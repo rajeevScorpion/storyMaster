@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+/* Smooth scroll behavior utility */
+.custom-scrollbar {
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: #525252 transparent;
+}
+
+/* Hidden scrollbar — still scrollable */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

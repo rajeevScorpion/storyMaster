@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, ChevronDown, ChevronUp, Check } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import Timeline from './Timeline';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
+import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 
 export default function StoryScreen() {
   const session = useStoryStore((state) => state.session);
@@ -15,7 +16,7 @@ export default function StoryScreen() {
   const isLoading = useStoryStore((state) => state.isLoading);
   const resetStory = useStoryStore((state) => state.resetStory);
 
-  const [isMinimized, setIsMinimized] = useState(false);
+  const optionsContainerRef = useRef<HTMLDivElement>(null);
 
   if (!session || !session.storyMap) return null;
 
@@ -29,7 +30,95 @@ export default function StoryScreen() {
     findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId) !== null;
 
   return (
-    <div className="relative min-h-screen bg-neutral-950 text-white overflow-hidden flex flex-col">
+    <StoryScreenInner
+      session={session}
+      currentBeat={currentBeat}
+      isEnding={isEnding}
+      isLoading={isLoading}
+      continueStory={continueStory}
+      navigateToNode={navigateToNode}
+      resetStory={resetStory}
+      hasExistingBranch={hasExistingBranch}
+    />
+  );
+}
+
+// Separate inner component so hooks can be called unconditionally
+function StoryScreenInner({
+  session,
+  currentBeat,
+  isEnding,
+  isLoading,
+  continueStory,
+  navigateToNode,
+  resetStory,
+  hasExistingBranch,
+}: {
+  session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
+  currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
+  isEnding: boolean;
+  isLoading: boolean;
+  continueStory: (optionId: string) => void;
+  navigateToNode: (nodeId: string) => void;
+  resetStory: () => void;
+  hasExistingBranch: (optionId: string) => boolean;
+}) {
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const optionsContainerRef = useRef<HTMLDivElement>(null);
+
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [isCardHovered, setIsCardHovered] = useState(false);
+  const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    // Update gradients via state (infrequent edge changes)
+    const atTop = el.scrollTop <= 0;
+    const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+    setScrollState(prev => {
+      if (prev.atTop !== atTop || prev.atBottom !== atBottom) {
+        return { atTop, atBottom };
+      }
+      return prev;
+    });
+
+    // Update thumb position directly via DOM — no re-render lag
+    const thumb = thumbRef.current;
+    if (thumb) {
+      const thumbH = Math.max(10, (el.clientHeight / el.scrollHeight) * 100) * 0.4;
+      const scrollRatio = el.scrollTop / (el.scrollHeight - el.clientHeight || 1);
+      const thumbTop = scrollRatio * (100 - thumbH);
+      thumb.style.top = `${thumbTop}%`;
+      thumb.style.height = `${thumbH}%`;
+    }
+  }, []);
+
+  const { focusedOptionIndex, focusMode } = useKeyboardNavigation({
+    storyMap: session.storyMap,
+    options: currentBeat.options,
+    onNavigateNode: navigateToNode,
+    onSelectOption: continueStory,
+    onSetMinimized: setIsMinimized,
+    isLoading,
+    isEnding,
+  });
+
+  // Auto-scroll focused option into view
+  useEffect(() => {
+    if (focusedOptionIndex >= 0 && optionRefs.current[focusedOptionIndex]) {
+      optionRefs.current[focusedOptionIndex]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    }
+  }, [focusedOptionIndex]);
+
+  return (
+    <div className="relative h-screen bg-neutral-950 text-white overflow-hidden flex flex-col">
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
@@ -53,9 +142,7 @@ export default function StoryScreen() {
             )}
             <motion.div
               initial={false}
-              animate={{
-                height: isMinimized ? "40%" : "100%",
-              }}
+              animate={{ height: isMinimized ? '40%' : '100%' }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
             />
@@ -64,7 +151,7 @@ export default function StoryScreen() {
       </div>
 
       {/* Header */}
-      <header className="relative z-10 p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent">
+      <header className="relative z-10 p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
         <div className="flex items-center gap-3">
           <BookOpen className="w-6 h-6 text-emerald-400" />
           <h1 className="text-xl font-serif tracking-wide text-neutral-200">
@@ -83,76 +170,140 @@ export default function StoryScreen() {
         </div>
       </header>
 
-      {/* Timeline */}
-      <Timeline storyMap={session.storyMap} onNodeClick={navigateToNode} />
-
       {/* Main Content */}
-      <main className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-5xl mx-auto w-full">
-        <motion.div layout className="grid md:grid-cols-12 gap-8 items-end">
+      <main className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-5xl mx-auto w-full min-h-0">
+        <div className="grid md:grid-cols-12 gap-8 items-end">
 
-          {/* Story Text Card */}
+          {/* Story Text Card + Toggle */}
+          <div className="md:col-span-7 flex flex-col items-center relative">
+            {/* Minimize/maximize toggle — attached above card */}
+            <button
+              onClick={() => setIsMinimized(!isMinimized)}
+              className="mb-2 p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
+              title={isMinimized ? 'Expand' : 'Minimize'}
+            >
+              {isMinimized ? (
+                <ChevronUp className="w-5 h-5 text-neutral-300" />
+              ) : (
+                <ChevronDown className="w-5 h-5 text-neutral-300" />
+              )}
+            </button>
+
           <motion.div
-            layout
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className={`relative md:col-span-7 backdrop-blur-xl border border-white/10 rounded-3xl p-8 md:p-12 shadow-2xl transition-colors duration-500 ${isMinimized ? 'bg-neutral-950/40' : 'bg-neutral-900/80'}`}
+            className={`relative w-full backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-colors duration-500 ${
+              isMinimized ? 'bg-neutral-950/40' : 'h-[50vh] bg-neutral-900/80'
+            }`}
+            onMouseEnter={() => setIsCardHovered(true)}
+            onMouseLeave={() => setIsCardHovered(false)}
           >
-            <button
-              onClick={() => setIsMinimized(!isMinimized)}
-              className="absolute top-6 right-6 p-2 bg-white/5 hover:bg-white/10 rounded-xl backdrop-blur-md transition-colors z-20"
-              title={isMinimized ? "Maximize story" : "Minimize story"}
+            {/* Top scroll fade gradient */}
+            {!isMinimized && (
+              <div
+                className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-neutral-900 to-transparent z-10 pointer-events-none transition-opacity duration-300 rounded-t-3xl"
+                style={{ opacity: scrollState.atTop ? 0 : 1 }}
+              />
+            )}
+
+            {/* Scrollable content area */}
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className={`p-8 md:p-12 ${isMinimized ? '' : 'flex-1 overflow-y-auto scrollbar-none'}`}
             >
-              {isMinimized ? <ChevronUp className="w-5 h-5 text-neutral-300" /> : <ChevronDown className="w-5 h-5 text-neutral-300" />}
-            </button>
-
-            <motion.div layout className="pr-8">
-              <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${isMinimized ? 'text-neutral-500 line-clamp-4' : 'text-neutral-100'}`}>
-                {currentBeat.storyText}
-              </p>
-            </motion.div>
-
-            <AnimatePresence>
-              {isEnding && !isMinimized && (
+              <AnimatePresence mode="wait">
                 <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="mt-8 pt-8 border-t border-white/10 overflow-hidden"
+                  key={session.storyMap.currentNodeId}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.4 }}
                 >
-                  <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
-                    The End
-                  </h3>
-                  <p className="text-neutral-400 font-sans italic">
-                    {currentBeat.nextBeatGoal}
+                  <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
+                    isMinimized ? 'text-neutral-500 line-clamp-4' : 'text-neutral-100'
+                  }`}>
+                    {currentBeat.storyText}
                   </p>
-                  <button
-                    onClick={resetStory}
-                    className="mt-8 bg-white text-black px-8 py-4 rounded-2xl font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2"
-                  >
-                    Start a New Story
-                  </button>
+
+                  {isEnding && !isMinimized && (
+                    <div className="mt-8 pt-8 border-t border-white/10">
+                      <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
+                        The End
+                      </h3>
+                      <p className="text-neutral-400 font-sans italic">
+                        {currentBeat.nextBeatGoal}
+                      </p>
+                      <button
+                        onClick={resetStory}
+                        className="mt-8 bg-white text-black px-8 py-4 rounded-2xl font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2"
+                      >
+                        Start a New Story
+                      </button>
+                    </div>
+                  )}
                 </motion.div>
-              )}
-            </AnimatePresence>
+              </AnimatePresence>
+            </div>
+
+            {/* Bottom scroll fade gradient */}
+            {!isMinimized && (
+              <div
+                className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-neutral-900 to-transparent z-10 pointer-events-none transition-opacity duration-300 rounded-b-3xl"
+                style={{ opacity: scrollState.atBottom ? 0 : 1 }}
+              />
+            )}
+
+            {/* Scroll indicator — positioned just outside the card's right edge */}
+            {!isMinimized && isCardHovered && (
+              <div className="absolute right-1 top-8 bottom-2 w-1 pointer-events-none z-20">
+                <div
+                  ref={thumbRef}
+                  className="absolute w-full rounded-full bg-neutral-500/60"
+                />
+              </div>
+            )}
           </motion.div>
+
+          </div>
 
           {/* Choices Column */}
           {!isEnding && (
-            <motion.div layout className="md:col-span-5 flex flex-col justify-end relative">
-              <motion.div layout className="flex items-center justify-between mb-4 px-4">
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              className="md:col-span-5 flex flex-col justify-end"
+            >
+              {/* Timeline — positioned above choices */}
+              <div className="shrink-0">
+                <Timeline
+                  storyMap={session.storyMap}
+                  onNodeClick={navigateToNode}
+                  focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+                />
+              </div>
+
+              {/* Header with toggle */}
+              <div className="flex items-center justify-between mb-3 px-4 shrink-0">
                 <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
                   What happens next?
                 </h3>
                 <button
                   onClick={() => setIsMinimized(!isMinimized)}
-                  className="p-2 bg-white/5 hover:bg-white/10 rounded-xl backdrop-blur-md transition-colors z-20"
-                  title={isMinimized ? "Maximize options" : "Minimize options"}
+                  className="p-1.5 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
+                  title={isMinimized ? 'Show options' : 'Hide options'}
                 >
-                  {isMinimized ? <ChevronUp className="w-4 h-4 text-neutral-300" /> : <ChevronDown className="w-4 h-4 text-neutral-300" />}
+                  {isMinimized ? (
+                    <ChevronUp className="w-4 h-4 text-neutral-300" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-neutral-300" />
+                  )}
                 </button>
-              </motion.div>
+              </div>
 
+              {/* Scrollable options — shows ~2.5 cards with fade hint */}
               <AnimatePresence>
                 {!isMinimized && (
                   <motion.div
@@ -160,46 +311,57 @@ export default function StoryScreen() {
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
                     transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                    className="space-y-4 overflow-hidden"
+                    className="relative shrink-0 overflow-hidden"
                   >
-                    {currentBeat.options.map((option, index) => {
-                      const explored = hasExistingBranch(option.id);
-                      return (
-                        <motion.button
-                          key={option.id}
-                          initial={{ opacity: 0, x: 20 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: index * 0.1 }}
-                          onClick={() => continueStory(option.id)}
-                          disabled={isLoading}
-                          className={`w-full text-left group backdrop-blur-md rounded-2xl p-6 transition-all duration-300 flex items-center justify-between ${
-                            explored
-                              ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40'
-                              : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'
-                          }`}
-                        >
-                          <div>
-                            <p className="text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
-                              {option.label}
-                            </p>
-                            <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider">
-                              {option.intent}
-                            </p>
-                          </div>
-                          {explored ? (
-                            <Check className="w-4 h-4 text-emerald-500/60" />
-                          ) : (
-                            <ArrowRight className="w-5 h-5 text-neutral-600 group-hover:text-emerald-400 transition-colors transform group-hover:translate-x-1" />
-                          )}
-                        </motion.button>
-                      );
-                    })}
+                    <div
+                      ref={optionsContainerRef}
+                      className="h-full overflow-y-auto scrollbar-none space-y-4 px-1 pt-1"
+                      style={{
+                        maskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
+                      }}
+                    >
+                      {currentBeat.options.map((option, index) => {
+                        const explored = hasExistingBranch(option.id);
+                        const isFocused = focusMode === 'options' && focusedOptionIndex === index;
+                        return (
+                          <motion.button
+                            key={option.id}
+                            ref={(el) => { optionRefs.current[index] = el; }}
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            transition={{ delay: index * 0.1 }}
+                            onClick={() => continueStory(option.id)}
+                            disabled={isLoading}
+                            className={`w-full text-left group backdrop-blur-md rounded-2xl p-6 transition-all duration-300 flex items-center justify-between ${
+                              explored
+                                ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40'
+                                : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'
+                            } ${isFocused ? 'ring-2 ring-emerald-400/50 border-emerald-500/40' : ''}`}
+                          >
+                            <div>
+                              <p className="text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
+                                {option.label}
+                              </p>
+                              <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider">
+                                {option.intent}
+                              </p>
+                            </div>
+                            {explored ? (
+                              <Check className="w-4 h-4 text-emerald-500/60" />
+                            ) : (
+                              <ArrowRight className="w-5 h-5 text-neutral-600 group-hover:text-emerald-400 transition-colors transform group-hover:translate-x-1" />
+                            )}
+                          </motion.button>
+                        );
+                      })}
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
             </motion.div>
           )}
-        </motion.div>
+        </div>
       </main>
     </div>
   );
