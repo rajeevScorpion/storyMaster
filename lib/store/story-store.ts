@@ -1,9 +1,17 @@
 import { create } from 'zustand';
 import { persist, StateStorage, createJSONStorage } from 'zustand/middleware';
 import { get, set as idbSet, del } from 'idb-keyval';
-import { StorySession, StoryBeat } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage } from '@/app/actions/story';
+import {
+  createStoryMap,
+  addChildNode,
+  findChildForOption,
+  getBeatsToNode,
+  getChoiceHistoryToNode,
+  getCurrentNode,
+} from '../utils/story-map';
 
 const storage: StateStorage = {
   getItem: async (name: string): Promise<string | null> => {
@@ -17,15 +25,37 @@ const storage: StateStorage = {
   },
 };
 
+const DEFAULT_CONFIG: StoryConfig = {
+  ageGroup: 'all_ages',
+  settingCountry: 'generic',
+  maxBeats: 6,
+};
+
 interface StoryState {
   session: StorySession | null;
   isLoading: boolean;
   loadingClues: string[];
   error: string | null;
-  startStory: (prompt: string) => Promise<void>;
+  startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
+  navigateToNode: (nodeId: string) => void;
   resetStory: () => void;
   setLoadingClues: (clues: string[]) => void;
+}
+
+function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
+  const currentNode = getCurrentNode(storyMap);
+  const beats = getBeatsToNode(storyMap, storyMap.currentNodeId);
+  const choiceHistory = getChoiceHistoryToNode(storyMap, storyMap.currentNodeId);
+  return {
+    ...session,
+    storyMap,
+    beats,
+    choiceHistory,
+    currentBeat: currentNode.data.beatNumber,
+    characters: currentNode.data.characters,
+    status: currentNode.data.isEnding ? 'completed' : 'active',
+  };
 }
 
 export const useStoryStore = create<StoryState>()(
@@ -36,52 +66,59 @@ export const useStoryStore = create<StoryState>()(
       loadingClues: [],
       error: null,
 
-      startStory: async (prompt: string) => {
-        set({ 
-          isLoading: true, 
+      startStory: async (prompt: string, config?: StoryConfig) => {
+        set({
+          isLoading: true,
           error: null,
-          loadingClues: ['The Story Master is weaving the next moment...'] 
+          loadingClues: ['The Story Master is weaving the next moment...'],
         });
-        
+
+        const storyConfig = config || DEFAULT_CONFIG;
+
         try {
           const initialSession: Partial<StorySession> = {
             storySessionId: uuidv4(),
             userPrompt: prompt,
             genre: 'adventure',
             tone: 'playful',
-            targetAge: 'all_ages',
+            targetAge: storyConfig.ageGroup,
             visualStyle: 'cinematic storybook illustration',
             currentBeat: 0,
-            maxBeats: 6,
+            maxBeats: storyConfig.maxBeats,
             status: 'active',
             characters: [],
             setting: {
-              world: 'unknown',
+              world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
               timeOfDay: 'unknown',
               mood: 'unknown',
             },
+            storyConfig,
             beats: [],
             choiceHistory: [],
             openThreads: [],
             allowedEndings: ['friendship', 'moral', 'comedy', 'discovery', 'rescue', 'bittersweet'],
-            safetyProfile: 'all_ages',
+            safetyProfile: storyConfig.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
           };
 
           const beat = await generateStoryBeat(prompt, initialSession);
-          
+
           set({ loadingClues: beat.clues });
-          
+
           const imageUrl = await generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!);
           beat.imageUrl = imageUrl;
 
-          set({
-            session: {
+          const storyMap = createStoryMap(beat);
+
+          const fullSession = deriveSessionFields(
+            {
               ...initialSession,
               title: beat.title,
-              currentBeat: beat.beatNumber,
-              characters: beat.characters,
-              beats: [beat],
             } as StorySession,
+            storyMap
+          );
+
+          set({
+            session: fullSession,
             isLoading: false,
           });
         } catch (error: any) {
@@ -93,43 +130,71 @@ export const useStoryStore = create<StoryState>()(
         const { session } = get();
         if (!session) return;
 
-        const currentBeat = session.beats[session.beats.length - 1];
-        const selectedOption = currentBeat.options.find(o => o.id === optionId);
-        
+        const currentNode = getCurrentNode(session.storyMap);
+        const selectedOption = currentNode.data.options.find((o) => o.id === optionId);
         if (!selectedOption) return;
 
-        set({ 
-          isLoading: true, 
+        // Check if branch already exists — instant load, no API call
+        const existingChildId = findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId);
+        if (existingChildId) {
+          const updatedMap = { ...session.storyMap, currentNodeId: existingChildId };
+          set({ session: deriveSessionFields(session, updatedMap) });
+          return;
+        }
+
+        // No existing branch — generate new beat
+        set({
+          isLoading: true,
           error: null,
-          loadingClues: currentBeat.clues.length > 0 ? currentBeat.clues : ['The Story Master is weaving the next moment...'] 
+          loadingClues: currentNode.data.clues.length > 0
+            ? currentNode.data.clues
+            : ['The Story Master is weaving the next moment...'],
         });
 
         try {
-          const updatedSession = {
+          // Build session state for Gemini with linear path beats
+          const beatsForPrompt = getBeatsToNode(session.storyMap, session.storyMap.currentNodeId);
+          const choiceHistoryForPrompt = [
+            ...getChoiceHistoryToNode(session.storyMap, session.storyMap.currentNodeId),
+            selectedOption.label,
+          ];
+          const sessionForPrompt: Partial<StorySession> = {
             ...session,
-            choiceHistory: [...session.choiceHistory, selectedOption.label],
+            beats: beatsForPrompt,
+            choiceHistory: choiceHistoryForPrompt,
           };
+          // Strip storyMap from what we send to Gemini
+          delete (sessionForPrompt as any).storyMap;
 
-          const beat = await generateStoryBeat(session.userPrompt, updatedSession, selectedOption.label);
-          
+          const beat = await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label);
+
           set({ loadingClues: beat.clues });
-          
+
           const imageUrl = await generateImage(beat.imagePrompt, beat.characters, session.visualStyle);
           beat.imageUrl = imageUrl;
 
+          const updatedMap = addChildNode(
+            session.storyMap,
+            session.storyMap.currentNodeId,
+            optionId,
+            beat
+          );
+
           set({
-            session: {
-              ...updatedSession,
-              currentBeat: beat.beatNumber,
-              characters: beat.characters, // Update characters with any new ones
-              beats: [...updatedSession.beats, beat],
-              status: beat.isEnding ? 'completed' : 'active',
-            },
+            session: deriveSessionFields(session, updatedMap),
             isLoading: false,
           });
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to continue story' });
         }
+      },
+
+      navigateToNode: (nodeId: string) => {
+        const { session } = get();
+        if (!session || !session.storyMap.nodes[nodeId]) return;
+
+        const updatedMap = { ...session.storyMap, currentNodeId: nodeId };
+        set({ session: deriveSessionFields(session, updatedMap) });
       },
 
       resetStory: () => {
@@ -142,7 +207,52 @@ export const useStoryStore = create<StoryState>()(
     }),
     {
       name: 'story-master-storage',
+      version: 2,
       storage: createJSONStorage(() => storage),
+      partialize: (state) => ({ session: state.session }),
+      migrate: (persistedState: any, version: number) => {
+        try {
+          if (version < 2 && persistedState?.session?.beats && !persistedState?.session?.storyMap) {
+            const session = persistedState.session;
+            const nodes: Record<string, StoryNode> = {};
+            let prevId: string | null = null;
+            const nodeIds: string[] = [];
+
+            for (const beat of session.beats) {
+              const id = uuidv4();
+              nodeIds.push(id);
+              nodes[id] = {
+                id,
+                beatNumber: beat.beatNumber,
+                parentId: prevId,
+                selectedOptionId: null,
+                data: beat,
+                children: [],
+              };
+              if (prevId) nodes[prevId].children.push(id);
+              prevId = id;
+            }
+
+            if (nodeIds.length > 0) {
+              session.storyMap = {
+                nodes,
+                rootNodeId: nodeIds[0],
+                currentNodeId: nodeIds[nodeIds.length - 1],
+              };
+            }
+
+            session.storyConfig = {
+              ageGroup: session.targetAge || 'all_ages',
+              settingCountry: 'generic',
+              maxBeats: session.maxBeats || 6,
+            };
+          }
+          return persistedState as StoryState;
+        } catch {
+          // Migration failed — start fresh
+          return { session: null } as unknown as StoryState;
+        }
+      },
     }
   )
 );

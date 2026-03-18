@@ -28,6 +28,29 @@ export interface StoryBeat {
   imageUrl?: string;
 }
 
+export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
+
+export interface StoryConfig {
+  ageGroup: AgeGroup;
+  settingCountry: string;
+  maxBeats: number;
+}
+
+export interface StoryNode {
+  id: string;
+  beatNumber: number;
+  parentId: string | null;
+  selectedOptionId: string | null;
+  data: StoryBeat;
+  children: string[];
+}
+
+export interface StoryMap {
+  nodes: Record<string, StoryNode>;
+  rootNodeId: string;
+  currentNodeId: string;
+}
+
 export interface StorySession {
   storySessionId: string;
   userPrompt: string;
@@ -45,6 +68,8 @@ export interface StorySession {
     timeOfDay: string;
     mood: string;
   };
+  storyConfig: StoryConfig;
+  storyMap: StoryMap;
   beats: StoryBeat[];
   choiceHistory: string[];
   openThreads: string[];

@@ -2,18 +2,31 @@
 
 import { useState } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
-import { Sparkles, BookOpen } from 'lucide-react';
-import { motion } from 'motion/react';
+import { AgeGroup, StoryConfig } from '@/lib/types/story';
+import { Sparkles, BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import AdvancedOptions from './AdvancedOptions';
 
 export default function LandingScreen() {
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
   const isLoading = useStoryStore((state) => state.isLoading);
 
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [ageGroup, setAgeGroup] = useState<AgeGroup>('all_ages');
+  const [settingCountry, setSettingCountry] = useState('generic');
+  const [customSetting, setCustomSetting] = useState('');
+  const [maxBeats, setMaxBeats] = useState(6);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim() && !isLoading) {
-      startStory(prompt.trim());
+      const config: StoryConfig = {
+        ageGroup,
+        settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
+        maxBeats,
+      };
+      startStory(prompt.trim(), config);
     }
   };
 
@@ -25,7 +38,7 @@ export default function LandingScreen() {
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-emerald-900/20 rounded-full blur-3xl mix-blend-screen" />
       </div>
 
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8 }}
@@ -71,17 +84,43 @@ export default function LandingScreen() {
               </button>
             </div>
           </div>
+
+          {/* Advanced Options Toggle */}
+          <div className="mt-4">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="inline-flex items-center gap-2 text-sm text-neutral-400 hover:text-neutral-200 transition-colors font-sans"
+            >
+              {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              Advanced Options
+            </button>
+            <AnimatePresence>
+              {showAdvanced && (
+                <AdvancedOptions
+                  ageGroup={ageGroup}
+                  onAgeGroupChange={setAgeGroup}
+                  settingCountry={settingCountry}
+                  onSettingCountryChange={setSettingCountry}
+                  customSetting={customSetting}
+                  onCustomSettingChange={setCustomSetting}
+                  maxBeats={maxBeats}
+                  onMaxBeatsChange={setMaxBeats}
+                />
+              )}
+            </AnimatePresence>
+          </div>
         </form>
 
         <div className="pt-12 flex gap-4 justify-center text-sm text-neutral-500 font-sans">
-          <button 
+          <button
             onClick={() => setPrompt("A brave little toaster's journey to the moon")}
             className="hover:text-neutral-300 transition-colors"
           >
             Try: &quot;A brave little toaster...&quot;
           </button>
           <span>•</span>
-          <button 
+          <button
             onClick={() => setPrompt("The mystery of the glowing forest")}
             className="hover:text-neutral-300 transition-colors"
           >

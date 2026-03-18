@@ -119,23 +119,33 @@ export async function generateStoryBeat(
   }
 
   let prompt = `User Request: ${userPrompt}\n\n`;
-  
+
+  // Inject story configuration for age/setting/pacing
+  if (sessionState?.storyConfig) {
+    const cfg = sessionState.storyConfig;
+    prompt += `Story Configuration:\n`;
+    prompt += `- Age Group: ${cfg.ageGroup}\n`;
+    prompt += `- Setting/Country: ${cfg.settingCountry}\n`;
+    prompt += `- Maximum Beats: ${cfg.maxBeats}\n`;
+    prompt += `- Current Beat: ${(sessionState.currentBeat || 0) + 1} of ${cfg.maxBeats}\n\n`;
+  }
+
   if (sessionState) {
-    // Clone session state and remove imageUrls to save tokens
-    const safeState = { ...sessionState };
+    // Clone session state and remove imageUrls/storyMap to save tokens
+    const { storyMap, storyConfig, ...safeState } = sessionState as any;
     if (safeState.beats) {
-      safeState.beats = safeState.beats.map(beat => {
+      safeState.beats = safeState.beats.map((beat: any) => {
         const { imageUrl, ...rest } = beat;
         return rest;
       });
     }
     prompt += `Current Story State:\n${JSON.stringify(safeState, null, 2)}\n\n`;
   }
-  
+
   if (selectedOptionLabel) {
     prompt += `User Selected Option: ${selectedOptionLabel}\n\n`;
   }
-  
+
   prompt += `Generate the next story beat.`;
 
   try {
