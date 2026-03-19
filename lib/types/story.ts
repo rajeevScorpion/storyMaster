@@ -26,6 +26,7 @@ export interface StoryBeat {
   nextBeatGoal: string;
   endingForecast: string[];
   imageUrl?: string;
+  audioUrl?: string;
 }
 
 export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
@@ -75,4 +76,5 @@ export interface StorySession {
   openThreads: string[];
   allowedEndings: string[];
   safetyProfile: string;
+  narratorVoice?: string;
 }

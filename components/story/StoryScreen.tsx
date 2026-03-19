@@ -6,8 +6,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import Timeline from './Timeline';
+import NarrationButton from './NarrationButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
+import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 
 export default function StoryScreen() {
   const session = useStoryStore((state) => state.session);
@@ -15,6 +17,10 @@ export default function StoryScreen() {
   const navigateToNode = useStoryStore((state) => state.navigateToNode);
   const isLoading = useStoryStore((state) => state.isLoading);
   const resetStory = useStoryStore((state) => state.resetStory);
+  const isGeneratingAudio = useStoryStore((state) => state.isGeneratingAudio);
+  const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
+  const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
+  const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -39,6 +45,10 @@ export default function StoryScreen() {
       navigateToNode={navigateToNode}
       resetStory={resetStory}
       hasExistingBranch={hasExistingBranch}
+      isGeneratingAudio={isGeneratingAudio}
+      audioReadyNodeId={audioReadyNodeId}
+      generateNarrationForNode={generateNarrationForNode}
+      clearAudioReady={clearAudioReady}
     />
   );
 }
@@ -53,6 +63,10 @@ function StoryScreenInner({
   navigateToNode,
   resetStory,
   hasExistingBranch,
+  isGeneratingAudio,
+  audioReadyNodeId,
+  generateNarrationForNode,
+  clearAudioReady,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -62,6 +76,10 @@ function StoryScreenInner({
   navigateToNode: (nodeId: string) => void;
   resetStory: () => void;
   hasExistingBranch: (optionId: string) => boolean;
+  isGeneratingAudio: boolean;
+  audioReadyNodeId: string | null;
+  generateNarrationForNode: (nodeId: string) => Promise<void>;
+  clearAudioReady: () => void;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -97,12 +115,31 @@ function StoryScreenInner({
     }
   }, []);
 
+  // Audio player
+  const currentNodeId = session.storyMap.currentNodeId;
+  const { playbackState, togglePlayPause, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
+  const isAudioReady = audioReadyNodeId === currentNodeId;
+
+  // Chime when audio becomes ready for current node
+  useEffect(() => {
+    if (isAudioReady) {
+      const chime = new Audio('/sounds/chime.wav');
+      chime.volume = 0.3;
+      chime.play().catch(() => {});
+    }
+  }, [isAudioReady]);
+
   const { focusedOptionIndex, focusMode } = useKeyboardNavigation({
     storyMap: session.storyMap,
     options: currentBeat.options,
     onNavigateNode: navigateToNode,
     onSelectOption: continueStory,
     onSetMinimized: setIsMinimized,
+    onToggleNarration: () => {
+      if (currentBeat.audioUrl) {
+        togglePlayPause();
+      }
+    },
     isLoading,
     isEnding,
   });
@@ -195,6 +232,22 @@ function StoryScreenInner({
               )}
             </button>
 
+          {/* Card + Narration button row */}
+          <div className="flex items-end gap-5 w-full">
+            {/* Narration button — outside card, left side */}
+            {!isMinimized && (
+              <div className="shrink-0 pb-4">
+                <NarrationButton
+                  isGeneratingAudio={isGeneratingAudio}
+                  isAudioReady={isAudioReady}
+                  playbackState={playbackState}
+                  hasAudio={!!currentBeat.audioUrl}
+                  onTogglePlayPause={togglePlayPause}
+                  onClearGlow={clearAudioReady}
+                />
+              </div>
+            )}
+
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -271,6 +324,7 @@ function StoryScreenInner({
               </div>
             )}
           </motion.div>
+          </div>{/* end card + narration button row */}
 
           </div>
 
@@ -341,7 +395,7 @@ function StoryScreenInner({
                             disabled={isLoading}
                             className={`w-full text-left group backdrop-blur-md rounded-2xl p-6 transition-all duration-300 flex items-center justify-between ${
                               explored
-                                ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40'
+                                ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40 glow-pulse-mild'
                                 : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'
                             } ${isFocused ? 'ring-2 ring-emerald-400/50 border-emerald-500/40' : ''}`}
                           >

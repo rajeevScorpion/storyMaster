@@ -10,6 +10,7 @@ interface UseKeyboardNavigationProps {
   onNavigateNode: (nodeId: string) => void;
   onSelectOption: (optionId: string) => void;
   onSetMinimized: (minimized: boolean) => void;
+  onToggleNarration?: () => void;
   isLoading: boolean;
   isEnding: boolean;
 }
@@ -25,6 +26,7 @@ export function useKeyboardNavigation({
   onNavigateNode,
   onSelectOption,
   onSetMinimized,
+  onToggleNarration,
   isLoading,
   isEnding,
 }: UseKeyboardNavigationProps): UseKeyboardNavigationResult {
@@ -120,9 +122,15 @@ export function useKeyboardNavigation({
           onSetMinimized(true);
           break;
         }
+
+        case 'p': {
+          e.preventDefault();
+          onToggleNarration?.();
+          break;
+        }
       }
     },
-    [storyMap, options, onNavigateNode, onSelectOption, onSetMinimized, isLoading, isEnding, focusState]
+    [storyMap, options, onNavigateNode, onSelectOption, onSetMinimized, onToggleNarration, isLoading, isEnding, focusState]
   );
 
   useEffect(() => {

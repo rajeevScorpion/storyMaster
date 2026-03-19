@@ -3,7 +3,7 @@ import { persist, StateStorage, createJSONStorage } from 'zustand/middleware';
 import { get, set as idbSet, del } from 'idb-keyval';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { generateStoryBeat, generateImage } from '@/app/actions/story';
+import { generateStoryBeat, generateImage, selectNarratorVoice, generateNarration } from '@/app/actions/story';
 import {
   createStoryMap,
   addChildNode,
@@ -36,11 +36,15 @@ interface StoryState {
   isLoading: boolean;
   loadingClues: string[];
   error: string | null;
+  isGeneratingAudio: boolean;
+  audioReadyNodeId: string | null;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
   resetStory: () => void;
   setLoadingClues: (clues: string[]) => void;
+  generateNarrationForNode: (nodeId: string) => Promise<void>;
+  clearAudioReady: () => void;
 }
 
 function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
@@ -65,6 +69,8 @@ export const useStoryStore = create<StoryState>()(
       isLoading: false,
       loadingClues: [],
       error: null,
+      isGeneratingAudio: false,
+      audioReadyNodeId: null,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
         set({
@@ -121,6 +127,9 @@ export const useStoryStore = create<StoryState>()(
             session: fullSession,
             isLoading: false,
           });
+
+          // Fire-and-forget: generate narration in background
+          get().generateNarrationForNode(storyMap.rootNodeId);
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to start story' });
         }
@@ -163,8 +172,9 @@ export const useStoryStore = create<StoryState>()(
             beats: beatsForPrompt,
             choiceHistory: choiceHistoryForPrompt,
           };
-          // Strip storyMap from what we send to Gemini
+          // Strip storyMap and heavy data from what we send to Gemini
           delete (sessionForPrompt as any).storyMap;
+          delete (sessionForPrompt as any).narratorVoice;
 
           const beat = await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label);
 
@@ -184,6 +194,9 @@ export const useStoryStore = create<StoryState>()(
             session: deriveSessionFields(session, updatedMap),
             isLoading: false,
           });
+
+          // Fire-and-forget: generate narration in background
+          get().generateNarrationForNode(updatedMap.currentNodeId);
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to continue story' });
         }
@@ -203,6 +216,63 @@ export const useStoryStore = create<StoryState>()(
 
       setLoadingClues: (clues: string[]) => {
         set({ loadingClues: clues });
+      },
+
+      generateNarrationForNode: async (nodeId: string) => {
+        const { session } = get();
+        if (!session) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node || node.data.audioUrl) return;
+
+        // Skip for mock stories
+        if (session.userPrompt.toLowerCase() === 'mock') return;
+
+        set({ isGeneratingAudio: true });
+
+        try {
+          // Select voice if not yet chosen
+          let voiceName = session.narratorVoice;
+          if (!voiceName) {
+            voiceName = await selectNarratorVoice(session.genre, session.tone, session.targetAge);
+            const currentSession = get().session;
+            if (currentSession) {
+              set({ session: { ...currentSession, narratorVoice: voiceName } });
+            }
+          }
+
+          const audioUrl = await generateNarration(
+            node.data.storyText,
+            session.tone,
+            session.genre,
+            voiceName
+          );
+
+          // Update the node with audio — re-read session in case it changed
+          const latestSession = get().session;
+          if (!latestSession) return;
+
+          const updatedNodes = {
+            ...latestSession.storyMap.nodes,
+            [nodeId]: {
+              ...latestSession.storyMap.nodes[nodeId],
+              data: { ...latestSession.storyMap.nodes[nodeId].data, audioUrl },
+            },
+          };
+          const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
+          set({
+            session: deriveSessionFields(latestSession, updatedMap),
+            isGeneratingAudio: false,
+            audioReadyNodeId: nodeId,
+          });
+        } catch (error) {
+          console.error('Narration generation failed:', error);
+          set({ isGeneratingAudio: false });
+        }
+      },
+
+      clearAudioReady: () => {
+        set({ audioReadyNodeId: null });
       },
     }),
     {
