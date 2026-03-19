@@ -60,7 +60,6 @@ export default function AdvancedOptions({
 
         {/* Age Group */}
         <div className="space-y-2">
-          <label className="text-sm text-neutral-300 font-sans">Age Group</label>
           <select
             value={ageGroup}
             onChange={(e) => onAgeGroupChange(e.target.value as AgeGroup)}
@@ -76,7 +75,6 @@ export default function AdvancedOptions({
 
         {/* Setting / Country */}
         <div className="space-y-2">
-          <label className="text-sm text-neutral-300 font-sans">Setting / Country</label>
           <select
             value={SETTING_PRESETS.includes(settingCountry) ? settingCountry : 'custom'}
             onChange={(e) => {

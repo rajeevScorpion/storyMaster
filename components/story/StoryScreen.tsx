@@ -200,7 +200,7 @@ function StoryScreenInner({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
             className={`relative w-full backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-colors duration-500 ${
-              isMinimized ? 'bg-neutral-950/40' : 'h-[50vh] bg-neutral-900/80'
+              isMinimized ? 'bg-neutral-950/40' : 'max-h-[50vh] bg-neutral-900/80'
             }`}
             onMouseEnter={() => setIsCardHovered(true)}
             onMouseLeave={() => setIsCardHovered(false)}
