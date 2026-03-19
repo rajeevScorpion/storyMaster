@@ -118,16 +118,19 @@ function StoryScreenInner({
   }, [focusedOptionIndex]);
 
   return (
-    <div className="relative h-screen bg-neutral-950 text-white overflow-hidden flex flex-col">
+    <div className="relative h-screen bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col">
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
           <motion.div
             key={currentBeat.imageUrl}
             initial={{ opacity: 0, scale: 1.05 }}
-            animate={{ opacity: 1, scale: 1 }}
+            animate={{ opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 1.5, ease: "easeOut" }}
+            transition={{
+              opacity: { duration: 1.5, ease: "easeOut" },
+              scale: { duration: 20, ease: "easeInOut", repeat: Infinity, repeatType: "reverse" },
+            }}
             className="absolute inset-0"
           >
             {currentBeat.imageUrl && (
@@ -135,14 +138,17 @@ function StoryScreenInner({
                 src={currentBeat.imageUrl}
                 alt={currentBeat.sceneSummary}
                 fill
-                className="object-cover opacity-40"
+                className={`object-cover transition-opacity duration-700 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
               />
             )}
             <motion.div
               initial={false}
-              animate={{ height: isMinimized ? '40%' : '100%' }}
+              animate={{
+                height: isMinimized ? '20%' : '60%',
+                opacity: isMinimized ? 0.5 : 0.7,
+              }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
             />
@@ -222,7 +228,7 @@ function StoryScreenInner({
                   transition={{ duration: 0.4 }}
                 >
                   <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
-                    isMinimized ? 'text-neutral-500 line-clamp-4' : 'text-neutral-100'
+                    isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
                   }`}>
                     {currentBeat.storyText}
                   </p>

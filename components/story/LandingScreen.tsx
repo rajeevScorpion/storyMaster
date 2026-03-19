@@ -48,7 +48,7 @@ export default function LandingScreen() {
           <div className="inline-flex items-center justify-center p-3 bg-white/5 rounded-2xl border border-white/10 mb-4">
             <BookOpen className="w-8 h-8 text-emerald-400" />
           </div>
-          <h1 className="text-5xl md:text-7xl font-serif text-white tracking-tight">
+          <h1 className="text-5xl md:text-7xl font-serif text-neutral-100 tracking-tight">
             Story Master
           </h1>
           <p className="text-lg md:text-xl text-neutral-400 font-sans max-w-lg mx-auto leading-relaxed">

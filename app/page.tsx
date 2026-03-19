@@ -13,7 +13,7 @@ export default function Home() {
   const resetStory = useStoryStore((state) => state.resetStory);
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-white font-sans selection:bg-emerald-500/30">
+    <main className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {error && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-500/10 border border-red-500/50 text-red-200 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl backdrop-blur-md">
           <p className="text-sm font-medium">{error}</p>
