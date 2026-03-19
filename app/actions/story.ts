@@ -128,12 +128,15 @@ export async function generateStoryBeat(
     }
   }
 
-  let prompt = `User Request: ${userPrompt}\n\n`;
+  const lang = sessionState?.storyConfig?.language || 'english';
+  let prompt = `[LANGUAGE: ${lang}] — Generate ALL story content in this language.\n\n`;
+  prompt += `User Request: ${userPrompt}\n\n`;
 
   // Inject story configuration for age/setting/pacing
   if (sessionState?.storyConfig) {
     const cfg = sessionState.storyConfig;
     prompt += `Story Configuration:\n`;
+    prompt += `- Language: ${cfg.language || 'english'}\n`;
     prompt += `- Age Group: ${cfg.ageGroup}\n`;
     prompt += `- Setting/Country: ${cfg.settingCountry}\n`;
     prompt += `- Maximum Beats: ${cfg.maxBeats}\n`;
@@ -272,12 +275,12 @@ function pcmToWavBase64(pcmBase64: string, sampleRate = 24000, channels = 1, bit
   return btoa(binary);
 }
 
-export async function selectNarratorVoice(genre: string, tone: string, targetAge: string): Promise<string> {
+export async function selectNarratorVoice(genre: string, tone: string, targetAge: string, language: string = 'english'): Promise<string> {
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-pro-preview',
-      contents: `Pick the single best narrator voice for a ${genre} story with a ${tone} tone, aimed at a ${targetAge} audience.
+      contents: `Pick the single best narrator voice for a ${genre} story with a ${tone} tone, aimed at a ${targetAge} audience. The story will be narrated in ${language}.
 
 Available voices: ${AVAILABLE_VOICES.join(', ')}
 
@@ -302,11 +305,12 @@ export async function generateNarration(
   storyText: string,
   tone: string,
   genre: string,
-  voiceName: string
+  voiceName: string,
+  language: string = 'english'
 ): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
 
-  const ttsPrompt = `You are a master storyteller narrating a ${genre} tale with a ${tone} tone. Read this passage aloud with natural pacing, dramatic pauses, and emotional expression that matches the scene:
+  const ttsPrompt = `You are a master storyteller narrating a ${genre} tale with a ${tone} tone in ${language}. Read this passage aloud with natural pacing, dramatic pauses, and emotional expression that matches the scene:
 
 ${storyText}`;
 

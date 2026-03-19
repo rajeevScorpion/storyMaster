@@ -218,7 +218,11 @@ function StoryScreenInner({
         <div className="grid md:grid-cols-12 gap-8 items-end">
 
           {/* Story Text Card + Toggle */}
-          <div className="md:col-span-7 flex flex-col items-center relative">
+          <div
+            className="md:col-span-7 flex flex-col items-center relative"
+            onMouseEnter={() => setIsCardHovered(true)}
+            onMouseLeave={() => setIsCardHovered(false)}
+          >
             {/* Minimize/maximize toggle — attached above card */}
             <button
               onClick={() => setIsMinimized(!isMinimized)}
@@ -252,17 +256,16 @@ function StoryScreenInner({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className={`relative w-full backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-colors duration-500 ${
+            style={{ opacity: isCardHovered ? 1 : 0.1 }}
+            className={`relative w-full border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-500 ${
               isMinimized ? 'bg-neutral-950/40' : 'max-h-[50vh] bg-neutral-900/80'
             }`}
-            onMouseEnter={() => setIsCardHovered(true)}
-            onMouseLeave={() => setIsCardHovered(false)}
           >
             {/* Top scroll fade gradient */}
             {!isMinimized && (
               <div
-                className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-neutral-900 to-transparent z-10 pointer-events-none transition-opacity duration-300 rounded-t-3xl"
-                style={{ opacity: scrollState.atTop ? 0 : 1 }}
+                className="absolute top-0 inset-x-0 h-16 bg-gradient-to-b from-neutral-900 to-transparent z-10 pointer-events-none transition-opacity duration-500 rounded-t-3xl"
+                style={{ opacity: scrollState.atTop || !isCardHovered ? 0 : 1 }}
               />
             )}
 
@@ -309,8 +312,8 @@ function StoryScreenInner({
             {/* Bottom scroll fade gradient */}
             {!isMinimized && (
               <div
-                className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-neutral-900 to-transparent z-10 pointer-events-none transition-opacity duration-300 rounded-b-3xl"
-                style={{ opacity: scrollState.atBottom ? 0 : 1 }}
+                className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-neutral-900 to-transparent z-10 pointer-events-none transition-opacity duration-500 rounded-b-3xl"
+                style={{ opacity: scrollState.atBottom || !isCardHovered ? 0 : 1 }}
               />
             )}
 

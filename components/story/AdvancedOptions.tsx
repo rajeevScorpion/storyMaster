@@ -1,7 +1,12 @@
 'use client';
 
-import { AgeGroup } from '@/lib/types/story';
+import { AgeGroup, StoryLanguage } from '@/lib/types/story';
 import { motion } from 'motion/react';
+
+const LANGUAGE_OPTIONS: { value: StoryLanguage; label: string }[] = [
+  { value: 'english', label: 'English' },
+  { value: 'hindi', label: 'Hindi (हिन्दी)' },
+];
 
 const AGE_GROUP_OPTIONS: { value: AgeGroup; label: string }[] = [
   { value: 'all_ages', label: 'All Ages' },
@@ -25,6 +30,8 @@ const SETTING_PRESETS = [
 ];
 
 interface AdvancedOptionsProps {
+  language: StoryLanguage;
+  onLanguageChange: (v: StoryLanguage) => void;
   ageGroup: AgeGroup;
   onAgeGroupChange: (v: AgeGroup) => void;
   settingCountry: string;
@@ -36,6 +43,8 @@ interface AdvancedOptionsProps {
 }
 
 export default function AdvancedOptions({
+  language,
+  onLanguageChange,
   ageGroup,
   onAgeGroupChange,
   settingCountry,
@@ -57,6 +66,21 @@ export default function AdvancedOptions({
         <h3 className="text-sm font-sans uppercase tracking-widest text-neutral-400">
           Story Settings
         </h3>
+
+        {/* Language */}
+        <div className="space-y-2">
+          <select
+            value={language}
+            onChange={(e) => onLanguageChange(e.target.value as StoryLanguage)}
+            className="w-full bg-neutral-800 border border-white/10 rounded-xl px-4 py-2.5 text-white font-sans text-sm outline-none focus:border-emerald-500/50 transition-colors appearance-none cursor-pointer"
+          >
+            {LANGUAGE_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {/* Age Group */}
         <div className="space-y-2">

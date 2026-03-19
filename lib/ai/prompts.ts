@@ -53,6 +53,15 @@ Setting and cultural adaptation rules:
 - Use the setting to enrich the story world naturally.
 - If no setting is specified or it is "generic", use a universal fantasy or contemporary setting.
 
+Language rules:
+- If a language is specified in the story configuration, ALL story content MUST be written in that language.
+- This includes: title, storyText, sceneSummary, option labels, option intents, clues, nextBeatGoal, and endingForecast.
+- JSON field names must remain in English — only the VALUES should be in the specified language.
+- imagePrompt must ALWAYS remain in English regardless of language setting (image generation works best in English).
+- continuityNotes should remain in English for internal consistency tracking.
+- Character names should be culturally appropriate to both the setting and language.
+- If no language is specified, default to English.
+
 Beat pacing and story length rules:
 - The story configuration includes a maxBeats value. You MUST pace the story to end exactly on that beat.
 - If the current beatNumber is less than maxBeats, you MUST set isEnding to false and provide 3-4 options.

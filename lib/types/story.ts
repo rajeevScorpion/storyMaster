@@ -31,10 +31,13 @@ export interface StoryBeat {
 
 export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
 
+export type StoryLanguage = 'english' | 'hindi';
+
 export interface StoryConfig {
   ageGroup: AgeGroup;
   settingCountry: string;
   maxBeats: number;
+  language: StoryLanguage;
 }
 
 export interface StoryNode {

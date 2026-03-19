@@ -26,6 +26,7 @@ const storage: StateStorage = {
 };
 
 const DEFAULT_CONFIG: StoryConfig = {
+  language: 'english',
   ageGroup: 'all_ages',
   settingCountry: 'generic',
   maxBeats: 6,
@@ -234,7 +235,7 @@ export const useStoryStore = create<StoryState>()(
           // Select voice if not yet chosen
           let voiceName = session.narratorVoice;
           if (!voiceName) {
-            voiceName = await selectNarratorVoice(session.genre, session.tone, session.targetAge);
+            voiceName = await selectNarratorVoice(session.genre, session.tone, session.targetAge, session.storyConfig?.language || 'english');
             const currentSession = get().session;
             if (currentSession) {
               set({ session: { ...currentSession, narratorVoice: voiceName } });
@@ -245,7 +246,8 @@ export const useStoryStore = create<StoryState>()(
             node.data.storyText,
             session.tone,
             session.genre,
-            voiceName
+            voiceName,
+            session.storyConfig?.language || 'english'
           );
 
           // Update the node with audio — re-read session in case it changed
@@ -277,7 +279,7 @@ export const useStoryStore = create<StoryState>()(
     }),
     {
       name: 'story-master-storage',
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => storage),
       partialize: (state) => ({ session: state.session }),
       migrate: (persistedState: any, version: number) => {
@@ -312,10 +314,15 @@ export const useStoryStore = create<StoryState>()(
             }
 
             session.storyConfig = {
+              language: 'english',
               ageGroup: session.targetAge || 'all_ages',
               settingCountry: 'generic',
               maxBeats: session.maxBeats || 6,
             };
+          }
+          // v2 → v3: add language to storyConfig
+          if (version < 3 && persistedState?.session?.storyConfig && !persistedState.session.storyConfig.language) {
+            persistedState.session.storyConfig.language = 'english';
           }
           return persistedState as StoryState;
         } catch {

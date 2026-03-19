@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
-import { AgeGroup, StoryConfig } from '@/lib/types/story';
+import { AgeGroup, StoryConfig, StoryLanguage } from '@/lib/types/story';
 import { Sparkles, BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
@@ -13,6 +13,7 @@ export default function LandingScreen() {
   const isLoading = useStoryStore((state) => state.isLoading);
 
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [language, setLanguage] = useState<StoryLanguage>('english');
   const [ageGroup, setAgeGroup] = useState<AgeGroup>('all_ages');
   const [settingCountry, setSettingCountry] = useState('generic');
   const [customSetting, setCustomSetting] = useState('');
@@ -22,6 +23,7 @@ export default function LandingScreen() {
     e.preventDefault();
     if (prompt.trim() && !isLoading) {
       const config: StoryConfig = {
+        language,
         ageGroup,
         settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
         maxBeats,
@@ -98,6 +100,8 @@ export default function LandingScreen() {
             <AnimatePresence>
               {showAdvanced && (
                 <AdvancedOptions
+                  language={language}
+                  onLanguageChange={setLanguage}
                   ageGroup={ageGroup}
                   onAgeGroupChange={setAgeGroup}
                   settingCountry={settingCountry}
