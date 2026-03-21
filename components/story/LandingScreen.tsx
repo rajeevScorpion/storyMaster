@@ -1,13 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, StoryConfig, StoryLanguage } from '@/lib/types/story';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 
-export default function LandingScreen() {
+interface LandingScreenProps {
+  onBegin?: (prompt: string, config?: StoryConfig) => void;
+}
+
+export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
   const isLoading = useStoryStore((state) => state.isLoading);
@@ -19,6 +23,26 @@ export default function LandingScreen() {
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
 
+  // Restore prompt after OAuth redirect
+  useEffect(() => {
+    const savedPrompt = sessionStorage.getItem('kissago_pending_prompt');
+    if (savedPrompt) {
+      setPrompt(savedPrompt);
+      sessionStorage.removeItem('kissago_pending_prompt');
+      const savedConfig = sessionStorage.getItem('kissago_pending_config');
+      if (savedConfig) {
+        try {
+          const config = JSON.parse(savedConfig) as StoryConfig;
+          setLanguage(config.language);
+          setAgeGroup(config.ageGroup);
+          setSettingCountry(config.settingCountry);
+          setMaxBeats(config.maxBeats);
+        } catch { /* ignore parse errors */ }
+        sessionStorage.removeItem('kissago_pending_config');
+      }
+    }
+  }, []);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim() && !isLoading) {
@@ -28,7 +52,11 @@ export default function LandingScreen() {
         settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
         maxBeats,
       };
-      startStory(prompt.trim(), config);
+      if (onBegin) {
+        onBegin(prompt.trim(), config);
+      } else {
+        startStory(prompt.trim(), config);
+      }
     }
   };
 
