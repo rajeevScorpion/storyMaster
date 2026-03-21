@@ -80,7 +80,7 @@ export const useStoryStore = create<StoryState>()(
         set({
           isLoading: true,
           error: null,
-          loadingClues: ['The Story Master is weaving the next moment...'],
+          loadingClues: ['Kissago is weaving the next moment...'],
         });
 
         const storyConfig = config || DEFAULT_CONFIG;
@@ -161,7 +161,7 @@ export const useStoryStore = create<StoryState>()(
           error: null,
           loadingClues: currentNode.data.clues.length > 0
             ? currentNode.data.clues
-            : ['The Story Master is weaving the next moment...'],
+            : ['Kissago is weaving the next moment...'],
         });
 
         try {

@@ -13,7 +13,7 @@ const playfair = Playfair_Display({
 });
 
 export const metadata: Metadata = {
-  title: 'Story Master',
+  title: 'Kissago',
   description: 'Interactive AI storytelling platform',
 };
 

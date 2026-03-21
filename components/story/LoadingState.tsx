@@ -20,7 +20,7 @@ export default function LoadingState() {
   }, [loadingClues]);
 
   const defaultClues = [
-    "The Story Master is weaving the next moment...",
+    "Kissago is weaving the next moment...",
     "Gathering stardust for the next scene...",
     "Consulting the ancient scrolls...",
     "Painting the landscape of imagination..."

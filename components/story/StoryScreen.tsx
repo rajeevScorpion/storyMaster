@@ -224,7 +224,7 @@ function StoryScreenInner({
         <div className="flex items-center gap-3">
           <BookOpen className="w-6 h-6 text-emerald-400" />
           <h1 className="text-xl font-serif tracking-wide text-neutral-200">
-            {session.title || "Story Master"}
+            {session.title || "Kissago"}
           </h1>
         </div>
         <div className="flex items-center gap-4 text-sm font-sans uppercase tracking-widest text-neutral-400">

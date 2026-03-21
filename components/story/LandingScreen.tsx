@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, StoryConfig, StoryLanguage } from '@/lib/types/story';
-import { Sparkles, BookOpen, ChevronDown, ChevronUp } from 'lucide-react';
+import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 
@@ -47,14 +47,11 @@ export default function LandingScreen() {
         className="z-10 max-w-2xl w-full text-center space-y-8"
       >
         <div className="space-y-4">
-          <div className="inline-flex items-center justify-center p-3 bg-white/5 rounded-2xl border border-white/10 mb-4">
-            <BookOpen className="w-8 h-8 text-emerald-400" />
-          </div>
           <h1 className="text-5xl md:text-7xl font-serif text-neutral-100 tracking-tight">
-            Story Master
+            Kissago
           </h1>
           <p className="text-lg md:text-xl text-neutral-400 font-sans max-w-lg mx-auto leading-relaxed">
-            Co-create magical, illustrated branching stories with an AI Story Master.
+            Co-create magical, illustrated branching stories with Kissago.
           </p>
         </div>
 

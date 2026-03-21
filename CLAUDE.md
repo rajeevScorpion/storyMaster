@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Story Master is an interactive AI-powered branching narrative app built with Next.js 15 (App Router) and React 19. Users enter a prompt, and the app generates story "beats" with choices using the Gemini API. Stories include AI-generated images and track characters/setting for continuity across beats. All state is persisted client-side via IndexedDB.
+Kissago is an interactive AI-powered branching narrative app built with Next.js 15 (App Router) and React 19. Users enter a prompt, and the app generates story "beats" with choices using the Gemini API. Stories include AI-generated images and track characters/setting for continuity across beats. All state is persisted client-side via IndexedDB.
 
 ## Commands
 
