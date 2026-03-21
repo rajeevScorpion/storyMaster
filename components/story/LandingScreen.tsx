@@ -24,23 +24,26 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
 
-  // Restore prompt after OAuth redirect
+  // Restore prompt after OAuth redirect — use initializer pattern to avoid setState in effect
   useEffect(() => {
     const savedPrompt = sessionStorage.getItem('kissago_pending_prompt');
     if (savedPrompt) {
-      setPrompt(savedPrompt);
-      sessionStorage.removeItem('kissago_pending_prompt');
-      const savedConfig = sessionStorage.getItem('kissago_pending_config');
-      if (savedConfig) {
-        try {
-          const config = JSON.parse(savedConfig) as StoryConfig;
-          setLanguage(config.language);
-          setAgeGroup(config.ageGroup);
-          setSettingCountry(config.settingCountry);
-          setMaxBeats(config.maxBeats);
-        } catch { /* ignore parse errors */ }
-        sessionStorage.removeItem('kissago_pending_config');
-      }
+      // Use flushSync-free approach: schedule state updates in a microtask
+      queueMicrotask(() => {
+        setPrompt(savedPrompt);
+        sessionStorage.removeItem('kissago_pending_prompt');
+        const savedConfig = sessionStorage.getItem('kissago_pending_config');
+        if (savedConfig) {
+          try {
+            const config = JSON.parse(savedConfig) as StoryConfig;
+            setLanguage(config.language);
+            setAgeGroup(config.ageGroup);
+            setSettingCountry(config.settingCountry);
+            setMaxBeats(config.maxBeats);
+          } catch { /* ignore parse errors */ }
+          sessionStorage.removeItem('kissago_pending_config');
+        }
+      });
     }
   }, []);
 

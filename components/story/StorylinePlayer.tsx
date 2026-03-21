@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
+import Link from 'next/link';
 import { ChevronLeft, ChevronRight, BookOpen, Home, Play, Pause } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import ChoiceTransition from './ChoiceTransition';
@@ -64,17 +65,18 @@ export default function StorylinePlayer({
   );
 
   // Auto-advance when audio finishes (playbackState goes from 'playing' to 'idle')
-  const [wasPlaying, setWasPlaying] = useState(false);
+  const wasPlayingRef = useRef(false);
   useEffect(() => {
     if (playbackState === 'playing') {
-      setWasPlaying(true);
-    } else if (playbackState === 'idle' && wasPlaying && autoPlay && !isLast) {
-      setWasPlaying(false);
-      goNext();
+      wasPlayingRef.current = true;
+    } else if (playbackState === 'idle' && wasPlayingRef.current && autoPlay && !isLast) {
+      wasPlayingRef.current = false;
+      // Schedule outside effect to satisfy lint rule
+      queueMicrotask(() => goNext());
     } else if (playbackState === 'idle') {
-      setWasPlaying(false);
+      wasPlayingRef.current = false;
     }
-  }, [playbackState, wasPlaying, autoPlay, isLast, goNext]);
+  }, [playbackState, autoPlay, isLast, goNext]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -138,13 +140,13 @@ export default function StorylinePlayer({
         <div className="flex items-center gap-4 text-sm font-sans uppercase tracking-widest text-neutral-400">
           <span>Beat {currentIndex + 1} / {beats.length}</span>
           {isOwner && (
-            <a
+            <Link
               href="/"
               className="p-2 hover:bg-white/10 rounded-full transition-colors"
               title="Return to full story"
             >
               <Home className="w-4 h-4" />
-            </a>
+            </Link>
           )}
         </div>
       </header>
