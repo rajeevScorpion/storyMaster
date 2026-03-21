@@ -21,6 +21,8 @@ export default function StoryScreen() {
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
+  const storyMode = useStoryStore((state) => state.storyMode);
+  const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -49,6 +51,8 @@ export default function StoryScreen() {
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
       clearAudioReady={clearAudioReady}
+      storyMode={storyMode}
+      toggleStoryMode={toggleStoryMode}
     />
   );
 }
@@ -67,6 +71,8 @@ function StoryScreenInner({
   audioReadyNodeId,
   generateNarrationForNode,
   clearAudioReady,
+  storyMode,
+  toggleStoryMode,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -80,6 +86,8 @@ function StoryScreenInner({
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
+  storyMode: boolean;
+  toggleStoryMode: () => void;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -117,8 +125,26 @@ function StoryScreenInner({
 
   // Audio player
   const currentNodeId = session.storyMap.currentNodeId;
-  const { playbackState, togglePlayPause, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
+  const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
+  const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
+
+  // Autoplay narration in story mode when navigating to a node with audio
+  useEffect(() => {
+    if (prevNodeIdForAutoplay.current !== currentNodeId) {
+      prevNodeIdForAutoplay.current = currentNodeId;
+      if (storyMode && currentBeat.audioUrl && playbackState === 'idle') {
+        playAudio();
+      }
+    }
+  }, [currentNodeId, storyMode, currentBeat.audioUrl, playbackState, playAudio]);
+
+  // Autoplay when audio becomes ready on current node in story mode
+  useEffect(() => {
+    if (storyMode && isAudioReady && currentBeat.audioUrl && playbackState === 'idle') {
+      playAudio();
+    }
+  }, [storyMode, isAudioReady, currentBeat.audioUrl, playbackState, playAudio]);
 
   // Chime when audio becomes ready for current node
   useEffect(() => {
@@ -248,6 +274,8 @@ function StoryScreenInner({
                   hasAudio={!!currentBeat.audioUrl}
                   onTogglePlayPause={togglePlayPause}
                   onClearGlow={clearAudioReady}
+                  storyMode={storyMode}
+                  onToggleStoryMode={toggleStoryMode}
                 />
               </div>
             )}

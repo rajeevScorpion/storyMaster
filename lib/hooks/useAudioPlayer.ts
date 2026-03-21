@@ -7,6 +7,7 @@ export type PlaybackState = 'idle' | 'playing' | 'paused';
 interface UseAudioPlayerReturn {
   playbackState: PlaybackState;
   togglePlayPause: () => void;
+  play: () => void;
   stop: () => void;
 }
 
@@ -58,6 +59,12 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlay
     }
   }, [playbackState]);
 
+  const play = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || playbackState === 'playing') return;
+    audio.play().then(() => setPlaybackState('playing')).catch(console.error);
+  }, [playbackState]);
+
   const stop = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -66,5 +73,5 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlay
     setPlaybackState('idle');
   }, []);
 
-  return { playbackState, togglePlayPause, stop };
+  return { playbackState, togglePlayPause, play, stop };
 }

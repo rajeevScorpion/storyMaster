@@ -6,7 +6,15 @@
       "Bash(npm run:*)",
       "Bash(npx next:*)",
       "Bash(npx tsc:*)",
-      "Bash(ls -la /d/AiCoding/storyMaster/*.config.* /d/AiCoding/storyMaster/tsconfig.json)"
+      "Bash(ls -la /d/AiCoding/storyMaster/*.config.* /d/AiCoding/storyMaster/tsconfig.json)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(grep -r gemini-2.5-flash-preview-tts --include=*.ts --include=*.tsx --include=*.md)",
+      "Bash(grep -r \"language\\\\|locale\\\\|i18n\\\\|translation\" /d/AiCoding/storyMaster --include=*.ts --include=*.tsx --exclude-dir=node_modules --exclude-dir=.next)",
+      "Bash(grep -r \"indexedDB\\\\|idb\\\\|storage\\\\|persist\" /d/AiCoding/storyMaster --include=*.ts --include=*.tsx --exclude-dir=node_modules --exclude-dir=.next)",
+      "Bash(ls -la /d/AiCoding/storyMaster/*.md)",
+      "Bash(git add:*)"
     ]
   }
 }

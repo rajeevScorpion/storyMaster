@@ -39,6 +39,7 @@ interface StoryState {
   error: string | null;
   isGeneratingAudio: boolean;
   audioReadyNodeId: string | null;
+  storyMode: boolean;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
@@ -46,6 +47,7 @@ interface StoryState {
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
+  toggleStoryMode: () => void;
 }
 
 function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
@@ -72,6 +74,7 @@ export const useStoryStore = create<StoryState>()(
       error: null,
       isGeneratingAudio: false,
       audioReadyNodeId: null,
+      storyMode: false,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
         set({
@@ -275,6 +278,10 @@ export const useStoryStore = create<StoryState>()(
 
       clearAudioReady: () => {
         set({ audioReadyNodeId: null });
+      },
+
+      toggleStoryMode: () => {
+        set((state) => ({ storyMode: !state.storyMode }));
       },
     }),
     {

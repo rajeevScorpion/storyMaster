@@ -11,6 +11,8 @@ interface NarrationButtonProps {
   hasAudio: boolean;
   onTogglePlayPause: () => void;
   onClearGlow: () => void;
+  storyMode: boolean;
+  onToggleStoryMode: () => void;
 }
 
 function WaveformBars() {
@@ -72,6 +74,8 @@ export default function NarrationButton({
   hasAudio,
   onTogglePlayPause,
   onClearGlow,
+  storyMode,
+  onToggleStoryMode,
 }: NarrationButtonProps) {
   const [showGlow, setShowGlow] = useState(false);
 
@@ -103,29 +107,44 @@ export default function NarrationButton({
   else if (hasAudio) title = 'Play narration (P)';
 
   return (
-    <button
-      onClick={handleClick}
-      disabled={isGeneratingAudio && !hasAudio}
-      className={`p-2.5 backdrop-blur-md rounded-full transition-all duration-300 ${
-        isGeneratingAudio && !hasAudio
-          ? 'bg-neutral-900/60 border border-white/5 cursor-wait'
-          : hasAudio
-            ? `bg-neutral-900/60 border border-emerald-500/20 hover:border-emerald-500/40 hover:bg-neutral-800 cursor-pointer ${isPlaying ? 'glow-pulse-strong' : ''}`
-            : 'bg-neutral-900/60 border border-white/5 hover:border-white/20 hover:bg-neutral-800 cursor-pointer'
-      } ${
-        showGlow
-          ? 'ring-2 ring-emerald-400/60 shadow-[0_0_12px_rgba(52,211,153,0.4)] animate-pulse'
-          : ''
-      }`}
-      title={title}
-    >
-      {isGeneratingAudio && !hasAudio ? (
-        <Loader2 className="w-5 h-5 text-neutral-400 animate-spin" />
-      ) : isPlaying ? (
-        <WaveformBars />
-      ) : (
-        <Volume2 className={`w-5 h-5 ${showGlow ? 'text-emerald-400' : 'text-neutral-400 hover:text-neutral-200'} transition-colors`} />
-      )}
-    </button>
+    <div className="flex flex-col items-center gap-2">
+      <button
+        onClick={handleClick}
+        disabled={isGeneratingAudio && !hasAudio}
+        className={`p-2.5 backdrop-blur-md rounded-full transition-all duration-300 ${
+          isGeneratingAudio && !hasAudio
+            ? 'bg-neutral-900/60 border border-white/5 cursor-wait'
+            : hasAudio
+              ? `bg-neutral-900/60 border border-emerald-500/20 hover:border-emerald-500/40 hover:bg-neutral-800 cursor-pointer ${isPlaying ? 'glow-pulse-strong' : ''}`
+              : 'bg-neutral-900/60 border border-white/5 hover:border-white/20 hover:bg-neutral-800 cursor-pointer'
+        } ${
+          showGlow
+            ? 'ring-2 ring-emerald-400/60 shadow-[0_0_12px_rgba(52,211,153,0.4)] animate-pulse'
+            : ''
+        }`}
+        title={title}
+      >
+        {isGeneratingAudio && !hasAudio ? (
+          <Loader2 className="w-5 h-5 text-neutral-400 animate-spin" />
+        ) : isPlaying ? (
+          <WaveformBars />
+        ) : (
+          <Volume2 className={`w-5 h-5 ${showGlow ? 'text-emerald-400' : 'text-neutral-400 hover:text-neutral-200'} transition-colors`} />
+        )}
+      </button>
+
+      {/* Story Mode toggle */}
+      <button
+        onClick={onToggleStoryMode}
+        className={`px-2 py-1 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all duration-300 backdrop-blur-md border ${
+          storyMode
+            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+            : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300 hover:border-white/20'
+        }`}
+        title={storyMode ? 'Story Mode: ON — narration autoplays' : 'Story Mode: OFF — click to autoplay narration'}
+      >
+        {storyMode ? 'auto' : 'auto'}
+      </button>
+    </div>
   );
 }
