@@ -4,8 +4,9 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2 } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
+import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
 import NarrationButton from './NarrationButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
@@ -103,6 +104,7 @@ function StoryScreenInner({
   const optionsContainerRef = useRef<HTMLDivElement>(null);
 
   const [isMinimized, setIsMinimized] = useState(false);
+  const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [isCardHovered, setIsCardHovered] = useState(false);
   const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -349,12 +351,23 @@ function StoryScreenInner({
                       <p className="text-neutral-400 font-sans italic">
                         {currentBeat.nextBeatGoal}
                       </p>
-                      <button
-                        onClick={resetStory}
-                        className="mt-8 bg-white text-black px-8 py-4 rounded-2xl font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2"
-                      >
-                        Start a New Story
-                      </button>
+                      <div className="mt-8 flex flex-wrap gap-3">
+                        {onSave && (
+                          <button
+                            onClick={() => setShowPublishDialog(true)}
+                            className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2"
+                          >
+                            <Share2 className="w-4 h-4" />
+                            Publish Storyline
+                          </button>
+                        )}
+                        <button
+                          onClick={resetStory}
+                          className="bg-white text-black px-8 py-4 rounded-2xl font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2"
+                        >
+                          Start a New Story
+                        </button>
+                      </div>
                     </div>
                   )}
                 </motion.div>
@@ -478,6 +491,15 @@ function StoryScreenInner({
           )}
         </div>
       </main>
+
+      {/* Publish Dialog */}
+      {isEnding && (
+        <PublishDialog
+          isOpen={showPublishDialog}
+          onClose={() => setShowPublishDialog(false)}
+          endingNodeId={session.storyMap.currentNodeId}
+        />
+      )}
     </div>
   );
 }

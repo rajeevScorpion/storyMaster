@@ -1,8 +1,9 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import type { StorySession, StoryMap } from '@/lib/types/story';
+import type { StorySession, StoryMap, StoryBeat } from '@/lib/types/story';
 import type { DbStory } from '@/lib/types/database';
+import type { StorylineChoice } from '@/lib/utils/storyline';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -159,4 +160,48 @@ export async function deleteStory(storyId: string): Promise<void> {
     .eq('user_id', user.id);
 
   if (error) throw new Error(`Failed to delete story: ${error.message}`);
+}
+
+/**
+ * Publish a storyline to the database.
+ * Assets should already be uploaded by the client before calling this.
+ */
+export async function publishStoryline(params: {
+  storyId: string;
+  title: string;
+  beats: StoryBeat[];
+  choices: StorylineChoice[];
+  nodePath: string[];
+  coverImageUrl: string | null;
+}): Promise<{ storylineId: string }> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  // Get author name from profile
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('display_name')
+    .eq('id', user.id)
+    .single();
+
+  const { data, error } = await supabase
+    .from('storylines')
+    .insert({
+      story_id: params.storyId,
+      user_id: user.id,
+      title: params.title,
+      beat_count: params.beats.length,
+      cover_image_url: params.coverImageUrl,
+      node_path: params.nodePath,
+      beats: params.beats as unknown as Record<string, unknown>[],
+      choices: params.choices as unknown as Record<string, unknown>[],
+      author_name: profile?.display_name || 'Anonymous',
+      is_public: true,
+    })
+    .select('id')
+    .single();
+
+  if (error) throw new Error(`Failed to publish storyline: ${error.message}`);
+  return { storylineId: data.id };
 }
