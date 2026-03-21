@@ -6,6 +6,7 @@ import { AgeGroup, StoryConfig, StoryLanguage } from '@/lib/types/story';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
+import Gallery from './Gallery';
 
 interface LandingScreenProps {
   onBegin?: (prompt: string, config?: StoryConfig) => void;
@@ -157,6 +158,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
           </button>
         </div>
       </motion.div>
+
+      {/* Public Storylines Gallery */}
+      <Gallery />
     </div>
   );
 }
