@@ -3,6 +3,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { StorySession, StoryBeat, Character } from '@/lib/types/story';
 import { STORY_MASTER_SYSTEM_PROMPT, VISUAL_PROMPT_COMPOSER_PROMPT } from '@/lib/ai/prompts';
+import { compressImage } from '@/lib/utils/image';
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -224,7 +225,9 @@ export async function generateImage(prompt: string, characters: any[], visualSty
     
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) {
-        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        const rawDataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+        // Compress to 1280x720 WebP at 80% quality
+        return await compressImage(rawDataUrl, 1280, 720, 0.8);
       }
     }
     throw new Error('No image generated');

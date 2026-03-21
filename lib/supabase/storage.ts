@@ -77,7 +77,7 @@ export async function uploadNodeAssets(
     results[nodeId] = {};
 
     if (isBase64DataUrl(node.data.imageUrl)) {
-      const imgPath = `${basePath}/${nodeId}/image.jpg`;
+      const imgPath = `${basePath}/${nodeId}/image.webp`;
       uploads.push(
         uploadAsset(bucket, imgPath, node.data.imageUrl!).then((url) => {
           results[nodeId].imageUrl = url;
@@ -182,6 +182,6 @@ export async function uploadCoverImage(
   storylineId: string,
   imageDataUrl: string
 ): Promise<string> {
-  const path = `${userId}/${storylineId}/cover.jpg`;
+  const path = `${userId}/${storylineId}/cover.webp`;
   return uploadAsset('public-storylines', path, imageDataUrl);
 }

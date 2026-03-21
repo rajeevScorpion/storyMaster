@@ -5,7 +5,7 @@ import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode } from '../ty
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, selectNarratorVoice, generateNarration } from '@/app/actions/story';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction } from '@/app/actions/persistence';
-import { uploadNodeAssets, replaceBase64WithUrls } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap } from '@/lib/supabase/storage';
 import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
@@ -307,8 +307,15 @@ export const useStoryStore = create<StoryState>()(
           // Replace base64 with storage URLs in the map
           const updatedMap = replaceBase64WithUrls(session.storyMap, assetMap);
 
-          // Save to database
-          const { storyId } = await saveStoryAction(session, updatedMap);
+          // Strip any remaining base64 from the map before sending to server action
+          const cleanMap = stripBase64FromStoryMap(updatedMap);
+
+          // Save to database (session beats are stripped to avoid 1MB body limit)
+          const strippedSession = {
+            ...session,
+            beats: session.beats.map(b => ({ ...b, imageUrl: undefined, audioUrl: undefined })),
+          };
+          const { storyId } = await saveStoryAction(strippedSession, cleanMap);
 
           // Update local session with savedStoryId and storage URLs
           const updatedSession = deriveSessionFields(
