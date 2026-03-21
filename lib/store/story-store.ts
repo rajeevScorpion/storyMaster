@@ -4,6 +4,9 @@ import { get, set as idbSet, del } from 'idb-keyval';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, selectNarratorVoice, generateNarration } from '@/app/actions/story';
+import { saveStory as saveStoryAction, loadStory as loadStoryAction } from '@/app/actions/persistence';
+import { uploadNodeAssets, replaceBase64WithUrls } from '@/lib/supabase/storage';
+import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
   addChildNode,
@@ -40,6 +43,7 @@ interface StoryState {
   isGeneratingAudio: boolean;
   audioReadyNodeId: string | null;
   storyMode: boolean;
+  isSaving: boolean;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
@@ -48,6 +52,8 @@ interface StoryState {
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
+  saveStoryToCloud: (userId: string) => Promise<void>;
+  loadStoryFromCloud: (storyId: string) => Promise<void>;
 }
 
 function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
@@ -75,6 +81,7 @@ export const useStoryStore = create<StoryState>()(
       isGeneratingAudio: false,
       audioReadyNodeId: null,
       storyMode: false,
+      isSaving: false,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
         set({
@@ -282,6 +289,48 @@ export const useStoryStore = create<StoryState>()(
 
       toggleStoryMode: () => {
         set((state) => ({ storyMode: !state.storyMode }));
+      },
+
+      saveStoryToCloud: async (userId: string) => {
+        const { session } = get();
+        if (!session) return;
+
+        set({ isSaving: true, error: null });
+
+        try {
+          // Upload images for current path nodes
+          const currentPath = getPathToNode(session.storyMap, session.storyMap.currentNodeId);
+          const nodeIds = currentPath.map((n) => n.id);
+          const basePath = `${userId}/${session.savedStoryId || session.storySessionId}`;
+          const assetMap = await uploadNodeAssets('story-assets', basePath, session.storyMap, nodeIds);
+
+          // Replace base64 with storage URLs in the map
+          const updatedMap = replaceBase64WithUrls(session.storyMap, assetMap);
+
+          // Save to database
+          const { storyId } = await saveStoryAction(session, updatedMap);
+
+          // Update local session with savedStoryId and storage URLs
+          const updatedSession = deriveSessionFields(
+            { ...session, savedStoryId: storyId },
+            updatedMap
+          );
+          set({ session: updatedSession, isSaving: false });
+        } catch (error: any) {
+          set({ isSaving: false, error: error.message || 'Failed to save story' });
+        }
+      },
+
+      loadStoryFromCloud: async (storyId: string) => {
+        set({ isLoading: true, error: null });
+
+        try {
+          const session = await loadStoryAction(storyId);
+          const fullSession = deriveSessionFields(session, session.storyMap);
+          set({ session: fullSession, isLoading: false });
+        } catch (error: any) {
+          set({ isLoading: false, error: error.message || 'Failed to load story' });
+        }
       },
     }),
     {

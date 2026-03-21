@@ -4,7 +4,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2 } from 'lucide-react';
+import { useAuth } from '@/lib/hooks/useAuth';
 import Timeline from './Timeline';
 import NarrationButton from './NarrationButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
@@ -23,6 +24,9 @@ export default function StoryScreen() {
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
   const storyMode = useStoryStore((state) => state.storyMode);
   const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
+  const isSaving = useStoryStore((state) => state.isSaving);
+  const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
+  const { user } = useAuth();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
 
@@ -53,6 +57,8 @@ export default function StoryScreen() {
       clearAudioReady={clearAudioReady}
       storyMode={storyMode}
       toggleStoryMode={toggleStoryMode}
+      isSaving={isSaving}
+      onSave={user ? () => saveStoryToCloud(user.id) : undefined}
     />
   );
 }
@@ -73,6 +79,8 @@ function StoryScreenInner({
   clearAudioReady,
   storyMode,
   toggleStoryMode,
+  isSaving,
+  onSave,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -88,6 +96,8 @@ function StoryScreenInner({
   clearAudioReady: () => void;
   storyMode: boolean;
   toggleStoryMode: () => void;
+  isSaving: boolean;
+  onSave?: () => void;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -229,6 +239,20 @@ function StoryScreenInner({
         </div>
         <div className="flex items-center gap-4 text-sm font-sans uppercase tracking-widest text-neutral-400">
           <span>Beat {currentBeat.beatNumber} / {session.maxBeats}</span>
+          {onSave && (
+            <button
+              onClick={onSave}
+              disabled={isSaving}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
+              title={isSaving ? 'Saving...' : 'Save Story'}
+            >
+              {isSaving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4" />
+              )}
+            </button>
+          )}
           <button
             onClick={resetStory}
             className="p-2 hover:bg-white/10 rounded-full transition-colors"
