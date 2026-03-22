@@ -4,8 +4,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, BookOpen, Home, Play, Pause } from 'lucide-react';
+import { ChevronLeft, ChevronRight, BookOpen, Home, Play, Pause, Bookmark, BookmarkCheck, Compass } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import ChoiceTransition from './ChoiceTransition';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
@@ -18,18 +19,44 @@ interface StorylinePlayerProps {
   choices: StorylineChoice[];
   authorName: string | null;
   isOwner: boolean;
+  isSaved?: boolean;
+  isLoggedIn?: boolean;
 }
 
 export default function StorylinePlayer({
+  storylineId,
+  storyId,
   title,
   beats,
   choices,
   authorName,
   isOwner,
+  isSaved: initialSaved = false,
+  isLoggedIn = false,
 }: StorylinePlayerProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showChoice, setShowChoice] = useState(false);
   const [autoPlay, setAutoPlay] = useState(false);
+  const [isSaved, setIsSaved] = useState(initialSaved);
+  const [isSavingToProfile, setIsSavingToProfile] = useState(false);
+
+  const handleToggleSave = async () => {
+    if (isSavingToProfile) return;
+    setIsSavingToProfile(true);
+    try {
+      if (isSaved) {
+        await unsaveStoryline(storylineId);
+        setIsSaved(false);
+      } else {
+        await saveStorylineToProfile(storylineId);
+        setIsSaved(true);
+      }
+    } catch (error) {
+      console.error('Failed to toggle save:', error);
+    } finally {
+      setIsSavingToProfile(false);
+    }
+  };
 
   const currentBeat = beats[currentIndex];
   const isFirst = currentIndex === 0;
@@ -137,8 +164,40 @@ export default function StorylinePlayer({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-4 text-sm font-sans uppercase tracking-widest text-neutral-400">
-          <span>Beat {currentIndex + 1} / {beats.length}</span>
+        <div className="flex items-center gap-3 text-sm font-sans uppercase tracking-widest text-neutral-400">
+          <span className="text-xs">Beat {currentIndex + 1} / {beats.length}</span>
+
+          {/* Save to profile button */}
+          {isLoggedIn && (
+            <button
+              onClick={handleToggleSave}
+              disabled={isSavingToProfile}
+              className={`p-2 rounded-full transition-all ${
+                isSaved
+                  ? 'bg-purple-500/20 text-purple-300'
+                  : 'hover:bg-white/10 text-neutral-500 hover:text-neutral-200'
+              }`}
+              title={isSaved ? 'Remove from saved' : 'Save to my storylines'}
+            >
+              {isSaved ? (
+                <BookmarkCheck className="w-4 h-4" />
+              ) : (
+                <Bookmark className="w-4 h-4" />
+              )}
+            </button>
+          )}
+
+          {/* Explore full story tree */}
+          {isLoggedIn && (
+            <Link
+              href={`/explore/${storyId}`}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors text-neutral-500 hover:text-indigo-300"
+              title="Explore full story tree"
+            >
+              <Compass className="w-4 h-4" />
+            </Link>
+          )}
+
           {isOwner && (
             <Link
               href="/"

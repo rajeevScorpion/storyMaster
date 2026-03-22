@@ -58,6 +58,8 @@ export interface StoryMap {
 export interface StorySession {
   storySessionId: string;
   savedStoryId?: string;
+  explorationMode?: boolean;
+  sourceStoryOwnerId?: string;
   userPrompt: string;
   title: string;
   genre: string;

@@ -4,10 +4,11 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2 } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
+import Link from 'next/link';
 import NarrationButton from './NarrationButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
@@ -27,6 +28,7 @@ export default function StoryScreen() {
   const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
   const isSaving = useStoryStore((state) => state.isSaving);
   const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
+  const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const { user } = useAuth();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -60,6 +62,7 @@ export default function StoryScreen() {
       toggleStoryMode={toggleStoryMode}
       isSaving={isSaving}
       onSave={user ? () => saveStoryToCloud(user.id) : undefined}
+      lastPublishResult={lastPublishResult}
     />
   );
 }
@@ -82,6 +85,7 @@ function StoryScreenInner({
   toggleStoryMode,
   isSaving,
   onSave,
+  lastPublishResult,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -99,6 +103,7 @@ function StoryScreenInner({
   toggleStoryMode: () => void;
   isSaving: boolean;
   onSave?: () => void;
+  lastPublishResult: { alreadyPublished: boolean; storylineId: string } | null;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -351,14 +356,57 @@ function StoryScreenInner({
                       <p className="text-neutral-400 font-sans italic">
                         {currentBeat.nextBeatGoal}
                       </p>
+
+                      {/* Auto-publish status */}
+                      {lastPublishResult && (
+                        <div className="mt-4">
+                          {lastPublishResult.alreadyPublished ? (
+                            <div className="flex items-center gap-2 text-sm text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3">
+                              <Check className="w-4 h-4 shrink-0" />
+                              <span>This path is already published.</span>
+                              <Link
+                                href={`/storyline/${lastPublishResult.storylineId}`}
+                                className="ml-auto flex items-center gap-1 text-indigo-300 hover:text-indigo-200 transition-colors"
+                              >
+                                View <ExternalLink className="w-3 h-3" />
+                              </Link>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
+                              <Share2 className="w-4 h-4 shrink-0" />
+                              <span>Storyline published!</span>
+                              <Link
+                                href={`/storyline/${lastPublishResult.storylineId}`}
+                                className="ml-auto flex items-center gap-1 text-emerald-300 hover:text-emerald-200 transition-colors"
+                              >
+                                View <ExternalLink className="w-3 h-3" />
+                              </Link>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="mt-8 flex flex-wrap gap-3">
-                        {onSave && (
+                        {!lastPublishResult && onSave && (
                           <button
                             onClick={() => setShowPublishDialog(true)}
                             className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2"
                           >
                             <Share2 className="w-4 h-4" />
                             Publish Storyline
+                          </button>
+                        )}
+                        {session.explorationMode && (
+                          <button
+                            onClick={() => {
+                              // Navigate to a branch point to explore more
+                              const rootId = session.storyMap.rootNodeId;
+                              navigateToNode(rootId);
+                            }}
+                            className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-indigo-500/30 transition-colors flex items-center gap-2"
+                          >
+                            <Compass className="w-4 h-4" />
+                            Explore More Branches
                           </button>
                         )}
                         <button

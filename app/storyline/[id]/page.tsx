@@ -23,9 +23,20 @@ export default async function StorylinePage({ params }: PageProps) {
     notFound();
   }
 
-  // Check if the current user is the owner
+  // Check if the current user is the owner and if they've saved this storyline
   const { data: { user } } = await supabase.auth.getUser();
   const isOwner = user?.id === storyline.user_id;
+  const isLoggedIn = !!user;
+
+  let isSaved = false;
+  if (user) {
+    const { count } = await supabase
+      .from('saved_storylines')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('storyline_id', id);
+    isSaved = (count ?? 0) > 0;
+  }
 
   return (
     <StorylinePlayer
@@ -36,6 +47,8 @@ export default async function StorylinePage({ params }: PageProps) {
       choices={storyline.choices as unknown as StorylineChoice[]}
       authorName={storyline.author_name}
       isOwner={isOwner}
+      isSaved={isSaved}
+      isLoggedIn={isLoggedIn}
     />
   );
 }

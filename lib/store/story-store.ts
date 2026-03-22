@@ -4,8 +4,9 @@ import { get, set as idbSet, del } from 'idb-keyval';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, selectNarratorVoice, generateNarration } from '@/app/actions/story';
-import { saveStory as saveStoryAction, loadStory as loadStoryAction } from '@/app/actions/persistence';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap } from '@/lib/supabase/storage';
+import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, updateBeatAssets } from '@/app/actions/persistence';
+import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction } from '@/app/actions/exploration';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadAsset } from '@/lib/supabase/storage';
 import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
@@ -42,6 +43,11 @@ const DEFAULT_CONFIG: StoryConfig = {
   maxBeats: 6,
 };
 
+interface PublishResult {
+  alreadyPublished: boolean;
+  storylineId: string;
+}
+
 interface StoryState {
   session: StorySession | null;
   isLoading: boolean;
@@ -51,6 +57,7 @@ interface StoryState {
   audioReadyNodeId: string | null;
   storyMode: boolean;
   isSaving: boolean;
+  lastPublishResult: PublishResult | null;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
@@ -61,6 +68,8 @@ interface StoryState {
   toggleStoryMode: () => void;
   saveStoryToCloud: (userId: string) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
+  exploreStoryTree: (storyId: string) => Promise<void>;
+  clearPublishResult: () => void;
 }
 
 function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
@@ -89,6 +98,7 @@ export const useStoryStore = create<StoryState>()(
       audioReadyNodeId: null,
       storyMode: false,
       isSaving: false,
+      lastPublishResult: null,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
         set({
@@ -215,6 +225,27 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: generate narration in background
           get().generateNarrationForNode(updatedMap.currentNodeId);
+
+          // Fire-and-forget: incremental beat save if story is persisted
+          if (session.savedStoryId) {
+            const newNode = updatedMap.nodes[updatedMap.currentNodeId];
+            saveBeatAction(session.savedStoryId, updatedMap.currentNodeId, newNode).catch(
+              (err) => console.error('Incremental beat save failed:', err)
+            );
+
+            // Auto-publish if this is an ending beat
+            if (beat.isEnding) {
+              autoPublishStoryline(
+                session.savedStoryId,
+                updatedMap.currentNodeId,
+                session.title
+              )
+                .then((result) => {
+                  set({ lastPublishResult: result });
+                })
+                .catch((err) => console.error('Auto-publish failed:', err));
+            }
+          }
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to continue story' });
         }
@@ -226,6 +257,11 @@ export const useStoryStore = create<StoryState>()(
 
         const updatedMap = { ...session.storyMap, currentNodeId: nodeId };
         set({ session: deriveSessionFields(session, updatedMap) });
+
+        // Fire-and-forget: track exploration position for non-owners
+        if (session.explorationMode && session.savedStoryId) {
+          trackExplorationAction(session.savedStoryId, nodeId).catch(() => {});
+        }
       },
 
       resetStory: () => {
@@ -358,6 +394,30 @@ export const useStoryStore = create<StoryState>()(
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to load story' });
         }
+      },
+
+      exploreStoryTree: async (storyId: string) => {
+        await hydrationPromise;
+
+        set({ isLoading: true, error: null, lastPublishResult: null });
+
+        try {
+          const session = await loadStoryTreeAction(storyId);
+          const fullSession = deriveSessionFields(session, session.storyMap);
+
+          if (process.env.NODE_ENV === 'development') {
+            const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
+            console.log(`[exploreStory] Loaded ${nodeCount} nodes, exploration=${fullSession.explorationMode}`);
+          }
+
+          set({ session: fullSession, isLoading: false });
+        } catch (error: any) {
+          set({ isLoading: false, error: error.message || 'Failed to load story for exploration' });
+        }
+      },
+
+      clearPublishResult: () => {
+        set({ lastPublishResult: null });
       },
     }),
     {

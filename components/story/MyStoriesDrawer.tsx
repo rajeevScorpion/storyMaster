@@ -2,16 +2,49 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock } from 'lucide-react';
-import { listUserStories, deleteStory } from '@/app/actions/persistence';
+import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play } from 'lucide-react';
+import { listUserStories, deleteStory, archiveStory, unarchiveStory, listSavedStorylines, unsaveStoryline } from '@/app/actions/persistence';
+import { listExploredStories } from '@/app/actions/exploration';
 import { useStoryStore } from '@/lib/store/story-store';
+import Link from 'next/link';
+
+type TabId = 'explored' | 'my-stories' | 'storylines';
 
 interface SavedStory {
   id: string;
   title: string;
   status: string;
+  is_archived: boolean;
   updated_at: string;
   user_prompt: string;
+}
+
+interface ExploredStory {
+  id: string;
+  story_id: string;
+  last_node_id: string | null;
+  updated_at: string;
+  story: {
+    id: string;
+    title: string;
+    user_prompt: string;
+    status: string;
+    user_id: string;
+  };
+}
+
+interface SavedStorylineItem {
+  id: string;
+  storyline_id: string;
+  saved_at: string;
+  storyline: {
+    id: string;
+    title: string;
+    beat_count: number;
+    cover_image_url: string | null;
+    author_name: string | null;
+    story_id: string;
+  };
 }
 
 interface MyStoriesDrawerProps {
@@ -19,30 +52,48 @@ interface MyStoriesDrawerProps {
   onClose: () => void;
 }
 
+const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
+  { id: 'explored', label: 'Explored', icon: Compass },
+  { id: 'my-stories', label: 'My Stories', icon: BookOpen },
+  { id: 'storylines', label: 'Storylines', icon: Library },
+];
+
 export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProps) {
+  const [activeTab, setActiveTab] = useState<TabId>('my-stories');
   const [stories, setStories] = useState<SavedStory[]>([]);
+  const [exploredStories, setExploredStories] = useState<ExploredStory[]>([]);
+  const [savedStorylines, setSavedStorylines] = useState<SavedStorylineItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [actionId, setActionId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const loadStoryFromCloud = useStoryStore((s) => s.loadStoryFromCloud);
+  const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
 
-  const fetchStories = useCallback(async () => {
+  const fetchData = useCallback(async (tab: TabId) => {
     setIsLoading(true);
     try {
-      const data = await listUserStories();
-      setStories(data);
+      if (tab === 'my-stories') {
+        const data = await listUserStories();
+        setStories(data);
+      } else if (tab === 'explored') {
+        const data = await listExploredStories();
+        setExploredStories(data);
+      } else if (tab === 'storylines') {
+        const data = await listSavedStorylines();
+        setSavedStorylines(data);
+      }
     } catch (error) {
-      console.error('Failed to fetch stories:', error);
+      console.error(`Failed to fetch ${tab}:`, error);
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (isOpen) fetchStories();
-  }, [isOpen, fetchStories]);
+    if (isOpen) fetchData(activeTab);
+  }, [isOpen, activeTab, fetchData]);
 
-  const handleLoad = async (storyId: string) => {
+  const handleLoadStory = async (storyId: string) => {
     setLoadingId(storyId);
     try {
       await loadStoryFromCloud(storyId);
@@ -54,15 +105,67 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     }
   };
 
-  const handleDelete = async (storyId: string) => {
-    setDeletingId(storyId);
+  const handleExplore = async (storyId: string) => {
+    setLoadingId(storyId);
+    try {
+      await exploreStoryTree(storyId);
+      onClose();
+    } catch (error) {
+      console.error('Failed to explore story:', error);
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  const handleDeleteStory = async (storyId: string) => {
+    setActionId(storyId);
     try {
       await deleteStory(storyId);
       setStories((prev) => prev.filter((s) => s.id !== storyId));
     } catch (error) {
       console.error('Failed to delete story:', error);
     } finally {
-      setDeletingId(null);
+      setActionId(null);
+    }
+  };
+
+  const handleArchiveStory = async (storyId: string) => {
+    setActionId(storyId);
+    try {
+      await archiveStory(storyId);
+      setStories((prev) =>
+        prev.map((s) => (s.id === storyId ? { ...s, is_archived: true } : s))
+      );
+    } catch (error) {
+      console.error('Failed to archive story:', error);
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleUnarchiveStory = async (storyId: string) => {
+    setActionId(storyId);
+    try {
+      await unarchiveStory(storyId);
+      setStories((prev) =>
+        prev.map((s) => (s.id === storyId ? { ...s, is_archived: false } : s))
+      );
+    } catch (error) {
+      console.error('Failed to unarchive story:', error);
+    } finally {
+      setActionId(null);
+    }
+  };
+
+  const handleUnsaveStoryline = async (storylineId: string) => {
+    setActionId(storylineId);
+    try {
+      await unsaveStoryline(storylineId);
+      setSavedStorylines((prev) => prev.filter((s) => s.storyline_id !== storylineId));
+    } catch (error) {
+      console.error('Failed to unsave storyline:', error);
+    } finally {
+      setActionId(null);
     }
   };
 
@@ -76,6 +179,219 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     const diffDays = Math.floor(diffHours / 24);
     if (diffDays < 7) return `${diffDays}d ago`;
     return date.toLocaleDateString();
+  };
+
+  const renderLoadingSkeletons = () => (
+    <div className="space-y-3">
+      {[...Array(3)].map((_, i) => (
+        <div key={i} className="h-24 rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse" />
+      ))}
+    </div>
+  );
+
+  const renderEmptyState = (icon: typeof BookOpen, title: string, description: string) => (
+    <div className="flex flex-col items-center justify-center h-64 text-center px-8">
+      {(() => { const Icon = icon; return <Icon className="w-12 h-12 text-neutral-700 mb-4" />; })()}
+      <p className="text-neutral-400 font-serif text-lg mb-2">{title}</p>
+      <p className="text-neutral-600 text-sm">{description}</p>
+    </div>
+  );
+
+  const renderMyStories = () => {
+    if (stories.length === 0) {
+      return renderEmptyState(BookOpen, 'No stories yet', 'Your created stories will appear here.');
+    }
+    return stories.map((story) => (
+      <motion.div
+        key={story.id}
+        layout
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className={`group relative rounded-2xl border transition-all overflow-hidden ${
+          story.is_archived
+            ? 'bg-neutral-900/30 border-white/5 opacity-60'
+            : 'bg-neutral-900/60 border-white/5 hover:border-white/15'
+        }`}
+      >
+        <button
+          onClick={() => handleLoadStory(story.id)}
+          disabled={loadingId === story.id}
+          className="w-full text-left p-5 pr-20"
+        >
+          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+            {story.title}
+          </h3>
+          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
+          <div className="flex items-center gap-3 mt-3">
+            <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+              story.is_archived
+                ? 'bg-neutral-500/10 text-neutral-500'
+                : story.status === 'completed'
+                  ? 'bg-emerald-500/10 text-emerald-400'
+                  : 'bg-amber-500/10 text-amber-400'
+            }`}>
+              {story.is_archived ? 'archived' : story.status}
+            </span>
+            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
+              <Clock className="w-3 h-3" />
+              {formatDate(story.updated_at)}
+            </span>
+          </div>
+          {loadingId === story.id && (
+            <div className="absolute inset-0 bg-neutral-950/80 flex items-center justify-center rounded-2xl">
+              <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
+            </div>
+          )}
+        </button>
+
+        {/* Action buttons */}
+        <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+          {story.is_archived ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleUnarchiveStory(story.id); }}
+              disabled={actionId === story.id}
+              className="p-2 hover:bg-emerald-500/10 rounded-full transition-all"
+              title="Restore story"
+            >
+              {actionId === story.id ? (
+                <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+              ) : (
+                <ArchiveRestore className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleArchiveStory(story.id); }}
+              disabled={actionId === story.id}
+              className="p-2 hover:bg-amber-500/10 rounded-full transition-all"
+              title="Archive story"
+            >
+              {actionId === story.id ? (
+                <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
+              ) : (
+                <Archive className="w-4 h-4 text-neutral-600 hover:text-amber-400 transition-colors" />
+              )}
+            </button>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleDeleteStory(story.id); }}
+            disabled={actionId === story.id}
+            className="p-2 hover:bg-red-500/10 rounded-full transition-all"
+            title="Delete story permanently"
+          >
+            <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
+          </button>
+        </div>
+      </motion.div>
+    ));
+  };
+
+  const renderExploredStories = () => {
+    if (exploredStories.length === 0) {
+      return renderEmptyState(Compass, 'No explored stories', 'Stories you explore from the gallery will appear here.');
+    }
+    return exploredStories.map((item) => (
+      <motion.div
+        key={item.id}
+        layout
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
+      >
+        <button
+          onClick={() => handleExplore(item.story_id)}
+          disabled={loadingId === item.story_id}
+          className="w-full text-left p-5"
+        >
+          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+            {item.story?.title || 'Untitled Story'}
+          </h3>
+          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
+            {item.story?.user_prompt || ''}
+          </p>
+          <div className="flex items-center gap-3 mt-3">
+            <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400">
+              explored
+            </span>
+            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
+              <Clock className="w-3 h-3" />
+              {formatDate(item.updated_at)}
+            </span>
+          </div>
+          {loadingId === item.story_id && (
+            <div className="absolute inset-0 bg-neutral-950/80 flex items-center justify-center rounded-2xl">
+              <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
+            </div>
+          )}
+        </button>
+      </motion.div>
+    ));
+  };
+
+  const renderStorylines = () => {
+    if (savedStorylines.length === 0) {
+      return renderEmptyState(Library, 'No saved storylines', 'Completed storylines will appear here automatically.');
+    }
+    return savedStorylines.map((item) => (
+      <motion.div
+        key={item.id}
+        layout
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
+      >
+        <div className="p-5 pr-20">
+          <Link
+            href={`/storyline/${item.storyline_id}`}
+            onClick={onClose}
+            className="block"
+          >
+            <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+              {item.storyline?.title || 'Untitled Storyline'}
+            </h3>
+            <div className="flex items-center gap-3 mt-2">
+              <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
+                {item.storyline?.beat_count || 0} beats
+              </span>
+              {item.storyline?.author_name && (
+                <span className="text-[10px] text-neutral-600">
+                  by {item.storyline.author_name}
+                </span>
+              )}
+              <span className="flex items-center gap-1 text-[10px] text-neutral-600">
+                <Clock className="w-3 h-3" />
+                {formatDate(item.saved_at)}
+              </span>
+            </div>
+          </Link>
+        </div>
+
+        {/* Action buttons */}
+        <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+          <Link
+            href={`/storyline/${item.storyline_id}`}
+            onClick={onClose}
+            className="p-2 hover:bg-purple-500/10 rounded-full transition-all"
+            title="Play storyline"
+          >
+            <Play className="w-4 h-4 text-neutral-600 hover:text-purple-400 transition-colors" />
+          </Link>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleUnsaveStoryline(item.storyline_id); }}
+            disabled={actionId === item.storyline_id}
+            className="p-2 hover:bg-red-500/10 rounded-full transition-all"
+            title="Remove from saved"
+          >
+            {actionId === item.storyline_id ? (
+              <Loader2 className="w-4 h-4 text-red-400 animate-spin" />
+            ) : (
+              <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
+            )}
+          </button>
+        </div>
+      </motion.div>
+    ));
   };
 
   return (
@@ -104,7 +420,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             <div className="flex items-center justify-between p-6 border-b border-white/5">
               <div className="flex items-center gap-3">
                 <BookOpen className="w-5 h-5 text-emerald-400" />
-                <h2 className="text-lg font-serif text-neutral-200">My Stories</h2>
+                <h2 className="text-lg font-serif text-neutral-200">Stories</h2>
               </div>
               <button
                 onClick={onClose}
@@ -114,84 +430,38 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
               </button>
             </div>
 
+            {/* Tabs */}
+            <div className="flex border-b border-white/5">
+              {TABS.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex-1 flex items-center justify-center gap-2 py-3 px-2 text-xs font-medium transition-all border-b-2 ${
+                      isActive
+                        ? 'border-emerald-400 text-emerald-400'
+                        : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {isLoading ? (
-                <div className="space-y-3">
-                  {[...Array(3)].map((_, i) => (
-                    <div
-                      key={i}
-                      className="h-24 rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse"
-                    />
-                  ))}
-                </div>
-              ) : stories.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-center px-8">
-                  <BookOpen className="w-12 h-12 text-neutral-700 mb-4" />
-                  <p className="text-neutral-400 font-serif text-lg mb-2">No stories yet</p>
-                  <p className="text-neutral-600 text-sm">
-                    Your saved stories will appear here.
-                  </p>
-                </div>
+                renderLoadingSkeletons()
+              ) : activeTab === 'my-stories' ? (
+                renderMyStories()
+              ) : activeTab === 'explored' ? (
+                renderExploredStories()
               ) : (
-                stories.map((story) => (
-                  <motion.div
-                    key={story.id}
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
-                  >
-                    <button
-                      onClick={() => handleLoad(story.id)}
-                      disabled={loadingId === story.id}
-                      className="w-full text-left p-5 pr-12"
-                    >
-                      <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-                        {story.title}
-                      </h3>
-                      <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
-                        {story.user_prompt}
-                      </p>
-                      <div className="flex items-center gap-3 mt-3">
-                        <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-                          story.status === 'completed'
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : 'bg-amber-500/10 text-amber-400'
-                        }`}>
-                          {story.status}
-                        </span>
-                        <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-                          <Clock className="w-3 h-3" />
-                          {formatDate(story.updated_at)}
-                        </span>
-                      </div>
-                      {loadingId === story.id && (
-                        <div className="absolute inset-0 bg-neutral-950/80 flex items-center justify-center rounded-2xl">
-                          <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
-                        </div>
-                      )}
-                    </button>
-
-                    {/* Delete button */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDelete(story.id);
-                      }}
-                      disabled={deletingId === story.id}
-                      className="absolute top-4 right-3 p-2 opacity-0 group-hover:opacity-100 hover:bg-red-500/10 rounded-full transition-all"
-                      title="Delete story"
-                    >
-                      {deletingId === story.id ? (
-                        <Loader2 className="w-4 h-4 text-red-400 animate-spin" />
-                      ) : (
-                        <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
-                      )}
-                    </button>
-                  </motion.div>
-                ))
+                renderStorylines()
               )}
             </div>
           </motion.div>
