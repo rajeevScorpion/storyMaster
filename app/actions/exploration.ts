@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { signStoryMapAssetUrls } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
 
@@ -122,6 +123,9 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     // Fallback to legacy story_map JSONB
     storyMap = dbStory.story_map as unknown as StoryMap;
   }
+
+  // Replace private storage URLs with signed URLs so images/audio load in the browser
+  storyMap = await signStoryMapAssetUrls(supabase, storyMap);
 
   // Track exploration for non-owners
   if (!isOwner) {

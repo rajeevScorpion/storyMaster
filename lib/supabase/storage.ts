@@ -1,4 +1,5 @@
 import { createClient } from './client';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type { StoryMap, StoryNode } from '@/lib/types/story';
 
 /**
@@ -184,4 +185,74 @@ export async function uploadCoverImage(
 ): Promise<string> {
   const path = `${userId}/${storylineId}/cover.webp`;
   return uploadAsset('public-storylines', path, imageDataUrl);
+}
+
+/**
+ * Extract the storage path from a Supabase Storage public URL.
+ * E.g. "https://xxx.supabase.co/storage/v1/object/public/story-assets/user/story/node/image.webp"
+ *   → "user/story/node/image.webp"
+ */
+function extractStoragePath(url: string, bucket: string): string | null {
+  const marker = `/storage/v1/object/public/${bucket}/`;
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return url.substring(idx + marker.length);
+}
+
+/**
+ * Replace Supabase Storage public URLs in a StoryMap with signed URLs.
+ * Must be called from a server context with a server supabase client.
+ */
+export async function signStoryMapAssetUrls(
+  supabase: SupabaseClient,
+  storyMap: StoryMap,
+  bucket = 'story-assets',
+  expiresIn = 3600
+): Promise<StoryMap> {
+  // Collect all paths that need signing
+  const pathEntries: { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string }[] = [];
+
+  for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
+    for (const field of ['imageUrl', 'audioUrl'] as const) {
+      const url = node.data[field];
+      if (!url) continue;
+      const storagePath = extractStoragePath(url, bucket);
+      if (storagePath) {
+        pathEntries.push({ nodeId, field, path: storagePath });
+      }
+    }
+  }
+
+  if (pathEntries.length === 0) return storyMap;
+
+  // Batch-create signed URLs
+  const paths = pathEntries.map((e) => e.path);
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrls(paths, expiresIn);
+
+  if (error || !data) {
+    console.error('Failed to create signed URLs:', error);
+    return storyMap;
+  }
+
+  // Build updated nodes
+  const cloned: StoryMap = { ...storyMap, nodes: { ...storyMap.nodes } };
+
+  for (let i = 0; i < pathEntries.length; i++) {
+    const entry = pathEntries[i];
+    const signed = data[i];
+    if (signed.error || !signed.signedUrl) continue;
+
+    const node = cloned.nodes[entry.nodeId];
+    cloned.nodes[entry.nodeId] = {
+      ...node,
+      data: {
+        ...node.data,
+        [entry.field]: signed.signedUrl,
+      },
+    };
+  }
+
+  return cloned;
 }
