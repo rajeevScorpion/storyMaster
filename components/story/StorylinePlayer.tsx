@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, BookOpen, Home, Play, Pause, Bookmark, BookmarkCheck, Compass } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, BookOpen, Home, Play, Pause, Bookmark, BookmarkCheck, Compass } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import ChoiceTransition from './ChoiceTransition';
@@ -39,6 +39,7 @@ export default function StorylinePlayer({
   const [autoPlay, setAutoPlay] = useState(false);
   const [isSaved, setIsSaved] = useState(initialSaved);
   const [isSavingToProfile, setIsSavingToProfile] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   const handleToggleSave = async () => {
     if (isSavingToProfile) return;
@@ -86,10 +87,21 @@ export default function StorylinePlayer({
     setCurrentIndex((i) => i - 1);
   }, [isFirst]);
 
-  const { playbackState, togglePlayPause } = useAudioPlayer(
+  const { playbackState, togglePlayPause, play: playAudio } = useAudioPlayer(
     currentBeat.audioUrl || undefined,
     `storyline-${currentIndex}`
   );
+
+  // Auto-play narration when beat changes and autoPlay is on
+  const prevIndexRef = useRef(currentIndex);
+  useEffect(() => {
+    if (prevIndexRef.current !== currentIndex) {
+      prevIndexRef.current = currentIndex;
+      if (autoPlay && currentBeat.audioUrl && playbackState === 'idle') {
+        playAudio();
+      }
+    }
+  }, [currentIndex, autoPlay, currentBeat.audioUrl, playbackState, playAudio]);
 
   // Auto-advance when audio finishes (playbackState goes from 'playing' to 'idle')
   const wasPlayingRef = useRef(false);
@@ -116,6 +128,8 @@ export default function StorylinePlayer({
         goPrev();
       } else if (e.key === 'p') {
         togglePlayPause();
+      } else if (e.key === 'm') {
+        setIsMinimized(prev => !prev);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -219,35 +233,58 @@ export default function StorylinePlayer({
           )}
         </AnimatePresence>
 
-        {/* Story Text Card */}
-        <AnimatePresence mode="wait">
-          {!showChoice && (
-            <motion.div
-              key={currentIndex}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-              className="bg-neutral-900/10 backdrop-blur-sm border border-white/5 rounded-3xl p-8 md:p-10 max-h-[60vh] overflow-y-auto"
-            >
-              <p className="text-xl md:text-2xl font-serif leading-relaxed text-neutral-300">
-                {currentBeat.storyText}
-              </p>
+        {/* Story Text Card + Toggle */}
+        <div className="flex flex-col items-center">
+          {/* Minimize/maximize toggle */}
+          <button
+            onClick={() => setIsMinimized(!isMinimized)}
+            className="mb-2 p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
+            title={isMinimized ? 'Expand (M)' : 'Minimize (M)'}
+          >
+            {isMinimized ? (
+              <ChevronUp className="w-5 h-5 text-neutral-300" />
+            ) : (
+              <ChevronDown className="w-5 h-5 text-neutral-300" />
+            )}
+          </button>
 
-              {/* Ending state */}
-              {currentBeat.isEnding && (
-                <div className="mt-8 pt-8 border-t border-white/10">
-                  <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
-                    The End
-                  </h3>
-                  <p className="text-neutral-400 font-sans italic">
-                    {currentBeat.nextBeatGoal}
-                  </p>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
+          <AnimatePresence mode="wait">
+            {!showChoice && (
+              <motion.div
+                key={currentIndex}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+                className={`w-full backdrop-blur-sm border border-white/5 rounded-3xl transition-all duration-500 ${
+                  isMinimized
+                    ? 'bg-neutral-950/40 p-4 md:p-6'
+                    : 'bg-neutral-900/10 p-8 md:p-10 max-h-[60vh] overflow-y-auto'
+                }`}
+              >
+                <p className={`font-serif leading-relaxed transition-all duration-500 ${
+                  isMinimized
+                    ? 'text-lg md:text-xl text-neutral-500 line-clamp-2'
+                    : 'text-xl md:text-2xl text-neutral-300'
+                }`}>
+                  {currentBeat.storyText}
+                </p>
+
+                {/* Ending state */}
+                {!isMinimized && currentBeat.isEnding && (
+                  <div className="mt-8 pt-8 border-t border-white/10">
+                    <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
+                      The End
+                    </h3>
+                    <p className="text-neutral-400 font-sans italic">
+                      {currentBeat.nextBeatGoal}
+                    </p>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
         {/* Navigation Controls */}
         <div className="flex items-center justify-between mt-6 mb-4">
@@ -289,6 +326,19 @@ export default function StorylinePlayer({
               }`}
             >
               auto
+            </button>
+
+            {/* Minimize/maximize toggle */}
+            <button
+              onClick={() => setIsMinimized(!isMinimized)}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border ${
+                isMinimized
+                  ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300'
+                  : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
+              }`}
+              title={isMinimized ? 'Expand text (M)' : 'Minimize text (M)'}
+            >
+              {isMinimized ? 'max' : 'min'}
             </button>
 
             {/* Progress dots */}

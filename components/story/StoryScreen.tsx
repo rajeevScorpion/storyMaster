@@ -177,7 +177,7 @@ function StoryScreenInner({
     options: currentBeat.options,
     onNavigateNode: navigateToNode,
     onSelectOption: continueStory,
-    onSetMinimized: setIsMinimized,
+    onToggleMinimized: () => setIsMinimized(prev => !prev),
     onToggleNarration: () => {
       if (currentBeat.audioUrl) {
         togglePlayPause();
