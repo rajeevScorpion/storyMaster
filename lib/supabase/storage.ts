@@ -90,7 +90,7 @@ export async function uploadNodeAssets(
     }
 
     if (isBase64DataUrl(node.data.audioUrl)) {
-      const audioPath = `${basePath}/${nodeId}/audio.wav`;
+      const audioPath = `${basePath}/${nodeId}/audio.mp3`;
       uploads.push(
         uploadAsset(bucket, audioPath, node.data.audioUrl!).then((url) => {
           results[nodeId].audioUrl = url;

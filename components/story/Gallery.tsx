@@ -25,14 +25,14 @@ export default function Gallery() {
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.8, delay: 0.4 }}
-      className="w-full max-w-5xl mx-auto mt-20 px-4"
+      className="w-full max-w-5xl mx-auto py-20 px-4"
     >
       <div className="text-center mb-10">
         <h2 className="text-2xl md:text-3xl font-serif text-neutral-200 mb-3">
           Discover Stories
         </h2>
         <p className="text-sm text-neutral-500 font-sans max-w-md mx-auto">
-          Scroll below to experience stories created by people like us.
+          Experience stories created by people like us.
         </p>
       </div>
 

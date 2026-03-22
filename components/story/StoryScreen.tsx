@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
@@ -27,6 +27,7 @@ export default function StoryScreen() {
   const storyMode = useStoryStore((state) => state.storyMode);
   const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
   const isSaving = useStoryStore((state) => state.isSaving);
+  const saveStatus = useStoryStore((state) => state.saveStatus);
   const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const { user } = useAuth();
@@ -61,6 +62,7 @@ export default function StoryScreen() {
       storyMode={storyMode}
       toggleStoryMode={toggleStoryMode}
       isSaving={isSaving}
+      saveStatus={saveStatus}
       onSave={user ? () => saveStoryToCloud(user.id) : undefined}
       lastPublishResult={lastPublishResult}
     />
@@ -84,6 +86,7 @@ function StoryScreenInner({
   storyMode,
   toggleStoryMode,
   isSaving,
+  saveStatus,
   onSave,
   lastPublishResult,
 }: {
@@ -102,6 +105,7 @@ function StoryScreenInner({
   storyMode: boolean;
   toggleStoryMode: () => void;
   isSaving: boolean;
+  saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string } | null;
 }) {
@@ -187,6 +191,20 @@ function StoryScreenInner({
     isEnding,
   });
 
+  // Auto-minimize panel when loading starts so background image is visible
+  useEffect(() => {
+    if (isLoading) {
+      setIsMinimized(true);
+    }
+  }, [isLoading]);
+
+  // Auto-save when a new beat is generated
+  useEffect(() => {
+    if (saveStatus === 'unsaved' && onSave && !isSaving) {
+      onSave();
+    }
+  }, [saveStatus, onSave, isSaving]);
+
   // Auto-scroll focused option into view
   useEffect(() => {
     if (focusedOptionIndex >= 0 && optionRefs.current[focusedOptionIndex]) {
@@ -221,6 +239,7 @@ function StoryScreenInner({
                 className={`object-cover transition-opacity duration-700 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
+                unoptimized
               />
             )}
             <motion.div
@@ -249,16 +268,41 @@ function StoryScreenInner({
           {onSave && (
             <button
               onClick={onSave}
-              disabled={isSaving}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors disabled:opacity-50"
-              title={isSaving ? 'Saving...' : 'Save Story'}
+              disabled={isSaving || saveStatus === 'saved'}
+              className={`p-2 rounded-full transition-all duration-300 ${
+                saveStatus === 'saving'
+                  ? 'text-amber-400'
+                  : saveStatus === 'saved'
+                  ? 'text-emerald-400'
+                  : saveStatus === 'unsaved'
+                  ? 'text-orange-400 hover:bg-white/10'
+                  : 'text-neutral-400 hover:bg-white/10'
+              } disabled:cursor-default`}
+              title={
+                saveStatus === 'saving'
+                  ? 'Saving...'
+                  : saveStatus === 'saved'
+                  ? 'Saved to cloud'
+                  : saveStatus === 'unsaved'
+                  ? 'Unsaved changes'
+                  : 'Save Story'
+              }
             >
-              {isSaving ? (
+              {saveStatus === 'saving' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
+              ) : saveStatus === 'saved' ? (
+                <CheckCircle2 className="w-4 h-4" />
+              ) : saveStatus === 'unsaved' ? (
+                <CloudUpload className="w-4 h-4" />
               ) : (
                 <Save className="w-4 h-4" />
               )}
             </button>
+          )}
+          {!onSave && saveStatus !== 'idle' && (
+            <div className="p-2 text-neutral-600" title="Sign in to save">
+              <CloudOff className="w-4 h-4" />
+            </div>
           )}
           <button
             onClick={resetStory}

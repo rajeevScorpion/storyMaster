@@ -4,6 +4,8 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { StorySession, StoryBeat, Character } from '@/lib/types/story';
 import { STORY_MASTER_SYSTEM_PROMPT, VISUAL_PROMPT_COMPOSER_PROMPT } from '@/lib/ai/prompts';
 import { compressImage } from '@/lib/utils/image';
+import { compressWavToMp3 } from '@/lib/utils/audio';
+import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY } from '@/lib/constants/media';
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -219,6 +221,7 @@ export async function generateImage(prompt: string, characters: any[], visualSty
       config: {
         imageConfig: {
           aspectRatio: '16:9',
+          imageSize: '1K',
         }
       }
     });
@@ -226,8 +229,7 @@ export async function generateImage(prompt: string, characters: any[], visualSty
     for (const part of response.candidates?.[0]?.content?.parts || []) {
       if (part.inlineData) {
         const rawDataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-        // Compress to 1280x720 WebP at 80% quality
-        return await compressImage(rawDataUrl, 1280, 720, 0.8);
+        return await compressImage(rawDataUrl, IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY);
       }
     }
     throw new Error('No image generated');
@@ -339,5 +341,6 @@ ${storyText}`;
   }
 
   const wavBase64 = pcmToWavBase64(audioPart.inlineData.data);
-  return `data:audio/wav;base64,${wavBase64}`;
+  const wavDataUrl = `data:audio/wav;base64,${wavBase64}`;
+  return compressWavToMp3(wavDataUrl);
 }

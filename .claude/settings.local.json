@@ -19,7 +19,16 @@
       "Bash(npm install:*)",
       "Bash(ls -la /d/AiCoding/storyMaster/.env*)",
       "Bash(npm list:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(ls -la /d/AiCoding/storyMaster/*.json)",
+      "Bash(find /d/AiCoding/storyMaster/lib/types -name *.ts)",
+      "Bash(find /d/AiCoding/storyMaster/app -type f -name *.ts -o -name *.tsx)",
+      "Bash(node -e \"try { require\\(''./next.config.ts''\\); console.log\\(''next.config OK''\\); } catch\\(e\\) { console.log\\(e.message\\); }\")",
+      "Bash(python -m json.tool)",
+      "Bash(ls -la /d/AiCoding/storyMaster/*.config.*)",
+      "Bash(find /d/AiCoding/storyMaster -name *.ts -path */types/* -type f)",
+      "Bash(find /d/AiCoding/storyMaster/lib/utils -type f -name *.ts)",
+      "WebSearch"
     ]
   }
 }

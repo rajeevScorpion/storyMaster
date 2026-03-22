@@ -57,6 +57,7 @@ interface StoryState {
   audioReadyNodeId: string | null;
   storyMode: boolean;
   isSaving: boolean;
+  saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
   lastPublishResult: PublishResult | null;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
@@ -98,6 +99,7 @@ export const useStoryStore = create<StoryState>()(
       audioReadyNodeId: null,
       storyMode: false,
       isSaving: false,
+      saveStatus: 'idle' as const,
       lastPublishResult: null,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
@@ -154,6 +156,7 @@ export const useStoryStore = create<StoryState>()(
           set({
             session: fullSession,
             isLoading: false,
+            saveStatus: 'unsaved',
           });
 
           // Fire-and-forget: generate narration in background
@@ -221,6 +224,7 @@ export const useStoryStore = create<StoryState>()(
           set({
             session: deriveSessionFields(session, updatedMap),
             isLoading: false,
+            saveStatus: 'unsaved',
           });
 
           // Fire-and-forget: generate narration in background
@@ -229,7 +233,16 @@ export const useStoryStore = create<StoryState>()(
           // Fire-and-forget: incremental beat save if story is persisted
           if (session.savedStoryId) {
             const newNode = updatedMap.nodes[updatedMap.currentNodeId];
-            saveBeatAction(session.savedStoryId, updatedMap.currentNodeId, newNode).catch(
+            // Strip base64 assets before sending — persistence discards them anyway
+            const cleanNode = {
+              ...newNode,
+              data: {
+                ...newNode.data,
+                imageUrl: newNode.data.imageUrl?.startsWith('data:') ? undefined : newNode.data.imageUrl,
+                audioUrl: newNode.data.audioUrl?.startsWith('data:') ? undefined : newNode.data.audioUrl,
+              },
+            };
+            saveBeatAction(session.savedStoryId, updatedMap.currentNodeId, cleanNode).catch(
               (err) => console.error('Incremental beat save failed:', err)
             );
 
@@ -338,7 +351,7 @@ export const useStoryStore = create<StoryState>()(
         const { session } = get();
         if (!session) return;
 
-        set({ isSaving: true, error: null });
+        set({ isSaving: true, saveStatus: 'saving', error: null });
 
         try {
           // Upload images for ALL explored nodes (not just current path)
@@ -353,10 +366,11 @@ export const useStoryStore = create<StoryState>()(
           // Strip any remaining base64 from the map before sending to server action
           const cleanMap = stripBase64FromStoryMap(updatedMap);
 
-          // Save to database (session beats are stripped to avoid 1MB body limit)
+          // Save to database (strip heavy data to stay under body size limit)
           const strippedSession = {
             ...session,
             beats: session.beats.map(b => ({ ...b, imageUrl: undefined, audioUrl: undefined })),
+            storyMap: cleanMap,  // use the already-stripped map instead of the base64-heavy original
           };
           const { storyId } = await saveStoryAction(strippedSession, cleanMap);
 
@@ -366,9 +380,9 @@ export const useStoryStore = create<StoryState>()(
             { ...session, savedStoryId: storyId },
             session.storyMap
           );
-          set({ session: updatedSession, isSaving: false });
+          set({ session: updatedSession, isSaving: false, saveStatus: 'saved' });
         } catch (error: any) {
-          set({ isSaving: false, error: error.message || 'Failed to save story' });
+          set({ isSaving: false, saveStatus: 'unsaved', error: error.message || 'Failed to save story' });
         }
       },
 

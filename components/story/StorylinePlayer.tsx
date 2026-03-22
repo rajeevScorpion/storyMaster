@@ -120,15 +120,16 @@ export default function StorylinePlayer({
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      const key = e.key.toLowerCase();
       if (e.key === 'ArrowRight' || e.key === ' ') {
         e.preventDefault();
         goNext();
       } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
         goPrev();
-      } else if (e.key === 'p') {
+      } else if (key === 'p') {
         togglePlayPause();
-      } else if (e.key === 'm') {
+      } else if (key === 'm') {
         setIsMinimized(prev => !prev);
       }
     }
@@ -160,6 +161,7 @@ export default function StorylinePlayer({
                 className="object-cover opacity-40"
                 referrerPolicy="no-referrer"
                 priority
+                unoptimized
               />
             )}
             <div className="absolute inset-x-0 bottom-0 h-[60%] bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent" />
