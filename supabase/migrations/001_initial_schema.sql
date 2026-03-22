@@ -165,6 +165,13 @@ create policy "Users can read own story assets"
     and auth.uid()::text = (storage.foldername(name))[1]
   );
 
+create policy "Users can update own story assets"
+  on storage.objects for update
+  using (
+    bucket_id = 'story-assets'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
 create policy "Users can delete own story assets"
   on storage.objects for delete
   using (
@@ -183,6 +190,13 @@ create policy "Anyone can read public storyline assets"
 create policy "Users can upload public storyline assets"
   on storage.objects for insert
   with check (
+    bucket_id = 'public-storylines'
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+create policy "Users can update own public storyline assets"
+  on storage.objects for update
+  using (
     bucket_id = 'public-storylines'
     and auth.uid()::text = (storage.foldername(name))[1]
   );

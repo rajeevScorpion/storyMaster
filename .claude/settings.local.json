@@ -14,7 +14,12 @@
       "Bash(grep -r \"language\\\\|locale\\\\|i18n\\\\|translation\" /d/AiCoding/storyMaster --include=*.ts --include=*.tsx --exclude-dir=node_modules --exclude-dir=.next)",
       "Bash(grep -r \"indexedDB\\\\|idb\\\\|storage\\\\|persist\" /d/AiCoding/storyMaster --include=*.ts --include=*.tsx --exclude-dir=node_modules --exclude-dir=.next)",
       "Bash(ls -la /d/AiCoding/storyMaster/*.md)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(wc -l /d/AiCoding/storyMaster/components/story/*.tsx)",
+      "Bash(npm install:*)",
+      "Bash(ls -la /d/AiCoding/storyMaster/.env*)",
+      "Bash(npm list:*)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

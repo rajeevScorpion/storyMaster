@@ -232,7 +232,7 @@ function StoryScreenInner({
       </div>
 
       {/* Header */}
-      <header className="relative z-10 p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
+      <header className="relative z-10 p-6 pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
         <div className="flex items-center gap-3">
           <BookOpen className="w-6 h-6 text-emerald-400" />
           <h1 className="text-xl font-serif tracking-wide text-neutral-200">
