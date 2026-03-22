@@ -28,6 +28,13 @@ const storage: StateStorage = {
   },
 };
 
+// Hydration guard: resolves when Zustand persist finishes rehydrating from IndexedDB.
+// This prevents cloud loads from being overwritten by stale IndexedDB data.
+let resolveHydration: () => void;
+const hydrationPromise = new Promise<void>((resolve) => {
+  resolveHydration = resolve;
+});
+
 const DEFAULT_CONFIG: StoryConfig = {
   language: 'english',
   ageGroup: 'all_ages',
@@ -298,9 +305,9 @@ export const useStoryStore = create<StoryState>()(
         set({ isSaving: true, error: null });
 
         try {
-          // Upload images for current path nodes
-          const currentPath = getPathToNode(session.storyMap, session.storyMap.currentNodeId);
-          const nodeIds = currentPath.map((n) => n.id);
+          // Upload images for ALL explored nodes (not just current path)
+          // so that branch images survive the save/load round-trip
+          const nodeIds = Object.keys(session.storyMap.nodes);
           const basePath = `${userId}/${session.savedStoryId || session.storySessionId}`;
           const assetMap = await uploadNodeAssets('story-assets', basePath, session.storyMap, nodeIds);
 
@@ -317,10 +324,11 @@ export const useStoryStore = create<StoryState>()(
           };
           const { storyId } = await saveStoryAction(strippedSession, cleanMap);
 
-          // Update local session with savedStoryId and storage URLs
+          // Update local session with savedStoryId but keep original base64 URLs
+          // (storage URLs are for DB only — story-assets bucket is private)
           const updatedSession = deriveSessionFields(
             { ...session, savedStoryId: storyId },
-            updatedMap
+            session.storyMap
           );
           set({ session: updatedSession, isSaving: false });
         } catch (error: any) {
@@ -329,11 +337,23 @@ export const useStoryStore = create<StoryState>()(
       },
 
       loadStoryFromCloud: async (storyId: string) => {
+        // Wait for IndexedDB rehydration to complete before loading from cloud,
+        // otherwise stale IndexedDB data can overwrite the freshly loaded session.
+        await hydrationPromise;
+
         set({ isLoading: true, error: null });
 
         try {
           const session = await loadStoryAction(storyId);
           const fullSession = deriveSessionFields(session, session.storyMap);
+
+          if (process.env.NODE_ENV === 'development') {
+            const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
+            const branchPoints = Object.values(fullSession.storyMap.nodes)
+              .filter((n) => n.children.length > 1).length;
+            console.log(`[loadStory] Loaded ${nodeCount} nodes, ${branchPoints} branch points`);
+          }
+
           set({ session: fullSession, isLoading: false });
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to load story' });
@@ -345,6 +365,11 @@ export const useStoryStore = create<StoryState>()(
       version: 3,
       storage: createJSONStorage(() => storage),
       partialize: (state) => ({ session: state.session }),
+      onRehydrateStorage: () => {
+        return () => {
+          resolveHydration();
+        };
+      },
       migrate: (persistedState: any, version: number) => {
         try {
           if (version < 2 && persistedState?.session?.beats && !persistedState?.session?.storyMap) {
