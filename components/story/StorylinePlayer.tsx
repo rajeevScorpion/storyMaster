@@ -4,9 +4,25 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, BookOpen, Home, Play, Pause, Bookmark, BookmarkCheck, Compass } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  Home,
+  Play,
+  Pause,
+  Bookmark,
+  BookmarkCheck,
+  Compass,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
+import UserMenu from '@/components/auth/UserMenu';
+import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
@@ -37,9 +53,11 @@ export default function StorylinePlayer({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showChoice, setShowChoice] = useState(false);
   const [autoPlay, setAutoPlay] = useState(false);
+  const [autoReplay, setAutoReplay] = useState(false);
   const [isSaved, setIsSaved] = useState(initialSaved);
   const [isSavingToProfile, setIsSavingToProfile] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [showMyStories, setShowMyStories] = useState(false);
 
   const handleToggleSave = async () => {
     if (isSavingToProfile) return;
@@ -87,10 +105,15 @@ export default function StorylinePlayer({
     setCurrentIndex((i) => i - 1);
   }, [isFirst]);
 
-  const { playbackState, togglePlayPause, play: playAudio } = useAudioPlayer(
+  const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio, volume, setVolume } = useAudioPlayer(
     currentBeat.audioUrl || undefined,
     `storyline-${currentIndex}`
   );
+
+  const replay = useCallback(() => {
+    stopAudio();
+    setCurrentIndex(0);
+  }, [stopAudio]);
 
   // Auto-play narration when beat changes and autoPlay is on
   const prevIndexRef = useRef(currentIndex);
@@ -108,16 +131,22 @@ export default function StorylinePlayer({
   useEffect(() => {
     if (playbackState === 'playing') {
       wasPlayingRef.current = true;
-    } else if (playbackState === 'idle' && wasPlayingRef.current && autoPlay && !isLast) {
+    } else if (playbackState === 'idle' && wasPlayingRef.current && autoPlay) {
       wasPlayingRef.current = false;
-      // Schedule outside effect to satisfy lint rule
-      queueMicrotask(() => goNext());
+      if (isLast && autoReplay) {
+        queueMicrotask(() => replay());
+      } else if (!isLast) {
+        queueMicrotask(() => goNext());
+      }
     } else if (playbackState === 'idle') {
       wasPlayingRef.current = false;
     }
-  }, [playbackState, autoPlay, isLast, goNext]);
+  }, [playbackState, autoPlay, autoReplay, isLast, goNext, replay]);
 
   // Keyboard navigation
+  const volumeRef = useRef(volume);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const key = e.key.toLowerCase();
@@ -131,11 +160,15 @@ export default function StorylinePlayer({
         togglePlayPause();
       } else if (key === 'm') {
         setIsMinimized(prev => !prev);
+      } else if (key === 'r') {
+        replay();
+      } else if (key === 'v') {
+        setVolume(volumeRef.current === 0 ? 1 : 0);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [goNext, goPrev, togglePlayPause]);
+  }, [goNext, goPrev, togglePlayPause, replay, setVolume]);
 
   return (
     <div className="relative h-screen bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col">
@@ -158,23 +191,37 @@ export default function StorylinePlayer({
                 src={currentBeat.imageUrl}
                 alt={currentBeat.sceneSummary}
                 fill
-                className="object-cover opacity-40"
+                className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
               />
             )}
-            <div className="absolute inset-x-0 bottom-0 h-[60%] bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent" />
+            <motion.div
+              initial={false}
+              animate={{
+                height: isMinimized ? '20%' : '60%',
+                opacity: isMinimized ? 0.5 : 0.7,
+              }}
+              transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
+            />
           </motion.div>
         </AnimatePresence>
       </div>
 
       {/* Header */}
-      <header className="relative z-10 p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
-        <div className="flex items-center gap-3">
-          <BookOpen className="w-6 h-6 text-emerald-400" />
-          <div>
-            <h1 className="text-xl font-serif tracking-wide text-neutral-200">{title}</h1>
+      <header className="relative z-10 p-4 md:p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
+        <div className="flex items-center gap-4">
+          {/* Kissago branding — matches main page style */}
+          <Link
+            href="/"
+            className="px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200"
+          >
+            kissago
+          </Link>
+          <div className="hidden md:block">
+            <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
             {authorName && (
               <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
             )}
@@ -223,8 +270,19 @@ export default function StorylinePlayer({
               <Home className="w-4 h-4" />
             </Link>
           )}
+
+          {/* User menu */}
+          <UserMenu onMyStories={() => setShowMyStories(true)} />
         </div>
       </header>
+
+      {/* Mobile title (shown below header on small screens) */}
+      <div className="relative z-10 px-4 md:hidden">
+        <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
+        {authorName && (
+          <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
+        )}
+      </div>
 
       {/* Main Content */}
       <main className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0">
@@ -258,31 +316,31 @@ export default function StorylinePlayer({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                className={`w-full backdrop-blur-sm border border-white/5 rounded-3xl transition-all duration-500 ${
+                className={`w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 ${
                   isMinimized
-                    ? 'bg-neutral-950/40 p-4 md:p-6'
-                    : 'bg-neutral-900/10 p-8 md:p-10 max-h-[60vh] overflow-y-auto'
+                    ? 'bg-neutral-950/40'
+                    : 'bg-neutral-900/80 max-h-[50vh]'
                 }`}
               >
-                <p className={`font-serif leading-relaxed transition-all duration-500 ${
-                  isMinimized
-                    ? 'text-lg md:text-xl text-neutral-500 line-clamp-2'
-                    : 'text-xl md:text-2xl text-neutral-300'
-                }`}>
-                  {currentBeat.storyText}
-                </p>
+                <div className={`p-8 md:p-10 ${isMinimized ? '' : 'flex-1 overflow-y-auto scrollbar-none'}`}>
+                  <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
+                    isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
+                  }`}>
+                    {currentBeat.storyText}
+                  </p>
 
-                {/* Ending state */}
-                {!isMinimized && currentBeat.isEnding && (
-                  <div className="mt-8 pt-8 border-t border-white/10">
-                    <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
-                      The End
-                    </h3>
-                    <p className="text-neutral-400 font-sans italic">
-                      {currentBeat.nextBeatGoal}
-                    </p>
-                  </div>
-                )}
+                  {/* Ending state */}
+                  {!isMinimized && currentBeat.isEnding && (
+                    <div className="mt-8 pt-8 border-t border-white/10">
+                      <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
+                        The End
+                      </h3>
+                      <p className="text-neutral-400 font-sans italic">
+                        {currentBeat.nextBeatGoal}
+                      </p>
+                    </div>
+                  )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -299,7 +357,16 @@ export default function StorylinePlayer({
             <span className="text-sm font-sans">Previous</span>
           </button>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 md:gap-3">
+            {/* Replay from start */}
+            <button
+              onClick={replay}
+              className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all"
+              title="Replay from start (R)"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+
             {/* Audio play/pause */}
             {currentBeat.audioUrl && (
               <button
@@ -318,6 +385,32 @@ export default function StorylinePlayer({
               </button>
             )}
 
+            {/* Volume control */}
+            {currentBeat.audioUrl && (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setVolume(volume === 0 ? 1 : 0)}
+                  className="p-1.5 text-neutral-400 hover:text-neutral-200 transition-colors"
+                  title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
+                >
+                  {volume === 0 ? (
+                    <VolumeX className="w-4 h-4" />
+                  ) : (
+                    <Volume2 className="w-4 h-4" />
+                  )}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={volume}
+                  onChange={(e) => setVolume(parseFloat(e.target.value))}
+                  className="w-16 md:w-20 h-1 accent-emerald-400 cursor-pointer"
+                />
+              </div>
+            )}
+
             {/* Auto-play toggle */}
             <button
               onClick={() => setAutoPlay(!autoPlay)}
@@ -328,6 +421,18 @@ export default function StorylinePlayer({
               }`}
             >
               auto
+            </button>
+
+            {/* Auto-replay (loop) toggle */}
+            <button
+              onClick={() => setAutoReplay(!autoReplay)}
+              className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border ${
+                autoReplay
+                  ? 'bg-purple-500/20 border-purple-500/30 text-purple-300'
+                  : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              loop
             </button>
 
             {/* Minimize/maximize toggle */}
@@ -344,7 +449,7 @@ export default function StorylinePlayer({
             </button>
 
             {/* Progress dots */}
-            <div className="flex gap-1">
+            <div className="hidden md:flex gap-1">
               {beats.map((_, i) => (
                 <div
                   key={i}
@@ -370,6 +475,12 @@ export default function StorylinePlayer({
           </button>
         </div>
       </main>
+
+      {/* My Stories drawer */}
+      <MyStoriesDrawer
+        isOpen={showMyStories}
+        onClose={() => setShowMyStories(false)}
+      />
     </div>
   );
 }

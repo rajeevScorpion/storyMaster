@@ -1,6 +1,6 @@
 import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { StoryMap, StoryNode } from '@/lib/types/story';
+import type { StoryMap, StoryNode, StoryBeat } from '@/lib/types/story';
 
 /**
  * Convert a base64 data URL to a Blob with the correct content type.
@@ -252,6 +252,53 @@ export async function signStoryMapAssetUrls(
         [entry.field]: signed.signedUrl,
       },
     };
+  }
+
+  return cloned;
+}
+
+/**
+ * Replace Supabase Storage public URLs in a flat StoryBeat[] with signed URLs.
+ * Used by the storyline player page (server context).
+ */
+export async function signStorylineBeatsUrls(
+  supabase: SupabaseClient,
+  beats: StoryBeat[],
+  bucket = 'story-assets',
+  expiresIn = 3600
+): Promise<StoryBeat[]> {
+  const pathEntries: { index: number; field: 'imageUrl' | 'audioUrl'; path: string }[] = [];
+
+  for (let i = 0; i < beats.length; i++) {
+    for (const field of ['imageUrl', 'audioUrl'] as const) {
+      const url = beats[i][field];
+      if (!url) continue;
+      const storagePath = extractStoragePath(url, bucket);
+      if (storagePath) {
+        pathEntries.push({ index: i, field, path: storagePath });
+      }
+    }
+  }
+
+  if (pathEntries.length === 0) return beats;
+
+  const paths = pathEntries.map((e) => e.path);
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrls(paths, expiresIn);
+
+  if (error || !data) {
+    console.error('Failed to create signed URLs for storyline beats:', error);
+    return beats;
+  }
+
+  const cloned = beats.map((b) => ({ ...b }));
+
+  for (let i = 0; i < pathEntries.length; i++) {
+    const entry = pathEntries[i];
+    const signed = data[i];
+    if (signed.error || !signed.signedUrl) continue;
+    cloned[entry.index] = { ...cloned[entry.index], [entry.field]: signed.signedUrl };
   }
 
   return cloned;

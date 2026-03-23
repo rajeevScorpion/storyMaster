@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server';
+import { signStorylineBeatsUrls } from '@/lib/supabase/storage';
 import { notFound } from 'next/navigation';
 import StorylinePlayer from '@/components/story/StorylinePlayer';
 import type { StoryBeat } from '@/lib/types/story';
@@ -40,12 +41,16 @@ export default async function StorylinePage({ params }: PageProps) {
     isSaved = (count ?? 0) > 0;
   }
 
+  // Sign private storage URLs so images/audio load in the browser
+  const rawBeats = storyline.beats as unknown as StoryBeat[];
+  const beats = await signStorylineBeatsUrls(supabase, rawBeats);
+
   return (
     <StorylinePlayer
       storylineId={storyline.id}
       storyId={storyline.story_id}
       title={storyline.title}
-      beats={storyline.beats as unknown as StoryBeat[]}
+      beats={beats}
       choices={storyline.choices as unknown as StorylineChoice[]}
       authorName={storyline.author_name}
       isOwner={isOwner}
