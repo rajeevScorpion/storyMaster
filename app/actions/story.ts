@@ -4,7 +4,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { StorySession, StoryBeat, Character } from '@/lib/types/story';
 import { STORY_MASTER_SYSTEM_PROMPT, VISUAL_PROMPT_COMPOSER_PROMPT } from '@/lib/ai/prompts';
 import { compressImage } from '@/lib/utils/image';
-import { compressWavToMp3 } from '@/lib/utils/audio';
+
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY } from '@/lib/constants/media';
 
 const AVAILABLE_VOICES = [
@@ -341,6 +341,5 @@ ${storyText}`;
   }
 
   const wavBase64 = pcmToWavBase64(audioPart.inlineData.data);
-  const wavDataUrl = `data:audio/wav;base64,${wavBase64}`;
-  return compressWavToMp3(wavDataUrl);
+  return `data:audio/wav;base64,${wavBase64}`;
 }

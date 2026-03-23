@@ -28,7 +28,10 @@
       "Bash(ls -la /d/AiCoding/storyMaster/*.config.*)",
       "Bash(find /d/AiCoding/storyMaster -name *.ts -path */types/* -type f)",
       "Bash(find /d/AiCoding/storyMaster/lib/utils -type f -name *.ts)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(git show:*)",
+      "Bash(find /d/AiCoding/storyMaster -name *.wav -o -name *.mp3)",
+      "Bash(node -e \"const lamejs = require\\(''lamejs''\\); console.log\\(''lamejs loaded, Mp3Encoder:'', typeof lamejs.Mp3Encoder\\);\")"
     ]
   }
 }
