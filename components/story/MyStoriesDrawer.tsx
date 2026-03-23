@@ -1,51 +1,13 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play } from 'lucide-react';
-import { listUserStories, deleteStory, archiveStory, unarchiveStory, listSavedStorylines, unsaveStoryline } from '@/app/actions/persistence';
-import { listExploredStories } from '@/app/actions/exploration';
+import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useStoryStore } from '@/lib/store/story-store';
+import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import Link from 'next/link';
-
-type TabId = 'explored' | 'my-stories' | 'storylines';
-
-interface SavedStory {
-  id: string;
-  title: string;
-  status: string;
-  is_archived: boolean;
-  updated_at: string;
-  user_prompt: string;
-}
-
-interface ExploredStory {
-  id: string;
-  story_id: string;
-  last_node_id: string | null;
-  updated_at: string;
-  story: {
-    id: string;
-    title: string;
-    user_prompt: string;
-    status: string;
-    user_id: string;
-  };
-}
-
-interface SavedStorylineItem {
-  id: string;
-  storyline_id: string;
-  saved_at: string;
-  storyline: {
-    id: string;
-    title: string;
-    beat_count: number;
-    cover_image_url: string | null;
-    author_name: string | null;
-    story_id: string;
-  };
-}
+import type { TabId } from '@/lib/types/my-stories';
 
 interface MyStoriesDrawerProps {
   isOpen: boolean;
@@ -60,38 +22,23 @@ const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
 
 export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProps) {
   const [activeTab, setActiveTab] = useState<TabId>('my-stories');
-  const [stories, setStories] = useState<SavedStory[]>([]);
-  const [exploredStories, setExploredStories] = useState<ExploredStory[]>([]);
-  const [savedStorylines, setSavedStorylines] = useState<SavedStorylineItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const loadStoryFromCloud = useStoryStore((s) => s.loadStoryFromCloud);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
 
-  const fetchData = useCallback(async (tab: TabId) => {
-    setIsLoading(true);
-    try {
-      if (tab === 'my-stories') {
-        const data = await listUserStories();
-        setStories(data);
-      } else if (tab === 'explored') {
-        const data = await listExploredStories();
-        setExploredStories(data);
-      } else if (tab === 'storylines') {
-        const data = await listSavedStorylines();
-        setSavedStorylines(data);
-      }
-    } catch (error) {
-      console.error(`Failed to fetch ${tab}:`, error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const stories = useMyStoriesStore((s) => s.stories);
+  const exploredStories = useMyStoriesStore((s) => s.exploredStories);
+  const savedStorylines = useMyStoriesStore((s) => s.savedStorylines);
+  const loading = useMyStoriesStore((s) => s.loading);
+  const fetchTab = useMyStoriesStore((s) => s.fetchTab);
 
+  // Fetch current tab data when drawer opens or tab changes (serves cache if fresh)
   useEffect(() => {
-    if (isOpen) fetchData(activeTab);
-  }, [isOpen, activeTab, fetchData]);
+    if (isOpen) fetchTab(activeTab);
+  }, [isOpen, activeTab, fetchTab]);
+
+  const isLoading = loading[activeTab];
 
   const handleLoadStory = async (storyId: string) => {
     setLoadingId(storyId);
@@ -121,7 +68,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     setActionId(storyId);
     try {
       await deleteStory(storyId);
-      setStories((prev) => prev.filter((s) => s.id !== storyId));
+      useMyStoriesStore.getState().removeStory(storyId);
     } catch (error) {
       console.error('Failed to delete story:', error);
     } finally {
@@ -133,9 +80,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     setActionId(storyId);
     try {
       await archiveStory(storyId);
-      setStories((prev) =>
-        prev.map((s) => (s.id === storyId ? { ...s, is_archived: true } : s))
-      );
+      useMyStoriesStore.getState().updateStory(storyId, { is_archived: true });
     } catch (error) {
       console.error('Failed to archive story:', error);
     } finally {
@@ -147,9 +92,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     setActionId(storyId);
     try {
       await unarchiveStory(storyId);
-      setStories((prev) =>
-        prev.map((s) => (s.id === storyId ? { ...s, is_archived: false } : s))
-      );
+      useMyStoriesStore.getState().updateStory(storyId, { is_archived: false });
     } catch (error) {
       console.error('Failed to unarchive story:', error);
     } finally {
@@ -161,7 +104,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     setActionId(storylineId);
     try {
       await unsaveStoryline(storylineId);
-      setSavedStorylines((prev) => prev.filter((s) => s.storyline_id !== storylineId));
+      useMyStoriesStore.getState().removeSavedStoryline(storylineId);
     } catch (error) {
       console.error('Failed to unsave storyline:', error);
     } finally {

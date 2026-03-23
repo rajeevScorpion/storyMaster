@@ -2,6 +2,7 @@
 
 import { createContext, useEffect, useState, useCallback, type ReactNode } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import type { User } from '@supabase/supabase-js';
 
 export interface AuthContextType {
@@ -28,14 +29,22 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user);
       setIsLoading(false);
+      if (user) {
+        useMyStoriesStore.getState().prefetchAll();
+      }
     });
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
       setIsLoading(false);
+      if (event === 'SIGNED_IN') {
+        useMyStoriesStore.getState().prefetchAll();
+      } else if (event === 'SIGNED_OUT') {
+        useMyStoriesStore.getState().clear();
+      }
     });
 
     return () => subscription.unsubscribe();
