@@ -140,7 +140,15 @@ export const useStoryStore = create<StoryState>()(
 
           set({ loadingClues: beat.clues });
 
-          const imageUrl = await generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!);
+          const [imageUrl, narratorVoice] = await Promise.all([
+            generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!),
+            selectNarratorVoice(
+              initialSession.genre!,
+              initialSession.tone!,
+              initialSession.targetAge!,
+              initialSession.storyConfig?.language || 'english'
+            ),
+          ]);
           beat.imageUrl = imageUrl;
 
           const storyMap = createStoryMap(beat);
@@ -149,6 +157,7 @@ export const useStoryStore = create<StoryState>()(
             {
               ...initialSession,
               title: beat.title,
+              narratorVoice,
             } as StorySession,
             storyMap
           );
@@ -221,8 +230,19 @@ export const useStoryStore = create<StoryState>()(
             beat
           );
 
+          // Use latest session to preserve narratorVoice and audioUrls
+          // written by concurrent generateNarrationForNode
+          const latestSession = get().session;
+          if (!latestSession) return;
+          const mergedMap = {
+            ...updatedMap,
+            nodes: {
+              ...latestSession.storyMap.nodes,
+              ...updatedMap.nodes,
+            },
+          };
           set({
-            session: deriveSessionFields(session, updatedMap),
+            session: deriveSessionFields(latestSession, mergedMap),
             isLoading: false,
             saveStatus: 'unsaved',
           });
@@ -333,6 +353,17 @@ export const useStoryStore = create<StoryState>()(
             isGeneratingAudio: false,
             audioReadyNodeId: nodeId,
           });
+
+          // Auto-persist narration to Supabase if story is cloud-saved
+          const freshSession = get().session;
+          if (freshSession?.savedStoryId && freshSession?.savedByUserId) {
+            const storagePath = `${freshSession.savedByUserId}/${freshSession.savedStoryId}/${nodeId}/audio.wav`;
+            uploadAsset('story-assets', storagePath, audioUrl)
+              .then((storageUrl) =>
+                updateBeatAssets(freshSession.savedStoryId!, nodeId, { audioUrl: storageUrl })
+              )
+              .catch((err) => console.error('Failed to persist narration:', err));
+          }
         } catch (error) {
           console.error('Narration generation failed:', error);
           set({ isGeneratingAudio: false });
@@ -354,30 +385,37 @@ export const useStoryStore = create<StoryState>()(
         set({ isSaving: true, saveStatus: 'saving', error: null });
 
         try {
-          // Upload images for ALL explored nodes (not just current path)
-          // so that branch images survive the save/load round-trip
+          // Persist story to DB first to get a stable storyId for asset paths.
+          // On first save this inserts and returns a new ID; on subsequent saves it updates.
+          const strippedForId = {
+            ...session,
+            beats: session.beats.map(b => ({ ...b, imageUrl: undefined, audioUrl: undefined })),
+            storyMap: stripBase64FromStoryMap(session.storyMap),
+          };
+          const { storyId } = await saveStoryAction(strippedForId, strippedForId.storyMap);
+
+          // Upload assets using the stable storyId so images + audio always share the same folder
           const nodeIds = Object.keys(session.storyMap.nodes);
-          const basePath = `${userId}/${session.savedStoryId || session.storySessionId}`;
+          const basePath = `${userId}/${storyId}`;
           const assetMap = await uploadNodeAssets('story-assets', basePath, session.storyMap, nodeIds);
 
           // Replace base64 with storage URLs in the map
           const updatedMap = replaceBase64WithUrls(session.storyMap, assetMap);
 
-          // Strip any remaining base64 from the map before sending to server action
+          // Strip any remaining base64 and re-save with asset URLs
           const cleanMap = stripBase64FromStoryMap(updatedMap);
-
-          // Save to database (strip heavy data to stay under body size limit)
           const strippedSession = {
             ...session,
+            savedStoryId: storyId,
             beats: session.beats.map(b => ({ ...b, imageUrl: undefined, audioUrl: undefined })),
-            storyMap: cleanMap,  // use the already-stripped map instead of the base64-heavy original
+            storyMap: cleanMap,
           };
-          const { storyId } = await saveStoryAction(strippedSession, cleanMap);
+          await saveStoryAction(strippedSession, cleanMap);
 
           // Update local session with savedStoryId but keep original base64 URLs
           // (storage URLs are for DB only — story-assets bucket is private)
           const updatedSession = deriveSessionFields(
-            { ...session, savedStoryId: storyId },
+            { ...session, savedStoryId: storyId, savedByUserId: userId },
             session.storyMap
           );
           set({ session: updatedSession, isSaving: false, saveStatus: 'saved' });
