@@ -116,7 +116,11 @@ export default function GalleryPage() {
   };
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
+    <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-32 bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-40 md:h-48"
+      />
       {/* Kissago logo — fixed top-left */}
       <Link
         href="/"
@@ -137,7 +141,7 @@ export default function GalleryPage() {
       />
 
       {/* Page content */}
-      <div className="pt-20 pb-16 px-4 max-w-7xl mx-auto">
+      <div className="pt-[clamp(8rem,30vh,18rem)] pb-16 px-4 max-w-7xl mx-auto">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
