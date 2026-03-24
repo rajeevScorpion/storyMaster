@@ -11,6 +11,7 @@ interface GalleryItemCardProps {
   isSaved: boolean;
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
+  onAuthRequired?: () => void;
 }
 
 export default function GalleryItemCard({
@@ -18,11 +19,22 @@ export default function GalleryItemCard({
   isSaved,
   isLoggedIn,
   onToggleSave,
+  onAuthRequired,
 }: GalleryItemCardProps) {
   const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
 
+  // For tree items, unauthenticated users need to sign in first
+  const needsAuth = item.type === 'tree' && !isLoggedIn;
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (needsAuth && onAuthRequired) {
+      e.preventDefault();
+      onAuthRequired();
+    }
+  };
+
   return (
-    <Link href={href}>
+    <Link href={href} onClick={handleClick}>
       <motion.div
         whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.2 }}

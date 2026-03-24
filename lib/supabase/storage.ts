@@ -188,15 +188,43 @@ export async function uploadCoverImage(
 }
 
 /**
- * Extract the storage path from a Supabase Storage public URL.
- * E.g. "https://xxx.supabase.co/storage/v1/object/public/story-assets/user/story/node/image.webp"
- *   → "user/story/node/image.webp"
+ * Extract the storage path from a Supabase Storage URL (public or signed).
+ * Handles both formats:
+ *   - Public:  /storage/v1/object/public/{bucket}/path
+ *   - Signed:  /storage/v1/object/sign/{bucket}/path?token=...
  */
 function extractStoragePath(url: string, bucket: string): string | null {
-  const marker = `/storage/v1/object/public/${bucket}/`;
-  const idx = url.indexOf(marker);
-  if (idx === -1) return null;
-  return url.substring(idx + marker.length);
+  // Try public URL format
+  const publicMarker = `/storage/v1/object/public/${bucket}/`;
+  let idx = url.indexOf(publicMarker);
+  if (idx !== -1) {
+    return url.substring(idx + publicMarker.length);
+  }
+
+  // Try signed URL format
+  const signedMarker = `/storage/v1/object/sign/${bucket}/`;
+  idx = url.indexOf(signedMarker);
+  if (idx !== -1) {
+    const pathWithQuery = url.substring(idx + signedMarker.length);
+    // Strip query params (e.g. ?token=...)
+    const qIdx = pathWithQuery.indexOf('?');
+    return qIdx !== -1 ? pathWithQuery.substring(0, qIdx) : pathWithQuery;
+  }
+
+  return null;
+}
+
+/**
+ * Convert any Supabase Storage URL (public or signed) to canonical public format.
+ * Returns the original string if it doesn't match any known format.
+ */
+export function normalizeStorageUrl(url: string, bucket: string): string {
+  const path = extractStoragePath(url, bucket);
+  if (!path) return url;
+  // Reconstruct as public URL using the project's Supabase URL
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) return url;
+  return `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}`;
 }
 
 /**

@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { signStoryMapAssetUrls } from '@/lib/supabase/storage';
+import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
 
@@ -252,6 +252,8 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   choices: { fromBeat: number; optionLabel: string }[];
 }> {
   const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
 
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
@@ -301,6 +303,9 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         optionLabel: jb.choice_label as string,
       }));
 
+    // Sign private storage URLs for authenticated access
+    const signedBeats = await signStorylineBeatsUrls(supabase, beats);
+
     return {
       storyline: {
         id: storyline.id,
@@ -312,12 +317,15 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         is_public: storyline.is_public,
         created_at: storyline.created_at,
       },
-      beats,
+      beats: signedBeats,
       choices,
     };
   }
 
   // Fallback to legacy JSONB beats
+  const legacyBeats = (storyline.beats as any[]).map(b => b as unknown as StoryBeat);
+  const signedLegacyBeats = await signStorylineBeatsUrls(supabase, legacyBeats);
+
   return {
     storyline: {
       id: storyline.id,
@@ -329,7 +337,93 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       is_public: storyline.is_public,
       created_at: storyline.created_at,
     },
-    beats: (storyline.beats as any[]).map(b => b as unknown as StoryBeat),
+    beats: signedLegacyBeats,
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
   };
+}
+
+/**
+ * Refresh signed URLs for a storyline's beats.
+ * Called by the client when signed URLs are about to expire.
+ */
+export async function refreshStorylineSignedUrls(storylineId: string): Promise<StoryBeat[]> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  const { data: storyline, error: slError } = await supabase
+    .from('storylines')
+    .select('beats')
+    .eq('id', storylineId)
+    .single();
+
+  if (slError || !storyline) throw new Error('Storyline not found');
+
+  // Try normalized junction beats first
+  const { data: junctionBeats } = await supabase
+    .from('storyline_beats')
+    .select('position, beats (*)')
+    .eq('storyline_id', storylineId)
+    .order('position', { ascending: true });
+
+  let beats: StoryBeat[];
+  if (junctionBeats && junctionBeats.length > 0) {
+    beats = junctionBeats.map((jb: any) => {
+      const b = jb.beats as DbBeat;
+      return {
+        title: b.title,
+        beatNumber: b.beat_number,
+        isEnding: b.is_ending,
+        storyText: b.story_text,
+        sceneSummary: b.scene_summary || '',
+        options: (b.options || []) as unknown as StoryBeat['options'],
+        characters: (b.characters || []) as unknown as StoryBeat['characters'],
+        continuityNotes: (b.continuity_notes || []) as string[],
+        imagePrompt: b.image_prompt || '',
+        clues: (b.clues || []) as string[],
+        nextBeatGoal: b.next_beat_goal || '',
+        endingForecast: (b.ending_forecast || []) as string[],
+        imageUrl: b.image_url || undefined,
+        audioUrl: b.audio_url || undefined,
+      };
+    });
+  } else {
+    beats = (storyline.beats as any[]).map(b => b as unknown as StoryBeat);
+  }
+
+  return signStorylineBeatsUrls(supabase, beats);
+}
+
+/**
+ * Refresh signed URLs for a story map's assets.
+ * Called by the client when signed URLs are about to expire.
+ */
+export async function refreshStoryMapSignedUrls(storyId: string): Promise<StoryMap> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  const { data: beats, error: beatsError } = await supabase
+    .from('beats')
+    .select('*')
+    .eq('story_id', storyId)
+    .order('beat_number', { ascending: true });
+
+  if (beatsError) throw new Error('Failed to load story beats');
+
+  let storyMap: StoryMap;
+  if (beats && beats.length > 0) {
+    storyMap = reconstructStoryMap(beats as DbBeat[]);
+  } else {
+    const { data: story } = await supabase
+      .from('stories')
+      .select('story_map')
+      .eq('id', storyId)
+      .single();
+
+    if (!story) throw new Error('Story not found');
+    storyMap = story.story_map as unknown as StoryMap;
+  }
+
+  return signStoryMapAssetUrls(supabase, storyMap);
 }

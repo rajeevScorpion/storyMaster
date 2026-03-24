@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import LandingScreen from '@/components/story/LandingScreen';
@@ -11,13 +12,15 @@ import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import { AnimatePresence } from 'motion/react';
 import type { StoryConfig } from '@/lib/types/story';
 
-export default function Home() {
+function HomeContent() {
   const session = useStoryStore((state) => state.session);
   const isLoading = useStoryStore((state) => state.isLoading);
   const error = useStoryStore((state) => state.error);
   const resetStory = useStoryStore((state) => state.resetStory);
   const { user, signInWithGoogle } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const searchParams = useSearchParams();
 
   // Clear stale exploration sessions so root URL always shows landing page
   useEffect(() => {
@@ -26,6 +29,21 @@ export default function Home() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Show auth-required message from redirects
+  useEffect(() => {
+    const authRequired = searchParams.get('authRequired');
+    if (authRequired === 'explore') {
+      setAuthMessage('Sign in to explore story trees');
+    } else if (authRequired === 'storyline') {
+      setAuthMessage('Sign in to experience full stories');
+    }
+    // Auto-dismiss after 5 seconds
+    if (authRequired) {
+      const timer = setTimeout(() => setAuthMessage(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [searchParams]);
 
   const handleBegin = async (prompt: string, config?: StoryConfig) => {
     if (!user) {
@@ -63,6 +81,18 @@ export default function Home() {
         onClose={() => setShowMyStories(false)}
       />
 
+      {authMessage && !user && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-emerald-500/10 border border-emerald-500/40 text-emerald-200 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl backdrop-blur-md">
+          <p className="text-sm font-medium">{authMessage}</p>
+          <button
+            onClick={() => setAuthMessage(null)}
+            className="text-xs uppercase tracking-wider font-bold hover:text-white transition-colors"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-500/10 border border-red-500/50 text-red-200 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl backdrop-blur-md">
           <p className="text-sm font-medium">{error}</p>
@@ -87,5 +117,13 @@ export default function Home() {
         {isLoading && <LoadingState key="loading" />}
       </AnimatePresence>
     </main>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense>
+      <HomeContent />
+    </Suspense>
   );
 }

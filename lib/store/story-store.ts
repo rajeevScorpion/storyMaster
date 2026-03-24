@@ -1,11 +1,9 @@
 import { create } from 'zustand';
-import { persist, StateStorage, createJSONStorage } from 'zustand/middleware';
-import { get, set as idbSet, del } from 'idb-keyval';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, selectNarratorVoice, generateNarration } from '@/app/actions/story';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, updateBeatAssets } from '@/app/actions/persistence';
-import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction } from '@/app/actions/exploration';
+import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadAsset, uploadCoverImage } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import { getPathToNode } from '../utils/story-map';
@@ -18,24 +16,6 @@ import {
   getCurrentNode,
 } from '../utils/story-map';
 
-const storage: StateStorage = {
-  getItem: async (name: string): Promise<string | null> => {
-    return (await get(name)) || null;
-  },
-  setItem: async (name: string, value: string): Promise<void> => {
-    await idbSet(name, value);
-  },
-  removeItem: async (name: string): Promise<void> => {
-    await del(name);
-  },
-};
-
-// Hydration guard: resolves when Zustand persist finishes rehydrating from IndexedDB.
-// This prevents cloud loads from being overwritten by stale IndexedDB data.
-let resolveHydration: () => void;
-const hydrationPromise = new Promise<void>((resolve) => {
-  resolveHydration = resolve;
-});
 
 const DEFAULT_CONFIG: StoryConfig = {
   language: 'english',
@@ -72,6 +52,7 @@ interface StoryState {
   saveStoryToCloud: (userId: string) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
+  refreshSignedUrls: () => Promise<void>;
   clearPublishResult: () => void;
 }
 
@@ -91,7 +72,6 @@ function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySe
 }
 
 export const useStoryStore = create<StoryState>()(
-  persist(
     (set, get) => ({
       session: null,
       isLoading: false,
@@ -459,10 +439,6 @@ export const useStoryStore = create<StoryState>()(
       },
 
       loadStoryFromCloud: async (storyId: string) => {
-        // Wait for IndexedDB rehydration to complete before loading from cloud,
-        // otherwise stale IndexedDB data can overwrite the freshly loaded session.
-        await hydrationPromise;
-
         set({ isLoading: true, error: null });
 
         try {
@@ -483,8 +459,6 @@ export const useStoryStore = create<StoryState>()(
       },
 
       exploreStoryTree: async (storyId: string) => {
-        await hydrationPromise;
-
         set({ isLoading: true, error: null, lastPublishResult: null });
 
         try {
@@ -502,74 +476,21 @@ export const useStoryStore = create<StoryState>()(
         }
       },
 
+      refreshSignedUrls: async () => {
+        const session = get().session;
+        if (!session?.savedStoryId) return;
+        try {
+          const refreshedMap = await refreshStoryMapAction(session.savedStoryId);
+          const current = get().session;
+          if (!current || current.savedStoryId !== session.savedStoryId) return;
+          set({ session: deriveSessionFields(current, refreshedMap) });
+        } catch {
+          // Silent fail — URLs will still work until full expiry
+        }
+      },
+
       clearPublishResult: () => {
         set({ lastPublishResult: null });
       },
-    }),
-    {
-      name: 'story-master-storage',
-      version: 3,
-      storage: createJSONStorage(() => storage),
-      partialize: (state) => ({
-        session: state.session?.explorationMode ? null : state.session,
-      }),
-      onRehydrateStorage: () => {
-        return (state) => {
-          // Defensive: clear any exploration session that somehow got persisted
-          if (state?.session?.explorationMode) {
-            useStoryStore.setState({ session: null });
-          }
-          resolveHydration();
-        };
-      },
-      migrate: (persistedState: any, version: number) => {
-        try {
-          if (version < 2 && persistedState?.session?.beats && !persistedState?.session?.storyMap) {
-            const session = persistedState.session;
-            const nodes: Record<string, StoryNode> = {};
-            let prevId: string | null = null;
-            const nodeIds: string[] = [];
-
-            for (const beat of session.beats) {
-              const id = uuidv4();
-              nodeIds.push(id);
-              nodes[id] = {
-                id,
-                beatNumber: beat.beatNumber,
-                parentId: prevId,
-                selectedOptionId: null,
-                data: beat,
-                children: [],
-              };
-              if (prevId) nodes[prevId].children.push(id);
-              prevId = id;
-            }
-
-            if (nodeIds.length > 0) {
-              session.storyMap = {
-                nodes,
-                rootNodeId: nodeIds[0],
-                currentNodeId: nodeIds[nodeIds.length - 1],
-              };
-            }
-
-            session.storyConfig = {
-              language: 'english',
-              ageGroup: session.targetAge || 'all_ages',
-              settingCountry: 'generic',
-              maxBeats: session.maxBeats || 6,
-            };
-          }
-          // v2 → v3: add language to storyConfig
-          if (version < 3 && persistedState?.session?.storyConfig && !persistedState.session.storyConfig.language) {
-            persistedState.session.storyConfig.language = 'english';
-          }
-          return persistedState as StoryState;
-        } catch {
-          // Migration failed — start fresh
-          return { session: null } as unknown as StoryState;
-        }
-      },
-    }
-  )
+    })
 );

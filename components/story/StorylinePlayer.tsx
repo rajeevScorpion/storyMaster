@@ -21,11 +21,14 @@ import {
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
+import { refreshStorylineSignedUrls } from '@/app/actions/exploration';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+
+const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 
 interface StorylinePlayerProps {
   storylineId: string;
@@ -50,6 +53,7 @@ export default function StorylinePlayer({
   isSaved: initialSaved = false,
   isLoggedIn = false,
 }: StorylinePlayerProps) {
+  const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showChoice, setShowChoice] = useState(false);
   const [autoPlay, setAutoPlay] = useState(false);
@@ -58,6 +62,20 @@ export default function StorylinePlayer({
   const [isSavingToProfile, setIsSavingToProfile] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [showMyStories, setShowMyStories] = useState(false);
+
+  // Refresh signed URLs before they expire (every 50 minutes)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const refreshed = await refreshStorylineSignedUrls(storylineId);
+        setCurrentBeats(refreshed);
+      } catch {
+        // Silent fail — URLs will still work until full expiry
+      }
+    }, SIGNED_URL_REFRESH_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [storylineId]);
 
   const handleToggleSave = async () => {
     if (isSavingToProfile) return;
@@ -77,9 +95,9 @@ export default function StorylinePlayer({
     }
   };
 
-  const currentBeat = beats[currentIndex];
+  const currentBeat = currentBeats[currentIndex];
   const isFirst = currentIndex === 0;
-  const isLast = currentIndex === beats.length - 1;
+  const isLast = currentIndex === currentBeats.length - 1;
 
   // Get the choice that led to the current beat
   const currentChoice = currentIndex > 0 ? choices[currentIndex - 1] : null;
@@ -228,7 +246,7 @@ export default function StorylinePlayer({
           </div>
         </div>
         <div className="flex items-center gap-3 text-sm font-sans uppercase tracking-widest text-neutral-400">
-          <span className="text-xs">Beat {currentIndex + 1} / {beats.length}</span>
+          <span className="text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
 
           {/* Save to profile button */}
           {isLoggedIn && (
@@ -450,7 +468,7 @@ export default function StorylinePlayer({
 
             {/* Progress dots */}
             <div className="hidden md:flex gap-1">
-              {beats.map((_, i) => (
+              {currentBeats.map((_, i) => (
                 <div
                   key={i}
                   className={`w-1.5 h-1.5 rounded-full transition-all ${

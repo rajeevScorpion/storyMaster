@@ -1,8 +1,8 @@
 import { createClient } from '@/lib/supabase/server';
-import { signStorylineBeatsUrls } from '@/lib/supabase/storage';
+import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { notFound } from 'next/navigation';
 import StorylinePlayer from '@/components/story/StorylinePlayer';
-import type { StoryBeat } from '@/lib/types/story';
+import StorylinePreview from '@/components/story/StorylinePreview';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,7 @@ export default async function StorylinePage({ params }: PageProps) {
   const { id } = await params;
   const supabase = await createClient();
 
-  // Fetch the storyline
+  // Fetch the storyline (RLS allows public storylines for everyone)
   const { data: storyline, error } = await supabase
     .from('storylines')
     .select('*')
@@ -26,24 +26,35 @@ export default async function StorylinePage({ params }: PageProps) {
     notFound();
   }
 
-  // Check if the current user is the owner and if they've saved this storyline
+  // Check authentication state
   const { data: { user } } = await supabase.auth.getUser();
-  const isOwner = user?.id === storyline.user_id;
-  const isLoggedIn = !!user;
 
-  let isSaved = false;
-  if (user) {
-    const { count } = await supabase
-      .from('saved_storylines')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', user.id)
-      .eq('storyline_id', id);
-    isSaved = (count ?? 0) > 0;
+  // Unauthenticated users see a preview with sign-in CTA
+  if (!user) {
+    return (
+      <StorylinePreview
+        storylineId={storyline.id}
+        title={storyline.title}
+        authorName={storyline.author_name}
+        coverImageUrl={storyline.cover_image_url}
+        beatCount={storyline.beat_count}
+      />
+    );
   }
 
-  // Sign private storage URLs so images/audio load in the browser
-  const rawBeats = storyline.beats as unknown as StoryBeat[];
-  const beats = await signStorylineBeatsUrls(supabase, rawBeats);
+  // Authenticated users get the full experience
+  const isOwner = user.id === storyline.user_id;
+
+  let isSaved = false;
+  const { count } = await supabase
+    .from('saved_storylines')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .eq('storyline_id', id);
+  isSaved = (count ?? 0) > 0;
+
+  // Load beats via junction table (falls back to JSONB) with fresh signed URLs
+  const { beats, choices } = await loadStorylineWithBeats(id);
 
   return (
     <StorylinePlayer
@@ -51,11 +62,11 @@ export default async function StorylinePage({ params }: PageProps) {
       storyId={storyline.story_id}
       title={storyline.title}
       beats={beats}
-      choices={storyline.choices as unknown as StorylineChoice[]}
+      choices={choices as StorylineChoice[]}
       authorName={storyline.author_name}
       isOwner={isOwner}
       isSaved={isSaved}
-      isLoggedIn={isLoggedIn}
+      isLoggedIn={true}
     />
   );
 }

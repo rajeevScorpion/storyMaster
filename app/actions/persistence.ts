@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { signStoryMapAssetUrls } from '@/lib/supabase/storage';
+import { signStoryMapAssetUrls, normalizeStorageUrl } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineChoice } from '@/lib/utils/storyline';
@@ -47,8 +47,8 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     clues: node.data.clues || null,
     next_beat_goal: node.data.nextBeatGoal || null,
     ending_forecast: node.data.endingForecast || null,
-    image_url: node.data.imageUrl?.startsWith('data:') ? null : (node.data.imageUrl || null),
-    audio_url: node.data.audioUrl?.startsWith('data:') ? null : (node.data.audioUrl || null),
+    image_url: node.data.imageUrl?.startsWith('data:') ? null : (node.data.imageUrl ? normalizeStorageUrl(node.data.imageUrl, 'story-assets') : null),
+    audio_url: node.data.audioUrl?.startsWith('data:') ? null : (node.data.audioUrl ? normalizeStorageUrl(node.data.audioUrl, 'story-assets') : null),
   };
 }
 

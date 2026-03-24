@@ -13,6 +13,7 @@ interface GenreShowcaseProps {
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
+  onAuthRequired?: () => void;
 }
 
 function GenreRow({
@@ -21,12 +22,14 @@ function GenreRow({
   isLoggedIn,
   onToggleSave,
   onGenreClick,
+  onAuthRequired,
 }: {
   section: GenreSection;
   savedIds: Set<string>;
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
+  onAuthRequired?: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -81,11 +84,20 @@ function GenreRow({
         {section.items.map((item) => {
           const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
           const isSaved = savedIds.has(item.id);
+          const needsAuth = item.type === 'tree' && !isLoggedIn;
+
+          const handleClick = (e: React.MouseEvent) => {
+            if (needsAuth && onAuthRequired) {
+              e.preventDefault();
+              onAuthRequired();
+            }
+          };
 
           return (
             <Link
               key={item.id}
               href={href}
+              onClick={handleClick}
               className="flex-shrink-0 snap-start"
             >
               <motion.div
@@ -163,6 +175,7 @@ export default function GenreShowcase({
   isLoggedIn,
   onToggleSave,
   onGenreClick,
+  onAuthRequired,
 }: GenreShowcaseProps) {
   if (sections.length === 0) return null;
 
@@ -181,6 +194,7 @@ export default function GenreShowcase({
             isLoggedIn={isLoggedIn}
             onToggleSave={onToggleSave}
             onGenreClick={onGenreClick}
+            onAuthRequired={onAuthRequired}
           />
         </motion.div>
       ))}

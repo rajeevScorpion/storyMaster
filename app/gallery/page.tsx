@@ -24,7 +24,7 @@ const DEFAULT_FILTERS: GalleryFilters = {
 const PAGE_SIZE = 12;
 
 export default function GalleryPage() {
-  const { user } = useAuth();
+  const { user, signInWithGoogle } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
 
   // Genre showcase state
@@ -168,6 +168,7 @@ export default function GalleryPage() {
               isLoggedIn={!!user}
               onToggleSave={handleToggleSave}
               onGenreClick={handleGenreClick}
+              onAuthRequired={signInWithGoogle}
             />
           )}
         </section>
@@ -215,6 +216,7 @@ export default function GalleryPage() {
                       isSaved={savedIds.has(item.id)}
                       isLoggedIn={!!user}
                       onToggleSave={handleToggleSave}
+                      onAuthRequired={signInWithGoogle}
                     />
                   </motion.div>
                 ))}

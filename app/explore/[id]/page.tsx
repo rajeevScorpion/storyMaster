@@ -25,8 +25,8 @@ export default function ExplorePage() {
     if (authLoading) return;
 
     if (!user) {
-      // Redirect to home for login
-      router.push('/');
+      // Redirect to home with auth prompt
+      router.push('/?authRequired=explore');
       return;
     }
 

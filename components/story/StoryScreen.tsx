@@ -31,9 +31,18 @@ export default function StoryScreen() {
   const saveStatus = useStoryStore((state) => state.saveStatus);
   const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
+  const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
   const { user } = useAuth();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
+
+  // Refresh signed URLs every 50 minutes to prevent expiry
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshSignedUrls();
+    }, 50 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [refreshSignedUrls]);
 
   if (!session || !session.storyMap) return null;
 
