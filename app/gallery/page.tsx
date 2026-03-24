@@ -141,7 +141,7 @@ export default function GalleryPage() {
       />
 
       {/* Page content */}
-      <div className="pt-[clamp(8rem,30vh,18rem)] pb-16 px-4 max-w-7xl mx-auto">
+      <div className="pt-[clamp(7rem,25vh,15rem)] pb-16 px-4 max-w-7xl mx-auto">
         {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
