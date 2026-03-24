@@ -116,6 +116,9 @@ export async function getGalleryItems(
     if (filters.country && filters.country !== 'all') {
       query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
     }
+    if (filters.language && filters.language !== 'all') {
+      query = query.filter('stories.story_config->>language', 'eq', filters.language);
+    }
 
     const { data: storylines } = await query;
 
@@ -181,6 +184,9 @@ export async function getGalleryItems(
       }
       if (filters.country && filters.country !== 'all') {
         storyQuery = storyQuery.filter('story_config->>settingCountry', 'eq', filters.country);
+      }
+      if (filters.language && filters.language !== 'all') {
+        storyQuery = storyQuery.filter('story_config->>language', 'eq', filters.language);
       }
 
       const { data: stories } = await storyQuery;

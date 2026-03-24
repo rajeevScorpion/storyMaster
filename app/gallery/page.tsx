@@ -19,6 +19,7 @@ const DEFAULT_FILTERS: GalleryFilters = {
   genre: 'all',
   ageGroup: 'all',
   country: 'all',
+  language: 'all',
 };
 
 const PAGE_SIZE = 12;

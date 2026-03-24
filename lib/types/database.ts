@@ -122,6 +122,7 @@ export interface GalleryFilters {
   genre: string;
   ageGroup: string;
   country: string;
+  language: string;
 }
 
 export interface GalleryPage {

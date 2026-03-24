@@ -5,6 +5,12 @@ import { Search, X, ChevronDown, Check } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { GalleryFilters as Filters } from '@/lib/types/database';
 
+const LANGUAGE_OPTIONS = [
+  { value: 'all', label: 'All Languages' },
+  { value: 'english', label: 'English' },
+  { value: 'hindi', label: 'Hindi (हिन्दी)' },
+];
+
 const TYPE_OPTIONS = [
   { value: 'all', label: 'All' },
   { value: 'trees', label: 'Story Trees' },
@@ -34,7 +40,7 @@ const AGE_OPTIONS = [
 ];
 
 const COUNTRY_OPTIONS = [
-  { value: 'all', label: 'All Settings' },
+  { value: 'all', label: 'All Demograph' },
   { value: 'India', label: 'India' },
   { value: 'Japan', label: 'Japan' },
   { value: 'USA', label: 'USA' },
@@ -78,7 +84,7 @@ function FilterDropdown({
             : 'border-white/10 rounded-xl text-neutral-200 hover:border-white/20'
         }`}
       >
-        {selected?.label}
+        {selected?.label || options[0]?.label}
         <ChevronDown
           className={`w-3.5 h-3.5 transition-transform duration-200 ${
             isOpen ? 'rotate-180 text-emerald-400' : 'text-neutral-500'
@@ -208,6 +214,13 @@ export default function GalleryFilters({ filters, onFiltersChange }: GalleryFilt
         value={filters.country}
         options={COUNTRY_OPTIONS}
         onChange={(v) => update({ country: v })}
+      />
+
+      {/* Language */}
+      <FilterDropdown
+        value={filters.language}
+        options={LANGUAGE_OPTIONS}
+        onChange={(v) => update({ language: v })}
       />
     </div>
   );
