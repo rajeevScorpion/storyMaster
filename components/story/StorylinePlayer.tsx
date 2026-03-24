@@ -7,8 +7,6 @@ import Link from 'next/link';
 import {
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
-  ChevronDown,
   Home,
   Play,
   Pause,
@@ -311,44 +309,25 @@ export default function StorylinePlayer({
           )}
         </AnimatePresence>
 
-        {/* Story Text Card + Toggle */}
+        {/* Story Text Card */}
         <div className="flex flex-col items-center">
-          {/* Minimize/maximize toggle */}
-          <button
-            onClick={() => setIsMinimized(!isMinimized)}
-            className="mb-2 p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
-            title={isMinimized ? 'Expand (M)' : 'Minimize (M)'}
-          >
-            {isMinimized ? (
-              <ChevronUp className="w-5 h-5 text-neutral-300" />
-            ) : (
-              <ChevronDown className="w-5 h-5 text-neutral-300" />
-            )}
-          </button>
-
           <AnimatePresence mode="wait">
-            {!showChoice && (
+            {!showChoice && !isMinimized && (
               <motion.div
                 key={currentIndex}
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                className={`w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 ${
-                  isMinimized
-                    ? 'bg-neutral-950/40'
-                    : 'bg-neutral-900/80 max-h-[50vh]'
-                }`}
+                className="w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 bg-neutral-900/80 max-h-[50vh]"
               >
-                <div className={`p-8 md:p-10 ${isMinimized ? '' : 'flex-1 overflow-y-auto scrollbar-none'}`}>
-                  <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
-                    isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
-                  }`}>
+                <div className="p-8 md:p-10 flex-1 overflow-y-auto scrollbar-none">
+                  <p className="text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 text-neutral-300">
                     {currentBeat.storyText}
                   </p>
 
                   {/* Ending state */}
-                  {!isMinimized && currentBeat.isEnding && (
+                  {currentBeat.isEnding && (
                     <div className="mt-8 pt-8 border-t border-white/10">
                       <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
                         The End
