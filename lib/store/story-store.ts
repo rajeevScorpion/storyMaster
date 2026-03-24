@@ -257,16 +257,21 @@ export const useStoryStore = create<StoryState>()(
                   const path = getPathToNode(updatedMap, updatedMap.currentNodeId);
                   const coverIdx = path.length > 1 ? 1 : 0;
                   const coverNode = path[coverIdx];
-                  if (coverNode?.data.imageUrl) {
+                  const coverImageData = coverNode?.data.imageUrl;
+                  if (coverImageData?.startsWith('data:')) {
+                    // Fresh session — image is still base64, upload it
                     const supabase = createBrowserClient();
                     const { data: { user } } = await supabase.auth.getUser();
                     if (user) {
                       coverImageUrl = await uploadCoverImage(
                         user.id,
                         session.savedStoryId!,
-                        coverNode.data.imageUrl
+                        coverImageData
                       );
                     }
+                  } else if (coverImageData && coverImageData.startsWith('http')) {
+                    // Resumed session — image is already a storage URL, reuse it
+                    coverImageUrl = coverImageData;
                   }
                 } catch (err) {
                   console.error('Cover image upload failed:', err);

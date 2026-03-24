@@ -29,8 +29,11 @@ export default function LoadingState() {
   const cluesToUse = loadingClues?.length > 0 ? loadingClues : defaultClues;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/30">
-      <div className="max-w-md w-full p-8 rounded-3xl bg-neutral-900 border border-white/10 shadow-2xl flex flex-col items-center text-center space-y-8">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: 'radial-gradient(ellipse at center, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.75) 60%, rgba(0,0,0,0.9) 100%)' }}
+    >
+      <div className="max-w-md w-full p-8 rounded-3xl bg-neutral-900/40 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col items-center text-center space-y-8">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
