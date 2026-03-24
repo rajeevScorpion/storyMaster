@@ -20,6 +20,7 @@ export default function StoryScreen() {
   const navigateToNode = useStoryStore((state) => state.navigateToNode);
   const isLoading = useStoryStore((state) => state.isLoading);
   const resetStory = useStoryStore((state) => state.resetStory);
+  const restartExploration = useStoryStore((state) => state.restartExploration);
   const isGeneratingAudio = useStoryStore((state) => state.isGeneratingAudio);
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
@@ -54,6 +55,7 @@ export default function StoryScreen() {
       continueStory={continueStory}
       navigateToNode={navigateToNode}
       resetStory={resetStory}
+      onRestart={session.sourceStoryOwnerId ? restartExploration : resetStory}
       hasExistingBranch={hasExistingBranch}
       isGeneratingAudio={isGeneratingAudio}
       audioReadyNodeId={audioReadyNodeId}
@@ -63,7 +65,7 @@ export default function StoryScreen() {
       toggleStoryMode={toggleStoryMode}
       isSaving={isSaving}
       saveStatus={saveStatus}
-      onSave={user ? () => saveStoryToCloud(user.id) : undefined}
+      onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id) : undefined}
       lastPublishResult={lastPublishResult}
     />
   );
@@ -78,6 +80,7 @@ function StoryScreenInner({
   continueStory,
   navigateToNode,
   resetStory,
+  onRestart,
   hasExistingBranch,
   isGeneratingAudio,
   audioReadyNodeId,
@@ -97,6 +100,7 @@ function StoryScreenInner({
   continueStory: (optionId: string) => void;
   navigateToNode: (nodeId: string) => void;
   resetStory: () => void;
+  onRestart: () => void;
   hasExistingBranch: (optionId: string) => boolean;
   isGeneratingAudio: boolean;
   audioReadyNodeId: string | null;
@@ -305,7 +309,7 @@ function StoryScreenInner({
             </div>
           )}
           <button
-            onClick={resetStory}
+            onClick={onRestart}
             className="p-2 hover:bg-white/10 rounded-full transition-colors"
             title="Restart Story"
           >

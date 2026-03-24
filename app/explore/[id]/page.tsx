@@ -1,17 +1,21 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import StoryScreen from '@/components/story/StoryScreen';
 import LoadingState from '@/components/story/LoadingState';
+import UserMenu from '@/components/auth/UserMenu';
+import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
+import Link from 'next/link';
 
 export default function ExplorePage() {
   const params = useParams();
   const router = useRouter();
   const storyId = params.id as string;
   const { user, isLoading: authLoading } = useAuth();
+  const [showMyStories, setShowMyStories] = useState(false);
 
   const session = useStoryStore((s) => s.session);
   const isLoading = useStoryStore((s) => s.isLoading);
@@ -55,5 +59,28 @@ export default function ExplorePage() {
 
   if (!session) return null;
 
-  return <StoryScreen />;
+  return (
+    <div className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
+      {/* Kissago logo — fixed top-left */}
+      <Link
+        href="/"
+        className="fixed top-4 left-4 z-40 px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200"
+      >
+        kissago
+      </Link>
+
+
+      {/* User menu — fixed top-right */}
+      <div className="fixed top-4 right-4 z-40">
+        <UserMenu onMyStories={() => setShowMyStories(true)} />
+      </div>
+
+      <MyStoriesDrawer
+        isOpen={showMyStories}
+        onClose={() => setShowMyStories(false)}
+      />
+
+      <StoryScreen />
+    </div>
+  );
 }

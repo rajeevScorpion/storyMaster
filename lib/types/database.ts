@@ -99,3 +99,39 @@ export interface DbExploredStory {
   explored_at: string;
   updated_at: string;
 }
+
+// Gallery types
+
+export interface GalleryItem {
+  id: string;
+  type: 'tree' | 'storyline';
+  title: string;
+  coverImageUrl: string | null;
+  authorName: string | null;
+  storyId: string;
+  beatCount: number | null;
+  genre: string | null;
+  ageGroup: string | null;
+  settingCountry: string | null;
+  createdAt: string;
+}
+
+export interface GalleryFilters {
+  search: string;
+  type: 'all' | 'trees' | 'storylines';
+  genre: string;
+  ageGroup: string;
+  country: string;
+}
+
+export interface GalleryPage {
+  items: GalleryItem[];
+  total: number;
+  hasMore: boolean;
+  savedStorylineIds: string[];
+}
+
+export interface GenreSection {
+  genre: string;
+  items: GalleryItem[];
+}

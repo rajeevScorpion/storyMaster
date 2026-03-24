@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
+import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 import GalleryCard from './GalleryCard';
 import { getPublicStorylines } from '@/app/actions/gallery';
 import type { GalleryStoryline } from '@/lib/types/database';
@@ -63,6 +65,19 @@ export default function Gallery() {
               />
             </motion.div>
           ))}
+        </div>
+      )}
+
+      {/* Browse Gallery link */}
+      {!isLoading && storylines.length > 0 && (
+        <div className="text-center mt-8">
+          <Link
+            href="/gallery"
+            className="inline-flex items-center gap-2 px-6 py-2.5 rounded-2xl bg-white/5 border border-white/10 text-neutral-400 hover:text-emerald-400 hover:border-emerald-500/30 hover:bg-white/10 transition-all duration-200 text-sm font-medium"
+          >
+            Browse Gallery
+            <ArrowRight className="w-4 h-4" />
+          </Link>
         </div>
       )}
     </motion.section>

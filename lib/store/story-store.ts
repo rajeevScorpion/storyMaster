@@ -64,6 +64,7 @@ interface StoryState {
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
   resetStory: () => void;
+  restartExploration: () => void;
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
@@ -326,6 +327,14 @@ export const useStoryStore = create<StoryState>()(
         set({ session: null, error: null, isLoading: false, loadingClues: [] });
       },
 
+      restartExploration: () => {
+        const { session } = get();
+        if (!session?.storyMap?.rootNodeId) return;
+        const rootId = session.storyMap.rootNodeId;
+        const updatedMap = { ...session.storyMap, currentNodeId: rootId };
+        set({ session: deriveSessionFields(session, updatedMap) });
+      },
+
       setLoadingClues: (clues: string[]) => {
         set({ loadingClues: clues });
       },
@@ -487,7 +496,7 @@ export const useStoryStore = create<StoryState>()(
             console.log(`[exploreStory] Loaded ${nodeCount} nodes, exploration=${fullSession.explorationMode}`);
           }
 
-          set({ session: fullSession, isLoading: false });
+          set({ session: fullSession, isLoading: false, saveStatus: 'saved' });
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to load story for exploration' });
         }
@@ -501,9 +510,15 @@ export const useStoryStore = create<StoryState>()(
       name: 'story-master-storage',
       version: 3,
       storage: createJSONStorage(() => storage),
-      partialize: (state) => ({ session: state.session }),
+      partialize: (state) => ({
+        session: state.session?.explorationMode ? null : state.session,
+      }),
       onRehydrateStorage: () => {
-        return () => {
+        return (state) => {
+          // Defensive: clear any exploration session that somehow got persisted
+          if (state?.session?.explorationMode) {
+            useStoryStore.setState({ session: null });
+          }
           resolveHydration();
         };
       },

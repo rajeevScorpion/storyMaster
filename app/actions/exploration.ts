@@ -104,24 +104,15 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
 
   let storyMap: StoryMap;
   if (beats && beats.length > 0) {
-    // Check if user has an exploration record with a last_node_id
-    let lastNodeId: string | null = null;
-    if (!isOwner) {
-      const { data: exploration } = await supabase
-        .from('explored_stories')
-        .select('last_node_id')
-        .eq('user_id', user.id)
-        .eq('story_id', storyId)
-        .maybeSingle();
-      lastNodeId = exploration?.last_node_id || null;
-    } else {
-      lastNodeId = dbStory.current_node_id;
-    }
-
-    storyMap = reconstructStoryMap(beats as DbBeat[], lastNodeId);
+    // Always start from root node — exploration begins from beat 1
+    storyMap = reconstructStoryMap(beats as DbBeat[], null);
   } else {
     // Fallback to legacy story_map JSONB
     storyMap = dbStory.story_map as unknown as StoryMap;
+    // Reset to root for legacy maps too
+    if (storyMap.rootNodeId) {
+      storyMap = { ...storyMap, currentNodeId: storyMap.rootNodeId };
+    }
   }
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser

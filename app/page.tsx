@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import LandingScreen from '@/components/story/LandingScreen';
@@ -18,6 +18,14 @@ export default function Home() {
   const resetStory = useStoryStore((state) => state.resetStory);
   const { user, signInWithGoogle } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
+
+  // Clear stale exploration sessions so root URL always shows landing page
+  useEffect(() => {
+    if (session?.explorationMode) {
+      resetStory();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleBegin = async (prompt: string, config?: StoryConfig) => {
     if (!user) {
@@ -43,6 +51,7 @@ export default function Home() {
       >
         kissago
       </button>
+
 
       {/* User menu — fixed top-right across all views */}
       <div className="fixed top-4 right-4 z-40">

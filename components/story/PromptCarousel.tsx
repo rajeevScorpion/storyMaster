@@ -36,7 +36,7 @@ export default function PromptCarousel({ onSelect }: PromptCarouselProps) {
     <div className="space-y-3">
       {/* Row 1 — scrolls left */}
       <div className="overflow-hidden" style={maskStyle}>
-        <div className="flex w-fit [animation:marquee-left_90s_linear_infinite] hover:[animation-play-state:paused] motion-reduce:[animation:none]">
+        <div className="flex w-fit [animation:marquee-left_180s_linear_infinite] hover:[animation-play-state:paused] motion-reduce:[animation:none]">
           {[...rows[0], ...rows[0]].map((prompt, i) => (
             <button
               key={i}
@@ -51,7 +51,7 @@ export default function PromptCarousel({ onSelect }: PromptCarouselProps) {
 
       {/* Row 2 — scrolls right */}
       <div className="overflow-hidden" style={maskStyle}>
-        <div className="flex w-fit [animation:marquee-right_100s_linear_infinite] hover:[animation-play-state:paused] motion-reduce:[animation:none]">
+        <div className="flex w-fit [animation:marquee-right_200s_linear_infinite] hover:[animation-play-state:paused] motion-reduce:[animation:none]">
           {[...rows[1], ...rows[1]].map((prompt, i) => (
             <button
               key={i}
