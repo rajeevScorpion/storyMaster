@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useStoryStore } from '@/lib/store/story-store';
 import {
   ChevronLeft,
   ChevronRight,
@@ -60,6 +62,8 @@ export default function StorylinePlayer({
   const [isSavingToProfile, setIsSavingToProfile] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [showMyStories, setShowMyStories] = useState(false);
+  const router = useRouter();
+  const resetStory = useStoryStore((state) => state.resetStory);
 
   // Refresh signed URLs before they expire (every 50 minutes)
   useEffect(() => {
@@ -278,13 +282,16 @@ export default function StorylinePlayer({
           )}
 
           {isOwner && (
-            <Link
-              href="/"
+            <button
+              onClick={() => {
+                resetStory();
+                router.push('/');
+              }}
               className="p-2 hover:bg-white/10 rounded-full transition-colors"
-              title="Return to full story"
+              title="Back to home"
             >
               <Home className="w-4 h-4" />
-            </Link>
+            </button>
           )}
 
           {/* User menu */}
