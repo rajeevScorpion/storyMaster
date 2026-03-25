@@ -119,7 +119,7 @@ export interface GalleryItem {
 
 export interface GalleryFilters {
   search: string;
-  type: 'all' | 'trees' | 'storylines';
+  type: 'storylines' | 'trees';
   genre: string;
   ageGroup: string;
   country: string;
@@ -130,7 +130,6 @@ export interface GalleryPage {
   items: GalleryItem[];
   total: number;
   hasMore: boolean;
-  savedStorylineIds: string[];
 }
 
 export interface GenreSection {

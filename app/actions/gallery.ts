@@ -3,6 +3,38 @@
 import { createClient } from '@/lib/supabase/server';
 import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryPage, GenreSection } from '@/lib/types/database';
 
+function mapStorylineRow(row: any): GalleryItem {
+  return {
+    id: row.id,
+    type: 'storyline',
+    title: row.title,
+    coverImageUrl: row.cover_image_url,
+    authorName: row.author_name,
+    storyId: row.story_id,
+    beatCount: row.beat_count,
+    genre: row.stories?.genre || null,
+    ageGroup: row.stories?.story_config?.ageGroup || null,
+    settingCountry: row.stories?.story_config?.settingCountry || null,
+    createdAt: row.created_at,
+  };
+}
+
+function mapTreeRow(row: any): GalleryItem {
+  return {
+    id: row.story_id,
+    type: 'tree',
+    title: row.title,
+    coverImageUrl: row.cover_image_url,
+    authorName: row.author_name,
+    storyId: row.story_id,
+    beatCount: null,
+    genre: row.genre || null,
+    ageGroup: row.story_config?.ageGroup || null,
+    settingCountry: row.story_config?.settingCountry || null,
+    createdAt: row.created_at,
+  };
+}
+
 /**
  * Fetch public storylines for the landing page gallery (unchanged).
  */
@@ -84,6 +116,29 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   return sections;
 }
 
+export async function getSavedStorylineIds(): Promise<string[]> {
+  const supabase = await createClient();
+
+  try {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) return [];
+
+    const { data, error } = await supabase
+      .from('saved_storylines')
+      .select('storyline_id')
+      .eq('user_id', user.id);
+
+    if (error) {
+      console.error('Failed to fetch saved storyline IDs:', error.message);
+      return [];
+    }
+
+    return (data || []).map((row: any) => row.storyline_id);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Fetch gallery items with search, filters, and pagination.
  */
@@ -93,11 +148,10 @@ export async function getGalleryItems(
   offset: number = 0
 ): Promise<GalleryPage> {
   const supabase = await createClient();
+  const rangeEnd = offset + limit - 1;
 
-  const allItems: GalleryItem[] = [];
-
-  // 1. Fetch storylines (when type is 'all' or 'storylines')
-  if (filters.type !== 'trees') {
+  // 1. Fetch storylines
+  if (filters.type === 'storylines') {
     let query = supabase
       .from('storylines')
       .select('id, title, cover_image_url, beat_count, author_name, story_id, created_at, stories!inner(genre, story_config)', { count: 'exact' })
@@ -120,120 +174,56 @@ export async function getGalleryItems(
       query = query.filter('stories.story_config->>language', 'eq', filters.language);
     }
 
-    const { data: storylines } = await query;
+    const { data: storylines, count, error } = await query.range(offset, rangeEnd);
 
-    if (storylines) {
-      for (const row of storylines as any[]) {
-        allItems.push({
-          id: row.id,
-          type: 'storyline',
-          title: row.title,
-          coverImageUrl: row.cover_image_url,
-          authorName: row.author_name,
-          storyId: row.story_id,
-          beatCount: row.beat_count,
-          genre: row.stories?.genre || null,
-          ageGroup: row.stories?.story_config?.ageGroup || null,
-          settingCountry: row.stories?.story_config?.settingCountry || null,
-          createdAt: row.created_at,
-        });
-      }
+    if (error) {
+      throw new Error(`Failed to fetch storyline gallery items: ${error.message}`);
     }
+
+    const items = (storylines || []).map(mapStorylineRow);
+    const total = count ?? 0;
+
+    return {
+      items,
+      total,
+      hasMore: offset + items.length < total,
+    };
   }
 
-  // 2. Fetch story trees (when type is 'all' or 'trees')
-  if (filters.type !== 'storylines') {
-    // Get public storylines to find explorable story_ids + cover images
-    const { data: publicStorylines } = await supabase
-      .from('storylines')
-      .select('story_id, cover_image_url, author_name, created_at')
-      .eq('is_public', true)
-      .order('created_at', { ascending: false });
+  // 2. Fetch story trees from a DB-backed gallery source
+  let query = supabase
+    .from('gallery_story_trees')
+    .select('story_id, title, user_prompt, genre, story_config, cover_image_url, author_name, created_at', { count: 'exact' })
+    .order('created_at', { ascending: false });
 
-    if (publicStorylines && publicStorylines.length > 0) {
-      // Deduplicate by story_id, keep most recent storyline's cover
-      const storyCovers = new Map<string, { coverImageUrl: string | null; authorName: string | null; createdAt: string }>();
-      for (const sl of publicStorylines) {
-        if (sl.story_id && !storyCovers.has(sl.story_id)) {
-          storyCovers.set(sl.story_id, {
-            coverImageUrl: sl.cover_image_url,
-            authorName: sl.author_name,
-            createdAt: sl.created_at,
-          });
-        }
-      }
-
-      const storyIds = Array.from(storyCovers.keys());
-
-      // Fetch the stories
-      let storyQuery = supabase
-        .from('stories')
-        .select('id, title, user_prompt, genre, story_config, cover_image_url, created_at')
-        .in('id', storyIds)
-        .eq('is_archived', false)
-        .order('created_at', { ascending: false });
-
-      if (filters.search) {
-        storyQuery = storyQuery.or(`title.ilike.%${filters.search}%,user_prompt.ilike.%${filters.search}%`);
-      }
-      if (filters.genre && filters.genre !== 'all') {
-        storyQuery = storyQuery.ilike('genre', filters.genre);
-      }
-      if (filters.ageGroup && filters.ageGroup !== 'all') {
-        storyQuery = storyQuery.filter('story_config->>ageGroup', 'eq', filters.ageGroup);
-      }
-      if (filters.country && filters.country !== 'all') {
-        storyQuery = storyQuery.filter('story_config->>settingCountry', 'eq', filters.country);
-      }
-      if (filters.language && filters.language !== 'all') {
-        storyQuery = storyQuery.filter('story_config->>language', 'eq', filters.language);
-      }
-
-      const { data: stories } = await storyQuery;
-
-      if (stories) {
-        for (const story of stories as any[]) {
-          const cover = storyCovers.get(story.id);
-          allItems.push({
-            id: story.id,
-            type: 'tree',
-            title: story.title,
-            coverImageUrl: story.cover_image_url || cover?.coverImageUrl || null,
-            authorName: cover?.authorName || null,
-            storyId: story.id,
-            beatCount: null,
-            genre: story.genre || null,
-            ageGroup: story.story_config?.ageGroup || null,
-            settingCountry: story.story_config?.settingCountry || null,
-            createdAt: cover?.createdAt || story.created_at,
-          });
-        }
-      }
-    }
+  if (filters.search) {
+    query = query.or(`title.ilike.%${filters.search}%,user_prompt.ilike.%${filters.search}%`);
+  }
+  if (filters.genre && filters.genre !== 'all') {
+    query = query.ilike('genre', filters.genre);
+  }
+  if (filters.ageGroup && filters.ageGroup !== 'all') {
+    query = query.filter('story_config->>ageGroup', 'eq', filters.ageGroup);
+  }
+  if (filters.country && filters.country !== 'all') {
+    query = query.filter('story_config->>settingCountry', 'eq', filters.country);
+  }
+  if (filters.language && filters.language !== 'all') {
+    query = query.filter('story_config->>language', 'eq', filters.language);
   }
 
-  // 3. Sort by createdAt desc
-  allItems.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const { data: storyTrees, count, error } = await query.range(offset, rangeEnd);
 
-  // 4. Paginate
-  const total = allItems.length;
-  const paginated = allItems.slice(offset, offset + limit);
-  const hasMore = offset + limit < total;
-
-  // 5. Fetch saved storyline IDs if authenticated
-  let savedStorylineIds: string[] = [];
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: saved } = await supabase
-        .from('saved_storylines')
-        .select('storyline_id')
-        .eq('user_id', user.id);
-      savedStorylineIds = (saved || []).map((s: any) => s.storyline_id);
-    }
-  } catch {
-    // Anonymous user, no saved IDs
+  if (error) {
+    throw new Error(`Failed to fetch story tree gallery items: ${error.message}`);
   }
 
-  return { items: paginated, total, hasMore, savedStorylineIds };
+  const items = (storyTrees || []).map(mapTreeRow);
+  const total = count ?? 0;
+
+  return {
+    items,
+    total,
+    hasMore: offset + items.length < total,
+  };
 }

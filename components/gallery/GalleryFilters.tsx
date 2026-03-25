@@ -12,9 +12,8 @@ const LANGUAGE_OPTIONS = [
 ];
 
 const TYPE_OPTIONS = [
-  { value: 'all', label: 'All' },
-  { value: 'trees', label: 'Story Trees' },
   { value: 'storylines', label: 'Storylines' },
+  { value: 'trees', label: 'Story Trees' },
 ] as const;
 
 const GENRE_OPTIONS = [
@@ -49,6 +48,10 @@ const COUNTRY_OPTIONS = [
   { value: 'Space', label: 'Space' },
   { value: 'Underwater', label: 'Underwater' },
 ];
+
+function normalizeSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 function FilterDropdown({
   value,
@@ -139,21 +142,52 @@ interface GalleryFiltersProps {
 export default function GalleryFilters({ filters, onFiltersChange }: GalleryFiltersProps) {
   const [searchInput, setSearchInput] = useState(filters.search);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestFiltersRef = useRef(filters);
+  const latestOnFiltersChangeRef = useRef(onFiltersChange);
+
+  useEffect(() => {
+    latestFiltersRef.current = filters;
+    latestOnFiltersChangeRef.current = onFiltersChange;
+  }, [filters, onFiltersChange]);
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      if (searchInput !== filters.search) {
-        onFiltersChange({ ...filters, search: searchInput });
+      const trimmedSearch = searchInput.trim();
+      const normalizedInput = normalizeSearch(trimmedSearch);
+      const normalizedFilter = normalizeSearch(filters.search);
+
+      if (normalizedInput !== normalizedFilter) {
+        latestOnFiltersChangeRef.current({
+          ...latestFiltersRef.current,
+          search: trimmedSearch,
+        });
+        if (trimmedSearch !== searchInput) {
+          setSearchInput(trimmedSearch);
+        }
+      } else if (trimmedSearch !== searchInput) {
+        setSearchInput(filters.search);
       }
     }, 300);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [searchInput]);
+  }, [searchInput, filters.search]);
 
   const update = (partial: Partial<Filters>) => {
-    onFiltersChange({ ...filters, ...partial });
+    const nextFilters = { ...filters, ...partial };
+    const isSameSearch = normalizeSearch(nextFilters.search) === normalizeSearch(filters.search);
+    const isSameFilters =
+      nextFilters.type === filters.type &&
+      nextFilters.genre === filters.genre &&
+      nextFilters.ageGroup === filters.ageGroup &&
+      nextFilters.country === filters.country &&
+      nextFilters.language === filters.language &&
+      isSameSearch;
+
+    if (isSameFilters) return;
+
+    onFiltersChange(nextFilters);
   };
 
   return (
@@ -170,7 +204,11 @@ export default function GalleryFilters({ filters, onFiltersChange }: GalleryFilt
         />
         {searchInput && (
           <button
-            onClick={() => { setSearchInput(''); update({ search: '' }); }}
+            onClick={() => {
+              if (!searchInput && !filters.search) return;
+              setSearchInput('');
+              update({ search: '' });
+            }}
             className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-neutral-300"
           >
             <X className="w-4 h-4" />

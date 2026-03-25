@@ -9,13 +9,13 @@ import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import GenreShowcase, { GenreShowcaseSkeleton } from '@/components/gallery/GenreShowcase';
 import GalleryFiltersBar from '@/components/gallery/GalleryFilters';
 import GalleryItemCard from '@/components/gallery/GalleryItemCard';
-import { getTopByGenre, getGalleryItems } from '@/app/actions/gallery';
+import { getTopByGenre, getGalleryItems, getSavedStorylineIds } from '@/app/actions/gallery';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import type { GalleryItem, GalleryFilters, GenreSection } from '@/lib/types/database';
 
 const DEFAULT_FILTERS: GalleryFilters = {
   search: '',
-  type: 'all',
+  type: 'storylines',
   genre: 'all',
   ageGroup: 'all',
   country: 'all',
@@ -23,6 +23,37 @@ const DEFAULT_FILTERS: GalleryFilters = {
 };
 
 const PAGE_SIZE = 12;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface GalleryCacheEntry {
+  items: GalleryItem[];
+  total: number;
+  hasMore: boolean;
+  nextOffset: number;
+  cachedAt: number;
+}
+
+function normalizeFilters(filters: GalleryFilters): GalleryFilters {
+  return {
+    ...filters,
+    search: filters.search.trim(),
+  };
+}
+
+function getFilterKey(filters: GalleryFilters): string {
+  return [
+    filters.type,
+    filters.search.trim().toLowerCase(),
+    filters.genre,
+    filters.ageGroup,
+    filters.country,
+    filters.language,
+  ].join('|');
+}
+
+function isCacheFresh(entry?: GalleryCacheEntry): boolean {
+  return !!entry && Date.now() - entry.cachedAt <= CACHE_TTL_MS;
+}
 
 export default function GalleryPage() {
   const { user, signInWithGoogle } = useAuth();
@@ -35,13 +66,21 @@ export default function GalleryPage() {
   // Grid state
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [filters, setFilters] = useState<GalleryFilters>(DEFAULT_FILTERS);
-  const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState(0);
-  const [gridLoading, setGridLoading] = useState(true);
+  const [initialGridLoading, setInitialGridLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [supportsInfiniteScroll, setSupportsInfiniteScroll] = useState(false);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
 
   const gridRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const cacheRef = useRef<Map<string, GalleryCacheEntry>>(new Map());
+  const inFlightRequestsRef = useRef<Set<string>>(new Set());
+  const activeFilterKeyRef = useRef(getFilterKey(DEFAULT_FILTERS));
+  const activeRequestTokenRef = useRef(0);
+  const hasHydratedOnceRef = useRef(false);
 
   // Fetch genre showcase on mount
   useEffect(() => {
@@ -51,33 +90,166 @@ export default function GalleryPage() {
       .finally(() => setGenreLoading(false));
   }, []);
 
-  // Fetch gallery grid
-  const fetchGrid = useCallback(async (f: GalleryFilters, off: number, append: boolean) => {
-    setGridLoading(true);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setSupportsInfiniteScroll('IntersectionObserver' in window);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user) {
+      setSavedIds(new Set());
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    getSavedStorylineIds()
+      .then((ids) => {
+        if (!cancelled) {
+          setSavedIds(new Set(ids));
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to fetch saved storyline IDs:', error);
+        if (!cancelled) {
+          setSavedIds(new Set());
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
+  const applyCacheEntry = useCallback((entry: GalleryCacheEntry) => {
+    setItems(entry.items);
+    setTotal(entry.total);
+    setHasMore(entry.hasMore);
+  }, []);
+
+  const fetchGridPage = useCallback(async (
+    targetFilters: GalleryFilters,
+    offset: number,
+    append: boolean,
+    token: number
+  ) => {
+    const normalizedFilters = normalizeFilters(targetFilters);
+    const filterKey = getFilterKey(normalizedFilters);
+    const requestKey = `${filterKey}:${offset}`;
+
+    if (inFlightRequestsRef.current.has(requestKey)) return;
+    inFlightRequestsRef.current.add(requestKey);
+
     try {
-      const result = await getGalleryItems(f, PAGE_SIZE, off);
-      setItems((prev) => append ? [...prev, ...result.items] : result.items);
-      setTotal(result.total);
-      setHasMore(result.hasMore);
-      setSavedIds(new Set(result.savedStorylineIds));
+      const result = await getGalleryItems(normalizedFilters, PAGE_SIZE, offset);
+      const cachedEntry = cacheRef.current.get(filterKey);
+      const nextItems = append && cachedEntry
+        ? [...cachedEntry.items, ...result.items]
+        : result.items;
+
+      const nextEntry: GalleryCacheEntry = {
+        items: nextItems,
+        total: result.total,
+        hasMore: result.hasMore,
+        nextOffset: offset + result.items.length,
+        cachedAt: Date.now(),
+      };
+
+      cacheRef.current.set(filterKey, nextEntry);
+
+      if (activeFilterKeyRef.current === filterKey && activeRequestTokenRef.current === token) {
+        applyCacheEntry(nextEntry);
+        hasHydratedOnceRef.current = true;
+      }
     } catch (err) {
       console.error('Failed to fetch gallery:', err);
     } finally {
-      setGridLoading(false);
+      inFlightRequestsRef.current.delete(requestKey);
+
+      if (activeFilterKeyRef.current === filterKey && activeRequestTokenRef.current === token) {
+        if (offset === 0) {
+          setInitialGridLoading(false);
+          setIsRefreshing(false);
+        } else {
+          setIsLoadingMore(false);
+        }
+      }
     }
-  }, []);
+  }, [applyCacheEntry]);
 
-  // Initial load + filter changes
+  const loadFilterResults = useCallback((nextFilters: GalleryFilters) => {
+    const normalizedFilters = normalizeFilters(nextFilters);
+    const filterKey = getFilterKey(normalizedFilters);
+    const cachedEntry = cacheRef.current.get(filterKey);
+    const token = activeRequestTokenRef.current + 1;
+
+    activeFilterKeyRef.current = filterKey;
+    activeRequestTokenRef.current = token;
+    setIsLoadingMore(false);
+
+    if (cachedEntry && isCacheFresh(cachedEntry)) {
+      applyCacheEntry(cachedEntry);
+      setInitialGridLoading(false);
+      setIsRefreshing(false);
+      hasHydratedOnceRef.current = true;
+      return;
+    }
+
+    if (hasHydratedOnceRef.current) {
+      setIsRefreshing(true);
+    } else {
+      setInitialGridLoading(true);
+    }
+
+    void fetchGridPage(normalizedFilters, 0, false, token);
+  }, [applyCacheEntry, fetchGridPage]);
+
   useEffect(() => {
-    setOffset(0);
-    fetchGrid(filters, 0, false);
-  }, [filters, fetchGrid]);
+    loadFilterResults(filters);
+  }, [filters, loadFilterResults]);
 
-  const handleLoadMore = () => {
-    const newOffset = offset + PAGE_SIZE;
-    setOffset(newOffset);
-    fetchGrid(filters, newOffset, true);
-  };
+  const handleLoadMore = useCallback(() => {
+    if (initialGridLoading || isRefreshing || isLoadingMore) return;
+
+    const filterKey = getFilterKey(filters);
+    const cachedEntry = cacheRef.current.get(filterKey);
+    if (!cachedEntry || !cachedEntry.hasMore) return;
+
+    const nextOffset = cachedEntry.nextOffset;
+    const requestKey = `${filterKey}:${nextOffset}`;
+    if (inFlightRequestsRef.current.has(requestKey)) return;
+
+    setIsLoadingMore(true);
+    void fetchGridPage(filters, nextOffset, true, activeRequestTokenRef.current);
+  }, [fetchGridPage, filters, initialGridLoading, isLoadingMore, isRefreshing]);
+
+  useEffect(() => {
+    if (!supportsInfiniteScroll) return;
+    if (!hasMore || isRefreshing) return;
+
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          handleLoadMore();
+        }
+      },
+      { rootMargin: '400px 0px' }
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [handleLoadMore, hasMore, isRefreshing, supportsInfiniteScroll]);
+
+  const handleFiltersChange = useCallback((nextFilters: GalleryFilters) => {
+    const normalizedFilters = normalizeFilters(nextFilters);
+    if (getFilterKey(normalizedFilters) === getFilterKey(filters)) return;
+    setFilters(normalizedFilters);
+  }, [filters]);
 
   const handleToggleSave = async (storylineId: string, currentlySaved: boolean) => {
     // Optimistic update
@@ -112,7 +284,7 @@ export default function GalleryPage() {
   };
 
   const handleGenreClick = (genre: string) => {
-    setFilters((prev) => ({ ...prev, genre }));
+    handleFiltersChange({ ...filters, genre });
     gridRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
@@ -184,12 +356,19 @@ export default function GalleryPage() {
           <div className="mb-8">
             <GalleryFiltersBar
               filters={filters}
-              onFiltersChange={setFilters}
+              onFiltersChange={handleFiltersChange}
             />
           </div>
 
+          <div className="mb-4 flex items-center justify-between gap-3 text-xs text-neutral-500">
+            <span>{total > 0 ? `${total} stories` : 'No stories found'}</span>
+            {isRefreshing && (
+              <span className="text-emerald-400/80">Updating results...</span>
+            )}
+          </div>
+
           {/* Grid */}
-          {gridLoading && items.length === 0 ? (
+          {initialGridLoading && items.length === 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {[...Array(PAGE_SIZE)].map((_, i) => (
                 <div
@@ -223,17 +402,33 @@ export default function GalleryPage() {
                 ))}
               </div>
 
-              {/* Load More */}
-              {hasMore && (
-                <div className="text-center mt-10">
+              {isLoadingMore && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                  {[...Array(3)].map((_, index) => (
+                    <div
+                      key={`loading-more-${index}`}
+                      className="aspect-[16/10] rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse"
+                    />
+                  ))}
+                </div>
+              )}
+
+              {hasMore && !isRefreshing && (
+                <>
+                  <div ref={sentinelRef} className="h-1" aria-hidden="true" />
                   <button
                     onClick={handleLoadMore}
-                    disabled={gridLoading}
-                    className="px-8 py-3 rounded-2xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all duration-200 text-sm font-medium disabled:opacity-50"
+                    disabled={isLoadingMore}
+                    className="mt-10 mx-auto block px-8 py-3 rounded-2xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all duration-200 text-sm font-medium disabled:opacity-50"
                   >
-                    {gridLoading ? 'Loading...' : `Load More (${items.length} of ${total})`}
+                    {isLoadingMore ? 'Loading...' : `Load More (${items.length} of ${total})`}
                   </button>
-                </div>
+                  {!supportsInfiniteScroll && (
+                    <p className="mt-3 text-center text-xs text-neutral-600">
+                      Automatic loading is unavailable in this browser.
+                    </p>
+                  )}
+                </>
               )}
             </>
           )}
