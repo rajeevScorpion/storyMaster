@@ -5,9 +5,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Upload, Check, Loader2, ExternalLink } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useStoryStore } from '@/lib/store/story-store';
-import { extractStoryline, selectCoverBeatIndex } from '@/lib/utils/storyline';
-import { uploadNodeAssets, replaceBase64WithUrls, uploadCoverImage } from '@/lib/supabase/storage';
-import { publishStoryline, saveStory } from '@/app/actions/persistence';
+import { extractStoryline } from '@/lib/utils/storyline';
+import { uploadNodeAssets, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
+import { publishStoryline, saveStory, copyCoverToPublicBucket } from '@/app/actions/persistence';
 import type { StoryBeat } from '@/lib/types/story';
 
 interface PublishDialogProps {
@@ -52,15 +52,18 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
         nodeIds
       );
 
-      // Step 3: Upload cover image (random middle beat)
-      const coverIdx = selectCoverBeatIndex(storylineData.path.length);
+      // Step 3: Upload cover image (second beat = first user choice)
+      const coverIdx = storylineData.path.length > 1 ? 1 : 0;
       const coverNode = storylineData.path[coverIdx];
       let coverImageUrl: string | null = null;
-      if (coverNode.data.imageUrl) {
-        if (coverNode.data.imageUrl.startsWith('data:')) {
-          coverImageUrl = await uploadCoverImage(user.id, storyId!, coverNode.data.imageUrl);
-        } else {
-          coverImageUrl = coverNode.data.imageUrl;
+      const coverImgData = coverNode?.data.imageUrl;
+      if (coverImgData) {
+        if (coverImgData.startsWith('data:')) {
+          coverImageUrl = await uploadCoverImage(user.id, storyId!, coverImgData);
+        } else if (extractStoragePath(coverImgData, 'story-assets')) {
+          coverImageUrl = await copyCoverToPublicBucket(storyId!, coverImgData);
+        } else if (extractStoragePath(coverImgData, 'public-storylines')) {
+          coverImageUrl = coverImgData;
         }
       }
 

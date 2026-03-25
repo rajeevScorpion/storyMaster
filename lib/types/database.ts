@@ -22,6 +22,7 @@ export interface DbStory {
   narrator_voice: string | null;
   is_archived: boolean;
   current_node_id: string | null;
+  cover_image_url: string | null;
   created_at: string;
   updated_at: string;
 }

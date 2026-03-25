@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { signStoryMapAssetUrls, normalizeStorageUrl } from '@/lib/supabase/storage';
+import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineChoice } from '@/lib/utils/storyline';
@@ -500,6 +500,44 @@ export async function autoPublishStoryline(
 }
 
 // ============================================================
+// Cover Image Helpers
+// ============================================================
+
+/**
+ * Copy a beat image from the private story-assets bucket to the public
+ * public-storylines bucket as a cover image. Returns the public URL.
+ */
+export async function copyCoverToPublicBucket(
+  storyId: string,
+  sourceImageUrl: string
+): Promise<string | null> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) return null;
+
+  const destPath = `${user.id}/${storyId}/cover.webp`;
+  return copyToPublicBucket(supabase, sourceImageUrl, 'story-assets', 'public-storylines', destPath);
+}
+
+/**
+ * Set the cover_image_url on the stories table (for tree thumbnails).
+ */
+export async function setStoryCoverImage(
+  storyId: string,
+  coverUrl: string
+): Promise<void> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) return;
+
+  await supabase
+    .from('stories')
+    .update({ cover_image_url: coverUrl })
+    .eq('id', storyId)
+    .eq('user_id', user.id);
+}
+
+// ============================================================
 // List / Delete / Archive
 // ============================================================
 
@@ -716,4 +754,155 @@ export async function publishStoryline(params: {
 
   if (error) throw new Error(`Failed to publish storyline: ${error.message}`);
   return { storylineId: data.id };
+}
+
+// ============================================================
+// Backfill Missing Cover Images
+// ============================================================
+
+/**
+ * Backfill missing cover images for storylines and story trees.
+ * - Storyline covers: uses beat at index 1 (or 0 for single-beat paths)
+ * - Tree covers: uses root beat (index 0)
+ * Copies images from story-assets (private) to public-storylines (public).
+ */
+export async function backfillMissingCovers(): Promise<{
+  storylinesFixed: number;
+  treesFixed: number;
+  failed: number;
+}> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  let storylinesFixed = 0;
+  let treesFixed = 0;
+  let failed = 0;
+
+  // 1. Fix storylines with NULL or private-bucket cover URLs
+  const { data: storylines } = await supabase
+    .from('storylines')
+    .select('id, story_id, user_id, node_path, cover_image_url')
+    .eq('is_public', true);
+
+  if (storylines) {
+    const toFix = storylines.filter(
+      (sl) =>
+        !sl.cover_image_url ||
+        sl.cover_image_url.includes('/story-assets/')
+    );
+
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < toFix.length; i += BATCH_SIZE) {
+      const batch = toFix.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(async (sl) => {
+          const nodePath: string[] = sl.node_path || [];
+          const coverNodeId = nodePath.length > 1 ? nodePath[1] : nodePath[0];
+          if (!coverNodeId) return;
+
+          // Look up beat image_url
+          const { data: beat } = await supabase
+            .from('beats')
+            .select('image_url')
+            .eq('story_id', sl.story_id)
+            .eq('node_id', coverNodeId)
+            .single();
+
+          const imageUrl = beat?.image_url;
+          if (!imageUrl) return;
+
+          let publicUrl: string | null = null;
+
+          if (extractStoragePath(imageUrl, 'public-storylines')) {
+            publicUrl = imageUrl;
+          } else if (extractStoragePath(imageUrl, 'story-assets')) {
+            const destPath = `${sl.user_id}/${sl.id}/cover.webp`;
+            publicUrl = await copyToPublicBucket(
+              supabase,
+              imageUrl,
+              'story-assets',
+              'public-storylines',
+              destPath
+            );
+          }
+
+          if (publicUrl) {
+            await supabase
+              .from('storylines')
+              .update({ cover_image_url: publicUrl })
+              .eq('id', sl.id);
+            storylinesFixed++;
+          }
+        })
+      );
+
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          console.error('Storyline backfill failed:', r.reason);
+          failed++;
+        }
+      }
+    }
+  }
+
+  // 2. Fix stories (trees) with NULL cover_image_url
+  const { data: stories } = await supabase
+    .from('stories')
+    .select('id, user_id, cover_image_url')
+    .is('cover_image_url', null)
+    .eq('is_archived', false);
+
+  if (stories) {
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < stories.length; i += BATCH_SIZE) {
+      const batch = stories.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(async (story) => {
+          // Get root beat (parent_node_id IS NULL)
+          const { data: rootBeat } = await supabase
+            .from('beats')
+            .select('image_url')
+            .eq('story_id', story.id)
+            .is('parent_node_id', null)
+            .single();
+
+          const imageUrl = rootBeat?.image_url;
+          if (!imageUrl) return;
+
+          let publicUrl: string | null = null;
+
+          if (extractStoragePath(imageUrl, 'public-storylines')) {
+            publicUrl = imageUrl;
+          } else if (extractStoragePath(imageUrl, 'story-assets')) {
+            const destPath = `${story.user_id}/${story.id}/tree-cover.webp`;
+            publicUrl = await copyToPublicBucket(
+              supabase,
+              imageUrl,
+              'story-assets',
+              'public-storylines',
+              destPath
+            );
+          }
+
+          if (publicUrl) {
+            await supabase
+              .from('stories')
+              .update({ cover_image_url: publicUrl })
+              .eq('id', story.id);
+            treesFixed++;
+          }
+        })
+      );
+
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          console.error('Tree backfill failed:', r.reason);
+          failed++;
+        }
+      }
+    }
+  }
+
+  return { storylinesFixed, treesFixed, failed };
 }

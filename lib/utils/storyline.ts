@@ -54,14 +54,3 @@ export function extractStoryline(storyMap: StoryMap, endingNodeId: string): Extr
   return { path, beats, choices };
 }
 
-/**
- * Select a cover image beat index from a storyline path.
- * Picks a random index excluding the first and last beats.
- * Falls back to index 0 if path has fewer than 3 beats.
- */
-export function selectCoverBeatIndex(pathLength: number): number {
-  if (pathLength <= 2) return 0;
-  const min = 1;
-  const max = pathLength - 2;
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}

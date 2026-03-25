@@ -168,7 +168,7 @@ export async function getGalleryItems(
       // Fetch the stories
       let storyQuery = supabase
         .from('stories')
-        .select('id, title, user_prompt, genre, story_config, created_at')
+        .select('id, title, user_prompt, genre, story_config, cover_image_url, created_at')
         .in('id', storyIds)
         .eq('is_archived', false)
         .order('created_at', { ascending: false });
@@ -198,7 +198,7 @@ export async function getGalleryItems(
             id: story.id,
             type: 'tree',
             title: story.title,
-            coverImageUrl: cover?.coverImageUrl || null,
+            coverImageUrl: story.cover_image_url || cover?.coverImageUrl || null,
             authorName: cover?.authorName || null,
             storyId: story.id,
             beatCount: null,

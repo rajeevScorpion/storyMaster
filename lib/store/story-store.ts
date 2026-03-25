@@ -2,9 +2,9 @@ import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, selectNarratorVoice, generateNarration } from '@/app/actions/story';
-import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, updateBeatAssets } from '@/app/actions/persistence';
+import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, updateBeatAssets, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadAsset, uploadCoverImage } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadAsset, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import { getPathToNode } from '../utils/story-map';
 import {
@@ -251,30 +251,60 @@ export const useStoryStore = create<StoryState>()(
             // Auto-publish if this is an ending beat
             if (beat.isEnding) {
               (async () => {
-                // Upload cover image from second beat (first user choice divergence)
-                let coverImageUrl: string | null = null;
-                try {
-                  const path = getPathToNode(updatedMap, updatedMap.currentNodeId);
-                  const coverIdx = path.length > 1 ? 1 : 0;
-                  const coverNode = path[coverIdx];
-                  const coverImageData = coverNode?.data.imageUrl;
-                  if (coverImageData?.startsWith('data:')) {
-                    // Fresh session — image is still base64, upload it
+                const storyPath = getPathToNode(updatedMap, updatedMap.currentNodeId);
+
+                // Storyline cover = second beat (index 1), tree cover = first beat (index 0)
+                const storylineCoverNode = storyPath.length > 1 ? storyPath[1] : storyPath[0];
+                const treeCoverNode = storyPath[0];
+
+                // Helper: resolve a node's image to a public-bucket URL
+                const resolvePublicCoverUrl = async (
+                  imageData: string | undefined,
+                  destSuffix: string
+                ): Promise<string | null> => {
+                  if (!imageData) return null;
+                  if (imageData.startsWith('data:')) {
                     const supabase = createBrowserClient();
                     const { data: { user } } = await supabase.auth.getUser();
-                    if (user) {
-                      coverImageUrl = await uploadCoverImage(
-                        user.id,
-                        session.savedStoryId!,
-                        coverImageData
-                      );
+                    if (!user) return null;
+                    return uploadCoverImage(user.id, session.savedStoryId!, imageData);
+                  }
+                  if (extractStoragePath(imageData, 'story-assets')) {
+                    // Private-bucket URL — copy to public bucket via server action
+                    return copyCoverToPublicBucket(session.savedStoryId!, imageData);
+                  }
+                  if (extractStoragePath(imageData, 'public-storylines')) {
+                    // Already in public bucket
+                    return imageData;
+                  }
+                  // External URL (e.g. picsum placeholder) — skip
+                  return null;
+                };
+
+                let coverImageUrl: string | null = null;
+                try {
+                  coverImageUrl = await resolvePublicCoverUrl(
+                    storylineCoverNode?.data.imageUrl,
+                    'cover.webp'
+                  );
+                } catch (err) {
+                  console.error('Storyline cover upload failed:', err);
+                }
+
+                // Also set tree cover (beat 0) if not already set
+                try {
+                  const treeCoverData = treeCoverNode?.data.imageUrl;
+                  if (treeCoverData && treeCoverNode !== storylineCoverNode) {
+                    const treeCoverUrl = await resolvePublicCoverUrl(treeCoverData, 'tree-cover.webp');
+                    if (treeCoverUrl) {
+                      await setStoryCoverImage(session.savedStoryId!, treeCoverUrl);
                     }
-                  } else if (coverImageData && coverImageData.startsWith('http')) {
-                    // Resumed session — image is already a storage URL, reuse it
-                    coverImageUrl = coverImageData;
+                  } else if (coverImageUrl) {
+                    // Single-beat story: use same cover for tree
+                    await setStoryCoverImage(session.savedStoryId!, coverImageUrl);
                   }
                 } catch (err) {
-                  console.error('Cover image upload failed:', err);
+                  console.error('Tree cover upload failed:', err);
                 }
 
                 return autoPublishStoryline(

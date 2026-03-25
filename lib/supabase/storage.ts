@@ -1,6 +1,6 @@
 import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { StoryMap, StoryNode, StoryBeat } from '@/lib/types/story';
+import type { StoryMap, StoryBeat } from '@/lib/types/story';
 
 /**
  * Convert a base64 data URL to a Blob with the correct content type.
@@ -164,18 +164,6 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
 }
 
 /**
- * Select a cover image from a storyline path.
- * Picks a random beat from the middle (excluding first and last).
- */
-export function selectCoverBeatIndex(pathLength: number): number {
-  if (pathLength <= 2) return 0;
-  // Random index between 1 and pathLength - 2 (inclusive)
-  const min = 1;
-  const max = pathLength - 2;
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-/**
  * Upload a cover image for a storyline from a specific node.
  */
 export async function uploadCoverImage(
@@ -188,12 +176,55 @@ export async function uploadCoverImage(
 }
 
 /**
+ * Copy a file from one Supabase Storage bucket to another.
+ * Downloads from the source bucket and uploads to the destination.
+ * Returns the public URL of the uploaded file, or null on failure.
+ */
+export async function copyToPublicBucket(
+  supabase: SupabaseClient,
+  sourceUrl: string,
+  sourceBucket: string,
+  destBucket: string,
+  destPath: string
+): Promise<string | null> {
+  const storagePath = extractStoragePath(sourceUrl, sourceBucket);
+  if (!storagePath) return null;
+
+  const { data: blob, error: dlError } = await supabase.storage
+    .from(sourceBucket)
+    .download(storagePath);
+
+  if (dlError || !blob) {
+    console.error('Failed to download source asset:', dlError?.message);
+    return null;
+  }
+
+  const { error: ulError } = await supabase.storage
+    .from(destBucket)
+    .upload(destPath, blob, {
+      contentType: blob.type || 'image/webp',
+      upsert: true,
+    });
+
+  if (ulError) {
+    console.error('Failed to upload to public bucket:', ulError.message);
+    return null;
+  }
+
+  const { data: urlData } = supabase.storage
+    .from(destBucket)
+    .getPublicUrl(destPath);
+
+  return urlData.publicUrl;
+}
+
+/**
  * Extract the storage path from a Supabase Storage URL (public or signed).
  * Handles both formats:
  *   - Public:  /storage/v1/object/public/{bucket}/path
  *   - Signed:  /storage/v1/object/sign/{bucket}/path?token=...
  */
-function extractStoragePath(url: string, bucket: string): string | null {
+export function extractStoragePath(url: string, bucket: string): string | null {
   // Try public URL format
   const publicMarker = `/storage/v1/object/public/${bucket}/`;
   let idx = url.indexOf(publicMarker);
