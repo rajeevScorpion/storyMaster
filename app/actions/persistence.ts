@@ -29,7 +29,7 @@ function stripBase64(storyMap: StoryMap): StoryMap {
  * Convert a StoryNode + beat data into a beats table row object.
  */
 function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId: string) {
-  return {
+  const row: Record<string, unknown> = {
     story_id: storyId,
     node_id: nodeId,
     beat_number: node.beatNumber,
@@ -47,9 +47,21 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     clues: node.data.clues || null,
     next_beat_goal: node.data.nextBeatGoal || null,
     ending_forecast: node.data.endingForecast || null,
-    image_url: node.data.imageUrl?.startsWith('data:') ? null : (node.data.imageUrl ? normalizeStorageUrl(node.data.imageUrl, 'story-assets') : null),
-    audio_url: node.data.audioUrl?.startsWith('data:') ? null : (node.data.audioUrl ? normalizeStorageUrl(node.data.audioUrl, 'story-assets') : null),
   };
+
+  // Only include asset URLs when they have values — prevents UPSERT from
+  // overwriting audio_url set by generateAndPersistNarration (race condition)
+  const imageUrl = node.data.imageUrl?.startsWith('data:') ? null : node.data.imageUrl;
+  if (imageUrl) {
+    row.image_url = normalizeStorageUrl(imageUrl, 'story-assets');
+  }
+
+  const audioUrl = node.data.audioUrl?.startsWith('data:') ? null : node.data.audioUrl;
+  if (audioUrl) {
+    row.audio_url = normalizeStorageUrl(audioUrl, 'story-assets');
+  }
+
+  return row;
 }
 
 /**

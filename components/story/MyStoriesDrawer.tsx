@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
-import { useStoryStore } from '@/lib/store/story-store';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import Link from 'next/link';
 import type { TabId } from '@/lib/types/my-stories';
@@ -21,11 +21,9 @@ const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
 ];
 
 export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>('my-stories');
   const [actionId, setActionId] = useState<string | null>(null);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
-  const loadStoryFromCloud = useStoryStore((s) => s.loadStoryFromCloud);
-  const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
 
   const stories = useMyStoriesStore((s) => s.stories);
   const exploredStories = useMyStoriesStore((s) => s.exploredStories);
@@ -40,28 +38,14 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
 
   const isLoading = loading[activeTab];
 
-  const handleLoadStory = async (storyId: string) => {
-    setLoadingId(storyId);
-    try {
-      await loadStoryFromCloud(storyId);
-      onClose();
-    } catch (error) {
-      console.error('Failed to load story:', error);
-    } finally {
-      setLoadingId(null);
-    }
+  const handleLoadStory = (storyId: string) => {
+    onClose();
+    router.push(`/story/${storyId}`);
   };
 
-  const handleExplore = async (storyId: string) => {
-    setLoadingId(storyId);
-    try {
-      await exploreStoryTree(storyId);
-      onClose();
-    } catch (error) {
-      console.error('Failed to explore story:', error);
-    } finally {
-      setLoadingId(null);
-    }
+  const handleExplore = (storyId: string) => {
+    onClose();
+    router.push(`/explore/${storyId}`);
   };
 
   const handleDeleteStory = async (storyId: string) => {
@@ -159,7 +143,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadStory(story.id)}
-          disabled={loadingId === story.id}
           className="w-full text-left p-5 pr-20"
         >
           <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
@@ -181,11 +164,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
               {formatDate(story.updated_at)}
             </span>
           </div>
-          {loadingId === story.id && (
-            <div className="absolute inset-0 bg-neutral-950/80 flex items-center justify-center rounded-2xl">
-              <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
-            </div>
-          )}
         </button>
 
         {/* Action buttons */}
@@ -244,7 +222,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleExplore(item.story_id)}
-          disabled={loadingId === item.story_id}
           className="w-full text-left p-5"
         >
           <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
@@ -262,11 +239,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
               {formatDate(item.updated_at)}
             </span>
           </div>
-          {loadingId === item.story_id && (
-            <div className="absolute inset-0 bg-neutral-950/80 flex items-center justify-center rounded-2xl">
-              <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
-            </div>
-          )}
         </button>
       </motion.div>
     ));

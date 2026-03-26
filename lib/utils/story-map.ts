@@ -22,9 +22,10 @@ export function addChildNode(
   map: StoryMap,
   parentId: string,
   optionId: string,
-  beat: StoryBeat
+  beat: StoryBeat,
+  preGeneratedId?: string
 ): StoryMap {
-  const id = uuidv4();
+  const id = preGeneratedId || uuidv4();
   const newNode: StoryNode = {
     id,
     beatNumber: beat.beatNumber,

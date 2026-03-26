@@ -1,7 +1,7 @@
 'use client';
 
-import { Suspense, useState, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Suspense, useState, useEffect, useRef } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import LandingScreen from '@/components/story/LandingScreen';
@@ -18,17 +18,35 @@ function HomeContent() {
   const error = useStoryStore((state) => state.error);
   const resetStory = useStoryStore((state) => state.resetStory);
   const { user, signInWithGoogle } = useAuth();
+  const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const searchParams = useSearchParams();
+  const hasRedirected = useRef(false);
 
-  // Clear stale exploration sessions so root URL always shows landing page
+  // Clear stale sessions so root URL always shows landing page
+  // (user navigated here via logo link from /story/[id] or /explore/[id])
   useEffect(() => {
-    if (session?.explorationMode) {
+    if (session?.explorationMode || session?.savedStoryId) {
       resetStory();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Redirect to /story/[id] once a newly created story gets its savedStoryId from auto-save
+  useEffect(() => {
+    if (
+      session?.savedStoryId &&
+      !session.explorationMode &&
+      !hasRedirected.current
+    ) {
+      hasRedirected.current = true;
+      router.replace(`/story/${session.savedStoryId}`);
+    }
+    if (!session) {
+      hasRedirected.current = false;
+    }
+  }, [session, router]);
 
   // Show auth-required message from redirects
   useEffect(() => {
