@@ -237,7 +237,7 @@ export default function StorylinePlayer({
                 src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-500 object-[center_30%] md:object-center ${isMinimized ? 'opacity-60' : 'opacity-50 md:opacity-40'}`}
+                className={`object-cover transition-opacity duration-500 object-[center_30%] md:object-center ${isMinimized ? 'opacity-40 md:opacity-60' : 'opacity-25 md:opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -333,9 +333,42 @@ export default function StorylinePlayer({
         )}
       </div>
 
+      {/* Focal image layer — mobile only, fills space between title and controls */}
+      {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
+        <div className="relative z-[1] flex-1 min-h-0 md:hidden px-5 py-2">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentBeat.imageUrl}
+              initial={{ opacity: 0, scale: 1.05 }}
+              animate={{ opacity: 1, scale: [1, 1.08] }}
+              exit={{ opacity: 0 }}
+              transition={{
+                opacity: { duration: 1.5, ease: 'easeOut' },
+                scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
+              }}
+              className="relative w-full h-full"
+              style={{
+                maskImage: 'linear-gradient(to bottom, transparent, black 12%, black 88%, transparent)',
+                WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 12%, black 88%, transparent)',
+              }}
+            >
+              <Image
+                src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
+                alt={currentBeat.sceneSummary}
+                fill
+                className="object-contain"
+                referrerPolicy="no-referrer"
+                priority
+                unoptimized
+              />
+            </motion.div>
+          </AnimatePresence>
+        </div>
+      )}
+
       {/* Main Content */}
       <motion.main
-        className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0"
+        className="relative z-10 flex-1 md:flex-1 flex-none flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0"
         onPan={onPan}
         onPanEnd={onPanEnd}
         style={{ x: dragX }}
