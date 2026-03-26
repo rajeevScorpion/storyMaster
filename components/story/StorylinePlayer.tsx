@@ -237,7 +237,7 @@ export default function StorylinePlayer({
                 src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-500 blur-[2px] md:blur-none object-[center_30%] md:object-center ${isMinimized ? 'opacity-60' : 'opacity-40 md:opacity-40'}`}
+                className={`object-cover transition-opacity duration-500 object-[center_30%] md:object-center ${isMinimized ? 'opacity-60' : 'opacity-50 md:opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
