@@ -20,6 +20,10 @@ import {
   RotateCcw,
   Volume2,
   VolumeX,
+  FastForward,
+  Repeat,
+  BookOpen,
+  EyeOff,
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
@@ -388,112 +392,157 @@ export default function StorylinePlayer({
 
         {/* Navigation Controls */}
         <div className="mt-6 mb-4 space-y-3 md:space-y-0">
-          {/* Row 1: Playback controls — mobile only, centered */}
-          <div className="flex items-center justify-center gap-2 md:hidden">
-            <button
-              onClick={replay}
-              className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
-              title="Replay from start (R)"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-
-            {currentBeat.audioUrl && (
-              <button
-                onClick={togglePlayPause}
-                className={`p-2.5 rounded-full border transition-all cursor-pointer ${
-                  playbackState === 'playing'
-                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                    : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                {playbackState === 'playing' ? (
-                  <Pause className="w-4 h-4" />
-                ) : (
-                  <Play className="w-4 h-4" />
-                )}
-              </button>
-            )}
-
-            {currentBeat.audioUrl && (
-              <button
-                onClick={() => setVolume(volume === 0 ? 1 : 0)}
-                className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
-                title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
-              >
-                {volume === 0 ? (
-                  <VolumeX className="w-4 h-4" />
-                ) : (
-                  <Volume2 className="w-4 h-4" />
-                )}
-              </button>
-            )}
-
-            <button
-              onClick={() => setAutoPlay(!autoPlay)}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
-                autoPlay
-                  ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
-                  : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
-              }`}
-            >
-              auto
-            </button>
-
-            <button
-              onClick={() => setAutoReplay(!autoReplay)}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
-                autoReplay
-                  ? 'bg-purple-500/20 border-purple-500/30 text-purple-300'
-                  : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
-              }`}
-            >
-              loop
-            </button>
-
-            <button
-              onClick={() => setIsMinimized(!isMinimized)}
-              className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
-                isMinimized
-                  ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300'
-                  : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
-              }`}
-              title={isMinimized ? 'Expand text (M)' : 'Minimize text (M)'}
-            >
-              {isMinimized ? 'max' : 'min'}
-            </button>
-
-            <button
-              onClick={toggleFullscreen}
-              className={`p-2.5 rounded-full border transition-all cursor-pointer ${
-                isFullscreen
-                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                  : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
-              }`}
-              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen landscape'}
-            >
-              {isFullscreen ? (
-                <Minimize2 className="w-4 h-4" />
-              ) : (
-                <Maximize2 className="w-4 h-4" />
-              )}
-            </button>
-          </div>
-
-          {/* Row 2: Navigation — always visible */}
-          <div className="flex items-center justify-between">
-            {/* Previous — icon-only on mobile, icon+text on desktop */}
+          {/* Mobile Row 1: Prev/Next buttons — right-aligned, above controls */}
+          <div className="flex items-center justify-end gap-2 md:hidden">
             <button
               onClick={goPrev}
               disabled={isFirst}
-              className="flex items-center gap-2 p-2.5 md:px-4 md:py-2.5 rounded-full md:rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              className="p-2.5 rounded-full bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              onClick={goNext}
+              disabled={isLast}
+              className="p-2.5 rounded-full bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Mobile Row 2: Playback controls + beat dots */}
+          <div className="flex items-center justify-between gap-1.5 md:hidden">
+            {/* Controls cluster */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={replay}
+                className="p-2 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
+                title="Replay from start (R)"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+
+              {currentBeat.audioUrl && (
+                <button
+                  onClick={togglePlayPause}
+                  className={`p-2 rounded-full border transition-all cursor-pointer ${
+                    playbackState === 'playing'
+                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                      : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  {playbackState === 'playing' ? (
+                    <Pause className="w-3.5 h-3.5" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
+
+              {currentBeat.audioUrl && (
+                <button
+                  onClick={() => setVolume(volume === 0 ? 1 : 0)}
+                  className="p-2 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                  title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
+                >
+                  {volume === 0 ? (
+                    <VolumeX className="w-3.5 h-3.5" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              )}
+
+              <button
+                onClick={() => setAutoPlay(!autoPlay)}
+                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                  autoPlay
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                    : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                }`}
+                title="Auto-play"
+              >
+                <FastForward className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                onClick={() => setAutoReplay(!autoReplay)}
+                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                  autoReplay
+                    ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                    : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                }`}
+                title="Loop"
+              >
+                <Repeat className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                onClick={() => setIsMinimized(!isMinimized)}
+                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                  isMinimized
+                    ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
+                    : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                }`}
+                title={isMinimized ? 'Show text (M)' : 'Hide text (M)'}
+              >
+                {isMinimized ? (
+                  <BookOpen className="w-3.5 h-3.5" />
+                ) : (
+                  <EyeOff className="w-3.5 h-3.5" />
+                )}
+              </button>
+
+              <button
+                onClick={toggleFullscreen}
+                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                  isFullscreen
+                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                    : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                }`}
+                title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen landscape'}
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Maximize2 className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+
+            {/* Beat dots — mobile */}
+            <div className="flex gap-1 items-center flex-shrink-0">
+              {currentBeats.map((_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setCurrentIndex(i)}
+                  title={`Beat ${i + 1}`}
+                  className={`rounded-full transition-all duration-200 cursor-pointer ${
+                    i === currentIndex
+                      ? 'bg-emerald-400 w-3.5 h-1.5'
+                      : i < currentIndex
+                        ? 'bg-neutral-600 w-1.5 h-1.5'
+                        : 'bg-neutral-800 w-1.5 h-1.5'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Desktop: Single row with all controls */}
+          <div className="hidden md:flex items-center justify-between">
+            {/* Previous */}
+            <button
+              onClick={goPrev}
+              disabled={isFirst}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <ChevronLeft className="w-4 h-4" />
-              <span className="hidden md:inline text-sm font-sans">Previous</span>
+              <span className="text-sm font-sans">Previous</span>
             </button>
 
-            {/* Desktop center controls — hidden on mobile */}
-            <div className="hidden md:flex items-center gap-3">
+            {/* Desktop center controls */}
+            <div className="flex items-center gap-3">
               <button
                 onClick={replay}
                 className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
@@ -573,12 +622,12 @@ export default function StorylinePlayer({
                     ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300'
                     : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
                 }`}
-                title={isMinimized ? 'Expand text (M)' : 'Minimize text (M)'}
+                title={isMinimized ? 'Show text (M)' : 'Hide text (M)'}
               >
-                {isMinimized ? 'max' : 'min'}
+                {isMinimized ? 'read' : 'hide'}
               </button>
 
-              {/* Progress dots — desktop only */}
+              {/* Progress dots */}
               <div className="flex gap-1 items-center">
                 {currentBeats.map((_, i) => (
                   <button
@@ -597,18 +646,13 @@ export default function StorylinePlayer({
               </div>
             </div>
 
-            {/* Mobile progress indicator */}
-            <span className="md:hidden text-xs font-sans text-neutral-500">
-              {currentIndex + 1} / {currentBeats.length}
-            </span>
-
-            {/* Next — icon-only on mobile, icon+text on desktop */}
+            {/* Next */}
             <button
               onClick={goNext}
               disabled={isLast}
-              className="flex items-center gap-2 p-2.5 md:px-4 md:py-2.5 rounded-full md:rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
-              <span className="hidden md:inline text-sm font-sans">Next</span>
+              <span className="text-sm font-sans">Next</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
