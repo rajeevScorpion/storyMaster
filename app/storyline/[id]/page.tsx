@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
 import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { notFound } from 'next/navigation';
@@ -57,16 +58,18 @@ export default async function StorylinePage({ params }: PageProps) {
   const { beats, choices } = await loadStorylineWithBeats(id);
 
   return (
-    <StorylinePlayer
-      storylineId={storyline.id}
-      storyId={storyline.story_id}
-      title={storyline.title}
-      beats={beats}
-      choices={choices as StorylineChoice[]}
-      authorName={storyline.author_name}
-      isOwner={isOwner}
-      isSaved={isSaved}
-      isLoggedIn={true}
-    />
+    <Suspense>
+      <StorylinePlayer
+        storylineId={storyline.id}
+        storyId={storyline.story_id}
+        title={storyline.title}
+        beats={beats}
+        choices={choices as StorylineChoice[]}
+        authorName={storyline.author_name}
+        isOwner={isOwner}
+        isSaved={isSaved}
+        isLoggedIn={true}
+      />
+    </Suspense>
   );
 }
