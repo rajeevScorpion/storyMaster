@@ -124,7 +124,9 @@ export async function generateAndPersistNarration(
     .from('story-assets')
     .getPublicUrl(storagePath);
 
-  // Update beats table with the storage URL
+  // Update beats table with the storage URL.
+  // Retry once after a delay if the beat row hasn't been created yet
+  // (race condition: narration can finish before saveBeatAction upserts the row).
   const { error: updateError } = await supabase
     .from('beats')
     .update({ audio_url: urlData.publicUrl })
@@ -134,6 +136,23 @@ export async function generateAndPersistNarration(
 
   if (updateError) {
     console.error('Failed to update beat audio_url:', updateError.message);
+  }
+
+  // Verify the update took effect; if not, the row likely didn't exist yet — retry once
+  const { data: check } = await supabase
+    .from('beats')
+    .select('audio_url')
+    .eq('story_id', savedStoryId)
+    .eq('node_id', nodeId)
+    .single();
+
+  if (!check?.audio_url) {
+    await new Promise(r => setTimeout(r, 2000));
+    await supabase
+      .from('beats')
+      .update({ audio_url: urlData.publicUrl })
+      .eq('story_id', savedStoryId)
+      .eq('node_id', nodeId);
   }
 
   // Return a signed URL for immediate playback (story-assets bucket is private)

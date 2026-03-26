@@ -282,6 +282,18 @@ export async function signStoryMapAssetUrls(
     }
   }
 
+  // Infer audio path from image path when audioUrl is missing but imageUrl exists.
+  // Both assets live in the same storage folder ({userId}/{storyId}/{nodeId}/).
+  for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
+    if (node.data.imageUrl && !node.data.audioUrl) {
+      const imgPath = extractStoragePath(node.data.imageUrl, bucket);
+      if (imgPath) {
+        const dir = imgPath.substring(0, imgPath.lastIndexOf('/'));
+        pathEntries.push({ nodeId, field: 'audioUrl', path: `${dir}/audio.wav` });
+      }
+    }
+  }
+
   if (pathEntries.length === 0) return storyMap;
 
   // Batch-create signed URLs
@@ -335,6 +347,18 @@ export async function signStorylineBeatsUrls(
       const storagePath = extractStoragePath(url, bucket);
       if (storagePath) {
         pathEntries.push({ index: i, field, path: storagePath });
+      }
+    }
+  }
+
+  // Infer audio path from image path when audioUrl is missing but imageUrl exists.
+  // Both assets live in the same storage folder ({userId}/{storyId}/{nodeId}/).
+  for (let i = 0; i < beats.length; i++) {
+    if (beats[i].imageUrl && !beats[i].audioUrl) {
+      const imgPath = extractStoragePath(beats[i].imageUrl!, bucket);
+      if (imgPath) {
+        const dir = imgPath.substring(0, imgPath.lastIndexOf('/'));
+        pathEntries.push({ index: i, field: 'audioUrl', path: `${dir}/audio.wav` });
       }
     }
   }
