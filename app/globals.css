@@ -1,5 +1,26 @@
 @import "tailwindcss";
 
+/* Safe area insets as CSS custom properties */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+
+/* Dynamic viewport height — accounts for mobile browser chrome */
+.h-dvh {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* Touch device card visibility — no hover available */
+@media (hover: none) {
+  .touch-visible {
+    opacity: 1 !important;
+  }
+}
+
 /* Global dark thin scrollbar */
 * {
   scrollbar-width: thin;

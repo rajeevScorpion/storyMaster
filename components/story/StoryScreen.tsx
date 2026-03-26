@@ -229,7 +229,7 @@ function StoryScreenInner({
   }, [focusedOptionIndex]);
 
   return (
-    <div className="relative h-screen bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col">
+    <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
@@ -244,12 +244,12 @@ function StoryScreenInner({
             }}
             className="absolute inset-0"
           >
-            {currentBeat.imageUrl && (
+            {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
               <Image
-                src={currentBeat.imageUrl}
+                src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-700 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
+                className={`object-cover transition-opacity duration-700 blur-[2px] md:blur-none object-[center_30%] md:object-center ${isMinimized ? 'opacity-60' : 'opacity-40 md:opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -258,18 +258,18 @@ function StoryScreenInner({
             <motion.div
               initial={false}
               animate={{
-                height: isMinimized ? '20%' : '60%',
-                opacity: isMinimized ? 0.5 : 0.7,
+                height: isMinimized ? '20%' : '50%',
+                opacity: isMinimized ? 0.5 : 0.6,
               }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
+              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-transparent"
             />
           </motion.div>
         </AnimatePresence>
       </div>
 
       {/* Header */}
-      <header className="relative z-10 p-6 pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
+      <header className="relative z-10 p-4 md:p-6 pl-16 md:pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
         <div className="flex items-center gap-3">
           <BookOpen className="w-6 h-6 text-emerald-400" />
           <h1 className="text-xl font-serif tracking-wide text-neutral-200">
@@ -373,7 +373,7 @@ function StoryScreenInner({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
             style={{ opacity: isCardHovered ? 1 : 0.1 }}
-            className={`relative w-full border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-500 ${
+            className={`touch-visible relative w-full border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-500 ${
               isMinimized ? 'bg-neutral-950/40' : 'max-h-[50vh] bg-neutral-900/80'
             }`}
           >
@@ -389,7 +389,7 @@ function StoryScreenInner({
             <div
               ref={scrollRef}
               onScroll={handleScroll}
-              className={`p-8 md:p-12 ${isMinimized ? '' : 'flex-1 overflow-y-auto scrollbar-none'}`}
+              className={`p-5 md:p-12 ${isMinimized ? '' : 'flex-1 overflow-y-auto scrollbar-none'}`}
             >
               <AnimatePresence mode="wait">
                 <motion.div
@@ -566,7 +566,7 @@ function StoryScreenInner({
                             transition={{ delay: index * 0.1 }}
                             onClick={() => continueStory(option.id)}
                             disabled={isLoading}
-                            className={`w-full text-left group backdrop-blur-md rounded-2xl p-6 transition-all duration-300 flex items-center justify-between ${
+                            className={`w-full text-left group backdrop-blur-md rounded-2xl p-4 md:p-6 transition-all duration-300 flex items-center justify-between ${
                               explored
                                 ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40 glow-pulse-mild'
                                 : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'

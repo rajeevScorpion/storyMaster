@@ -25,6 +25,7 @@ import { refreshStorylineSignedUrls } from '@/app/actions/exploration';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
+import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 
@@ -209,8 +210,14 @@ export default function StorylinePlayer({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [goNext, goPrev, togglePlayPause, replay, setVolume]);
 
+  // Swipe navigation for mobile
+  const { dragX, onPan, onPanEnd } = useSwipeNavigation({
+    onSwipeLeft: goNext,
+    onSwipeRight: goPrev,
+  });
+
   return (
-    <div className="relative h-screen bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col">
+    <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
@@ -225,12 +232,12 @@ export default function StorylinePlayer({
             }}
             className="absolute inset-0"
           >
-            {currentBeat.imageUrl && (
+            {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
               <Image
-                src={currentBeat.imageUrl}
+                src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
+                className={`object-cover transition-opacity duration-500 blur-[2px] md:blur-none object-[center_30%] md:object-center ${isMinimized ? 'opacity-60' : 'opacity-40 md:opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -239,11 +246,11 @@ export default function StorylinePlayer({
             <motion.div
               initial={false}
               animate={{
-                height: isMinimized ? '20%' : '60%',
-                opacity: isMinimized ? 0.5 : 0.7,
+                height: isMinimized ? '20%' : '50%',
+                opacity: isMinimized ? 0.5 : 0.6,
               }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
+              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-transparent"
             />
           </motion.div>
         </AnimatePresence>
@@ -327,7 +334,12 @@ export default function StorylinePlayer({
       </div>
 
       {/* Main Content */}
-      <main className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0">
+      <motion.main
+        className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0"
+        onPan={onPan}
+        onPanEnd={onPanEnd}
+        style={{ x: dragX }}
+      >
         {/* Choice Transition */}
         <AnimatePresence>
           {showChoice && currentChoice && (
@@ -347,7 +359,7 @@ export default function StorylinePlayer({
                 transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
                 className="w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 bg-neutral-900/80 max-h-[50vh]"
               >
-                <div className="p-8 md:p-10 flex-1 overflow-y-auto scrollbar-none">
+                <div className="p-5 md:p-10 flex-1 overflow-y-auto scrollbar-none">
                   <p className="text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 text-neutral-300">
                     {currentBeat.storyText}
                   </p>
@@ -370,18 +382,9 @@ export default function StorylinePlayer({
         </div>
 
         {/* Navigation Controls */}
-        <div className="flex items-center justify-between mt-6 mb-4">
-          <button
-            onClick={goPrev}
-            disabled={isFirst}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            <span className="text-sm font-sans">Previous</span>
-          </button>
-
-          <div className="flex items-center gap-2 md:gap-3">
-            {/* Replay from start */}
+        <div className="mt-6 mb-4 space-y-3 md:space-y-0">
+          {/* Row 1: Playback controls — mobile only, centered */}
+          <div className="flex items-center justify-center gap-2 md:hidden">
             <button
               onClick={replay}
               className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
@@ -390,7 +393,6 @@ export default function StorylinePlayer({
               <RotateCcw className="w-4 h-4" />
             </button>
 
-            {/* Audio play/pause */}
             {currentBeat.audioUrl && (
               <button
                 onClick={togglePlayPause}
@@ -408,33 +410,20 @@ export default function StorylinePlayer({
               </button>
             )}
 
-            {/* Volume control */}
             {currentBeat.audioUrl && (
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setVolume(volume === 0 ? 1 : 0)}
-                  className="p-1.5 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
-                  title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
-                >
-                  {volume === 0 ? (
-                    <VolumeX className="w-4 h-4" />
-                  ) : (
-                    <Volume2 className="w-4 h-4" />
-                  )}
-                </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={volume}
-                  onChange={(e) => setVolume(parseFloat(e.target.value))}
-                  className="w-16 md:w-20 h-1 accent-emerald-400 cursor-pointer"
-                />
-              </div>
+              <button
+                onClick={() => setVolume(volume === 0 ? 1 : 0)}
+                className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
+              >
+                {volume === 0 ? (
+                  <VolumeX className="w-4 h-4" />
+                ) : (
+                  <Volume2 className="w-4 h-4" />
+                )}
+              </button>
             )}
 
-            {/* Auto-play toggle */}
             <button
               onClick={() => setAutoPlay(!autoPlay)}
               className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
@@ -446,7 +435,6 @@ export default function StorylinePlayer({
               auto
             </button>
 
-            {/* Auto-replay (loop) toggle */}
             <button
               onClick={() => setAutoReplay(!autoReplay)}
               className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
@@ -458,7 +446,6 @@ export default function StorylinePlayer({
               loop
             </button>
 
-            {/* Minimize/maximize toggle */}
             <button
               onClick={() => setIsMinimized(!isMinimized)}
               className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
@@ -470,36 +457,142 @@ export default function StorylinePlayer({
             >
               {isMinimized ? 'max' : 'min'}
             </button>
-
-            {/* Progress dots */}
-            <div className="hidden md:flex gap-1 items-center">
-              {currentBeats.map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentIndex(i)}
-                  title={`Beat ${i + 1}`}
-                  className={`rounded-full transition-all duration-200 cursor-pointer hover:scale-[2] ${
-                    i === currentIndex
-                      ? 'bg-emerald-400 w-4 h-1.5'
-                      : i < currentIndex
-                        ? 'bg-neutral-600 w-1.5 h-1.5 hover:bg-emerald-400/60'
-                        : 'bg-neutral-800 w-1.5 h-1.5 hover:bg-neutral-600'
-                  }`}
-                />
-              ))}
-            </div>
           </div>
 
-          <button
-            onClick={goNext}
-            disabled={isLast}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <span className="text-sm font-sans">Next</span>
-            <ChevronRight className="w-4 h-4" />
-          </button>
+          {/* Row 2: Navigation — always visible */}
+          <div className="flex items-center justify-between">
+            {/* Previous — icon-only on mobile, icon+text on desktop */}
+            <button
+              onClick={goPrev}
+              disabled={isFirst}
+              className="flex items-center gap-2 p-2.5 md:px-4 md:py-2.5 rounded-full md:rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              <span className="hidden md:inline text-sm font-sans">Previous</span>
+            </button>
+
+            {/* Desktop center controls — hidden on mobile */}
+            <div className="hidden md:flex items-center gap-3">
+              <button
+                onClick={replay}
+                className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
+                title="Replay from start (R)"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+
+              {currentBeat.audioUrl && (
+                <button
+                  onClick={togglePlayPause}
+                  className={`p-2.5 rounded-full border transition-all cursor-pointer ${
+                    playbackState === 'playing'
+                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                      : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  {playbackState === 'playing' ? (
+                    <Pause className="w-4 h-4" />
+                  ) : (
+                    <Play className="w-4 h-4" />
+                  )}
+                </button>
+              )}
+
+              {currentBeat.audioUrl && (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setVolume(volume === 0 ? 1 : 0)}
+                    className="p-1.5 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                    title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
+                  >
+                    {volume === 0 ? (
+                      <VolumeX className="w-4 h-4" />
+                    ) : (
+                      <Volume2 className="w-4 h-4" />
+                    )}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={volume}
+                    onChange={(e) => setVolume(parseFloat(e.target.value))}
+                    className="w-20 h-1 accent-emerald-400 cursor-pointer"
+                  />
+                </div>
+              )}
+
+              <button
+                onClick={() => setAutoPlay(!autoPlay)}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
+                  autoPlay
+                    ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+                    : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                auto
+              </button>
+
+              <button
+                onClick={() => setAutoReplay(!autoReplay)}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
+                  autoReplay
+                    ? 'bg-purple-500/20 border-purple-500/30 text-purple-300'
+                    : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                loop
+              </button>
+
+              <button
+                onClick={() => setIsMinimized(!isMinimized)}
+                className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
+                  isMinimized
+                    ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300'
+                    : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
+                }`}
+                title={isMinimized ? 'Expand text (M)' : 'Minimize text (M)'}
+              >
+                {isMinimized ? 'max' : 'min'}
+              </button>
+
+              {/* Progress dots — desktop only */}
+              <div className="flex gap-1 items-center">
+                {currentBeats.map((_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentIndex(i)}
+                    title={`Beat ${i + 1}`}
+                    className={`rounded-full transition-all duration-200 cursor-pointer hover:scale-[2] ${
+                      i === currentIndex
+                        ? 'bg-emerald-400 w-4 h-1.5'
+                        : i < currentIndex
+                          ? 'bg-neutral-600 w-1.5 h-1.5 hover:bg-emerald-400/60'
+                          : 'bg-neutral-800 w-1.5 h-1.5 hover:bg-neutral-600'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Mobile progress indicator */}
+            <span className="md:hidden text-xs font-sans text-neutral-500">
+              {currentIndex + 1} / {currentBeats.length}
+            </span>
+
+            {/* Next — icon-only on mobile, icon+text on desktop */}
+            <button
+              onClick={goNext}
+              disabled={isLast}
+              className="flex items-center gap-2 p-2.5 md:px-4 md:py-2.5 rounded-full md:rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <span className="hidden md:inline text-sm font-sans">Next</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
-      </main>
+      </motion.main>
 
       {/* My Stories drawer */}
       <MyStoriesDrawer
