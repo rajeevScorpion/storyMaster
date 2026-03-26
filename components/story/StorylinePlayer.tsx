@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import {
   ChevronLeft,
@@ -53,10 +53,10 @@ export default function StorylinePlayer({
   isSaved: initialSaved = false,
   isLoggedIn = false,
 }: StorylinePlayerProps) {
-  const searchParams = useSearchParams();
   const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(() => {
-    const beatParam = searchParams.get('beat');
+    if (typeof window === 'undefined') return 0;
+    const beatParam = new URLSearchParams(window.location.search).get('beat');
     if (beatParam) {
       const parsed = parseInt(beatParam, 10);
       if (!isNaN(parsed) && parsed >= 0 && parsed < beats.length) return parsed;
@@ -478,7 +478,7 @@ export default function StorylinePlayer({
                   key={i}
                   onClick={() => setCurrentIndex(i)}
                   title={`Beat ${i + 1}`}
-                  className={`rounded-full transition-all duration-200 hover:scale-[2] cursor-pointer ${
+                  className={`rounded-full transition-all duration-200 cursor-pointer hover:scale-[2] ${
                     i === currentIndex
                       ? 'bg-emerald-400 w-4 h-1.5'
                       : i < currentIndex
