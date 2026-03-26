@@ -15,6 +15,8 @@ import {
   Bookmark,
   BookmarkCheck,
   Compass,
+  Maximize2,
+  Minimize2,
   RotateCcw,
   Volume2,
   VolumeX,
@@ -26,6 +28,7 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
+import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 
@@ -73,6 +76,8 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
 
   // Sync current beat index to URL for persistence across refresh
   useEffect(() => {
@@ -217,7 +222,7 @@ export default function StorylinePlayer({
   });
 
   return (
-    <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
+    <div ref={containerRef} className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
@@ -237,7 +242,7 @@ export default function StorylinePlayer({
                 src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-500 object-[center_30%] md:object-center ${isMinimized ? 'opacity-40 md:opacity-60' : 'opacity-25 md:opacity-40'}`}
+                className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -246,11 +251,11 @@ export default function StorylinePlayer({
             <motion.div
               initial={false}
               animate={{
-                height: isMinimized ? '20%' : '50%',
-                opacity: isMinimized ? 0.5 : 0.6,
+                height: isMinimized ? '20%' : '60%',
+                opacity: isMinimized ? 0.5 : 0.7,
               }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-transparent"
+              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
             />
           </motion.div>
         </AnimatePresence>
@@ -333,42 +338,9 @@ export default function StorylinePlayer({
         )}
       </div>
 
-      {/* Focal image layer — mobile only, fills space between title and controls */}
-      {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
-        <div className="relative z-[1] flex-1 min-h-0 md:hidden px-5 py-2">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentBeat.imageUrl}
-              initial={{ opacity: 0, scale: 1.05 }}
-              animate={{ opacity: 1, scale: [1, 1.08] }}
-              exit={{ opacity: 0 }}
-              transition={{
-                opacity: { duration: 1.5, ease: 'easeOut' },
-                scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
-              }}
-              className="relative w-full h-full"
-              style={{
-                maskImage: 'linear-gradient(to bottom, transparent, black 12%, black 88%, transparent)',
-                WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 12%, black 88%, transparent)',
-              }}
-            >
-              <Image
-                src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
-                alt={currentBeat.sceneSummary}
-                fill
-                className="object-contain"
-                referrerPolicy="no-referrer"
-                priority
-                unoptimized
-              />
-            </motion.div>
-          </AnimatePresence>
-        </div>
-      )}
-
       {/* Main Content */}
       <motion.main
-        className="relative z-10 flex-1 md:flex-1 flex-none flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0"
+        className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0"
         onPan={onPan}
         onPanEnd={onPanEnd}
         style={{ x: dragX }}
@@ -489,6 +461,22 @@ export default function StorylinePlayer({
               title={isMinimized ? 'Expand text (M)' : 'Minimize text (M)'}
             >
               {isMinimized ? 'max' : 'min'}
+            </button>
+
+            <button
+              onClick={toggleFullscreen}
+              className={`p-2.5 rounded-full border transition-all cursor-pointer ${
+                isFullscreen
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                  : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+              }`}
+              title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen landscape'}
+            >
+              {isFullscreen ? (
+                <Minimize2 className="w-4 h-4" />
+              ) : (
+                <Maximize2 className="w-4 h-4" />
+              )}
             </button>
           </div>
 
@@ -626,6 +614,22 @@ export default function StorylinePlayer({
           </div>
         </div>
       </motion.main>
+
+      {/* Rotate hint toast — shown on iOS / devices that can't lock orientation */}
+      <AnimatePresence>
+        {showRotateHint && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-neutral-900/90 border border-white/10 backdrop-blur-md rounded-2xl px-5 py-3 flex items-center gap-3 shadow-2xl"
+            onClick={dismissHint}
+          >
+            <span className="text-2xl">📱↪️</span>
+            <p className="text-sm text-neutral-200 font-sans">Rotate your phone for landscape view</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* My Stories drawer */}
       <MyStoriesDrawer

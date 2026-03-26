@@ -249,7 +249,7 @@ function StoryScreenInner({
                 src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-700 object-[center_30%] md:object-center ${isMinimized ? 'opacity-60' : 'opacity-50 md:opacity-40'}`}
+                className={`object-cover transition-opacity duration-700 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -258,11 +258,11 @@ function StoryScreenInner({
             <motion.div
               initial={false}
               animate={{
-                height: isMinimized ? '20%' : '50%',
-                opacity: isMinimized ? 0.5 : 0.6,
+                height: isMinimized ? '20%' : '60%',
+                opacity: isMinimized ? 0.5 : 0.7,
               }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-transparent"
+              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
             />
           </motion.div>
         </AnimatePresence>
