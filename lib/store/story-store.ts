@@ -125,10 +125,15 @@ export const useStoryStore = create<StoryState>()(
 
           const lang = initialSession.storyConfig?.language || 'english';
 
-          // Track resolved audio URL for merging after storyMap creation
-          let resolvedAudioUrl: string | undefined;
+          // Create storyMap immediately so we can save early and get a savedStoryId
+          const storyMap = createStoryMap(beat);
+          const rootNodeId = storyMap.rootNodeId;
 
-          // Start voice selection (fast ~1s) — shared by both image-blocking path and narration chain
+          // Track resolved audio URL for merging after image resolves
+          let resolvedAudioUrl: string | undefined;
+          let earlySavedStoryId: string | undefined;
+
+          // Start voice selection (fast ~1s)
           const voicePromise = selectNarratorVoiceServer(
             initialSession.genre!,
             initialSession.tone!,
@@ -136,16 +141,34 @@ export const useStoryStore = create<StoryState>()(
             lang
           );
 
-          // Fire-and-forget: once voice resolves, start narration in parallel with image
+          // Early save: get a savedStoryId so narration can persist directly to Supabase
+          const earlySavePromise = saveStoryAction(
+            { ...initialSession, title: beat.title } as StorySession,
+            storyMap
+          ).then(({ storyId }) => {
+            earlySavedStoryId = storyId;
+            return storyId;
+          }).catch((err) => {
+            console.error('Early save failed (narration will use base64 fallback):', err);
+            return undefined;
+          });
+
+          // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
           if (initialSession.userPrompt !== 'mock') {
-            voicePromise.then((voice) => {
-              generateNarrationOnly(
-                beat.storyText,
-                initialSession.tone!,
-                initialSession.genre!,
-                voice,
-                lang
-              ).then((audioUrl) => {
+            Promise.all([voicePromise, earlySavePromise]).then(([voice, storyId]) => {
+              set({ isGeneratingAudio: true });
+
+              const narrationFn = storyId
+                ? generateAndPersistNarration(
+                    beat.storyText, initialSession.tone!, initialSession.genre!,
+                    voice, lang, storyId, rootNodeId
+                  ).then(({ audioUrl }) => audioUrl)
+                : generateNarrationOnly(
+                    beat.storyText, initialSession.tone!, initialSession.genre!,
+                    voice, lang
+                  );
+
+              narrationFn.then((audioUrl) => {
                 resolvedAudioUrl = audioUrl;
                 const latestSession = get().session;
                 if (!latestSession) return;
@@ -170,8 +193,6 @@ export const useStoryStore = create<StoryState>()(
                 console.error('Narration generation failed:', err);
                 set({ isGeneratingAudio: false });
               });
-
-              set({ isGeneratingAudio: true });
             });
           }
 
@@ -182,29 +203,32 @@ export const useStoryStore = create<StoryState>()(
           ]);
           beat.imageUrl = imageUrl;
 
-          const storyMap = createStoryMap(beat);
+          // Also await early save (should be done by now — DB insert is fast)
+          await earlySavePromise;
 
-          // Apply resolved audioUrl if narration finished before image
-          if (resolvedAudioUrl) {
-            const rootId = storyMap.rootNodeId;
-            storyMap.nodes[rootId] = {
-              ...storyMap.nodes[rootId],
-              data: { ...storyMap.nodes[rootId].data, audioUrl: resolvedAudioUrl },
-            };
-          }
+          // Update storyMap node with imageUrl (and audioUrl if narration already resolved)
+          storyMap.nodes[rootNodeId] = {
+            ...storyMap.nodes[rootNodeId],
+            data: {
+              ...storyMap.nodes[rootNodeId].data,
+              imageUrl,
+              ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
+            },
+          };
 
           const fullSession = deriveSessionFields(
             {
               ...initialSession,
               title: beat.title,
               narratorVoice,
+              ...(earlySavedStoryId ? { savedStoryId: earlySavedStoryId } : {}),
             } as StorySession,
             storyMap
           );
 
           // If narration already resolved, signal readiness immediately
           const audioExtra = resolvedAudioUrl
-            ? { isGeneratingAudio: false, audioReadyNodeId: storyMap.rootNodeId }
+            ? { isGeneratingAudio: false, audioReadyNodeId: rootNodeId }
             : {};
 
           set({

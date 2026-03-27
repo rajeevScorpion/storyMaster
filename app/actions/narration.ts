@@ -108,12 +108,26 @@ export async function generateAndPersistNarration(
 
   const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.wav`;
 
-  const { error: uploadError } = await supabase.storage
-    .from('story-assets')
-    .upload(storagePath, wavBuffer, {
-      contentType: 'audio/wav',
-      upsert: true,
-    });
+  // Retry upload up to 3 times with backoff (transient "fetch failed" errors)
+  let uploadError: { message: string } | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await supabase.storage
+      .from('story-assets')
+      .upload(storagePath, wavBuffer, {
+        contentType: 'audio/wav',
+        upsert: true,
+      });
+
+    if (!result.error) {
+      uploadError = null;
+      break;
+    }
+
+    uploadError = result.error;
+    if (attempt < 2) {
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
 
   if (uploadError) {
     throw new Error(`Audio upload failed: ${uploadError.message}`);

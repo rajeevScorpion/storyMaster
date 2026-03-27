@@ -198,6 +198,8 @@ function StoryScreenInner({
     onToggleNarration: () => {
       if (currentBeat.audioUrl) {
         togglePlayPause();
+      } else if (!isGeneratingAudio) {
+        generateNarrationForNode(currentNodeId);
       }
     },
     isLoading,
@@ -361,6 +363,7 @@ function StoryScreenInner({
                   playbackState={playbackState}
                   hasAudio={!!currentBeat.audioUrl}
                   onTogglePlayPause={togglePlayPause}
+                  onGenerateNarration={() => generateNarrationForNode(currentNodeId)}
                   onClearGlow={clearAudioReady}
                   storyMode={storyMode}
                   onToggleStoryMode={toggleStoryMode}

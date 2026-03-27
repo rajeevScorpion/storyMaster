@@ -10,6 +10,7 @@ interface NarrationButtonProps {
   playbackState: PlaybackState;
   hasAudio: boolean;
   onTogglePlayPause: () => void;
+  onGenerateNarration?: () => void;
   onClearGlow: () => void;
   storyMode: boolean;
   onToggleStoryMode: () => void;
@@ -73,6 +74,7 @@ export default function NarrationButton({
   playbackState,
   hasAudio,
   onTogglePlayPause,
+  onGenerateNarration,
   onClearGlow,
   storyMode,
   onToggleStoryMode,
@@ -96,15 +98,20 @@ export default function NarrationButton({
       setShowGlow(false);
       onClearGlow();
     }
-    onTogglePlayPause();
+    if (hasAudio) {
+      onTogglePlayPause();
+    } else if (onGenerateNarration) {
+      onGenerateNarration();
+    }
   };
 
   const isPlaying = playbackState === 'playing';
 
-  let title = 'Play narration';
+  let title = 'Generate narration';
   if (isGeneratingAudio && !hasAudio) title = 'Preparing narration...';
   else if (isPlaying) title = 'Pause narration (P)';
   else if (hasAudio) title = 'Play narration (P)';
+  else if (onGenerateNarration) title = 'Generate narration (P)';
 
   return (
     <div className="flex flex-col items-center gap-2">
