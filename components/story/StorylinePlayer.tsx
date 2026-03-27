@@ -40,6 +40,10 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
+const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cursor-pointer';
+const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
+const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer';
+const DESKTOP_CONTROL_ICON_CLASS = 'w-5 h-5';
 
 interface StorylinePlayerProps {
   storylineId: string;
@@ -465,25 +469,25 @@ export default function StorylinePlayer({
             <div className="flex items-center gap-1.5">
               <button
                 onClick={replay}
-                className="p-2 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
+                className={`${MOBILE_CONTROL_BUTTON_CLASS} bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200`}
                 title="Replay from start (R)"
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className={MOBILE_CONTROL_ICON_CLASS} />
               </button>
 
               {currentBeat.audioUrl && (
                 <button
                   onClick={togglePlayPause}
-                  className={`p-2 rounded-full border transition-all cursor-pointer ${
+                  className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
                     playbackState === 'playing'
                       ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
                       : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
                   }`}
                 >
                   {playbackState === 'playing' ? (
-                    <Pause className="w-3.5 h-3.5" />
+                    <Pause className={MOBILE_CONTROL_ICON_CLASS} />
                   ) : (
-                    <Play className="w-3.5 h-3.5" />
+                    <Play className={MOBILE_CONTROL_ICON_CLASS} />
                   )}
                 </button>
               )}
@@ -491,44 +495,44 @@ export default function StorylinePlayer({
               {currentBeat.audioUrl && (
                 <button
                   onClick={() => setVolume(volume === 0 ? 1 : 0)}
-                  className="p-2 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                  className={`${MOBILE_CONTROL_BUTTON_CLASS} bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-colors`}
                   title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
                 >
                   {volume === 0 ? (
-                    <VolumeX className="w-3.5 h-3.5" />
+                    <VolumeX className={MOBILE_CONTROL_ICON_CLASS} />
                   ) : (
-                    <Volume2 className="w-3.5 h-3.5" />
+                    <Volume2 className={MOBILE_CONTROL_ICON_CLASS} />
                   )}
                 </button>
               )}
 
               <button
                 onClick={() => setAutoPlay(!autoPlay)}
-                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
                   autoPlay
                     ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
                     : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
                 }`}
                 title="Auto-play"
               >
-                <FastForward className="w-3.5 h-3.5" />
+                <FastForward className={MOBILE_CONTROL_ICON_CLASS} />
               </button>
 
               <button
                 onClick={() => setAutoReplay(!autoReplay)}
-                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
                   autoReplay
                     ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
                     : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
                 }`}
                 title="Loop"
               >
-                <Repeat className="w-3.5 h-3.5" />
+                <Repeat className={MOBILE_CONTROL_ICON_CLASS} />
               </button>
 
               <button
                 onClick={() => setIsMinimized(!isMinimized)}
-                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
                   isMinimized
                     ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
                     : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
@@ -536,15 +540,15 @@ export default function StorylinePlayer({
                 title={isMinimized ? 'Show text (M)' : 'Hide text (M)'}
               >
                 {isMinimized ? (
-                  <BookOpen className="w-3.5 h-3.5" />
+                  <BookOpen className={MOBILE_CONTROL_ICON_CLASS} />
                 ) : (
-                  <EyeOff className="w-3.5 h-3.5" />
+                  <EyeOff className={MOBILE_CONTROL_ICON_CLASS} />
                 )}
               </button>
 
               <button
                 onClick={toggleFullscreen}
-                className={`p-2 rounded-full border transition-all cursor-pointer ${
+                className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
                   isFullscreen
                     ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
                     : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
@@ -552,9 +556,9 @@ export default function StorylinePlayer({
                 title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen landscape'}
               >
                 {isFullscreen ? (
-                  <Minimize2 className="w-3.5 h-3.5" />
+                  <Minimize2 className={MOBILE_CONTROL_ICON_CLASS} />
                 ) : (
-                  <Maximize2 className="w-3.5 h-3.5" />
+                  <Maximize2 className={MOBILE_CONTROL_ICON_CLASS} />
                 )}
               </button>
             </div>
@@ -594,25 +598,25 @@ export default function StorylinePlayer({
             <div className="flex items-center gap-3">
               <button
                 onClick={replay}
-                className="p-2.5 rounded-full border bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200 transition-all cursor-pointer"
+                className={`${DESKTOP_CONTROL_BUTTON_CLASS} bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200`}
                 title="Replay from start (R)"
               >
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className={DESKTOP_CONTROL_ICON_CLASS} />
               </button>
 
               {currentBeat.audioUrl && (
                 <button
                   onClick={togglePlayPause}
-                  className={`p-2.5 rounded-full border transition-all cursor-pointer ${
+                  className={`${DESKTOP_CONTROL_BUTTON_CLASS} ${
                     playbackState === 'playing'
                       ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
                       : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
                   }`}
                 >
                   {playbackState === 'playing' ? (
-                    <Pause className="w-4 h-4" />
+                    <Pause className={DESKTOP_CONTROL_ICON_CLASS} />
                   ) : (
-                    <Play className="w-4 h-4" />
+                    <Play className={DESKTOP_CONTROL_ICON_CLASS} />
                   )}
                 </button>
               )}
@@ -621,13 +625,13 @@ export default function StorylinePlayer({
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => setVolume(volume === 0 ? 1 : 0)}
-                    className="p-1.5 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                    className="p-2 text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
                     title={volume === 0 ? 'Unmute (V)' : 'Mute (V)'}
                   >
                     {volume === 0 ? (
-                      <VolumeX className="w-4 h-4" />
+                      <VolumeX className={DESKTOP_CONTROL_ICON_CLASS} />
                     ) : (
-                      <Volume2 className="w-4 h-4" />
+                      <Volume2 className={DESKTOP_CONTROL_ICON_CLASS} />
                     )}
                   </button>
                   <input
