@@ -8,7 +8,7 @@ import StoryScreen from '@/components/story/StoryScreen';
 import LoadingState from '@/components/story/LoadingState';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
-import Link from 'next/link';
+import KissagoLogo from '@/components/ui/KissagoLogo';
 
 export default function ExplorePage() {
   const params = useParams();
@@ -62,12 +62,7 @@ export default function ExplorePage() {
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {/* Kissago logo — fixed top-left */}
-      <Link
-        href="/"
-        className="fixed top-4 left-4 z-40 px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200"
-      >
-        kissago
-      </Link>
+      <KissagoLogo />
 
 
       {/* User menu — fixed top-right */}

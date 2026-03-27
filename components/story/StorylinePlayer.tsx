@@ -6,6 +6,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
+import KissagoLogo from '@/components/ui/KissagoLogo';
 import {
   ChevronLeft,
   ChevronRight,
@@ -299,12 +300,7 @@ export default function StorylinePlayer({
       <header className="relative z-10 p-4 md:p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
         <div className="flex items-center gap-4">
           {/* Kissago branding — matches main page style */}
-          <Link
-            href="/"
-            className="px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200"
-          >
-            kissago
-          </Link>
+          <KissagoLogo fixed={false} />
           <div className="hidden md:block">
             <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
             {authorName && (

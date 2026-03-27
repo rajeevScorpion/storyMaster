@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'motion/react';
-import Link from 'next/link';
 import { useAuth } from '@/lib/hooks/useAuth';
+import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import GenreShowcase, { GenreShowcaseSkeleton } from '@/components/gallery/GenreShowcase';
@@ -295,12 +295,7 @@ export default function GalleryPage() {
         className="pointer-events-none fixed inset-x-0 top-0 z-30 h-32 bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-40 md:h-48"
       />
       {/* Kissago logo — fixed top-left */}
-      <Link
-        href="/"
-        className="fixed top-4 left-4 z-40 px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200"
-      >
-        kissago
-      </Link>
+      <KissagoLogo />
 
 
       {/* User menu — fixed top-right */}

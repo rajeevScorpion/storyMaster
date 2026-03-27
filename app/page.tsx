@@ -9,6 +9,7 @@ import StoryScreen from '@/components/story/StoryScreen';
 import LoadingState from '@/components/story/LoadingState';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
+import KissagoLogo from '@/components/ui/KissagoLogo';
 import { AnimatePresence } from 'motion/react';
 import type { StoryConfig } from '@/lib/types/story';
 
@@ -23,15 +24,6 @@ function HomeContent() {
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const searchParams = useSearchParams();
   const hasRedirected = useRef(false);
-
-  // Clear stale sessions so root URL always shows landing page
-  // (user navigated here via logo link from /story/[id] or /explore/[id])
-  useEffect(() => {
-    if (session?.explorationMode || session?.savedStoryId) {
-      resetStory();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Redirect to /story/[id] once a newly created story gets its savedStoryId from auto-save
   useEffect(() => {
@@ -81,12 +73,7 @@ function HomeContent() {
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {/* Kissago logo — fixed top-left across all views */}
-      <button
-        onClick={resetStory}
-        className="fixed top-4 left-4 z-40 px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200 cursor-pointer"
-      >
-        kissago
-      </button>
+      <KissagoLogo />
 
 
       {/* User menu — fixed top-right across all views */}

@@ -3,6 +3,7 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { motion } from 'motion/react';
+import KissagoLogo from '@/components/ui/KissagoLogo';
 import { BookOpen, LogIn } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 
@@ -50,12 +51,7 @@ export default function StorylinePreview({
 
       {/* Header */}
       <header className="relative z-10 p-4 md:p-6 flex justify-between items-center shrink-0">
-        <Link
-          href="/"
-          className="px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-xl font-serif font-semibold tracking-wide text-emerald-400 hover:bg-white/10 hover:border-emerald-500/30 transition-all duration-200"
-        >
-          kissago
-        </Link>
+        <KissagoLogo fixed={false} />
         <Link
           href="/gallery"
           className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all"
