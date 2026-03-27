@@ -40,6 +40,8 @@ export interface DbStoryline {
   author_name: string | null;
   is_public: boolean;
   path_hash: string | null;
+  like_count: number;
+  view_count: number;
   created_at: string;
 }
 
@@ -50,6 +52,8 @@ export interface GalleryStoryline {
   beat_count: number;
   author_name: string | null;
   story_id: string | null;
+  like_count: number;
+  view_count: number;
   created_at: string;
 }
 
@@ -114,7 +118,23 @@ export interface GalleryItem {
   genre: string | null;
   ageGroup: string | null;
   settingCountry: string | null;
+  likeCount: number;
+  viewCount: number;
   createdAt: string;
+}
+
+export interface DbStorylineLike {
+  id: string;
+  user_id: string;
+  storyline_id: string;
+  created_at: string;
+}
+
+export interface DbStorylineView {
+  id: string;
+  user_id: string;
+  storyline_id: string;
+  viewed_at: string;
 }
 
 export interface GalleryFilters {

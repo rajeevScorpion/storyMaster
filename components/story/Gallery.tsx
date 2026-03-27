@@ -62,6 +62,8 @@ export default function Gallery() {
                 coverImageUrl={storyline.cover_image_url}
                 beatCount={storyline.beat_count}
                 authorName={storyline.author_name}
+                likeCount={storyline.like_count}
+                viewCount={storyline.view_count}
               />
             </motion.div>
           ))}

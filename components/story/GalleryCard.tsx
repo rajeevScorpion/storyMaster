@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, Eye, Heart } from 'lucide-react';
 
 interface GalleryCardProps {
   id: string;
@@ -11,6 +11,8 @@ interface GalleryCardProps {
   coverImageUrl: string | null;
   beatCount: number;
   authorName: string | null;
+  likeCount?: number;
+  viewCount?: number;
 }
 
 export default function GalleryCard({
@@ -19,6 +21,8 @@ export default function GalleryCard({
   coverImageUrl,
   beatCount,
   authorName,
+  likeCount = 0,
+  viewCount = 0,
 }: GalleryCardProps) {
   return (
     <Link href={`/storyline/${id}`}>
@@ -51,9 +55,23 @@ export default function GalleryCard({
             {title}
           </h3>
           <div className="flex items-center justify-between text-xs font-sans text-neutral-500">
-            <span className="flex items-center gap-1.5">
-              <BookOpen className="w-3 h-3" />
-              {beatCount} beats
+            <span className="flex items-center gap-3">
+              <span className="flex items-center gap-1">
+                <BookOpen className="w-3 h-3" />
+                {beatCount}
+              </span>
+              {viewCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <Eye className="w-3 h-3" />
+                  {viewCount}
+                </span>
+              )}
+              {likeCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <Heart className="w-3 h-3" />
+                  {likeCount}
+                </span>
+              )}
             </span>
             {authorName && (
               <span className="truncate max-w-[120px]">by {authorName}</span>

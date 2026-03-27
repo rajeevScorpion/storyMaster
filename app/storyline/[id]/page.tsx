@@ -54,6 +54,16 @@ export default async function StorylinePage({ params }: PageProps) {
     .eq('storyline_id', id);
   isSaved = (count ?? 0) > 0;
 
+  // Check like status
+  let isLiked = false;
+  const { count: likeCheck } = await supabase
+    .from('storyline_likes')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .eq('storyline_id', id);
+  isLiked = (likeCheck ?? 0) > 0;
+  const likeCount = storyline.like_count ?? 0;
+
   // Load beats via junction table (falls back to JSONB) with fresh signed URLs
   const { beats, choices } = await loadStorylineWithBeats(id);
 
@@ -68,6 +78,8 @@ export default async function StorylinePage({ params }: PageProps) {
         authorName={storyline.author_name}
         isOwner={isOwner}
         isSaved={isSaved}
+        isLiked={isLiked}
+        likeCount={likeCount}
         isLoggedIn={true}
       />
     </Suspense>

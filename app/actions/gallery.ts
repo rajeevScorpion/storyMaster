@@ -15,6 +15,8 @@ function mapStorylineRow(row: any): GalleryItem {
     genre: row.stories?.genre || null,
     ageGroup: row.stories?.story_config?.ageGroup || null,
     settingCountry: row.stories?.story_config?.settingCountry || null,
+    likeCount: row.like_count ?? 0,
+    viewCount: row.view_count ?? 0,
     createdAt: row.created_at,
   };
 }
@@ -31,6 +33,8 @@ function mapTreeRow(row: any): GalleryItem {
     genre: row.genre || null,
     ageGroup: row.story_config?.ageGroup || null,
     settingCountry: row.story_config?.settingCountry || null,
+    likeCount: 0,
+    viewCount: 0,
     createdAt: row.created_at,
   };
 }
@@ -43,7 +47,7 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
 
   const { data, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, created_at')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -65,7 +69,7 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   // Fetch public storylines joined with their parent story for genre
   const { data: rows, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, created_at, stories!inner(genre, story_config)')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, stories!inner(genre, story_config)')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(100);
@@ -100,6 +104,8 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
       genre: genreKey,
       ageGroup: row.stories?.story_config?.ageGroup || null,
       settingCountry: row.stories?.story_config?.settingCountry || null,
+      likeCount: row.like_count ?? 0,
+      viewCount: row.view_count ?? 0,
       createdAt: row.created_at,
     });
   }
@@ -154,7 +160,7 @@ export async function getGalleryItems(
   if (filters.type === 'storylines') {
     let query = supabase
       .from('storylines')
-      .select('id, title, cover_image_url, beat_count, author_name, story_id, created_at, stories!inner(genre, story_config)', { count: 'exact' })
+      .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, stories!inner(genre, story_config)', { count: 'exact' })
       .eq('is_public', true)
       .order('created_at', { ascending: false });
 

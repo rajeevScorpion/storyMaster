@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
-import { BookOpen, Bookmark, BookmarkCheck } from 'lucide-react';
+import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart } from 'lucide-react';
 import type { GalleryItem } from '@/lib/types/database';
 
 interface GalleryItemCardProps {
@@ -95,12 +95,24 @@ export default function GalleryItemCard({
             {item.title}
           </h3>
           <div className="flex items-center justify-between text-xs font-sans text-neutral-500">
-            <span className="flex items-center gap-1.5">
+            <span className="flex items-center gap-3">
               {item.type === 'storyline' && item.beatCount && (
-                <>
+                <span className="flex items-center gap-1">
                   <BookOpen className="w-3 h-3" />
-                  {item.beatCount} beats
-                </>
+                  {item.beatCount}
+                </span>
+              )}
+              {item.type === 'storyline' && item.viewCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <Eye className="w-3 h-3" />
+                  {item.viewCount}
+                </span>
+              )}
+              {item.type === 'storyline' && item.likeCount > 0 && (
+                <span className="flex items-center gap-1">
+                  <Heart className="w-3 h-3" />
+                  {item.likeCount}
+                </span>
               )}
               {item.type === 'tree' && item.genre && (
                 <span className="capitalize">{item.genre}</span>

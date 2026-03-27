@@ -14,6 +14,7 @@ import {
   Pause,
   Bookmark,
   BookmarkCheck,
+  Heart,
   Compass,
   Maximize2,
   Minimize2,
@@ -28,6 +29,7 @@ import {
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import { refreshStorylineSignedUrls } from '@/app/actions/exploration';
+import { toggleLike, recordView } from '@/app/actions/engagement';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
@@ -47,6 +49,8 @@ interface StorylinePlayerProps {
   authorName: string | null;
   isOwner: boolean;
   isSaved?: boolean;
+  isLiked?: boolean;
+  likeCount?: number;
   isLoggedIn?: boolean;
 }
 
@@ -59,6 +63,8 @@ export default function StorylinePlayer({
   authorName,
   isOwner,
   isSaved: initialSaved = false,
+  isLiked: initialLiked = false,
+  likeCount: initialLikeCount = 0,
   isLoggedIn = false,
 }: StorylinePlayerProps) {
   const [currentBeats, setCurrentBeats] = useState(beats);
@@ -76,6 +82,9 @@ export default function StorylinePlayer({
   const [autoReplay, setAutoReplay] = useState(false);
   const [isSaved, setIsSaved] = useState(initialSaved);
   const [isSavingToProfile, setIsSavingToProfile] = useState(false);
+  const [isLiked, setIsLiked] = useState(initialLiked);
+  const [likeCount, setLikeCount] = useState(initialLikeCount);
+  const [isTogglingLike, setIsTogglingLike] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [showMyStories, setShowMyStories] = useState(false);
   const router = useRouter();
@@ -125,6 +134,27 @@ export default function StorylinePlayer({
       setIsSavingToProfile(false);
     }
   };
+
+  const handleToggleLike = async () => {
+    if (isTogglingLike) return;
+    setIsTogglingLike(true);
+    try {
+      const result = await toggleLike(storylineId);
+      setIsLiked(result.liked);
+      setLikeCount(result.likeCount);
+    } catch (error) {
+      console.error('Failed to toggle like:', error);
+    } finally {
+      setIsTogglingLike(false);
+    }
+  };
+
+  // Record view on mount (fire-and-forget, idempotent)
+  useEffect(() => {
+    if (isLoggedIn) {
+      recordView(storylineId).catch(() => {});
+    }
+  }, [storylineId, isLoggedIn]);
 
   const currentBeat = currentBeats[currentIndex];
   const isFirst = currentIndex === 0;
@@ -301,6 +331,29 @@ export default function StorylinePlayer({
                 <BookmarkCheck className="w-4 h-4" />
               ) : (
                 <Bookmark className="w-4 h-4" />
+              )}
+            </button>
+          )}
+
+          {/* Like button */}
+          {isLoggedIn && (
+            <button
+              onClick={handleToggleLike}
+              disabled={isTogglingLike}
+              className={`p-2 rounded-full transition-all flex items-center gap-1 ${
+                isLiked
+                  ? 'bg-rose-500/20 text-rose-300'
+                  : 'hover:bg-white/10 text-neutral-500 hover:text-neutral-200'
+              }`}
+              title={isLiked ? 'Unlike' : 'Like this storyline'}
+            >
+              {isLiked ? (
+                <Heart className="w-4 h-4" fill="currentColor" strokeWidth={0} />
+              ) : (
+                <Heart className="w-4 h-4" />
+              )}
+              {likeCount > 0 && (
+                <span className="text-xs">{likeCount}</span>
               )}
             </button>
           )}
