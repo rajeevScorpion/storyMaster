@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
-import { BookOpen, Eye, Heart } from 'lucide-react';
+import { BookOpen, Eye, Heart, Share2 } from 'lucide-react';
 
 interface GalleryCardProps {
   id: string;
@@ -83,6 +83,22 @@ export default function GalleryCard({
                   {likeCount}
                 </span>
               )}
+              <button
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const url = `${window.location.origin}/storyline/${id}`;
+                  if (navigator.share) {
+                    navigator.share({ title, url }).catch(() => {});
+                  } else {
+                    navigator.clipboard.writeText(url).catch(() => {});
+                  }
+                }}
+                className="flex items-center gap-1 hover:text-neutral-200 transition-colors"
+                title="Share storyline"
+              >
+                <Share2 className="w-3 h-3" />
+              </button>
             </span>
             {authorName && (
               <span className="truncate max-w-[120px]">by {authorName}</span>

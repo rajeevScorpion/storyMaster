@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2 } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import Link from 'next/link';
@@ -312,6 +312,21 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
           >
             <Play className="w-4 h-4 text-neutral-600 hover:text-purple-400 transition-colors" />
           </Link>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              const url = `${window.location.origin}/storyline/${item.storyline_id}`;
+              if (navigator.share) {
+                navigator.share({ title: item.storyline?.title || 'Storyline', url }).catch(() => {});
+              } else {
+                navigator.clipboard.writeText(url).catch(() => {});
+              }
+            }}
+            className="p-2 hover:bg-emerald-500/10 rounded-full transition-all"
+            title="Share storyline"
+          >
+            <Share2 className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
+          </button>
           <button
             onClick={(e) => { e.stopPropagation(); handleUnsaveStoryline(item.storyline_id); }}
             disabled={actionId === item.storyline_id}
