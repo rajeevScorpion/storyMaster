@@ -10,6 +10,7 @@ interface GalleryItemCardProps {
   item: GalleryItem;
   isSaved: boolean;
   isLoggedIn: boolean;
+  isWide?: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onAuthRequired?: () => void;
 }
@@ -18,6 +19,7 @@ export default function GalleryItemCard({
   item,
   isSaved,
   isLoggedIn,
+  isWide,
   onToggleSave,
   onAuthRequired,
 }: GalleryItemCardProps) {
@@ -49,7 +51,7 @@ export default function GalleryItemCard({
       <motion.div
         whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.2 }}
-        className="relative group rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 aspect-[16/10] bg-neutral-900"
+        className="relative group rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 bg-neutral-900 h-full"
       >
         {/* Cover Image */}
         {item.coverImageUrl && (
@@ -59,7 +61,7 @@ export default function GalleryItemCard({
             fill
             className="object-cover transition-transform duration-500 group-hover:scale-105"
             referrerPolicy="no-referrer"
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
           />
         )}
 

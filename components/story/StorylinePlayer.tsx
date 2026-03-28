@@ -10,7 +10,6 @@ import KissagoLogo from '@/components/ui/KissagoLogo';
 import {
   ChevronLeft,
   ChevronRight,
-  Home,
   Play,
   Pause,
   Bookmark,
@@ -397,18 +396,6 @@ export default function StorylinePlayer({
             </Link>
           )}
 
-          {isOwner && (
-            <button
-              onClick={() => {
-                resetStory();
-                router.push('/');
-              }}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors"
-              title="Back to home"
-            >
-              <Home className="w-4 h-4" />
-            </button>
-          )}
 
           {/* User menu — logged-in only */}
           <UserMenu onMyStories={() => setShowMyStories(true)} />
