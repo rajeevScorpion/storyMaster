@@ -6,6 +6,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import StoryScreen from '@/components/story/StoryScreen';
 import LoadingState from '@/components/story/LoadingState';
+import LoadingAmbientBackdrop from '@/components/story/LoadingAmbientBackdrop';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
@@ -21,6 +22,7 @@ export default function ExplorePage() {
   const isLoading = useStoryStore((s) => s.isLoading);
   const error = useStoryStore((s) => s.error);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
+  const hasMatchingSession = !!session && session.savedStoryId === storyId;
   useEffect(() => {
     if (authLoading) return;
 
@@ -35,10 +37,6 @@ export default function ExplorePage() {
       exploreStoryTree(storyId);
     }
   }, [storyId, user, authLoading, session, exploreStoryTree, router]);
-
-  if (authLoading || isLoading) {
-    return <LoadingState />;
-  }
 
   if (error) {
     return (
@@ -57,10 +55,8 @@ export default function ExplorePage() {
     );
   }
 
-  if (!session) return null;
-
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
+    <div className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {/* Kissago logo — fixed top-left */}
       <KissagoLogo />
 
@@ -75,7 +71,15 @@ export default function ExplorePage() {
         onClose={() => setShowMyStories(false)}
       />
 
-      <StoryScreen />
+      {hasMatchingSession ? (
+        <StoryScreen />
+      ) : (
+        <div className="relative min-h-screen overflow-hidden">
+          <LoadingAmbientBackdrop />
+        </div>
+      )}
+
+      {(authLoading || isLoading) && <LoadingState backdropMode="scene" />}
     </div>
   );
 }

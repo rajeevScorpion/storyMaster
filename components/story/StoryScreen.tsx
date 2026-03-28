@@ -208,9 +208,13 @@ function StoryScreenInner({
 
   // Auto-minimize panel when loading starts so background image is visible
   useEffect(() => {
-    if (isLoading) {
+    if (!isLoading) return;
+
+    const frame = requestAnimationFrame(() => {
       setIsMinimized(true);
-    }
+    });
+
+    return () => cancelAnimationFrame(frame);
   }, [isLoading]);
 
   // Auto-save when a new beat is generated
@@ -229,6 +233,16 @@ function StoryScreenInner({
       });
     }
   }, [focusedOptionIndex]);
+
+  const backgroundImageOpacity = isLoading
+    ? (isMinimized ? 'opacity-85' : 'opacity-70')
+    : (isMinimized ? 'opacity-60' : 'opacity-40');
+  const backgroundGradientClass = isLoading
+    ? 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950/60 via-neutral-950/35 to-transparent'
+    : 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent';
+  const headerGradientClass = isLoading
+    ? 'relative z-10 p-4 md:p-6 pl-16 md:pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/45 via-neutral-950/15 to-transparent shrink-0'
+    : 'relative z-10 p-4 md:p-6 pl-16 md:pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0';
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -251,7 +265,7 @@ function StoryScreenInner({
                 src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-700 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
+                className={`object-cover transition-opacity duration-700 ${backgroundImageOpacity}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -260,18 +274,18 @@ function StoryScreenInner({
             <motion.div
               initial={false}
               animate={{
-                height: isMinimized ? '20%' : '60%',
-                opacity: isMinimized ? 0.5 : 0.7,
+                height: isLoading ? (isMinimized ? '14%' : '42%') : (isMinimized ? '20%' : '60%'),
+                opacity: isLoading ? (isMinimized ? 0.26 : 0.42) : (isMinimized ? 0.5 : 0.7),
               }}
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
+              className={backgroundGradientClass}
             />
           </motion.div>
         </AnimatePresence>
       </div>
 
       {/* Header */}
-      <header className="relative z-10 p-4 md:p-6 pl-16 md:pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
+      <header className={headerGradientClass}>
         <div className="flex items-center gap-3">
           <BookOpen className="w-6 h-6 text-emerald-400" />
           <h1 className="text-xl font-serif tracking-wide text-neutral-200">

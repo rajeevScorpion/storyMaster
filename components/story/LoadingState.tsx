@@ -5,7 +5,15 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Loader2 } from 'lucide-react';
 
-export default function LoadingState() {
+interface LoadingStateProps {
+  backdropMode?: 'scene' | 'blocking';
+  className?: string;
+}
+
+export default function LoadingState({
+  backdropMode = 'scene',
+  className = '',
+}: LoadingStateProps) {
   const loadingClues = useStoryStore((state) => state.loadingClues);
   const [currentClueIndex, setCurrentClueIndex] = useState(0);
 
@@ -27,13 +35,16 @@ export default function LoadingState() {
   ];
 
   const cluesToUse = loadingClues?.length > 0 ? loadingClues : defaultClues;
+  const backdropStyle = backdropMode === 'blocking'
+    ? 'radial-gradient(ellipse at center, rgba(0,0,0,0.28) 0%, rgba(0,0,0,0.58) 58%, rgba(0,0,0,0.82) 100%)'
+    : 'radial-gradient(ellipse at center, rgba(0,0,0,0.18) 0%, rgba(0,0,0,0.5) 58%, rgba(0,0,0,0.76) 100%)';
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'radial-gradient(ellipse at center, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.75) 60%, rgba(0,0,0,0.9) 100%)' }}
+      className={`fixed inset-0 z-50 flex items-center justify-center px-4 ${className}`}
+      style={{ background: backdropStyle }}
     >
-      <div className="max-w-md w-full p-8 rounded-3xl bg-neutral-900/40 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col items-center text-center space-y-8">
+      <div className="max-w-md w-full p-8 rounded-3xl bg-neutral-900/35 backdrop-blur-xl border border-white/10 shadow-2xl flex flex-col items-center text-center space-y-8">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
