@@ -30,6 +30,17 @@ export default function GalleryItemCard({
     if (needsAuth && onAuthRequired) {
       e.preventDefault();
       onAuthRequired();
+      return;
+    }
+    if (item.type === 'storyline') {
+      try {
+        sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
+          title: item.title,
+          coverImageUrl: item.coverImageUrl,
+          authorName: item.authorName,
+          beatCount: item.beatCount,
+        }));
+      } catch {}
     }
   };
 

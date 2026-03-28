@@ -259,7 +259,17 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         <div className="p-5 pr-20">
           <Link
             href={`/storyline/${item.storyline_id}`}
-            onClick={onClose}
+            onClick={() => {
+              try {
+                sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
+                  title: item.storyline?.title || 'Untitled Storyline',
+                  coverImageUrl: item.storyline?.cover_image_url || null,
+                  authorName: item.storyline?.author_name || null,
+                  beatCount: item.storyline?.beat_count || null,
+                }));
+              } catch {}
+              onClose();
+            }}
             className="block"
           >
             <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
@@ -286,7 +296,17 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
           <Link
             href={`/storyline/${item.storyline_id}`}
-            onClick={onClose}
+            onClick={() => {
+              try {
+                sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
+                  title: item.storyline?.title || 'Untitled Storyline',
+                  coverImageUrl: item.storyline?.cover_image_url || null,
+                  authorName: item.storyline?.author_name || null,
+                  beatCount: item.storyline?.beat_count || null,
+                }));
+              } catch {}
+              onClose();
+            }}
             className="p-2 hover:bg-purple-500/10 rounded-full transition-all"
             title="Play storyline"
           >

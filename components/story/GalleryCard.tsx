@@ -24,8 +24,19 @@ export default function GalleryCard({
   likeCount = 0,
   viewCount = 0,
 }: GalleryCardProps) {
+  const handleClick = () => {
+    try {
+      sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
+        title,
+        coverImageUrl,
+        authorName,
+        beatCount,
+      }));
+    } catch {}
+  };
+
   return (
-    <Link href={`/storyline/${id}`}>
+    <Link href={`/storyline/${id}`} onClick={handleClick}>
       <motion.div
         whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.2 }}
