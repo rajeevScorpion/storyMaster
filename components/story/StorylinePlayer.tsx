@@ -26,6 +26,7 @@ import {
   Repeat,
   BookOpen,
   EyeOff,
+  Share2,
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
@@ -92,6 +93,7 @@ export default function StorylinePlayer({
   const [isTogglingLike, setIsTogglingLike] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [showMyStories, setShowMyStories] = useState(false);
+  const [shareToastVisible, setShareToastVisible] = useState(false);
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -154,7 +156,22 @@ export default function StorylinePlayer({
     }
   };
 
-  // Record view on mount (fire-and-forget, idempotent)
+  const handleShare = async () => {
+    const url = `${window.location.origin}/storyline/${storylineId}`;
+    if (navigator.share) {
+      navigator.share({ title, url }).catch(() => {});
+    } else {
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareToastVisible(true);
+        setTimeout(() => setShareToastVisible(false), 3000);
+      } catch (error) {
+        console.error('Failed to copy share link:', error);
+      }
+    }
+  };
+
+  // Record view on mount (fire-and-forget)
   useEffect(() => {
     if (isLoggedIn) {
       recordView(storylineId).catch(() => {});
@@ -315,7 +332,7 @@ export default function StorylinePlayer({
         <div className="flex items-center gap-3 text-sm font-sans uppercase tracking-widest text-neutral-400">
           <span className="text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
 
-          {/* Save to profile button */}
+          {/* Save to profile button — logged-in only */}
           {isLoggedIn && (
             <button
               onClick={handleToggleSave}
@@ -335,7 +352,7 @@ export default function StorylinePlayer({
             </button>
           )}
 
-          {/* Like button */}
+          {/* Like button — logged-in only */}
           {isLoggedIn && (
             <button
               onClick={handleToggleLike}
@@ -358,7 +375,18 @@ export default function StorylinePlayer({
             </button>
           )}
 
-          {/* Explore full story tree */}
+          {/* Share button — logged-in only */}
+          {isLoggedIn && (
+            <button
+              onClick={handleShare}
+              className="p-2 hover:bg-white/10 rounded-full transition-colors text-neutral-500 hover:text-neutral-200"
+              title="Share storyline"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+          )}
+
+          {/* Explore full story tree — logged-in only */}
           {isLoggedIn && (
             <Link
               href={`/explore/${storyId}`}
@@ -382,7 +410,7 @@ export default function StorylinePlayer({
             </button>
           )}
 
-          {/* User menu */}
+          {/* User menu — logged-in only */}
           <UserMenu onMyStories={() => setShowMyStories(true)} />
         </div>
       </header>
@@ -728,7 +756,21 @@ export default function StorylinePlayer({
         )}
       </AnimatePresence>
 
-      {/* My Stories drawer */}
+      {/* Share link copied toast */}
+      <AnimatePresence>
+        {shareToastVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-neutral-900/90 border border-emerald-500/20 backdrop-blur-md rounded-2xl px-5 py-3 shadow-2xl"
+          >
+            <p className="text-sm text-emerald-300 font-sans">Link copied!</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* My Stories drawer — logged-in only */}
       <MyStoriesDrawer
         isOpen={showMyStories}
         onClose={() => setShowMyStories(false)}

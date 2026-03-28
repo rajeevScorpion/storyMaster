@@ -76,14 +76,14 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlay
       audio.pause();
       setPlaybackState('paused');
     } else {
-      audio.play().then(() => setPlaybackState('playing')).catch(console.error);
+      audio.play().then(() => setPlaybackState('playing')).catch(() => {});
     }
   }, [playbackState]);
 
   const play = useCallback(() => {
     const audio = audioRef.current;
     if (!audio || playbackState === 'playing') return;
-    audio.play().then(() => setPlaybackState('playing')).catch(console.error);
+    audio.play().then(() => setPlaybackState('playing')).catch(() => {});
   }, [playbackState]);
 
   const stop = useCallback(() => {

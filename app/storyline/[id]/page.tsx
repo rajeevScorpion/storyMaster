@@ -5,11 +5,49 @@ import { notFound } from 'next/navigation';
 import StorylinePlayer from '@/components/story/StorylinePlayer';
 import StorylinePreview from '@/components/story/StorylinePreview';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+import type { Metadata } from 'next';
 
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ id: string }>;
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { id } = await params;
+  const supabase = await createClient();
+
+  const { data: storyline } = await supabase
+    .from('storylines')
+    .select('title, author_name, cover_image_url')
+    .eq('id', id)
+    .single();
+
+  if (!storyline) return { title: 'Storyline — Kissago' };
+
+  const description = storyline.author_name
+    ? `A storyline by ${storyline.author_name} on Kissago`
+    : 'An interactive storyline on Kissago';
+
+  return {
+    title: `${storyline.title} — Kissago`,
+    description,
+    openGraph: {
+      title: storyline.title,
+      description,
+      ...(storyline.cover_image_url && {
+        images: [{ url: storyline.cover_image_url, width: 1200, height: 630 }],
+      }),
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: storyline.title,
+      description,
+      ...(storyline.cover_image_url && {
+        images: [storyline.cover_image_url],
+      }),
+    },
+  };
 }
 
 export default async function StorylinePage({ params }: PageProps) {
@@ -27,7 +65,7 @@ export default async function StorylinePage({ params }: PageProps) {
     notFound();
   }
 
-  // Check authentication state
+  // Check authentication
   const { data: { user } } = await supabase.auth.getUser();
 
   // Unauthenticated users see a preview with sign-in CTA

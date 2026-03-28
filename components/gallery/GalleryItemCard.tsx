@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
-import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart } from 'lucide-react';
+import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Share2 } from 'lucide-react';
 import type { GalleryItem } from '@/lib/types/database';
 
 interface GalleryItemCardProps {
@@ -124,6 +124,24 @@ export default function GalleryItemCard({
                   <Heart className="w-3 h-3" />
                   {item.likeCount}
                 </span>
+              )}
+              {item.type === 'storyline' && (
+                <button
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const url = `${window.location.origin}/storyline/${item.id}`;
+                    if (navigator.share) {
+                      navigator.share({ title: item.title, url }).catch(() => {});
+                    } else {
+                      navigator.clipboard.writeText(url).catch(() => {});
+                    }
+                  }}
+                  className="flex items-center gap-1 hover:text-neutral-200 transition-colors"
+                  title="Share storyline"
+                >
+                  <Share2 className="w-3 h-3" />
+                </button>
               )}
               {item.type === 'tree' && item.genre && (
                 <span className="capitalize">{item.genre}</span>
