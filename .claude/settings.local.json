@@ -31,7 +31,14 @@
       "WebSearch",
       "Bash(git show:*)",
       "Bash(find /d/AiCoding/storyMaster -name *.wav -o -name *.mp3)",
-      "Bash(node -e \"const lamejs = require\\(''lamejs''\\); console.log\\(''lamejs loaded, Mp3Encoder:'', typeof lamejs.Mp3Encoder\\);\")"
+      "Bash(node -e \"const lamejs = require\\(''lamejs''\\); console.log\\(''lamejs loaded, Mp3Encoder:'', typeof lamejs.Mp3Encoder\\);\")",
+      "Bash(git log:*)",
+      "Bash(xargs cat:*)",
+      "Bash(git branch:*)",
+      "Bash(git stash:*)",
+      "Bash(git pull:*)",
+      "Bash(grep -n \"refreshStorylineSignedUrls\\\\|refreshSignedUrls\" /d/AiCoding/storyMaster/app/actions/*.ts)",
+      "Bash(ls d:/AiCoding/storyMaster/app/storyline/[id]/)"
     ]
   }
 }

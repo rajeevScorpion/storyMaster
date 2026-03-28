@@ -13,6 +13,33 @@ import { getTopByGenre, getGalleryItems, getSavedStorylineIds } from '@/app/acti
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import type { GalleryItem, GalleryFilters, GenreSection } from '@/lib/types/database';
 
+/** Fisher-Yates shuffle (returns a new array). */
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * Build a Set of indices that should be "big" (2×2) in a bento grid.
+ * Each group of 5 items fills 2 rows of 4 cols: 1 big (2×2) + 4 small (1×1).
+ * The big item is randomly placed on the left (index 0) or right (index 2)
+ * within each group, so the layout changes on every mount.
+ */
+function generateBentoPattern(count: number): Set<number> {
+  const bigIndices = new Set<number>();
+  for (let g = 0; g * 5 < count; g++) {
+    const base = g * 5;
+    // Randomly pick left-aligned (offset 0) or right-aligned (offset 2)
+    const offset = Math.random() < 0.5 ? 0 : 2;
+    bigIndices.add(base + offset);
+  }
+  return bigIndices;
+}
+
 const DEFAULT_FILTERS: GalleryFilters = {
   search: '',
   type: 'storylines',
@@ -81,6 +108,12 @@ export default function GalleryPage() {
   const activeFilterKeyRef = useRef(getFilterKey(DEFAULT_FILTERS));
   const activeRequestTokenRef = useRef(0);
   const hasHydratedOnceRef = useRef(false);
+  const [bentoPattern, setBentoPattern] = useState<Set<number>>(new Set());
+
+  // Generate bento pattern client-side only to avoid hydration mismatch
+  useEffect(() => {
+    setBentoPattern(generateBentoPattern(50));
+  }, []);
 
   // Fetch genre showcase on mount
   useEffect(() => {
@@ -147,7 +180,7 @@ export default function GalleryPage() {
       const cachedEntry = cacheRef.current.get(filterKey);
       const nextItems = append && cachedEntry
         ? [...cachedEntry.items, ...result.items]
-        : result.items;
+        : shuffle(result.items);
 
       const nextEntry: GalleryCacheEntry = {
         items: nextItems,
@@ -248,6 +281,7 @@ export default function GalleryPage() {
   const handleFiltersChange = useCallback((nextFilters: GalleryFilters) => {
     const normalizedFilters = normalizeFilters(nextFilters);
     if (getFilterKey(normalizedFilters) === getFilterKey(filters)) return;
+    setBentoPattern(generateBentoPattern(50));
     setFilters(normalizedFilters);
   }, [filters]);
 
@@ -364,11 +398,11 @@ export default function GalleryPage() {
 
           {/* Grid */}
           {initialGridLoading && items.length === 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px]">
               {[...Array(PAGE_SIZE)].map((_, i) => (
                 <div
                   key={i}
-                  className="aspect-[16/10] rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse"
+                  className={`rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse ${bentoPattern.has(i) ? 'sm:col-span-2 sm:row-span-2' : ''}`}
                 />
               ))}
             </div>
@@ -378,31 +412,36 @@ export default function GalleryPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {items.map((item, index) => (
-                  <motion.div
-                    key={`${item.type}-${item.id}`}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.4, delay: (index % PAGE_SIZE) * 0.05 }}
-                  >
-                    <GalleryItemCard
-                      item={item}
-                      isSaved={savedIds.has(item.id)}
-                      isLoggedIn={!!user}
-                      onToggleSave={handleToggleSave}
-                      onAuthRequired={signInWithGoogle}
-                    />
-                  </motion.div>
-                ))}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px]">
+                {items.map((item, index) => {
+                  const isBig = bentoPattern.has(index);
+                  return (
+                    <motion.div
+                      key={`${item.type}-${item.id}`}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4, delay: (index % PAGE_SIZE) * 0.05 }}
+                      className={isBig ? 'sm:col-span-2 sm:row-span-2' : ''}
+                    >
+                      <GalleryItemCard
+                        item={item}
+                        isSaved={savedIds.has(item.id)}
+                        isLoggedIn={!!user}
+                        isWide={isBig}
+                        onToggleSave={handleToggleSave}
+                        onAuthRequired={signInWithGoogle}
+                      />
+                    </motion.div>
+                  );
+                })}
               </div>
 
               {isLoadingMore && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
-                  {[...Array(3)].map((_, index) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px] mt-4">
+                  {[...Array(4)].map((_, index) => (
                     <div
                       key={`loading-more-${index}`}
-                      className="aspect-[16/10] rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse"
+                      className="rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse"
                     />
                   ))}
                 </div>
