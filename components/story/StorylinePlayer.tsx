@@ -83,7 +83,7 @@ export default function StorylinePlayer({
     return 0;
   });
   const [showChoice, setShowChoice] = useState(false);
-  const [autoPlay, setAutoPlay] = useState(false);
+  const [autoPlay, setAutoPlay] = useState(true);
   const [autoReplay, setAutoReplay] = useState(false);
   const [isSaved, setIsSaved] = useState(initialSaved);
   const [isSavingToProfile, setIsSavingToProfile] = useState(false);
@@ -93,6 +93,7 @@ export default function StorylinePlayer({
   const [isMinimized, setIsMinimized] = useState(false);
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
+  const [showEndModal, setShowEndModal] = useState(false);
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -212,6 +213,7 @@ export default function StorylinePlayer({
 
   const replay = useCallback(() => {
     stopAudio();
+    setShowEndModal(false);
     setCurrentIndex(0);
   }, [stopAudio]);
 
@@ -233,7 +235,10 @@ export default function StorylinePlayer({
       wasPlayingRef.current = true;
     } else if (playbackState === 'idle' && wasPlayingRef.current && autoPlay) {
       wasPlayingRef.current = false;
-      if (isLast && autoReplay) {
+      if (isLast && currentBeat.isEnding) {
+        setTimeout(() => setShowEndModal(true), 1500);
+        return;
+      } else if (isLast && autoReplay) {
         queueMicrotask(() => replay());
       } else if (!isLast) {
         queueMicrotask(() => goNext());
@@ -241,7 +246,15 @@ export default function StorylinePlayer({
     } else if (playbackState === 'idle') {
       wasPlayingRef.current = false;
     }
-  }, [playbackState, autoPlay, autoReplay, isLast, goNext, replay]);
+  }, [playbackState, autoPlay, autoReplay, isLast, currentBeat.isEnding, goNext, replay]);
+
+  // Show end modal after delay when manually navigating to ending beat without audio
+  useEffect(() => {
+    if (isLast && currentBeat.isEnding && !currentBeat.audioUrl) {
+      const timer = setTimeout(() => setShowEndModal(true), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [isLast, currentBeat.isEnding, currentBeat.audioUrl]);
 
   // Keyboard navigation
   const volumeRef = useRef(volume);
@@ -753,6 +766,88 @@ export default function StorylinePlayer({
             className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-neutral-900/90 border border-emerald-500/20 backdrop-blur-md rounded-2xl px-5 py-3 shadow-2xl"
           >
             <p className="text-sm text-emerald-300 font-sans">Link copied!</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* End-of-story modal */}
+      <AnimatePresence>
+        {showEndModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            onClick={() => setShowEndModal(false)}
+          >
+            {/* Dark radial overlay — matches loader */}
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  'radial-gradient(ellipse at center, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.7) 50%, rgba(0,0,0,0.95) 100%)',
+              }}
+            />
+
+            {/* Ambient glow orbs */}
+            <div className="absolute inset-0 pointer-events-none">
+              <motion.div
+                animate={{ opacity: [0.15, 0.3, 0.15], scale: [1, 1.2, 1] }}
+                transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
+                className="absolute top-1/4 left-1/3 w-64 h-64 rounded-full bg-emerald-500/20 blur-3xl"
+              />
+              <motion.div
+                animate={{ opacity: [0.1, 0.25, 0.1], scale: [1, 1.15, 1] }}
+                transition={{ duration: 8, repeat: Infinity, ease: 'easeInOut', delay: 2 }}
+                className="absolute bottom-1/3 right-1/4 w-48 h-48 rounded-full bg-indigo-500/20 blur-3xl"
+              />
+            </div>
+
+            {/* Modal card */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              transition={{ duration: 0.6, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
+              className="relative z-10 max-w-sm w-full p-8 rounded-3xl bg-neutral-900/30 backdrop-blur-xl border border-white/10 shadow-2xl text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-xs font-sans uppercase tracking-widest text-emerald-400 mb-3">
+                The End
+              </h3>
+              <p className="text-xl md:text-2xl font-serif text-white leading-snug mb-8">
+                {title}
+              </p>
+
+              <div className="space-y-3">
+                <button
+                  onClick={() => { setShowEndModal(false); router.push('/gallery'); }}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-500/40 transition-all cursor-pointer font-sans text-sm"
+                >
+                  <Compass className="w-4 h-4" />
+                  Find More Stories
+                </button>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={replay}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans text-sm"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Replay
+                  </button>
+
+                  <button
+                    onClick={() => { setShowEndModal(false); handleShare(); }}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans text-sm"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    Share
+                  </button>
+                </div>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
