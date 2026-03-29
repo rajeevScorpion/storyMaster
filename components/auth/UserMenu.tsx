@@ -39,7 +39,7 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
   if (!user) {
     return (
       <button
-        onClick={signInWithGoogle}
+        onClick={() => signInWithGoogle()}
         className="flex items-center gap-2 px-3 py-2 rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-emerald-500/30 transition-all text-sm text-neutral-300 hover:text-neutral-100 backdrop-blur-md"
       >
         <LogIn className="w-4 h-4" />

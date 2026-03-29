@@ -1,7 +1,7 @@
 'use client';
 
 import { Suspense, useState, useEffect, useRef } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import LandingScreen from '@/components/story/LandingScreen';
@@ -21,8 +21,6 @@ function HomeContent() {
   const { user, signInWithGoogle } = useAuth();
   const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
-  const [authMessage, setAuthMessage] = useState<string | null>(null);
-  const searchParams = useSearchParams();
   const hasRedirected = useRef(false);
 
   // Redirect to /story/[id] once a newly created story gets its savedStoryId from auto-save
@@ -39,21 +37,6 @@ function HomeContent() {
       hasRedirected.current = false;
     }
   }, [session, router]);
-
-  // Show auth-required message from redirects
-  useEffect(() => {
-    const authRequired = searchParams.get('authRequired');
-    if (authRequired === 'explore') {
-      setAuthMessage('Sign in to explore story trees');
-    } else if (authRequired === 'storyline') {
-      setAuthMessage('Sign in to experience full stories');
-    }
-    // Auto-dismiss after 5 seconds
-    if (authRequired) {
-      const timer = setTimeout(() => setAuthMessage(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [searchParams]);
 
   const handleBegin = async (prompt: string, config?: StoryConfig) => {
     if (!user) {
@@ -85,18 +68,6 @@ function HomeContent() {
         isOpen={showMyStories}
         onClose={() => setShowMyStories(false)}
       />
-
-      {authMessage && !user && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 bg-emerald-500/10 border border-emerald-500/40 text-emerald-200 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl backdrop-blur-md">
-          <p className="text-sm font-medium">{authMessage}</p>
-          <button
-            onClick={() => setAuthMessage(null)}
-            className="text-xs uppercase tracking-wider font-bold hover:text-white transition-colors"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
 
       {error && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-500/10 border border-red-500/50 text-red-200 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl backdrop-blur-md">

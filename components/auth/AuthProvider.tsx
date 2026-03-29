@@ -8,7 +8,7 @@ import type { User } from '@supabase/supabase-js';
 export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: (returnTo?: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -44,17 +44,19 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
         useMyStoriesStore.getState().prefetchAll();
       } else if (event === 'SIGNED_OUT') {
         useMyStoriesStore.getState().clear();
+        window.location.href = '/signed-out';
       }
     });
 
     return () => subscription.unsubscribe();
   }, [supabase.auth]);
 
-  const signInWithGoogle = useCallback(async () => {
+  const signInWithGoogle = useCallback(async (returnTo?: string) => {
+    const next = returnTo ?? `${window.location.pathname}${window.location.search}`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
       },
     });
     if (error) {

@@ -25,11 +25,7 @@ export default function StorylinePreview({
   const { signInWithGoogle } = useAuth();
 
   const handleSignIn = () => {
-    // Store the storyline ID so we can redirect back after login
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('kissago_pending_storyline', storylineId);
-    }
-    signInWithGoogle();
+    signInWithGoogle(`/storyline/${storylineId}`);
   };
 
   return (

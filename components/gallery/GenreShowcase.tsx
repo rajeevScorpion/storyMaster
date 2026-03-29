@@ -13,7 +13,7 @@ interface GenreShowcaseProps {
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
-  onAuthRequired?: () => void;
+  onAuthRequired?: (returnTo: string) => void;
 }
 
 function GenreRow({
@@ -29,7 +29,7 @@ function GenreRow({
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
-  onAuthRequired?: () => void;
+  onAuthRequired?: (returnTo: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -89,7 +89,7 @@ function GenreRow({
           const handleClick = (e: React.MouseEvent) => {
             if (needsAuth && onAuthRequired) {
               e.preventDefault();
-              onAuthRequired();
+              onAuthRequired(href);
             }
           };
 
