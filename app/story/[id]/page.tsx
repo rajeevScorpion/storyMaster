@@ -15,7 +15,7 @@ export default function StoryPage() {
   const params = useParams();
   const router = useRouter();
   const storyId = params.id as string;
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading, signInWithGoogle } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
 
   const session = useStoryStore((s) => s.session);
@@ -28,7 +28,7 @@ export default function StoryPage() {
     if (authLoading) return;
 
     if (!user) {
-      router.push('/?authRequired=explore');
+      signInWithGoogle();
       return;
     }
 
@@ -36,7 +36,7 @@ export default function StoryPage() {
     if (!session || session.savedStoryId !== storyId) {
       loadStoryFromCloud(storyId);
     }
-  }, [storyId, user, authLoading, session, loadStoryFromCloud, router]);
+  }, [storyId, user, authLoading, session, loadStoryFromCloud, router, signInWithGoogle]);
 
   if (error) {
     return (

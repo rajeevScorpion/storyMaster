@@ -330,7 +330,7 @@ export default function StorylinePlayer({
       </div>
 
       {/* Header */}
-      <header className="relative z-10 p-4 md:p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
+      <header className="relative z-20 p-4 md:p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
         <div className="flex items-center gap-4">
           {/* Kissago branding — matches main page style */}
           <KissagoLogo fixed={false} />
@@ -416,7 +416,7 @@ export default function StorylinePlayer({
       </header>
 
       {/* Mobile title (shown below header on small screens) */}
-      <div className="relative z-10 px-4 md:hidden">
+      <div className="relative px-4 md:hidden">
         <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
         {authorName && (
           <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>

@@ -12,7 +12,7 @@ interface GalleryItemCardProps {
   isLoggedIn: boolean;
   isWide?: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
-  onAuthRequired?: () => void;
+  onAuthRequired?: (returnTo: string) => void;
 }
 
 export default function GalleryItemCard({
@@ -31,7 +31,7 @@ export default function GalleryItemCard({
   const handleClick = (e: React.MouseEvent) => {
     if (needsAuth && onAuthRequired) {
       e.preventDefault();
-      onAuthRequired();
+      onAuthRequired(href);
       return;
     }
     if (item.type === 'storyline') {

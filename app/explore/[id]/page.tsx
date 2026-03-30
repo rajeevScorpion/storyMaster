@@ -15,7 +15,7 @@ export default function ExplorePage() {
   const params = useParams();
   const router = useRouter();
   const storyId = params.id as string;
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, isLoading: authLoading, signInWithGoogle } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
 
   const session = useStoryStore((s) => s.session);
@@ -23,12 +23,12 @@ export default function ExplorePage() {
   const error = useStoryStore((s) => s.error);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
+
   useEffect(() => {
     if (authLoading) return;
 
     if (!user) {
-      // Redirect to home with auth prompt
-      router.push('/?authRequired=explore');
+      signInWithGoogle();
       return;
     }
 
@@ -36,7 +36,7 @@ export default function ExplorePage() {
     if (!session || session.savedStoryId !== storyId) {
       exploreStoryTree(storyId);
     }
-  }, [storyId, user, authLoading, session, exploreStoryTree, router]);
+  }, [storyId, user, authLoading, session, exploreStoryTree, router, signInWithGoogle]);
 
   if (error) {
     return (
