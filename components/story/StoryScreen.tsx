@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2 } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
@@ -22,8 +22,10 @@ export default function StoryScreen() {
   const resetStory = useStoryStore((state) => state.resetStory);
   const restartExploration = useStoryStore((state) => state.restartExploration);
   const isGeneratingAudio = useStoryStore((state) => state.isGeneratingAudio);
+  const isRegeneratingImage = useStoryStore((state) => state.isRegeneratingImage);
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
+  const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
   const storyMode = useStoryStore((state) => state.storyMode);
   const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
@@ -67,8 +69,10 @@ export default function StoryScreen() {
       onRestart={session.sourceStoryOwnerId ? restartExploration : resetStory}
       hasExistingBranch={hasExistingBranch}
       isGeneratingAudio={isGeneratingAudio}
+      isRegeneratingImage={isRegeneratingImage}
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
+      regenerateImageForNode={regenerateImageForNode}
       clearAudioReady={clearAudioReady}
       storyMode={storyMode}
       toggleStoryMode={toggleStoryMode}
@@ -92,8 +96,10 @@ function StoryScreenInner({
   onRestart,
   hasExistingBranch,
   isGeneratingAudio,
+  isRegeneratingImage,
   audioReadyNodeId,
   generateNarrationForNode,
+  regenerateImageForNode,
   clearAudioReady,
   storyMode,
   toggleStoryMode,
@@ -112,8 +118,10 @@ function StoryScreenInner({
   onRestart: () => void;
   hasExistingBranch: (optionId: string) => boolean;
   isGeneratingAudio: boolean;
+  isRegeneratingImage: boolean;
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
+  regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   storyMode: boolean;
   toggleStoryMode: () => void;
@@ -368,9 +376,28 @@ function StoryScreenInner({
 
           {/* Card + Narration button row */}
           <div className="flex items-end gap-5 w-full">
-            {/* Narration button — outside card, left side */}
+            {/* Narration + Regenerate image buttons — outside card, left side */}
             {!isMinimized && (
-              <div className="shrink-0 pb-4">
+              <div className="shrink-0 pb-4 flex flex-col items-center gap-2">
+                {/* Regenerate image button — only when image is missing */}
+                {!currentBeat.imageUrl && (
+                  <button
+                    onClick={() => regenerateImageForNode(currentNodeId)}
+                    disabled={isRegeneratingImage}
+                    className={`p-2.5 backdrop-blur-md rounded-full transition-all duration-300 ${
+                      isRegeneratingImage
+                        ? 'bg-neutral-900/60 border border-white/5 cursor-wait'
+                        : 'bg-neutral-900/60 border border-amber-500/20 hover:border-amber-500/40 hover:bg-neutral-800 cursor-pointer'
+                    }`}
+                    title={isRegeneratingImage ? 'Generating image...' : 'Regenerate image'}
+                  >
+                    {isRegeneratingImage ? (
+                      <Loader2 className="w-5 h-5 text-neutral-400 animate-spin" />
+                    ) : (
+                      <ImageIcon className="w-5 h-5 text-amber-400 hover:text-amber-300 transition-colors" />
+                    )}
+                  </button>
+                )}
                 <NarrationButton
                   isGeneratingAudio={isGeneratingAudio}
                   isAudioReady={isAudioReady}

@@ -3,9 +3,9 @@ import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage } from '@/app/actions/story';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
-import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
+import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
+import { uploadAsset, uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import { getPathToNode } from '../utils/story-map';
 import {
@@ -36,6 +36,7 @@ interface StoryState {
   loadingClues: string[];
   error: string | null;
   isGeneratingAudio: boolean;
+  isRegeneratingImage: boolean;
   audioReadyNodeId: string | null;
   storyMode: boolean;
   isSaving: boolean;
@@ -48,6 +49,7 @@ interface StoryState {
   restartExploration: () => void;
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
+  regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
   saveStoryToCloud: (userId: string) => Promise<void>;
@@ -79,6 +81,7 @@ export const useStoryStore = create<StoryState>()(
       loadingClues: [],
       error: null,
       isGeneratingAudio: false,
+      isRegeneratingImage: false,
       audioReadyNodeId: null,
       storyMode: false,
       isSaving: false,
@@ -579,6 +582,56 @@ export const useStoryStore = create<StoryState>()(
         } catch (error) {
           console.error('Narration generation failed:', error);
           set({ isGeneratingAudio: false });
+        }
+      },
+
+      regenerateImageForNode: async (nodeId: string) => {
+        const { session } = get();
+        if (!session) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) return;
+
+        set({ isRegeneratingImage: true });
+
+        try {
+          const imageUrl = await generateImage(
+            node.data.imagePrompt,
+            node.data.characters,
+            session.visualStyle
+          );
+
+          // Update the node with the new image
+          const latestSession = get().session;
+          if (!latestSession) return;
+
+          const updatedNodes = {
+            ...latestSession.storyMap.nodes,
+            [nodeId]: {
+              ...latestSession.storyMap.nodes[nodeId],
+              data: { ...latestSession.storyMap.nodes[nodeId].data, imageUrl },
+            },
+          };
+          const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
+          set({
+            session: deriveSessionFields(latestSession, updatedMap),
+            isRegeneratingImage: false,
+            saveStatus: 'unsaved',
+          });
+
+          // Upload to storage and update DB if story is persisted
+          if (session.savedStoryId && session.savedByUserId) {
+            const storagePath = `${session.savedByUserId}/${session.savedStoryId}/${nodeId}/image.webp`;
+            try {
+              const storageUrl = await uploadAsset('story-assets', storagePath, imageUrl);
+              await updateBeatAssets(session.savedStoryId, nodeId, { imageUrl: storageUrl });
+            } catch (err) {
+              console.error('Failed to persist regenerated image:', err);
+            }
+          }
+        } catch (error) {
+          console.error('Image regeneration failed:', error);
+          set({ isRegeneratingImage: false });
         }
       },
 
