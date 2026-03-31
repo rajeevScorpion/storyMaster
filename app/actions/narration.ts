@@ -3,6 +3,11 @@
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@/lib/supabase/server';
 import { getModelConfig } from '@/lib/ai/model-config';
+import {
+  LOCKED_PROMPT_GUARDRAILS,
+  resolvePromptTemplate,
+} from '@/lib/ai/prompt-config.shared';
+import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -58,12 +63,16 @@ async function callGeminiTTS(
   language: string
 ): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
-
-  const ttsPrompt = `You are a master storyteller narrating a ${genre} tale with a ${tone} tone in ${language}. Read this passage aloud with natural pacing, dramatic pauses, and emotional expression that matches the scene:
-
-${storyText}`;
-
   const ttsConfig = await getModelConfig('tts');
+  const ttsPrompt = resolvePromptTemplate(
+    await getPublishedPrompt('tts'),
+    {
+      storyText,
+      tone,
+      genre,
+      language,
+    }
+  );
   const response = await ai.models.generateContent({
     model: ttsConfig.model,
     contents: [{ parts: [{ text: ttsPrompt }] }],
@@ -207,14 +216,23 @@ export async function selectNarratorVoiceServer(
   try {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
     const voiceConfig = await getModelConfig('voice_selection');
+    const voicePrompt = resolvePromptTemplate(
+      await getPublishedPrompt('voice_selection'),
+      {
+        genre,
+        tone,
+        targetAge,
+        language,
+        availableVoices: AVAILABLE_VOICES.join(', '),
+      }
+    );
     const response = await ai.models.generateContent({
       model: voiceConfig.model,
-      contents: `Pick the single best narrator voice for a ${genre} story with a ${tone} tone, aimed at a ${targetAge} audience. The story will be narrated in ${language}.
-
-Available voices: ${AVAILABLE_VOICES.join(', ')}
-
-Respond with ONLY the voice name, nothing else.`,
-      config: { temperature: voiceConfig.temperature ?? 0.3 },
+      contents: voicePrompt,
+      config: {
+        systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
+        temperature: voiceConfig.temperature ?? 0.3,
+      },
     });
 
     const voiceName = response.text?.trim() || '';
