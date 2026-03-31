@@ -2,6 +2,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import { createClient } from '@/lib/supabase/server';
+import { getModelConfig } from '@/lib/ai/model-config';
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -62,8 +63,9 @@ async function callGeminiTTS(
 
 ${storyText}`;
 
+  const ttsConfig = await getModelConfig('tts');
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-preview-tts',
+    model: ttsConfig.model,
     contents: [{ parts: [{ text: ttsPrompt }] }],
     config: {
       responseModalities: ['AUDIO'],
@@ -204,14 +206,15 @@ export async function selectNarratorVoiceServer(
 ): Promise<string> {
   try {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    const voiceConfig = await getModelConfig('voice_selection');
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-pro-preview',
+      model: voiceConfig.model,
       contents: `Pick the single best narrator voice for a ${genre} story with a ${tone} tone, aimed at a ${targetAge} audience. The story will be narrated in ${language}.
 
 Available voices: ${AVAILABLE_VOICES.join(', ')}
 
 Respond with ONLY the voice name, nothing else.`,
-      config: { temperature: 0.3 },
+      config: { temperature: voiceConfig.temperature ?? 0.3 },
     });
 
     const voiceName = response.text?.trim() || '';

@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { generateStoryBeat, generateImage } from '@/app/actions/story';
+import { generateStoryBeat, generateImage, type StoryModelOverrides } from '@/app/actions/story';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
+import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
 import { uploadAsset, uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
@@ -97,6 +98,14 @@ export const useStoryStore = create<StoryState>()(
 
         const storyConfig = config || DEFAULT_CONFIG;
 
+        // Fetch active model config from DB (falls back to hardcoded defaults on error)
+        let modelOverrides: StoryModelOverrides | undefined;
+        try {
+          modelOverrides = await getStoryModelOverrides();
+        } catch {
+          // Non-critical: story.ts has hardcoded fallbacks
+        }
+
         try {
           const initialSession: Partial<StorySession> = {
             storySessionId: uuidv4(),
@@ -122,7 +131,7 @@ export const useStoryStore = create<StoryState>()(
             safetyProfile: storyConfig.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
           };
 
-          const beat = await generateStoryBeat(prompt, initialSession);
+          const beat = await generateStoryBeat(prompt, initialSession, undefined, modelOverrides);
 
           set({ loadingClues: beat.clues });
 
@@ -201,7 +210,7 @@ export const useStoryStore = create<StoryState>()(
 
           // Block loading on image + voice (voice is fast, image is the bottleneck)
           const [imageUrl, narratorVoice] = await Promise.all([
-            generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!),
+            generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides),
             voicePromise,
           ]);
           beat.imageUrl = imageUrl;
@@ -286,7 +295,13 @@ export const useStoryStore = create<StoryState>()(
           delete (sessionForPrompt as any).storyMap;
           delete (sessionForPrompt as any).narratorVoice;
 
-          const beat = await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label);
+          // Fetch active model config (non-blocking fallback to defaults)
+          let modelOverrides: StoryModelOverrides | undefined;
+          try {
+            modelOverrides = await getStoryModelOverrides();
+          } catch { /* falls back to hardcoded defaults */ }
+
+          const beat = await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label, modelOverrides);
 
           set({ loadingClues: beat.clues });
 
@@ -350,7 +365,7 @@ export const useStoryStore = create<StoryState>()(
           }
 
           // Block loading on image only
-          const imageUrl = await generateImage(beat.imagePrompt, beat.characters, session.visualStyle);
+          const imageUrl = await generateImage(beat.imagePrompt, beat.characters, session.visualStyle, modelOverrides);
           beat.imageUrl = imageUrl;
 
           const updatedMap = addChildNode(

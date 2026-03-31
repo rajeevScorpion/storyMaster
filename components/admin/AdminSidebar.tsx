@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BookOpen, Database } from 'lucide-react';
+import { BookOpen, Database, FlaskConical } from 'lucide-react';
 
 const navItems = [
   { label: 'Content', href: '/admin/content', icon: BookOpen },
   { label: 'Backfill', href: '/admin/backfill', icon: Database },
+  { label: 'Playground', href: '/admin/playground', icon: FlaskConical },
 ];
 
 export function AdminSidebar() {

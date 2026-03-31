@@ -1,6 +1,8 @@
 'use server';
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
+import { getAllModelConfigs, type ModelConfig } from '@/lib/ai/model-config';
+import type { StoryModelOverrides } from '@/app/actions/story';
 
 // ============================================================
 // Search
@@ -140,6 +142,26 @@ export async function adminDeleteStoryline(id: string): Promise<void> {
       await supabase.storage.from('public-storylines').remove([path]);
     } catch { /* ignore */ }
   }
+}
+
+// ============================================================
+// Model Config (for client-side story.ts to read active models)
+// ============================================================
+
+export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
+  return getAllModelConfigs();
+}
+
+export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
+  const configs = await getAllModelConfigs();
+  const map = new Map(configs.map(c => [c.taskKey, c]));
+  return {
+    storyModel: map.get('story_generation')?.modelId,
+    storyTemperature: map.get('story_generation')?.temperature ?? undefined,
+    composerModel: map.get('visual_prompt')?.modelId,
+    composerTemperature: map.get('visual_prompt')?.temperature ?? undefined,
+    imageModel: map.get('image_generation')?.modelId,
+  };
 }
 
 export async function adminDeleteStory(storyId: string): Promise<void> {

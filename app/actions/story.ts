@@ -7,6 +7,14 @@ import { compressImage } from '@/lib/utils/image';
 
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY } from '@/lib/constants/media';
 
+export interface StoryModelOverrides {
+  storyModel?: string;
+  storyTemperature?: number;
+  composerModel?: string;
+  composerTemperature?: number;
+  imageModel?: string;
+}
+
 const beatSchema = {
   type: Type.OBJECT,
   properties: {
@@ -75,7 +83,8 @@ const beatSchema = {
 export async function generateStoryBeat(
   userPrompt: string,
   sessionState: Partial<StorySession> | null,
-  selectedOptionLabel?: string
+  selectedOptionLabel?: string,
+  modelOverrides?: StoryModelOverrides
 ): Promise<StoryBeat> {
   if (userPrompt.toLowerCase() === 'mock') {
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -157,13 +166,13 @@ export async function generateStoryBeat(
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-pro-preview',
+      model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
       contents: prompt,
       config: {
         systemInstruction: STORY_MASTER_SYSTEM_PROMPT,
         responseMimeType: 'application/json',
         responseSchema: beatSchema,
-        temperature: 0.7,
+        temperature: modelOverrides?.storyTemperature ?? 0.7,
       },
     });
 
@@ -177,7 +186,7 @@ export async function generateStoryBeat(
   }
 }
 
-export async function generateImage(prompt: string, characters: any[], visualStyle: string): Promise<string> {
+export async function generateImage(prompt: string, characters: any[], visualStyle: string, modelOverrides?: StoryModelOverrides): Promise<string> {
   if (prompt.includes("Cinematic children's storybook illustration")) {
     await new Promise(resolve => setTimeout(resolve, 2000));
     return `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`;
@@ -196,17 +205,17 @@ export async function generateImage(prompt: string, characters: any[], visualSty
     `;
 
     const composerResponse = await ai.models.generateContent({
-      model: 'gemini-3.1-pro-preview',
+      model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
       contents: composerPrompt,
       config: {
-        temperature: 0.7,
+        temperature: modelOverrides?.composerTemperature ?? 0.7,
       }
     });
 
     const finalImagePrompt = composerResponse.text || prompt;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-image-preview',
+      model: modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview',
       contents: finalImagePrompt,
       config: {
         imageConfig: {
