@@ -14,6 +14,11 @@ import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 
+function isFallbackImageUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  return url.startsWith('https://picsum.photos/seed/');
+}
+
 export default function StoryScreen() {
   const session = useStoryStore((state) => state.session);
   const continueStory = useStoryStore((state) => state.continueStory);
@@ -136,6 +141,7 @@ function StoryScreenInner({
   const [isMinimized, setIsMinimized] = useState(false);
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [isCardHovered, setIsCardHovered] = useState(false);
+  const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
@@ -167,6 +173,9 @@ function StoryScreenInner({
 
   // Audio player
   const currentNodeId = session.storyMap.currentNodeId;
+  const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
+  const imageLoadFailed = !!displayImageUrl && failedImageUrl === displayImageUrl;
+  const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
@@ -258,7 +267,7 @@ function StoryScreenInner({
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
           <motion.div
-            key={currentBeat.imageUrl}
+            key={displayImageUrl}
             initial={{ opacity: 0, scale: 1.05 }}
             animate={{ opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
@@ -268,15 +277,16 @@ function StoryScreenInner({
             }}
             className="absolute inset-0"
           >
-            {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
+            {displayImageUrl && (
               <Image
-                src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
+                src={displayImageUrl}
                 alt={currentBeat.sceneSummary}
                 fill
                 className={`object-cover transition-opacity duration-700 ${backgroundImageOpacity}`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
+                onError={() => setFailedImageUrl(displayImageUrl)}
               />
             )}
             <motion.div
@@ -380,7 +390,7 @@ function StoryScreenInner({
             {!isMinimized && (
               <div className="shrink-0 pb-4 flex flex-col items-center gap-2">
                 {/* Regenerate image button — only when image is missing */}
-                {!currentBeat.imageUrl && (
+                {canRegenerateImage && (
                   <button
                     onClick={() => regenerateImageForNode(currentNodeId)}
                     disabled={isRegeneratingImage}
