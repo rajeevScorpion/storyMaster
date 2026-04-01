@@ -182,7 +182,8 @@ export async function generateImage(
   characters: any[],
   visualStyle: string,
   modelOverrides?: StoryModelOverrides,
-  referenceImages?: ReferenceImage[]
+  referenceImages?: ReferenceImage[],
+  beatNumber?: number
 ): Promise<string> {
   if (prompt.includes("Cinematic children's storybook illustration")) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -196,6 +197,7 @@ export async function generateImage(
       sceneDescription: prompt,
       characters: JSON.stringify(characters, null, 2),
       visualStyle,
+      beatNumber,
     });
 
     const composerResponse = await ai.models.generateContent({

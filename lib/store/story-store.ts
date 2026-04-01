@@ -209,28 +209,33 @@ export const useStoryStore = create<StoryState>()(
             });
           }
 
-          // Generate portraits in parallel with scene image (only if reference images enabled)
-          const portraitPromises = initialSession.enableReferenceImages
-            ? beat.characters.map(char =>
+          // Step A: Generate portraits first (sequential, not parallel) so beat 1 scene can use
+          // them as references — makes portrait the single source of truth from the very first image.
+          let portraitRefs: ReferenceImage[] = [];
+          if (initialSession.enableReferenceImages) {
+            const rawPortraits = await Promise.all(
+              beat.characters.map(char =>
                 generateCharacterPortrait(char, initialSession.visualStyle!, modelOverrides)
                   .catch(() => null) // non-fatal: beat continues without portrait
               )
-            : [];
-
-          // Block loading on image + voice + portraits (voice is fast, image is the bottleneck)
-          const [imageUrl, narratorVoice, ...portraits] = await Promise.all([
-            generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides),
-            voicePromise,
-            ...portraitPromises,
-          ]);
-
-          // Attach portraits to character objects
-          if (initialSession.enableReferenceImages && portraits.length > 0) {
+            );
             beat.characters = beat.characters.map((char, i) => ({
               ...char,
-              portraitBase64: (portraits[i] as string | null) || undefined,
+              portraitBase64: (rawPortraits[i] as string | null) || undefined,
             }));
+            portraitRefs = beat.characters
+              .filter(c => c.portraitBase64)
+              .map(c => ({ type: 'character' as const, base64: c.portraitBase64! }));
           }
+
+          // Step B: Generate scene image (with portrait refs if available) + await voice in parallel
+          const [imageUrl, narratorVoice] = await Promise.all([
+            generateImage(
+              beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides,
+              portraitRefs.length > 0 ? portraitRefs : undefined, beat.beatNumber
+            ),
+            voicePromise,
+          ]);
 
           beat.imageUrl = imageUrl;
 
@@ -402,7 +407,7 @@ export const useStoryStore = create<StoryState>()(
           // Block loading on image only
           const imageUrl = await generateImage(
             beat.imagePrompt, beat.characters, session.visualStyle,
-            modelOverrides, referenceImages.length > 0 ? referenceImages : undefined
+            modelOverrides, referenceImages.length > 0 ? referenceImages : undefined, beat.beatNumber
           );
           beat.imageUrl = imageUrl;
 
@@ -678,7 +683,8 @@ export const useStoryStore = create<StoryState>()(
             node.data.characters,
             session.visualStyle,
             modelOverrides,
-            referenceImages.length > 0 ? referenceImages : undefined
+            referenceImages.length > 0 ? referenceImages : undefined,
+            node.data.beatNumber
           );
 
           // Update the node with the new image

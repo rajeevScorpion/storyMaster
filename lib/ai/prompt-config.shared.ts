@@ -64,7 +64,8 @@ Core behavior rules:
 9. If the story is nearing the final beat, begin resolving tensions rather than creating many new ones.
 10. Each beat must include an image prompt that preserves visual continuity.
 11. The image prompt must describe the same characters consistently across beats.
-12. Also generate 2 to 4 short clue or loading lines that can be shown while the next beat is generated.
+12. Each beat's imagePrompt must suggest a camera angle that DIFFERS from the previous beat. Rotate between: wide establishing shot, medium two-shot, close-up on face or hands, over-the-shoulder, low-angle, bird's-eye view. State the angle explicitly in the prompt.
+13. Also generate 2 to 4 short clue or loading lines that can be shown while the next beat is generated.
 13. Keep the writing accessible, vivid, and cinematic.
 14. Avoid contradiction, repetition, and random additions.
 15. Default to all-ages safe content unless the product configuration says otherwise.
@@ -164,7 +165,7 @@ Rules:
 4. Focus on one clear cinematic moment.
 5. Do not include text overlays in the image.
 6. Ensure the prompt is emotionally expressive and visually specific.
-7. Mention camera framing, lighting, mood, and environment where useful.
+7. Choose a camera angle and framing that is DIFFERENT from the previous beat. Rotate between: wide establishing shot, medium two-shot, close-up on face or hands, over-the-shoulder, low-angle, bird's-eye view, or dutch angle. Always state the chosen angle explicitly (e.g. "low-angle wide shot", "tight close-up", "over-the-shoulder medium shot").
 8. Keep the prompt concise but rich.
 9. Avoid adding new visual elements not grounded in the story state.
 10. Prefer readable, beautiful compositions suitable for story scenes.
@@ -178,6 +179,8 @@ Characters:
 
 Visual Style:
 {{visualStyle}}
+
+Beat Number: {{beatNumber}}
 
 Generate the final image prompt based on the above.`;
 
@@ -243,6 +246,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'sceneDescription', label: 'Scene Description', description: 'The current beat image prompt or scene summary.', required: true },
       { key: 'characters', label: 'Characters', description: 'Character continuity details.', required: true },
       { key: 'visualStyle', label: 'Visual Style', description: 'Requested art style or rendering direction.', required: true },
+      { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number, used to calibrate camera angle variety.', required: false },
     ],
     defaultPrompt: VISUAL_PROMPT_DEFAULT,
   },
