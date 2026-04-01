@@ -91,6 +91,12 @@ Admin dashboard tab to test different Gemini models per task, compare cost/speed
 
 ## Phase 2: Multi-Provider Support (Future)
 
+### Prompt Playground Notes
+- Prompt iteration now supports drafts, publish history, and test runs for `story_generation`, `visual_prompt`, `tts`, and `voice_selection`.
+- Important TTS finding: adding a `systemInstruction` to Gemini TTS requests caused `500 INTERNAL` failures during audio generation.
+- Fix: keep narration guidance inside the TTS prompt body and do not send a separate `systemInstruction` for TTS calls.
+- Voice selection can still use `systemInstruction`; the regression was specific to TTS audio generation.
+
 ### Options Being Considered
 1. **Single AI Gateway** — Vercel AI Gateway or OpenRouter (unified API, simplified key management)
 2. **Independent providers per task** — Flux (images), ElevenLabs (music/narration), etc.

@@ -2,7 +2,8 @@
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getAllModelConfigs, type ModelConfig } from '@/lib/ai/model-config';
-import type { StoryModelOverrides } from '@/app/actions/story';
+import { getPublishedPrompt } from '@/lib/ai/prompt-config';
+import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 
 // ============================================================
 // Search
@@ -155,12 +156,20 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
+  const [storyPrompt, visualPrompt, imagePrompt] = await Promise.all([
+    getPublishedPrompt('story_generation'),
+    getPublishedPrompt('visual_prompt'),
+    getPublishedPrompt('image_generation'),
+  ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
     storyTemperature: map.get('story_generation')?.temperature ?? undefined,
     composerModel: map.get('visual_prompt')?.modelId,
     composerTemperature: map.get('visual_prompt')?.temperature ?? undefined,
     imageModel: map.get('image_generation')?.modelId,
+    storyPrompt,
+    visualPrompt,
+    imagePrompt,
   };
 }
 

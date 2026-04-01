@@ -4,6 +4,11 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { StorySession, StoryBeat, Character } from '@/lib/types/story';
 import { STORY_MASTER_SYSTEM_PROMPT, VISUAL_PROMPT_COMPOSER_PROMPT } from '@/lib/ai/prompts';
 import { compressImage } from '@/lib/utils/image';
+import {
+  LOCKED_PROMPT_GUARDRAILS,
+  getDefaultPromptBody,
+  resolvePromptTemplate,
+} from '@/lib/ai/prompt-config.shared';
 
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY } from '@/lib/constants/media';
 
@@ -13,6 +18,8 @@ export interface StoryModelOverrides {
   composerModel?: string;
   composerTemperature?: number;
   imageModel?: string;
+  storyPrompt?: string;
+  visualPrompt?: string;
 }
 
 const beatSchema = {

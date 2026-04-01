@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { generateStoryBeat, generateImage, type StoryModelOverrides } from '@/app/actions/story';
+import { generateStoryBeat, generateImage, type StoryModelOverrides } from '@/app/actions/story-runtime';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
@@ -610,10 +610,18 @@ export const useStoryStore = create<StoryState>()(
         set({ isRegeneratingImage: true });
 
         try {
+          let modelOverrides: StoryModelOverrides | undefined;
+          try {
+            modelOverrides = await getStoryModelOverrides();
+          } catch {
+            // Falls back to default prompt and model config inside generateImage.
+          }
+
           const imageUrl = await generateImage(
             node.data.imagePrompt,
             node.data.characters,
-            session.visualStyle
+            session.visualStyle,
+            modelOverrides
           );
 
           // Update the node with the new image
