@@ -38,7 +38,8 @@
       "Bash(git stash:*)",
       "Bash(git pull:*)",
       "Bash(grep -n \"refreshStorylineSignedUrls\\\\|refreshSignedUrls\" /d/AiCoding/storyMaster/app/actions/*.ts)",
-      "Bash(ls d:/AiCoding/storyMaster/app/storyline/[id]/)"
+      "Bash(ls d:/AiCoding/storyMaster/app/storyline/[id]/)",
+      "WebFetch(domain:ai.google.dev)"
     ]
   }
 }
