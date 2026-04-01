@@ -99,6 +99,19 @@ export async function uploadNodeAssets(
     } else if (node.data.audioUrl) {
       results[nodeId].audioUrl = node.data.audioUrl;
     }
+
+    // Upload character portraits (only from root node where they're generated)
+    for (const character of node.data.characters) {
+      if (isBase64DataUrl(character.portraitBase64)) {
+        const portraitPath = `${basePath}/${nodeId}/portrait_${character.id}.webp`;
+        uploads.push(
+          uploadAsset(bucket, portraitPath, character.portraitBase64!).then((url) => {
+            character.portraitUrl = url;
+            character.portraitBase64 = undefined;
+          })
+        );
+      }
+    }
   }
 
   // Upload in parallel with concurrency limit
@@ -156,6 +169,10 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
         ...node.data,
         imageUrl: isBase64DataUrl(node.data.imageUrl) ? undefined : node.data.imageUrl,
         audioUrl: isBase64DataUrl(node.data.audioUrl) ? undefined : node.data.audioUrl,
+        characters: node.data.characters.map(c => ({
+          ...c,
+          portraitBase64: undefined,
+        })),
       },
     };
   }

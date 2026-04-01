@@ -199,6 +199,8 @@ async function executeTaskTest(
       return runVisualPromptTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'image_generation':
       return runImageGenerationTest(ai, modelId, inputs, promptBody!);
+    case 'portrait_generation':
+      return runPortraitGenerationTest(ai, modelId, inputs, promptBody!);
     case 'tts':
       return runTTSTest(ai, modelId, inputs, promptBody!);
     case 'voice_selection':
@@ -296,6 +298,40 @@ async function runImageGenerationTest(
   }
 
   throw new Error('No image generated');
+}
+
+async function runPortraitGenerationTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const wrappedPrompt = resolvePromptTemplate(promptBody, {
+    characterName: inputs.characterName || 'Unknown',
+    characterAppearance: inputs.characterAppearance || '',
+    characterType: inputs.characterType || 'character',
+    visualStyle: inputs.visualStyle || 'cinematic storybook illustration',
+  });
+
+  const start = Date.now();
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: wrappedPrompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.portrait_generation,
+      imageConfig: {
+        aspectRatio: '1:1',
+        imageSize: '1K',
+      },
+    },
+  });
+
+  const image = extractInlineImage(response);
+  if (image) {
+    return buildImageTestResult(image, Date.now() - start, modelId, response.usageMetadata);
+  }
+
+  throw new Error('No portrait generated');
 }
 
 async function requestImageResponse(ai: GoogleGenAI, modelId: string, prompt: string) {

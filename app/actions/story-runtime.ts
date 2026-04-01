@@ -8,7 +8,8 @@ import {
   getDefaultPromptBody,
   resolvePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY } from '@/lib/constants/media';
+import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY } from '@/lib/constants/media';
+import type { Character } from '@/lib/types/story';
 
 export interface StoryModelOverrides {
   storyModel?: string;
@@ -16,9 +17,11 @@ export interface StoryModelOverrides {
   composerModel?: string;
   composerTemperature?: number;
   imageModel?: string;
+  portraitModel?: string;
   storyPrompt?: string;
   visualPrompt?: string;
   imagePrompt?: string;
+  portraitPrompt?: string;
 }
 
 const beatSchema = {
@@ -169,11 +172,17 @@ export async function generateStoryBeat(
   }
 }
 
+export interface ReferenceImage {
+  type: 'character' | 'scene';
+  base64: string;
+}
+
 export async function generateImage(
   prompt: string,
   characters: any[],
   visualStyle: string,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  referenceImages?: ReferenceImage[]
 ): Promise<string> {
   if (prompt.includes("Cinematic children's storybook illustration")) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -205,7 +214,7 @@ export async function generateImage(
     });
 
     const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
-    const response = await requestImageResponse(ai, imageModel, finalImagePrompt);
+    const response = await requestImageResponse(ai, imageModel, finalImagePrompt, referenceImages);
     const initialImage = extractInlineImage(response);
     if (initialImage) {
       return await compressImage(initialImage, IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY);
@@ -213,7 +222,7 @@ export async function generateImage(
 
     const fallbackPrompt = (response.text || '').trim();
     if (fallbackPrompt && fallbackPrompt !== finalImagePrompt) {
-      const retryResponse = await requestImageResponse(ai, imageModel, fallbackPrompt);
+      const retryResponse = await requestImageResponse(ai, imageModel, fallbackPrompt, referenceImages);
       const retryImage = extractInlineImage(retryResponse);
       if (retryImage) {
         return await compressImage(retryImage, IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY);
@@ -227,10 +236,30 @@ export async function generateImage(
   }
 }
 
-async function requestImageResponse(ai: GoogleGenAI, modelId: string, prompt: string) {
+async function requestImageResponse(
+  ai: GoogleGenAI,
+  modelId: string,
+  prompt: string,
+  referenceImages?: ReferenceImage[]
+) {
+  // Build contents: text prompt + optional reference image parts
+  const hasRefs = referenceImages && referenceImages.length > 0;
+  let contents: any = prompt;
+
+  if (hasRefs) {
+    const parts: any[] = [{ text: prompt }];
+    for (const ref of referenceImages) {
+      const match = ref.base64.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+      }
+    }
+    contents = [{ role: 'user', parts }];
+  }
+
   return ai.models.generateContent({
     model: modelId,
-    contents: prompt,
+    contents,
     config: {
       imageConfig: {
         aspectRatio: '16:9',
@@ -248,6 +277,46 @@ function extractInlineImage(response: Awaited<ReturnType<typeof requestImageResp
   }
 
   return null;
+}
+
+export async function generateCharacterPortrait(
+  character: Character,
+  visualStyle: string,
+  modelOverrides?: StoryModelOverrides
+): Promise<string> {
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+    const portraitTemplate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
+    const prompt = resolvePromptTemplate(portraitTemplate, {
+      characterName: character.name,
+      characterAppearance: character.appearanceSummary,
+      characterType: character.type,
+      visualStyle,
+    });
+
+    const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
+    const response = await ai.models.generateContent({
+      model: portraitModel,
+      contents: prompt,
+      config: {
+        systemInstruction: LOCKED_PROMPT_GUARDRAILS.portrait_generation,
+        imageConfig: {
+          aspectRatio: '1:1',
+          imageSize: '1K',
+        },
+      },
+    });
+
+    const image = extractInlineImage(response);
+    if (image) {
+      return await compressImage(image, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY);
+    }
+
+    throw new Error('No portrait image generated');
+  } catch (error) {
+    console.error(`Portrait generation failed for ${character.name}:`, error);
+    throw error;
+  }
 }
 
 function formatStoryConfig(sessionState: Partial<StorySession> | null): string {

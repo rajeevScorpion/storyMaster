@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { generateStoryBeat, generateImage, type StoryModelOverrides } from '@/app/actions/story-runtime';
+import { generateStoryBeat, generateImage, generateCharacterPortrait, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
@@ -118,6 +118,7 @@ export const useStoryStore = create<StoryState>()(
             maxBeats: storyConfig.maxBeats,
             status: 'active',
             characters: [],
+            enableReferenceImages: true, // TODO: set from user tier (premium only)
             setting: {
               world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
               timeOfDay: 'unknown',
@@ -208,11 +209,29 @@ export const useStoryStore = create<StoryState>()(
             });
           }
 
-          // Block loading on image + voice (voice is fast, image is the bottleneck)
-          const [imageUrl, narratorVoice] = await Promise.all([
+          // Generate portraits in parallel with scene image (only if reference images enabled)
+          const portraitPromises = initialSession.enableReferenceImages
+            ? beat.characters.map(char =>
+                generateCharacterPortrait(char, initialSession.visualStyle!, modelOverrides)
+                  .catch(() => null) // non-fatal: beat continues without portrait
+              )
+            : [];
+
+          // Block loading on image + voice + portraits (voice is fast, image is the bottleneck)
+          const [imageUrl, narratorVoice, ...portraits] = await Promise.all([
             generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides),
             voicePromise,
+            ...portraitPromises,
           ]);
+
+          // Attach portraits to character objects
+          if (initialSession.enableReferenceImages && portraits.length > 0) {
+            beat.characters = beat.characters.map((char, i) => ({
+              ...char,
+              portraitBase64: (portraits[i] as string | null) || undefined,
+            }));
+          }
+
           beat.imageUrl = imageUrl;
 
           // Also await early save (should be done by now — DB insert is fast)
@@ -364,8 +383,27 @@ export const useStoryStore = create<StoryState>()(
             }
           }
 
+          // Build reference images for visual consistency (only if enabled)
+          const referenceImages: ReferenceImage[] = [];
+          if (session.enableReferenceImages) {
+            // Add character portraits
+            for (const char of beat.characters) {
+              const sessionChar = session.characters.find(c => c.id === char.id);
+              if (sessionChar?.portraitBase64) {
+                referenceImages.push({ type: 'character', base64: sessionChar.portraitBase64 });
+              }
+            }
+            // Add previous scene as style/environment reference
+            if (currentNode.data.imageUrl?.startsWith('data:')) {
+              referenceImages.push({ type: 'scene', base64: currentNode.data.imageUrl });
+            }
+          }
+
           // Block loading on image only
-          const imageUrl = await generateImage(beat.imagePrompt, beat.characters, session.visualStyle, modelOverrides);
+          const imageUrl = await generateImage(
+            beat.imagePrompt, beat.characters, session.visualStyle,
+            modelOverrides, referenceImages.length > 0 ? referenceImages : undefined
+          );
           beat.imageUrl = imageUrl;
 
           const updatedMap = addChildNode(
@@ -617,11 +655,30 @@ export const useStoryStore = create<StoryState>()(
             // Falls back to default prompt and model config inside generateImage.
           }
 
+          // Build reference images for visual consistency (only if enabled)
+          const referenceImages: ReferenceImage[] = [];
+          if (session.enableReferenceImages) {
+            for (const char of node.data.characters) {
+              const sessionChar = session.characters.find(c => c.id === char.id);
+              if (sessionChar?.portraitBase64) {
+                referenceImages.push({ type: 'character', base64: sessionChar.portraitBase64 });
+              }
+            }
+            // Previous scene reference (parent node's image)
+            if (node.parentId) {
+              const parentNode = session.storyMap.nodes[node.parentId];
+              if (parentNode?.data.imageUrl?.startsWith('data:')) {
+                referenceImages.push({ type: 'scene', base64: parentNode.data.imageUrl });
+              }
+            }
+          }
+
           const imageUrl = await generateImage(
             node.data.imagePrompt,
             node.data.characters,
             session.visualStyle,
-            modelOverrides
+            modelOverrides,
+            referenceImages.length > 0 ? referenceImages : undefined
           );
 
           // Update the node with the new image
