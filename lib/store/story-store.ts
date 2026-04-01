@@ -3,6 +3,7 @@ import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, generateCharacterPortrait, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
+import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
@@ -339,8 +340,10 @@ export const useStoryStore = create<StoryState>()(
           let resolvedAudioUrl: string | undefined;
 
           // Fire-and-forget: start narration in parallel with image generation
+          // Voice is locked at story start — use it directly or fall back to default constant
+          const voiceForBeat = session.narratorVoice || DEFAULT_VOICE;
           let narrationPromise: Promise<void> | null = null;
-          if (session.userPrompt.toLowerCase() !== 'mock' && session.narratorVoice) {
+          if (session.userPrompt.toLowerCase() !== 'mock') {
             set({ isGeneratingAudio: true });
 
             const handleNarrationResolved = (audioUrl: string) => {
@@ -374,7 +377,7 @@ export const useStoryStore = create<StoryState>()(
               // Server-side: generate + upload to Supabase in one round trip
               narrationPromise = generateAndPersistNarration(
                 beat.storyText, session.tone, session.genre,
-                session.narratorVoice, lang,
+                voiceForBeat, lang,
                 session.savedStoryId, newNodeId
               ).then(({ audioUrl }) => handleNarrationResolved(audioUrl))
                 .catch(handleNarrationError);
@@ -382,7 +385,7 @@ export const useStoryStore = create<StoryState>()(
               // Fallback: generate only (no persistence yet)
               narrationPromise = generateNarrationOnly(
                 beat.storyText, session.tone, session.genre,
-                session.narratorVoice, lang
+                voiceForBeat, lang
               ).then(handleNarrationResolved)
                 .catch(handleNarrationError);
             }
@@ -593,15 +596,8 @@ export const useStoryStore = create<StoryState>()(
         try {
           const lang = session.storyConfig?.language || 'english';
 
-          // Select voice if not yet chosen
-          let voiceName = session.narratorVoice;
-          if (!voiceName) {
-            voiceName = await selectNarratorVoiceServer(session.genre, session.tone, session.targetAge, lang);
-            const currentSession = get().session;
-            if (currentSession) {
-              set({ session: { ...currentSession, narratorVoice: voiceName } });
-            }
-          }
+          // Use locked voice — selected once at story start, never re-queried
+          const voiceName = session.narratorVoice || DEFAULT_VOICE;
 
           let audioUrl: string;
 
