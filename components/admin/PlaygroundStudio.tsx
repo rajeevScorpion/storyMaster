@@ -71,6 +71,12 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     language: 'english',
     voice: 'Sulafat',
   },
+  portrait_generation: {
+    characterName: 'Miko',
+    characterAppearance: 'small golden-brown monkey with a curled tail and expressive amber eyes, wearing a tiny red vest',
+    characterType: 'monkey',
+    visualStyle: 'cinematic storybook illustration',
+  },
   voice_selection: {
     genre: 'fantasy',
     tone: 'whimsical',
@@ -80,13 +86,13 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
 };
 
 function getModelsForTask(taskKey: TaskKey): string[] {
-  if (taskKey === 'image_generation') return KNOWN_MODELS.image;
+  if (taskKey === 'image_generation' || taskKey === 'portrait_generation') return KNOWN_MODELS.image;
   if (taskKey === 'tts') return KNOWN_MODELS.tts;
   return KNOWN_MODELS.text;
 }
 
 function taskHasTemperature(taskKey: TaskKey): boolean {
-  return taskKey !== 'image_generation' && taskKey !== 'tts';
+  return taskKey !== 'image_generation' && taskKey !== 'portrait_generation' && taskKey !== 'tts';
 }
 
 function formatTimestamp(value: string | null | undefined): string {

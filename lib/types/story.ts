@@ -4,6 +4,8 @@ export interface Character {
   type: string;
   appearanceSummary: string;
   personalitySummary: string;
+  portraitBase64?: string;
+  portraitUrl?: string;
 }
 
 export interface Option {
@@ -85,4 +87,5 @@ export interface StorySession {
   allowedEndings: string[];
   safetyProfile: string;
   narratorVoice?: string;
+  enableReferenceImages?: boolean;
 }

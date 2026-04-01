@@ -4,6 +4,7 @@ export type TaskKey =
   | 'story_generation'
   | 'visual_prompt'
   | 'image_generation'
+  | 'portrait_generation'
   | 'tts'
   | 'voice_selection';
 
@@ -22,6 +23,7 @@ export const TASK_DEFINITIONS: {
   { key: 'story_generation', label: 'Story Generation', description: 'Generates structured JSON story beats with characters, options, and continuity' },
   { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Refines scene descriptions into detailed image generation prompts' },
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
+  { key: 'portrait_generation', label: 'Portrait Generation', description: 'Generates character reference portraits for visual consistency across beats' },
   { key: 'tts', label: 'Text-to-Speech', description: 'Narrates story text with expressive voice acting' },
   { key: 'voice_selection', label: 'Voice Selection', description: 'Picks the best narrator voice for the story genre and tone' },
 ];
@@ -30,6 +32,7 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   story_generation: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
   visual_prompt: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
   image_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
+  portrait_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
   tts: { modelId: 'gemini-2.5-flash-preview-tts', temperature: null },
   voice_selection: { modelId: 'gemini-3.1-pro-preview', temperature: 0.3 },
 };

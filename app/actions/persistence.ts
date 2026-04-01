@@ -19,6 +19,11 @@ function stripBase64(storyMap: StoryMap): StoryMap {
         ...node.data,
         imageUrl: node.data.imageUrl?.startsWith('data:') ? undefined : node.data.imageUrl,
         audioUrl: node.data.audioUrl?.startsWith('data:') ? undefined : node.data.audioUrl,
+        // Strip portrait base64 from characters — portraitUrl is preserved
+        characters: node.data.characters.map(c => ({
+          ...c,
+          portraitBase64: undefined,
+        })),
       },
     };
   }

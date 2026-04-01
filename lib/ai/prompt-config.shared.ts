@@ -64,7 +64,8 @@ Core behavior rules:
 9. If the story is nearing the final beat, begin resolving tensions rather than creating many new ones.
 10. Each beat must include an image prompt that preserves visual continuity.
 11. The image prompt must describe the same characters consistently across beats.
-12. Also generate 2 to 4 short clue or loading lines that can be shown while the next beat is generated.
+12. Each beat's imagePrompt must suggest a camera angle that DIFFERS from the previous beat. Rotate between: wide establishing shot, medium two-shot, close-up on face or hands, over-the-shoulder, low-angle, bird's-eye view. State the angle explicitly in the prompt.
+13. Also generate 2 to 4 short clue or loading lines that can be shown while the next beat is generated.
 13. Keep the writing accessible, vivid, and cinematic.
 14. Avoid contradiction, repetition, and random additions.
 15. Default to all-ages safe content unless the product configuration says otherwise.
@@ -159,15 +160,16 @@ Your job is to convert the latest story beat and the story bible into a high-qua
 
 Rules:
 1. Preserve character appearance exactly as described in {{characters}}.
-2. Preserve the art style across the whole story session.
-3. Focus on one clear cinematic moment.
-4. Do not include text overlays in the image.
-5. Ensure the prompt is emotionally expressive and visually specific.
-6. Mention camera framing, lighting, mood, and environment where useful.
-7. Keep the prompt concise but rich.
-8. Avoid adding new visual elements not grounded in the story state.
-9. Prefer readable, beautiful compositions suitable for story scenes.
-10. Output only the final image prompt as plain text.
+2. If character reference portraits are provided, describe characters exactly as they appear in their reference images — same proportions, colors, clothing, and distinguishing features.
+3. Preserve the art style across the whole story session.
+4. Focus on one clear cinematic moment.
+5. Do not include text overlays in the image.
+6. Ensure the prompt is emotionally expressive and visually specific.
+7. Choose a camera angle and framing that is DIFFERENT from the previous beat. Rotate between: wide establishing shot, medium two-shot, close-up on face or hands, over-the-shoulder, low-angle, bird's-eye view, or dutch angle. Always state the chosen angle explicitly (e.g. "low-angle wide shot", "tight close-up", "over-the-shoulder medium shot").
+8. Keep the prompt concise but rich.
+9. Avoid adding new visual elements not grounded in the story state.
+10. Prefer readable, beautiful compositions suitable for story scenes.
+11. Output only the final image prompt as plain text.
 
 Story Beat Image Prompt:
 {{sceneDescription}}
@@ -177,6 +179,8 @@ Characters:
 
 Visual Style:
 {{visualStyle}}
+
+Beat Number: {{beatNumber}}
 
 Generate the final image prompt based on the above.`;
 
@@ -198,10 +202,24 @@ export const IMAGE_GENERATION_PROMPT_DEFAULT = `{{prompt}}
 
 Cinematic storybook illustration, visually clear composition, expressive lighting, rich environmental detail, consistent character continuity, emotionally readable scene, no text overlays or typography.`;
 
+export const PORTRAIT_GENERATION_PROMPT_DEFAULT = `Generate a single character portrait of {{characterName}}, a {{characterType}}.
+
+Appearance: {{characterAppearance}}
+
+Requirements:
+- Front-facing or three-quarter view, clear face and full body visible
+- Clean, simple background (soft gradient or neutral tone)
+- Match the art style: {{visualStyle}}
+- Single character only, no other characters or figures
+- High detail on distinguishing features (face, clothing, accessories, coloring)
+- Expressive pose that reflects personality
+- No text, labels, or watermarks`;
+
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience.',
   visual_prompt: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown.',
+  portrait_generation: 'Generate a single character portrait image. No text overlays, no multiple characters, no background clutter.',
   tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata or alternative takes.',
   voice_selection: 'Return only a single voice name from the available list. Do not add commentary or punctuation beyond the voice name.',
 };
@@ -228,6 +246,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'sceneDescription', label: 'Scene Description', description: 'The current beat image prompt or scene summary.', required: true },
       { key: 'characters', label: 'Characters', description: 'Character continuity details.', required: true },
       { key: 'visualStyle', label: 'Visual Style', description: 'Requested art style or rendering direction.', required: true },
+      { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number, used to calibrate camera angle variety.', required: false },
     ],
     defaultPrompt: VISUAL_PROMPT_DEFAULT,
   },
@@ -239,6 +258,18 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'prompt', label: 'Base Prompt', description: 'The composed image prompt that will be refined before image generation.', required: true },
     ],
     defaultPrompt: IMAGE_GENERATION_PROMPT_DEFAULT,
+  },
+  portrait_generation: {
+    key: 'portrait_generation',
+    label: 'Portrait Generation Prompt',
+    description: 'Controls how character reference portraits are generated for visual consistency.',
+    placeholders: [
+      { key: 'characterName', label: 'Character Name', description: 'Name of the character.', required: true },
+      { key: 'characterAppearance', label: 'Character Appearance', description: 'Detailed appearance description from the story beat.', required: true },
+      { key: 'characterType', label: 'Character Type', description: 'Type/species of the character (e.g., monkey, wizard, girl).', required: true },
+      { key: 'visualStyle', label: 'Visual Style', description: 'Art style for the portrait to match scene images.', required: true },
+    ],
+    defaultPrompt: PORTRAIT_GENERATION_PROMPT_DEFAULT,
   },
   tts: {
     key: 'tts',

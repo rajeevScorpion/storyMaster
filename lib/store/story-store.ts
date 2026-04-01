@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { generateStoryBeat, generateImage, type StoryModelOverrides } from '@/app/actions/story-runtime';
+import { generateStoryBeat, generateImage, generateCharacterPortrait, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
+import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
@@ -118,6 +119,7 @@ export const useStoryStore = create<StoryState>()(
             maxBeats: storyConfig.maxBeats,
             status: 'active',
             characters: [],
+            enableReferenceImages: true, // TODO: set from user tier (premium only)
             setting: {
               world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
               timeOfDay: 'unknown',
@@ -208,11 +210,34 @@ export const useStoryStore = create<StoryState>()(
             });
           }
 
-          // Block loading on image + voice (voice is fast, image is the bottleneck)
+          // Step A: Generate portraits first (sequential, not parallel) so beat 1 scene can use
+          // them as references — makes portrait the single source of truth from the very first image.
+          let portraitRefs: ReferenceImage[] = [];
+          if (initialSession.enableReferenceImages) {
+            const rawPortraits = await Promise.all(
+              beat.characters.map(char =>
+                generateCharacterPortrait(char, initialSession.visualStyle!, modelOverrides)
+                  .catch(() => null) // non-fatal: beat continues without portrait
+              )
+            );
+            beat.characters = beat.characters.map((char, i) => ({
+              ...char,
+              portraitBase64: (rawPortraits[i] as string | null) || undefined,
+            }));
+            portraitRefs = beat.characters
+              .filter(c => c.portraitBase64)
+              .map(c => ({ type: 'character' as const, base64: c.portraitBase64! }));
+          }
+
+          // Step B: Generate scene image (with portrait refs if available) + await voice in parallel
           const [imageUrl, narratorVoice] = await Promise.all([
-            generateImage(beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides),
+            generateImage(
+              beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides,
+              portraitRefs.length > 0 ? portraitRefs : undefined, beat.beatNumber
+            ),
             voicePromise,
           ]);
+
           beat.imageUrl = imageUrl;
 
           // Also await early save (should be done by now — DB insert is fast)
@@ -315,8 +340,10 @@ export const useStoryStore = create<StoryState>()(
           let resolvedAudioUrl: string | undefined;
 
           // Fire-and-forget: start narration in parallel with image generation
+          // Voice is locked at story start — use it directly or fall back to default constant
+          const voiceForBeat = session.narratorVoice || DEFAULT_VOICE;
           let narrationPromise: Promise<void> | null = null;
-          if (session.userPrompt.toLowerCase() !== 'mock' && session.narratorVoice) {
+          if (session.userPrompt.toLowerCase() !== 'mock') {
             set({ isGeneratingAudio: true });
 
             const handleNarrationResolved = (audioUrl: string) => {
@@ -350,7 +377,7 @@ export const useStoryStore = create<StoryState>()(
               // Server-side: generate + upload to Supabase in one round trip
               narrationPromise = generateAndPersistNarration(
                 beat.storyText, session.tone, session.genre,
-                session.narratorVoice, lang,
+                voiceForBeat, lang,
                 session.savedStoryId, newNodeId
               ).then(({ audioUrl }) => handleNarrationResolved(audioUrl))
                 .catch(handleNarrationError);
@@ -358,14 +385,33 @@ export const useStoryStore = create<StoryState>()(
               // Fallback: generate only (no persistence yet)
               narrationPromise = generateNarrationOnly(
                 beat.storyText, session.tone, session.genre,
-                session.narratorVoice, lang
+                voiceForBeat, lang
               ).then(handleNarrationResolved)
                 .catch(handleNarrationError);
             }
           }
 
+          // Build reference images for visual consistency (only if enabled)
+          const referenceImages: ReferenceImage[] = [];
+          if (session.enableReferenceImages) {
+            // Add character portraits
+            for (const char of beat.characters) {
+              const sessionChar = session.characters.find(c => c.id === char.id);
+              if (sessionChar?.portraitBase64) {
+                referenceImages.push({ type: 'character', base64: sessionChar.portraitBase64 });
+              }
+            }
+            // Add previous scene as style/environment reference
+            if (currentNode.data.imageUrl?.startsWith('data:')) {
+              referenceImages.push({ type: 'scene', base64: currentNode.data.imageUrl });
+            }
+          }
+
           // Block loading on image only
-          const imageUrl = await generateImage(beat.imagePrompt, beat.characters, session.visualStyle, modelOverrides);
+          const imageUrl = await generateImage(
+            beat.imagePrompt, beat.characters, session.visualStyle,
+            modelOverrides, referenceImages.length > 0 ? referenceImages : undefined, beat.beatNumber
+          );
           beat.imageUrl = imageUrl;
 
           const updatedMap = addChildNode(
@@ -550,15 +596,8 @@ export const useStoryStore = create<StoryState>()(
         try {
           const lang = session.storyConfig?.language || 'english';
 
-          // Select voice if not yet chosen
-          let voiceName = session.narratorVoice;
-          if (!voiceName) {
-            voiceName = await selectNarratorVoiceServer(session.genre, session.tone, session.targetAge, lang);
-            const currentSession = get().session;
-            if (currentSession) {
-              set({ session: { ...currentSession, narratorVoice: voiceName } });
-            }
-          }
+          // Use locked voice — selected once at story start, never re-queried
+          const voiceName = session.narratorVoice || DEFAULT_VOICE;
 
           let audioUrl: string;
 
@@ -617,11 +656,31 @@ export const useStoryStore = create<StoryState>()(
             // Falls back to default prompt and model config inside generateImage.
           }
 
+          // Build reference images for visual consistency (only if enabled)
+          const referenceImages: ReferenceImage[] = [];
+          if (session.enableReferenceImages) {
+            for (const char of node.data.characters) {
+              const sessionChar = session.characters.find(c => c.id === char.id);
+              if (sessionChar?.portraitBase64) {
+                referenceImages.push({ type: 'character', base64: sessionChar.portraitBase64 });
+              }
+            }
+            // Previous scene reference (parent node's image)
+            if (node.parentId) {
+              const parentNode = session.storyMap.nodes[node.parentId];
+              if (parentNode?.data.imageUrl?.startsWith('data:')) {
+                referenceImages.push({ type: 'scene', base64: parentNode.data.imageUrl });
+              }
+            }
+          }
+
           const imageUrl = await generateImage(
             node.data.imagePrompt,
             node.data.characters,
             session.visualStyle,
-            modelOverrides
+            modelOverrides,
+            referenceImages.length > 0 ? referenceImages : undefined,
+            node.data.beatNumber
           );
 
           // Update the node with the new image

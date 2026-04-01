@@ -156,10 +156,11 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, visualPrompt, imagePrompt] = await Promise.all([
+  const [storyPrompt, visualPrompt, imagePrompt, portraitPrompt] = await Promise.all([
     getPublishedPrompt('story_generation'),
     getPublishedPrompt('visual_prompt'),
     getPublishedPrompt('image_generation'),
+    getPublishedPrompt('portrait_generation'),
   ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
@@ -167,9 +168,11 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     composerModel: map.get('visual_prompt')?.modelId,
     composerTemperature: map.get('visual_prompt')?.temperature ?? undefined,
     imageModel: map.get('image_generation')?.modelId,
+    portraitModel: map.get('portrait_generation')?.modelId,
     storyPrompt,
     visualPrompt,
     imagePrompt,
+    portraitPrompt,
   };
 }
 
