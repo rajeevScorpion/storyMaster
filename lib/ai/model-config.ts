@@ -1,0 +1,141 @@
+import 'server-only';
+
+import { createAdminClient } from '@/lib/supabase/admin';
+
+// Re-export shared types and constants for server-side consumers
+export { type TaskKey, type ModelConfig, TASK_DEFINITIONS, DEFAULT_MODELS, KNOWN_MODELS } from './model-config.shared';
+import { type TaskKey, type ModelConfig, DEFAULT_MODELS } from './model-config.shared';
+
+// ── In-memory cache (60s TTL) ──────────────────────────────────
+let cache: Map<string, { data: ModelConfig; ts: number }> = new Map();
+const CACHE_TTL = 60_000;
+
+function getCached(key: TaskKey): ModelConfig | null {
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
+  return null;
+}
+
+function setCache(config: ModelConfig) {
+  cache.set(config.taskKey, { data: config, ts: Date.now() });
+}
+
+export function invalidateCache() {
+  cache.clear();
+}
+
+// ── Public API ─────────────────────────────────────────────────
+
+export async function getModelConfig(task: TaskKey): Promise<{ model: string; temperature: number | null }> {
+  const cached = getCached(task);
+  if (cached) return { model: cached.modelId, temperature: cached.temperature };
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('model_config')
+      .select('task_key, model_id, temperature, updated_at')
+      .eq('task_key', task)
+      .single();
+
+    if (error || !data) {
+      const fallback = DEFAULT_MODELS[task];
+      return { model: fallback.modelId, temperature: fallback.temperature };
+    }
+
+    const config: ModelConfig = {
+      taskKey: data.task_key,
+      modelId: data.model_id,
+      temperature: data.temperature,
+      updatedAt: data.updated_at,
+    };
+    setCache(config);
+    return { model: config.modelId, temperature: config.temperature };
+  } catch {
+    const fallback = DEFAULT_MODELS[task];
+    return { model: fallback.modelId, temperature: fallback.temperature };
+  }
+}
+
+export async function getAllModelConfigs(): Promise<ModelConfig[]> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('model_config')
+      .select('task_key, model_id, temperature, updated_at')
+      .order('task_key');
+
+    if (error || !data) {
+      return Object.entries(DEFAULT_MODELS).map(([key, val]) => ({
+        taskKey: key as TaskKey,
+        modelId: val.modelId,
+        temperature: val.temperature,
+        updatedAt: new Date().toISOString(),
+      }));
+    }
+
+    const configs = data.map((row) => ({
+      taskKey: row.task_key as TaskKey,
+      modelId: row.model_id,
+      temperature: row.temperature,
+      updatedAt: row.updated_at,
+    }));
+
+    configs.forEach(setCache);
+    return configs;
+  } catch {
+    return Object.entries(DEFAULT_MODELS).map(([key, val]) => ({
+      taskKey: key as TaskKey,
+      modelId: val.modelId,
+      temperature: val.temperature,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+}
+
+export interface ConfigAudit {
+  changedBy: string;
+  experimentId?: string;
+  reason?: string;
+}
+
+export async function updateModelConfig(
+  taskKey: TaskKey,
+  modelId: string,
+  temperature: number | null,
+  audit?: ConfigAudit
+): Promise<void> {
+  const supabase = createAdminClient();
+
+  // Log to history if audit info provided
+  if (audit) {
+    const { data: current } = await supabase
+      .from('model_config')
+      .select('model_id, temperature')
+      .eq('task_key', taskKey)
+      .single();
+
+    await supabase.from('model_config_history').insert({
+      task_key: taskKey,
+      old_model_id: current?.model_id ?? null,
+      old_temperature: current?.temperature ?? null,
+      new_model_id: modelId,
+      new_temperature: temperature,
+      changed_by: audit.changedBy,
+      experiment_id: audit.experimentId ?? null,
+      change_reason: audit.reason ?? null,
+    });
+  }
+
+  const { error } = await supabase
+    .from('model_config')
+    .upsert({
+      task_key: taskKey,
+      model_id: modelId,
+      temperature,
+      updated_at: new Date().toISOString(),
+    });
+
+  if (error) throw new Error(`Failed to update model config: ${error.message}`);
+  invalidateCache();
+}

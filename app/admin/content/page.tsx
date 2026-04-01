@@ -4,8 +4,9 @@ import { useState, useTransition } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, BookOpen, GitBranch, EyeOff, Trash2,
-  Loader2, AlertTriangle, X, ChevronDown,
+  Loader2, AlertTriangle, X,
 } from 'lucide-react';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import {
   searchStories, searchStorylines,
   adminUnpublishStoryline, adminDeleteStoryline, adminDeleteStory,
@@ -132,21 +133,25 @@ export default function ContentPage() {
             className="w-full px-4 py-2.5 bg-white/5 border border-white/10 rounded-lg text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-emerald-500/50 transition-colors"
           />
         </div>
-        <div className="relative">
-          <select
-            value={tab === 'storylines' ? storylineSearchBy : storySearchBy}
-            onChange={e => {
-              if (tab === 'storylines') setStorylineSearchBy(e.target.value as StorylineSearchBy);
-              else setStorySearchBy(e.target.value as StorySearchBy);
-            }}
-            className="appearance-none px-4 py-2.5 pr-8 bg-white/5 border border-white/10 rounded-lg text-neutral-300 text-sm focus:outline-none focus:border-emerald-500/50 transition-colors cursor-pointer"
-          >
-            <option value="title">Title</option>
-            <option value="id">ID</option>
-            {tab === 'storylines' && <option value="story_id">Story ID</option>}
-          </select>
-          <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" />
-        </div>
+        <FilterDropdown
+          value={tab === 'storylines' ? storylineSearchBy : storySearchBy}
+          options={
+            tab === 'storylines'
+              ? [
+                  { value: 'title', label: 'Title' },
+                  { value: 'id', label: 'ID' },
+                  { value: 'story_id', label: 'Story ID' },
+                ]
+              : [
+                  { value: 'title', label: 'Title' },
+                  { value: 'id', label: 'ID' },
+                ]
+          }
+          onChange={v => {
+            if (tab === 'storylines') setStorylineSearchBy(v as StorylineSearchBy);
+            else setStorySearchBy(v as StorySearchBy);
+          }}
+        />
         <button
           type="submit"
           disabled={isPending || !query.trim()}
