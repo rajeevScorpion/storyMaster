@@ -3,6 +3,12 @@ export const IMAGE_MAX_WIDTH = Number(process.env.NEXT_PUBLIC_IMAGE_MAX_WIDTH) |
 export const IMAGE_MAX_HEIGHT = Number(process.env.NEXT_PUBLIC_IMAGE_MAX_HEIGHT) || 540;
 export const IMAGE_QUALITY = Number(process.env.NEXT_PUBLIC_IMAGE_QUALITY) || 0.65;
 
+// Storyboard mode — 2×2 panel grid at 2K, displayed via CSS sprite
+export const STORYBOARD_QUALITY    = 0.85;
+export const STORYBOARD_MAX_WIDTH  = 2048;
+export const STORYBOARD_MAX_HEIGHT = 1152;  // 16:9 at 2K
+export const STORYBOARD_ADVANCE_MS = 2500;  // ms between auto-panel advances
+
 // Portrait-specific (used only when enableReferenceImages is true)
 export const PORTRAIT_MAX_WIDTH = 512;
 export const PORTRAIT_MAX_HEIGHT = 512;

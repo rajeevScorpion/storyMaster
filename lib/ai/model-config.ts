@@ -93,6 +93,40 @@ export async function getAllModelConfigs(): Promise<ModelConfig[]> {
   }
 }
 
+// ── Feature Flags ──────────────────────────────────────────────
+
+let flagCache: Map<string, { data: boolean; ts: number }> = new Map();
+
+export async function getFeatureFlag(flagKey: string): Promise<boolean> {
+  const cached = flagCache.get(flagKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('feature_flags')
+      .select('enabled')
+      .eq('flag_key', flagKey)
+      .single();
+
+    if (error || !data) return false;
+    flagCache.set(flagKey, { data: data.enabled, ts: Date.now() });
+    return data.enabled;
+  } catch {
+    return false;
+  }
+}
+
+export async function setFeatureFlag(flagKey: string, enabled: boolean): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase
+    .from('feature_flags')
+    .upsert({ flag_key: flagKey, enabled, updated_at: new Date().toISOString() });
+
+  if (error) throw new Error(`Failed to set feature flag: ${error.message}`);
+  flagCache.delete(flagKey);
+}
+
 export interface ConfigAudit {
   changedBy: string;
   experimentId?: string;

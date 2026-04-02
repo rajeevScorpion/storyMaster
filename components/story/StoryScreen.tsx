@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
@@ -13,6 +14,62 @@ import NarrationButton from './NarrationButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+
+// translate(x%, y%) shifts by % of the element's own dimensions (200% of viewport)
+// so translate(-50%, 0%) = shift left by 50% of 200vw = 100vw → shows right half
+const PANEL_TRANSFORMS = [
+  'translate(0%, 0%)',       // TL — panel 1
+  'translate(-50%, 0%)',     // TR — panel 2
+  'translate(0%, -50%)',     // BL — panel 3
+  'translate(-50%, -50%)',   // BR — panel 4
+] as const;
+
+function StoryboardCycler({ gridUrl }: { gridUrl: string }) {
+  const [activePanel, setActivePanel] = useState(0);
+
+  useEffect(() => {
+    setActivePanel(0);
+    const id = setInterval(() => setActivePanel(p => (p + 1) % 4), STORYBOARD_ADVANCE_MS);
+    return () => clearInterval(id);
+  }, [gridUrl]);
+
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activePanel}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
+          className="absolute inset-0 overflow-hidden"
+        >
+          {/* 200% container, translated to crop to the correct quadrant */}
+          <div
+            className="absolute w-[200%] h-[200%]"
+            style={{ transform: PANEL_TRANSFORMS[activePanel] }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={gridUrl} alt="" className="w-full h-full object-cover" />
+          </div>
+        </motion.div>
+      </AnimatePresence>
+      {/* Vignette */}
+      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 50px rgba(0,0,0,0.65)' }} />
+      {/* Indicator dots */}
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+        {PANEL_TRANSFORMS.map((_, i) => (
+          <div
+            key={i}
+            className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
+              i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function isFallbackImageUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -173,9 +230,10 @@ function StoryScreenInner({
 
   // Audio player
   const currentNodeId = session.storyMap.currentNodeId;
+  const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
   const imageLoadFailed = !!displayImageUrl && failedImageUrl === displayImageUrl;
-  const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
+  const canRegenerateImage = !isStoryboard && (!currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed);
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
@@ -277,7 +335,9 @@ function StoryScreenInner({
             }}
             className="absolute inset-0"
           >
-            {displayImageUrl && (
+            {isStoryboard ? (
+              <StoryboardCycler gridUrl={currentBeat.imageUrl!} />
+            ) : displayImageUrl && (
               <Image
                 src={displayImageUrl}
                 alt={currentBeat.sceneSummary}

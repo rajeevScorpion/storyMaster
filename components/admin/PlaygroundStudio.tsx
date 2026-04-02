@@ -185,8 +185,8 @@ export default function PlaygroundStudio() {
 
   useEffect(() => {
     getActiveModelConfigs()
-      .then((data) => {
-        setConfigs(data);
+      .then((modelData) => {
+        setConfigs(modelData);
         setIsFetchingConfigs(false);
       })
       .catch(() => setIsFetchingConfigs(false));
@@ -417,6 +417,7 @@ export default function PlaygroundStudio() {
           </div>
 
           <div className="flex-1 space-y-6">
+            <>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
@@ -553,6 +554,7 @@ export default function PlaygroundStudio() {
                 </motion.div>
               )}
             </AnimatePresence>
+            </>
           </div>
         </div>
       )}

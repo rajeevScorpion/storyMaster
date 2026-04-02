@@ -8,7 +8,7 @@ import {
   getDefaultPromptBody,
   resolvePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY } from '@/lib/constants/media';
+import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
 import type { Character } from '@/lib/types/story';
 
 export interface StoryModelOverrides {
@@ -22,6 +22,7 @@ export interface StoryModelOverrides {
   visualPrompt?: string;
   imagePrompt?: string;
   portraitPrompt?: string;
+  enableStoryboard?: boolean;
 }
 
 const beatSchema = {
@@ -216,18 +217,23 @@ export async function generateImage(
     });
 
     const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
-    const response = await requestImageResponse(ai, imageModel, finalImagePrompt, referenceImages);
+    const isStoryboard = !!modelOverrides?.enableStoryboard;
+    const maxW = isStoryboard ? STORYBOARD_MAX_WIDTH  : IMAGE_MAX_WIDTH;
+    const maxH = isStoryboard ? STORYBOARD_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
+    const qual = isStoryboard ? STORYBOARD_QUALITY    : IMAGE_QUALITY;
+
+    const response = await requestImageResponse(ai, imageModel, finalImagePrompt, referenceImages, isStoryboard);
     const initialImage = extractInlineImage(response);
     if (initialImage) {
-      return await compressImage(initialImage, IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY);
+      return await compressImage(initialImage, maxW, maxH, qual);
     }
 
     const fallbackPrompt = (response.text || '').trim();
     if (fallbackPrompt && fallbackPrompt !== finalImagePrompt) {
-      const retryResponse = await requestImageResponse(ai, imageModel, fallbackPrompt, referenceImages);
+      const retryResponse = await requestImageResponse(ai, imageModel, fallbackPrompt, referenceImages, isStoryboard);
       const retryImage = extractInlineImage(retryResponse);
       if (retryImage) {
-        return await compressImage(retryImage, IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY);
+        return await compressImage(retryImage, maxW, maxH, qual);
       }
     }
 
@@ -242,7 +248,8 @@ async function requestImageResponse(
   ai: GoogleGenAI,
   modelId: string,
   prompt: string,
-  referenceImages?: ReferenceImage[]
+  referenceImages?: ReferenceImage[],
+  storyboard?: boolean
 ) {
   // Build contents: text prompt + optional reference image parts
   const hasRefs = referenceImages && referenceImages.length > 0;
@@ -265,7 +272,7 @@ async function requestImageResponse(
     config: {
       imageConfig: {
         aspectRatio: '16:9',
-        imageSize: '1K',
+        imageSize: storyboard ? '2K' : '1K',
       },
     },
   });

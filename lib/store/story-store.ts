@@ -239,6 +239,7 @@ export const useStoryStore = create<StoryState>()(
           ]);
 
           beat.imageUrl = imageUrl;
+          if (modelOverrides?.enableStoryboard) beat.isStoryboard = true;
 
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
@@ -249,6 +250,7 @@ export const useStoryStore = create<StoryState>()(
             data: {
               ...storyMap.nodes[rootNodeId].data,
               imageUrl,
+              ...(beat.isStoryboard ? { isStoryboard: true } : {}),
               ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
             },
           };
@@ -413,6 +415,7 @@ export const useStoryStore = create<StoryState>()(
             modelOverrides, referenceImages.length > 0 ? referenceImages : undefined, beat.beatNumber
           );
           beat.imageUrl = imageUrl;
+          if (modelOverrides?.enableStoryboard) beat.isStoryboard = true;
 
           const updatedMap = addChildNode(
             session.storyMap,
@@ -691,7 +694,11 @@ export const useStoryStore = create<StoryState>()(
             ...latestSession.storyMap.nodes,
             [nodeId]: {
               ...latestSession.storyMap.nodes[nodeId],
-              data: { ...latestSession.storyMap.nodes[nodeId].data, imageUrl },
+              data: {
+                ...latestSession.storyMap.nodes[nodeId].data,
+                imageUrl,
+                isStoryboard: !!modelOverrides?.enableStoryboard,
+              },
             },
           };
           const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };

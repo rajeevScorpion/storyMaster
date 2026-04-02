@@ -1,7 +1,7 @@
 'use server';
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
-import { getAllModelConfigs, type ModelConfig } from '@/lib/ai/model-config';
+import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, type ModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 
@@ -156,11 +156,12 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, visualPrompt, imagePrompt, portraitPrompt] = await Promise.all([
+  const [storyPrompt, visualPrompt, imagePrompt, portraitPrompt, enableStoryboard] = await Promise.all([
     getPublishedPrompt('story_generation'),
     getPublishedPrompt('visual_prompt'),
     getPublishedPrompt('image_generation'),
     getPublishedPrompt('portrait_generation'),
+    getFeatureFlag('storyboard_mode'),
   ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
@@ -173,7 +174,19 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     visualPrompt,
     imagePrompt,
     portraitPrompt,
+    enableStoryboard,
   };
+}
+
+export async function getGlobalSettings(): Promise<{ storyboardMode: boolean }> {
+  await verifyAdmin();
+  const storyboardMode = await getFeatureFlag('storyboard_mode');
+  return { storyboardMode };
+}
+
+export async function setStoryboardMode(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('storyboard_mode', enabled);
 }
 
 export async function adminDeleteStory(storyId: string): Promise<void> {
