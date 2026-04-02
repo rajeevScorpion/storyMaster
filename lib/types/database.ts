@@ -78,6 +78,7 @@ export interface DbBeat {
   ending_forecast: string[] | null;
   image_url: string | null;
   audio_url: string | null;
+  is_storyboard: boolean;
   created_at: string;
 }
 

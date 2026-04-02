@@ -93,6 +93,72 @@ export async function getAllModelConfigs(): Promise<ModelConfig[]> {
   }
 }
 
+// ── Feature Flags ──────────────────────────────────────────────
+
+let flagCache: Map<string, { data: boolean; ts: number }> = new Map();
+
+export async function getFeatureFlag(flagKey: string): Promise<boolean> {
+  const cached = flagCache.get(flagKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('feature_flags')
+      .select('enabled')
+      .eq('flag_key', flagKey)
+      .single();
+
+    if (error || !data) return false;
+    flagCache.set(flagKey, { data: data.enabled, ts: Date.now() });
+    return data.enabled;
+  } catch {
+    return false;
+  }
+}
+
+export async function setFeatureFlag(flagKey: string, enabled: boolean): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase
+    .from('feature_flags')
+    .upsert({ flag_key: flagKey, enabled, updated_at: new Date().toISOString() });
+
+  if (error) throw new Error(`Failed to set feature flag: ${error.message}`);
+  flagCache.delete(flagKey);
+}
+
+let flagValueCache: Map<string, { data: string | null; ts: number }> = new Map();
+
+export async function getFeatureFlagValue(flagKey: string): Promise<string | null> {
+  const cached = flagValueCache.get(flagKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('feature_flags')
+      .select('value')
+      .eq('flag_key', flagKey)
+      .single();
+
+    if (error || !data) return null;
+    flagValueCache.set(flagKey, { data: data.value ?? null, ts: Date.now() });
+    return data.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setFeatureFlagValue(flagKey: string, value: string): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase
+    .from('feature_flags')
+    .upsert({ flag_key: flagKey, value, updated_at: new Date().toISOString() });
+
+  if (error) throw new Error(`Failed to set feature flag value: ${error.message}`);
+  flagValueCache.delete(flagKey);
+}
+
 export interface ConfigAudit {
   changedBy: string;
   experimentId?: string;

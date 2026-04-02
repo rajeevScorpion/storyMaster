@@ -169,7 +169,8 @@ Rules:
 8. Keep the prompt concise but rich.
 9. Avoid adding new visual elements not grounded in the story state.
 10. Prefer readable, beautiful compositions suitable for story scenes.
-11. Output only the final image prompt as plain text.
+11. When storyboard mode is active, the output image will be composed as a 2×2 panel grid. In that case: describe four distinct sequential moments from the scene, one per panel, in reading order (top-left → top-right → bottom-left → bottom-right). Each panel should advance the action naturally. Panels are separated by thin dark lines; no text, captions, or labels inside panels. Maintain strict character visual consistency (same face, clothing, proportions) across all four panels.
+12. Output only the final image prompt as plain text.
 
 Story Beat Image Prompt:
 {{sceneDescription}}
@@ -200,7 +201,7 @@ Respond with ONLY the voice name, nothing else.`;
 
 export const IMAGE_GENERATION_PROMPT_DEFAULT = `{{prompt}}
 
-Cinematic storybook illustration, visually clear composition, expressive lighting, rich environmental detail, consistent character continuity, emotionally readable scene, no text overlays or typography.`;
+Cinematic storybook illustration, visually clear composition, expressive lighting, rich environmental detail, consistent character continuity, emotionally readable scene, no text overlays or typography. Compose as a 2×2 storyboard grid of four equal 16:9-proportioned panels separated by thin dark dividing lines — each panel a distinct sequential cinematic moment of the scene.`;
 
 export const PORTRAIT_GENERATION_PROMPT_DEFAULT = `Generate a single character portrait of {{characterName}}, a {{characterType}}.
 

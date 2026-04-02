@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
@@ -13,6 +14,128 @@ import NarrationButton from './NarrationButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { getStoryboardSettings } from '@/app/actions/admin';
+
+// translate(x%, y%) shifts by % of the element's own dimensions (200% of viewport)
+// so translate(-50%, 0%) = shift left by 50% of 200vw = 100vw → shows right half
+const PANEL_TRANSFORMS = [
+  'translate(0%, 0%)',       // TL — panel 1
+  'translate(-50%, 0%)',     // TR — panel 2
+  'translate(0%, -50%)',     // BL — panel 3
+  'translate(-50%, -50%)',   // BR — panel 4
+] as const;
+
+function StoryboardCycler({
+  gridUrl,
+  audioUrl,
+  cycleOverride,
+  cycleMs,
+  playbackState,
+}: {
+  gridUrl: string;
+  audioUrl?: string;
+  cycleOverride: boolean;
+  cycleMs: number;
+  playbackState: 'idle' | 'playing' | 'paused';
+}) {
+  const [activePanel, setActivePanel] = useState(0);
+  // null = waiting for audio metadata (hold panel 1); number = resolved ms per panel
+  const [panelDurationMs, setPanelDurationMs] = useState<number | null>(null);
+  const hasAudio = !!audioUrl;
+  const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+
+  // Effect 1: resolve panel duration whenever the beat changes
+  useEffect(() => {
+    setActivePanel(0);
+    prevPlaybackStateRef.current = 'idle';
+
+    if (cycleOverride) {
+      // Manual override: start immediately, no audio wait
+      setPanelDurationMs(cycleMs);
+      return;
+    }
+
+    if (!audioUrl) {
+      // No narration: start immediately at fallback speed
+      setPanelDurationMs(STORYBOARD_ADVANCE_MS);
+      return;
+    }
+
+    // Narration present: hold panel 1 until audio metadata is known
+    setPanelDurationMs(null);
+    const audio = new Audio();
+    const onMeta = () => {
+      const d = audio.duration;
+      setPanelDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS);
+    };
+    const onError = () => setPanelDurationMs(STORYBOARD_ADVANCE_MS);
+    audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('error', onError);
+    audio.src = audioUrl; // triggers metadata load — no play()
+    return () => { audio.src = ''; };
+  }, [gridUrl, audioUrl, cycleOverride, cycleMs]);
+
+  // Effect 2: run interval only when playing (or when no narration)
+  // Pause → interval clears → panel freezes
+  // End (idle after play) → interval clears → panel stays on last frame
+  // Replay (idle → playing) → resets to panel 1 and restarts
+  useEffect(() => {
+    if (panelDurationMs === null) return;
+
+    const prev = prevPlaybackStateRef.current;
+    prevPlaybackStateRef.current = playbackState;
+
+    // Reset to panel 1 when replaying after narration ended
+    if (hasAudio && !cycleOverride && prev === 'idle' && playbackState === 'playing') {
+      setActivePanel(0);
+    }
+
+    // With narration: only cycle while playing
+    // Without narration / override: cycle freely (playbackState stays 'idle')
+    const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
+    if (!shouldCycle) return;
+
+    const id = setInterval(() => setActivePanel(p => Math.min(p + 1, 3)), panelDurationMs);
+    return () => clearInterval(id);
+  }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
+
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activePanel}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
+          className="absolute inset-0 overflow-hidden"
+        >
+          {/* 200% container, translated to crop to the correct quadrant */}
+          <div
+            className="absolute w-[200%] h-[200%]"
+            style={{ transform: PANEL_TRANSFORMS[activePanel] }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={gridUrl} alt="" className="w-full h-full object-cover" />
+          </div>
+        </motion.div>
+      </AnimatePresence>
+      {/* Vignette */}
+      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 50px rgba(0,0,0,0.65)' }} />
+      {/* Indicator dots */}
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+        {PANEL_TRANSFORMS.map((_, i) => (
+          <div
+            key={i}
+            className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
+              i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'
+            }`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function isFallbackImageUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -42,6 +165,15 @@ export default function StoryScreen() {
   const { user } = useAuth();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number }>({
+    cycleOverride: false,
+    cycleMs: STORYBOARD_ADVANCE_MS,
+  });
+
+  // Fetch storyboard cycle settings once on mount
+  useEffect(() => {
+    getStoryboardSettings().then(setCycleSettings).catch(() => {/* use defaults */});
+  }, []);
 
   // Refresh signed URLs every 50 minutes to prevent expiry
   useEffect(() => {
@@ -85,6 +217,7 @@ export default function StoryScreen() {
       saveStatus={saveStatus}
       onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id) : undefined}
       lastPublishResult={lastPublishResult}
+      cycleSettings={cycleSettings}
     />
   );
 }
@@ -112,6 +245,7 @@ function StoryScreenInner({
   saveStatus,
   onSave,
   lastPublishResult,
+  cycleSettings,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -134,6 +268,7 @@ function StoryScreenInner({
   saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string } | null;
+  cycleSettings: { cycleOverride: boolean; cycleMs: number };
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -173,9 +308,10 @@ function StoryScreenInner({
 
   // Audio player
   const currentNodeId = session.storyMap.currentNodeId;
+  const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
   const imageLoadFailed = !!displayImageUrl && failedImageUrl === displayImageUrl;
-  const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
+  const canRegenerateImage = !isStoryboard && (!currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed);
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
@@ -277,7 +413,15 @@ function StoryScreenInner({
             }}
             className="absolute inset-0"
           >
-            {displayImageUrl && (
+            {isStoryboard ? (
+              <StoryboardCycler
+                gridUrl={currentBeat.imageUrl!}
+                audioUrl={currentBeat.audioUrl}
+                cycleOverride={cycleSettings.cycleOverride}
+                cycleMs={cycleSettings.cycleMs}
+                playbackState={playbackState}
+              />
+            ) : displayImageUrl && (
               <Image
                 src={displayImageUrl}
                 alt={currentBeat.sceneSummary}

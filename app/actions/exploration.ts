@@ -293,6 +293,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
         audioUrl: b.audio_url || undefined,
+        isStoryboard: b.is_storyboard || undefined,
       };
     });
 
@@ -385,6 +386,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
         audioUrl: b.audio_url || undefined,
+        isStoryboard: b.is_storyboard || undefined,
       };
     });
   } else {

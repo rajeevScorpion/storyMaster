@@ -66,6 +66,10 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.audio_url = normalizeStorageUrl(audioUrl, 'story-assets');
   }
 
+  if (node.data.isStoryboard) {
+    row.is_storyboard = true;
+  }
+
   return row;
 }
 
@@ -93,6 +97,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       endingForecast: (beat.ending_forecast || []) as string[],
       imageUrl: beat.image_url || undefined,
       audioUrl: beat.audio_url || undefined,
+      isStoryboard: beat.is_storyboard || undefined,
     },
     children: childNodeIds,
   };
@@ -241,6 +246,19 @@ export async function loadStory(storyId: string): Promise<StorySession> {
   let storyMap: StoryMap;
   if (beats && beats.length > 0) {
     storyMap = reconstructStoryMap(beats as DbBeat[], story.current_node_id);
+    // Merge isStoryboard from JSONB story_map for beats that predate the is_storyboard column
+    if (story.story_map) {
+      const jsonbMap = story.story_map as unknown as StoryMap;
+      for (const nodeId of Object.keys(storyMap.nodes)) {
+        const jsonbNode = jsonbMap.nodes?.[nodeId];
+        if (jsonbNode?.data?.isStoryboard && !storyMap.nodes[nodeId].data.isStoryboard) {
+          storyMap.nodes[nodeId] = {
+            ...storyMap.nodes[nodeId],
+            data: { ...storyMap.nodes[nodeId].data, isStoryboard: true },
+          };
+        }
+      }
+    }
   } else {
     // Fallback to legacy story_map JSONB
     storyMap = story.story_map as unknown as StoryMap;

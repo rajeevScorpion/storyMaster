@@ -28,6 +28,7 @@ export interface StoryBeat {
   nextBeatGoal: string;
   endingForecast: string[];
   imageUrl?: string;
+  isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;
 }
