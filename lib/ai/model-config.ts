@@ -127,6 +127,38 @@ export async function setFeatureFlag(flagKey: string, enabled: boolean): Promise
   flagCache.delete(flagKey);
 }
 
+let flagValueCache: Map<string, { data: string | null; ts: number }> = new Map();
+
+export async function getFeatureFlagValue(flagKey: string): Promise<string | null> {
+  const cached = flagValueCache.get(flagKey);
+  if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('feature_flags')
+      .select('value')
+      .eq('flag_key', flagKey)
+      .single();
+
+    if (error || !data) return null;
+    flagValueCache.set(flagKey, { data: data.value ?? null, ts: Date.now() });
+    return data.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setFeatureFlagValue(flagKey: string, value: string): Promise<void> {
+  const supabase = createAdminClient();
+  const { error } = await supabase
+    .from('feature_flags')
+    .upsert({ flag_key: flagKey, value, updated_at: new Date().toISOString() });
+
+  if (error) throw new Error(`Failed to set feature flag value: ${error.message}`);
+  flagValueCache.delete(flagKey);
+}
+
 export interface ConfigAudit {
   changedBy: string;
   experimentId?: string;

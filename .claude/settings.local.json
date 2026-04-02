@@ -39,7 +39,14 @@
       "Bash(git pull:*)",
       "Bash(grep -n \"refreshStorylineSignedUrls\\\\|refreshSignedUrls\" /d/AiCoding/storyMaster/app/actions/*.ts)",
       "Bash(ls d:/AiCoding/storyMaster/app/storyline/[id]/)",
-      "WebFetch(domain:ai.google.dev)"
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(find /d/AiCoding/storyMaster -type f \\\\\\(-name *narrat* -o -name *tts* -o -name *voice* \\\\\\))",
+      "Bash(find /d/AiCoding/storyMaster/components -type f -name *.tsx)",
+      "WebFetch(domain:developers.googleblog.com)",
+      "WebFetch(domain:docs.cloud.google.com)",
+      "WebFetch(domain:blog.laozhang.ai)",
+      "WebFetch(domain:deepmind.google)",
+      "Bash(tee /tmp/audio_branch.txt)"
     ]
   }
 }

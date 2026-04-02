@@ -28,6 +28,8 @@ import {
   Share2,
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { getStoryboardSettings } from '@/app/actions/admin';
+import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import { refreshStorylineSignedUrls } from '@/app/actions/exploration';
 import { toggleLike, recordView } from '@/app/actions/engagement';
@@ -40,6 +42,90 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
+
+const PANEL_TRANSFORMS = [
+  'translate(0%, 0%)',      // TL — panel 1
+  'translate(-50%, 0%)',    // TR — panel 2
+  'translate(0%, -50%)',    // BL — panel 3
+  'translate(-50%, -50%)',  // BR — panel 4
+] as const;
+
+function StoryboardCycler({
+  gridUrl,
+  audioUrl,
+  cycleOverride,
+  cycleMs,
+  playbackState,
+}: {
+  gridUrl: string;
+  audioUrl?: string;
+  cycleOverride: boolean;
+  cycleMs: number;
+  playbackState: 'idle' | 'playing' | 'paused';
+}) {
+  const [activePanel, setActivePanel] = useState(0);
+  const [panelDurationMs, setPanelDurationMs] = useState<number | null>(null);
+  const hasAudio = !!audioUrl;
+  const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+
+  useEffect(() => {
+    setActivePanel(0);
+    prevPlaybackStateRef.current = 'idle';
+    if (cycleOverride) { setPanelDurationMs(cycleMs); return; }
+    if (!audioUrl) { setPanelDurationMs(STORYBOARD_ADVANCE_MS); return; }
+    setPanelDurationMs(null);
+    const audio = new Audio();
+    const onMeta = () => { const d = audio.duration; setPanelDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS); };
+    const onError = () => setPanelDurationMs(STORYBOARD_ADVANCE_MS);
+    audio.addEventListener('loadedmetadata', onMeta);
+    audio.addEventListener('error', onError);
+    audio.src = audioUrl;
+    return () => { audio.src = ''; };
+  }, [gridUrl, audioUrl, cycleOverride, cycleMs]);
+
+  useEffect(() => {
+    if (panelDurationMs === null) return;
+    const prev = prevPlaybackStateRef.current;
+    prevPlaybackStateRef.current = playbackState;
+    if (hasAudio && !cycleOverride && prev === 'idle' && playbackState === 'playing') {
+      setActivePanel(0);
+    }
+    const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
+    if (!shouldCycle) return;
+    const id = setInterval(() => setActivePanel(p => Math.min(p + 1, 3)), panelDurationMs);
+    return () => clearInterval(id);
+  }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
+
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activePanel}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.6, ease: 'easeInOut' }}
+          className="absolute inset-0 overflow-hidden"
+        >
+          <div
+            className="absolute w-[200%] h-[200%]"
+            style={{ transform: PANEL_TRANSFORMS[activePanel] }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={gridUrl} alt="" className="w-full h-full object-cover" />
+          </div>
+        </motion.div>
+      </AnimatePresence>
+      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 50px rgba(0,0,0,0.65)' }} />
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+        {PANEL_TRANSFORMS.map((_, i) => (
+          <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cursor-pointer';
 const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
 const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer';
@@ -94,10 +180,18 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number }>({
+    cycleOverride: false,
+    cycleMs: STORYBOARD_ADVANCE_MS,
+  });
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
   const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
+
+  useEffect(() => {
+    getStoryboardSettings().then(setCycleSettings).catch(() => {/* use defaults */});
+  }, []);
 
   // Sync current beat index to URL for persistence across refresh
   useEffect(() => {
@@ -293,29 +387,17 @@ export default function StorylinePlayer({
     <div ref={containerRef} className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={currentBeat.imageUrl}
-            initial={{ opacity: 0, scale: 1.05 }}
-            animate={{ opacity: 1, scale: [1, 1.08] }}
-            exit={{ opacity: 0 }}
-            transition={{
-              opacity: { duration: 1.5, ease: 'easeOut' },
-              scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
-            }}
-            className="absolute inset-0"
-          >
-            {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
-              <Image
-                src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
-                alt={currentBeat.sceneSummary}
-                fill
-                className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
-                referrerPolicy="no-referrer"
-                priority
-                unoptimized
+        {currentBeat.isStoryboard && currentBeat.imageUrl ? (
+          <>
+            <div className={`absolute inset-0 transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}>
+              <StoryboardCycler
+                gridUrl={currentBeat.imageUrl}
+                audioUrl={currentBeat.audioUrl || undefined}
+                cycleOverride={cycleSettings.cycleOverride}
+                cycleMs={cycleSettings.cycleMs}
+                playbackState={playbackState}
               />
-            )}
+            </div>
             <motion.div
               initial={false}
               animate={{
@@ -325,8 +407,43 @@ export default function StorylinePlayer({
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
             />
-          </motion.div>
-        </AnimatePresence>
+          </>
+        ) : (
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentBeat.imageUrl}
+              initial={{ opacity: 0, scale: 1.05 }}
+              animate={{ opacity: 1, scale: [1, 1.08] }}
+              exit={{ opacity: 0 }}
+              transition={{
+                opacity: { duration: 1.5, ease: 'easeOut' },
+                scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
+              }}
+              className="absolute inset-0"
+            >
+              {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
+                <Image
+                  src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
+                  alt={currentBeat.sceneSummary}
+                  fill
+                  className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
+                  referrerPolicy="no-referrer"
+                  priority
+                  unoptimized
+                />
+              )}
+              <motion.div
+                initial={false}
+                animate={{
+                  height: isMinimized ? '20%' : '60%',
+                  opacity: isMinimized ? 0.5 : 0.7,
+                }}
+                transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
+              />
+            </motion.div>
+          </AnimatePresence>
+        )}
       </div>
 
       {/* Header */}

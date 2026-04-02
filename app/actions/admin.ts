@@ -1,7 +1,7 @@
 'use server';
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
-import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, type ModelConfig } from '@/lib/ai/model-config';
+import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue, setFeatureFlagValue, type ModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 
@@ -178,15 +178,49 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   };
 }
 
-export async function getGlobalSettings(): Promise<{ storyboardMode: boolean }> {
+export async function getGlobalSettings(): Promise<{
+  storyboardMode: boolean;
+  cycleOverride: boolean;
+  cycleMs: number;
+}> {
   await verifyAdmin();
-  const storyboardMode = await getFeatureFlag('storyboard_mode');
-  return { storyboardMode };
+  const [storyboardMode, cycleOverride, cycleMsStr] = await Promise.all([
+    getFeatureFlag('storyboard_mode'),
+    getFeatureFlag('storyboard_cycle_override'),
+    getFeatureFlagValue('storyboard_cycle_ms'),
+  ]);
+  return {
+    storyboardMode,
+    cycleOverride,
+    cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
+  };
 }
 
 export async function setStoryboardMode(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('storyboard_mode', enabled);
+}
+
+export async function setCycleOverride(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('storyboard_cycle_override', enabled);
+}
+
+export async function setCycleMs(ms: number): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlagValue('storyboard_cycle_ms', String(ms));
+}
+
+// Public (no admin gate) — read by StoryScreen to pace storyboard panels
+export async function getStoryboardSettings(): Promise<{ cycleOverride: boolean; cycleMs: number }> {
+  const [cycleOverride, cycleMsStr] = await Promise.all([
+    getFeatureFlag('storyboard_cycle_override'),
+    getFeatureFlagValue('storyboard_cycle_ms'),
+  ]);
+  return {
+    cycleOverride,
+    cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
+  };
 }
 
 export async function adminDeleteStory(storyId: string): Promise<void> {
