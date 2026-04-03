@@ -31,6 +31,13 @@ function stripBase64(storyMap: StoryMap): StoryMap {
   return { ...storyMap, nodes };
 }
 
+function sanitizeSessionCharacters(session: StorySession): StorySession['characters'] {
+  return (session.characters || []).map((character) => ({
+    ...character,
+    portraitBase64: undefined,
+  }));
+}
+
 /**
  * Convert a StoryNode + beat data into a beats table row object.
  */
@@ -169,7 +176,7 @@ export async function saveStory(
     target_age: session.targetAge,
     story_config: session.storyConfig as unknown as Record<string, unknown>,
     story_map: cleanMap as unknown as Record<string, unknown>,
-    characters: session.characters as unknown as Record<string, unknown>[],
+    characters: sanitizeSessionCharacters(session) as unknown as Record<string, unknown>[],
     setting: session.setting as unknown as Record<string, unknown>,
     status: session.status,
     narrator_voice: session.narratorVoice || null,
@@ -247,17 +254,23 @@ export async function loadStory(storyId: string): Promise<StorySession> {
   let storyMap: StoryMap;
   if (beats && beats.length > 0) {
     storyMap = reconstructStoryMap(beats as DbBeat[], story.current_node_id);
-    // Merge isStoryboard from JSONB story_map for beats that predate the is_storyboard column
+    // Merge fields that only live inside story_map JSONB so older normalized rows still
+    // preserve storyboard metadata and additive compatibility fields.
     if (story.story_map) {
       const jsonbMap = story.story_map as unknown as StoryMap;
       for (const nodeId of Object.keys(storyMap.nodes)) {
         const jsonbNode = jsonbMap.nodes?.[nodeId];
-        if (jsonbNode?.data?.isStoryboard && !storyMap.nodes[nodeId].data.isStoryboard) {
-          storyMap.nodes[nodeId] = {
-            ...storyMap.nodes[nodeId],
-            data: { ...storyMap.nodes[nodeId].data, isStoryboard: true },
-          };
-        }
+        if (!jsonbNode?.data) continue;
+        storyMap.nodes[nodeId] = {
+          ...storyMap.nodes[nodeId],
+          data: {
+            ...storyMap.nodes[nodeId].data,
+            ...(jsonbNode.data.isStoryboard ? { isStoryboard: true } : {}),
+            ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
+            ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
+            ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+          },
+        };
       }
     }
   } else {

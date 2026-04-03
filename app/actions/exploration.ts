@@ -107,6 +107,23 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
   if (beats && beats.length > 0) {
     // Always start from root node — exploration begins from beat 1
     storyMap = reconstructStoryMap(beats as DbBeat[], null);
+    if (dbStory.story_map) {
+      const jsonbMap = dbStory.story_map as unknown as StoryMap;
+      for (const nodeId of Object.keys(storyMap.nodes)) {
+        const jsonbNode = jsonbMap.nodes?.[nodeId];
+        if (!jsonbNode?.data) continue;
+        storyMap.nodes[nodeId] = {
+          ...storyMap.nodes[nodeId],
+          data: {
+            ...storyMap.nodes[nodeId].data,
+            ...(jsonbNode.data.isStoryboard ? { isStoryboard: true } : {}),
+            ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
+            ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
+            ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+          },
+        };
+      }
+    }
   } else {
     // Fallback to legacy story_map JSONB
     storyMap = dbStory.story_map as unknown as StoryMap;

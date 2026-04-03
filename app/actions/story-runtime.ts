@@ -1,7 +1,7 @@
 'use client';
 
-import { GoogleGenAI, Type } from '@google/genai';
-import { StorySession, StoryBeat } from '@/lib/types/story';
+import { GoogleGenAI } from '@google/genai';
+import { StorySession, StoryBeat, StoryboardPlan } from '@/lib/types/story';
 import { compressImage } from '@/lib/utils/image';
 import {
   buildPromptCharacterAnchors,
@@ -18,7 +18,9 @@ import {
   LOCKED_PROMPT_GUARDRAILS,
   getDefaultPromptBody,
   resolvePromptTemplate,
+  validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
+import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
 import type { Character } from '@/lib/types/story';
 
@@ -36,71 +38,6 @@ export interface StoryModelOverrides {
   portraitPrompt?: string;
   enableStoryboard?: boolean;
 }
-
-const beatSchema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING },
-    beatNumber: { type: Type.INTEGER },
-    isEnding: { type: Type.BOOLEAN },
-    storyText: { type: Type.STRING },
-    sceneSummary: { type: Type.STRING },
-    options: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          id: { type: Type.STRING },
-          label: { type: Type.STRING },
-          intent: { type: Type.STRING },
-        },
-        required: ['id', 'label', 'intent'],
-      },
-    },
-    characters: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          id: { type: Type.STRING },
-          name: { type: Type.STRING },
-          type: { type: Type.STRING },
-          appearanceSummary: { type: Type.STRING },
-          personalitySummary: { type: Type.STRING },
-        },
-        required: ['id', 'name', 'type', 'appearanceSummary', 'personalitySummary'],
-      },
-    },
-    continuityNotes: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    imagePrompt: { type: Type.STRING },
-    clues: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    nextBeatGoal: { type: Type.STRING },
-    endingForecast: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-  },
-  required: [
-    'title',
-    'beatNumber',
-    'isEnding',
-    'storyText',
-    'sceneSummary',
-    'options',
-    'characters',
-    'continuityNotes',
-    'imagePrompt',
-    'clues',
-    'nextBeatGoal',
-    'endingForecast',
-  ],
-};
 
 export async function generateStoryBeat(
   userPrompt: string,
@@ -141,6 +78,8 @@ export async function generateStoryBeat(
         clues: ['Some rocks can breathe... if they are not rocks at all.', 'Curiosity can sometimes lead to friendship.'],
         nextBeatGoal: 'Reveal whether the giant rock is alive and deepen the encounter.',
         endingForecast: ['friendship', 'comedy', 'moral discovery'],
+        newCharacterIds: ['char_monkey', 'char_elephant'],
+        changedCharacterIds: [],
       };
     }
 
@@ -157,11 +96,16 @@ export async function generateStoryBeat(
       clues: ['Friendship comes in all sizes.'],
       nextBeatGoal: 'Conclude the story with a heartwarming friendship.',
       endingForecast: ['friendship'],
+      newCharacterIds: [],
+      changedCharacterIds: [],
     };
   }
 
   const lang = normalizedSessionState?.storyConfig?.language || 'english';
-  const storyTemplate = modelOverrides?.storyPrompt || getDefaultPromptBody('story_generation');
+  const storyTemplateCandidate = modelOverrides?.storyPrompt || getDefaultPromptBody('story_generation');
+  const storyTemplate = validatePromptTemplate('story_generation', storyTemplateCandidate).isValid
+    ? storyTemplateCandidate
+    : getDefaultPromptBody('story_generation');
   const basePrompt = resolvePromptTemplate(storyTemplate, {
     language: lang,
     userPrompt,
@@ -211,7 +155,101 @@ export async function generateStoryBeat(
 
 export interface ReferenceImage {
   type: 'character' | 'scene';
-  base64: string;
+  dataUrl?: string;
+  url?: string;
+}
+
+export async function composeStoryboardPlan(
+  beat: StoryBeat,
+  sessionState: Partial<StorySession> | null,
+  visualStyle: string,
+  modelOverrides?: StoryModelOverrides
+): Promise<StoryboardPlan> {
+  const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+  const composerTemplateCandidate = modelOverrides?.visualPrompt || getDefaultPromptBody('visual_prompt');
+  const composerTemplate = validatePromptTemplate('visual_prompt', composerTemplateCandidate).isValid
+    ? composerTemplateCandidate
+    : getDefaultPromptBody('visual_prompt');
+  const previousBeat = sessionState?.beats?.[sessionState.beats.length - 1];
+  const prompt = resolvePromptTemplate(composerTemplate, {
+    storyText: beat.storyText,
+    sceneSummary: beat.sceneSummary,
+    imageIntent: beat.imagePrompt,
+    characters: buildPromptCharacterAnchors(beat.characters),
+    continuityNotes: JSON.stringify(beat.continuityNotes || [], null, 2),
+    visualStyle,
+    beatNumber: beat.beatNumber,
+    storyState: formatStoryState(sessionState),
+    newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState), null, 2),
+    changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat), null, 2),
+    previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
+  });
+
+  const response = await ai.models.generateContent({
+    model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
+    contents: prompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
+      responseMimeType: 'application/json',
+      responseSchema: storyboardPlanSchema,
+      temperature: modelOverrides?.composerTemperature ?? 0.5,
+    },
+  });
+
+  const text = response.text;
+  if (!text) {
+    throw new Error('Failed to compose storyboard plan');
+  }
+
+  return JSON.parse(text) as StoryboardPlan;
+}
+
+export function renderStoryboardPlan(plan: StoryboardPlan): string {
+  const frameSections = [
+    ['Top Left', plan.topLeft],
+    ['Top Right', plan.topRight],
+    ['Bottom Left', plan.bottomLeft],
+    ['Bottom Right', plan.bottomRight],
+  ] as const;
+
+  return [
+    'Shared visual invariants:',
+    ...plan.sharedVisualInvariants.map((item) => `- ${item}`),
+    ...frameSections.flatMap(([label, frame]) => [
+      '',
+      `${label}:`,
+      `Description: ${frame.description}`,
+      `Prompt: ${frame.prompt}`,
+      `Camera Angle: ${frame.cameraAngle}`,
+      `Visual Focus: ${frame.visualFocus.join(', ')}`,
+      `Emotion: ${frame.emotion}`,
+      `Continuity Anchor: ${frame.continuityAnchor}`,
+    ]),
+    ...(plan.negativeConstraints.length > 0
+      ? ['', 'Negative constraints:', ...plan.negativeConstraints.map((item) => `- ${item}`)]
+      : []),
+  ].join('\n');
+}
+
+function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined): string {
+  if (!previousBeat) {
+    return 'None yet - first beat';
+  }
+
+  return JSON.stringify({
+    beatNumber: previousBeat.beatNumber,
+    sceneSummary: previousBeat.sceneSummary,
+    continuityNotes: previousBeat.continuityNotes || [],
+    imagePrompt: previousBeat.imagePrompt,
+    storyboardFrames: previousBeat.storyboardPlan
+      ? {
+          topLeft: previousBeat.storyboardPlan.topLeft.description,
+          topRight: previousBeat.storyboardPlan.topRight.description,
+          bottomLeft: previousBeat.storyboardPlan.bottomLeft.description,
+          bottomRight: previousBeat.storyboardPlan.bottomRight.description,
+        }
+      : null,
+  }, null, 2);
 }
 
 export async function generateImage(
@@ -222,14 +260,20 @@ export async function generateImage(
   referenceImages?: ReferenceImage[],
   beatNumber?: number
 ): Promise<string> {
-  if (prompt.includes("Cinematic children's storybook illustration")) {
+  if (
+    prompt.includes("Cinematic children's storybook illustration") ||
+    characters.some((character) => ['Miko', 'Bhoora'].includes(character.name))
+  ) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     return `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`;
   }
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
-    const imageTemplate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
+    const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
+    const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
+      ? imageTemplateCandidate
+      : getDefaultPromptBody('image_generation');
     const finalImagePrompt = resolvePromptTemplate(imageTemplate, {
       prompt,
       characters: buildPromptCharacterAnchors(characters),
@@ -238,7 +282,7 @@ export async function generateImage(
     });
 
     const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
-    const isStoryboard = !!modelOverrides?.enableStoryboard;
+    const isStoryboard = true;
     const maxW = isStoryboard ? STORYBOARD_MAX_WIDTH  : IMAGE_MAX_WIDTH;
     const maxH = isStoryboard ? STORYBOARD_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
     const qual = isStoryboard ? STORYBOARD_QUALITY    : IMAGE_QUALITY;
@@ -279,7 +323,9 @@ async function requestImageResponse(
   if (hasRefs) {
     const parts: any[] = [{ text: prompt }];
     for (const ref of referenceImages) {
-      const match = ref.base64.match(/^data:([^;]+);base64,(.+)$/);
+      const dataUrl = await resolveReferenceImageDataUrl(ref);
+      if (!dataUrl) continue;
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (match) {
         parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
       }
@@ -312,12 +358,16 @@ function extractInlineImage(response: Awaited<ReturnType<typeof requestImageResp
 export async function generateCharacterPortrait(
   character: Character,
   visualStyle: string,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  promptOverride?: string
 ): Promise<string> {
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
-    const portraitTemplate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
-    const prompt = resolvePromptTemplate(portraitTemplate, {
+    const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
+    const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
+      ? portraitTemplateCandidate
+      : getDefaultPromptBody('portrait_generation');
+    const prompt = promptOverride || resolvePromptTemplate(portraitTemplate, {
       characterName: character.name,
       characterAppearance: character.appearanceSummary,
       characterType: character.type,
@@ -372,4 +422,55 @@ function formatStoryState(
   selectedOptionLabel?: string
 ): string {
   return formatStoryBible(sessionState, selectedOptionLabel);
+}
+
+function resolveNewCharacterIds(
+  beat: StoryBeat,
+  sessionState: Partial<StorySession> | null
+): string[] {
+  if ((beat.newCharacterIds || []).length > 0) {
+    return beat.newCharacterIds || [];
+  }
+
+  if (!sessionState?.beats || sessionState.beats.length === 0) {
+    return beat.characters.map((character) => character.id);
+  }
+
+  const existingIds = new Set((sessionState.characters || []).map((character) => character.id));
+  return beat.characters
+    .filter((character) => !existingIds.has(character.id))
+    .map((character) => character.id);
+}
+
+function resolveChangedCharacterIds(beat: StoryBeat): string[] {
+  return beat.changedCharacterIds || [];
+}
+
+async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string | null> {
+  const candidate = ref.dataUrl || ref.url;
+  if (!candidate) return null;
+  if (candidate.startsWith('data:')) return candidate;
+
+  const response = await fetch(candidate);
+  if (!response.ok) {
+    return null;
+  }
+
+  const blob = await response.blob();
+  return blobToDataUrl(blob);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error('Failed to read reference image'));
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('Reference image reader returned an unexpected result'));
+      }
+    };
+    reader.readAsDataURL(blob);
+  });
 }

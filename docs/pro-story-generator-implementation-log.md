@@ -279,3 +279,100 @@
 
 ### Test evidence
 - Architecture review completed against the shared storyboard flow and clarified product requirements.
+
+## Phase 8. Structured composer runtime implementation
+
+### Goals
+- Implement the locked production flow:
+  - `story_generation`
+  - `visual_prompt` structured composer
+  - portrait-first beat 1 rendering
+  - previous-storyboard continuity for beat 2+
+- Preserve backward compatibility for saved stories and prompt history while replacing the legacy live composer assumptions.
+- Realign the admin playground and production runtime so they test the same composer contract.
+
+### Files and systems touched
+- Runtime and store:
+  - `app/actions/story-runtime.ts`
+  - `lib/store/story-store.ts`
+  - `lib/ai/story-bible.ts`
+  - `lib/ai/generation-schemas.ts`
+  - `lib/types/story.ts`
+- Prompt/admin/playground:
+  - `lib/ai/prompt-config.shared.ts`
+  - `lib/ai/model-config.shared.ts`
+  - `app/actions/admin.ts`
+  - `app/actions/prompt-playground.ts`
+  - `components/admin/PlaygroundStudio.tsx`
+- Persistence compatibility:
+  - `app/actions/persistence.ts`
+  - `app/actions/exploration.ts`
+- Docs:
+  - `docs/pro-story-generator-plan.md`
+  - `docs/pro-story-generator-implementation-log.md`
+
+### Decisions made
+- `visual_prompt` is live again in runtime, but now returns structured JSON rather than plain text.
+- The composer prompt is example-led for intent, but the response is schema-driven JSON.
+- Beat 1 now composes the storyboard plan first, generates required portraits, and only then renders the storyboard image.
+- Beat 2+ uses the previous storyboard image as the primary visual continuity reference, with new portraits attached only when new or visibly changed characters require them.
+- Runtime prompt loading now validates editable prompt templates and falls back to code defaults when stored prompt bodies are missing newly required placeholders.
+- Structured storyboard metadata (`storyboardPlan`, `newCharacterIds`, `changedCharacterIds`) stays in `story_map` JSONB for compatibility; normalized beat rows remain unchanged.
+
+### What is working
+- Story generation now requests and validates `newCharacterIds` and `changedCharacterIds`.
+- The live runtime now calls `composeStoryboardPlan()` and renders the returned `StoryboardPlan` through the image wrapper.
+- Beat 1 portrait generation completes before storyboard image generation and those portraits are passed as image references into Gemini.
+- Beat 2+ storyboard image generation now uses the last storyboard image as scene continuity context and passes newly generated portraits only when needed.
+- Regenerate-image flow now reuses stored storyboard plans when available and can recompose them if missing.
+- Prompt playground now tests `visual_prompt` with the live JSON schema and updated placeholder set.
+- Admin production override loading once again fetches the `visual_prompt` prompt/model configuration for live runtime use.
+- Saved and explored stories can still reconstruct storyboard metadata from `story_map` even though the normalized `beats` table schema was not changed.
+
+### What is partially working
+- `lib/ai/prompt-config.shared.ts` still contains the older exported `VISUAL_PROMPT_DEFAULT` constant for historical reference, while the runtime now uses `VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT`.
+- Composer quality is now structurally correct, but prompt tuning and richer fixtures are still needed to optimize adherence, cost, and cinematic quality.
+
+### Open issues and deferred items
+- The next tuning round should add stronger visual-composer fixtures for:
+  - first beat with two new named characters
+  - later beat with no new characters
+  - later beat with one visibly transformed returning character
+- If prompt history in Supabase contains older visual-composer drafts, admins may need to republish updated versions after comparing them in the playground.
+- Full repo lint remains subject to the pre-existing React purity issues logged in Phase 6; this phase stayed scoped to the story-generator architecture.
+
+### Test evidence
+- `npx tsc --noEmit`
+- `npx eslint app/actions/story-runtime.ts app/actions/prompt-playground.ts app/actions/admin.ts components/admin/PlaygroundStudio.tsx lib/store/story-store.ts lib/ai/story-bible.ts lib/ai/prompt-config.shared.ts lib/ai/model-config.shared.ts app/actions/persistence.ts app/actions/exploration.ts`
+
+## Phase 9. First-beat cloud save regression fix
+
+### Goals
+- Fix the stuck first-beat save spinner.
+- Ensure storyboard images, portrait refs, and narration uploads can actually start after first-beat generation.
+- Prevent base64 portrait data from being sent inside oversized story save payloads.
+
+### Files and systems touched
+- `lib/store/story-store.ts`
+- `app/actions/persistence.ts`
+
+### Decisions made
+- The cloud-save request now sends a persistable session snapshot instead of the full in-memory session object.
+- Unused `beats` payload data is dropped entirely from the client-to-server save request.
+- Top-level `session.characters` are sanitized before save so portrait base64 stays local and never gets posted into the story row payload.
+- Server-side persistence now also sanitizes `stories.characters` defensively before DB write.
+
+### What is working
+- First-beat save requests are now much smaller and no longer include portrait base64 in the top-level session payload.
+- Asset upload can proceed to the `story-assets` bucket after the initial story row save completes.
+- The persisted `stories.characters` JSON will keep portrait URLs when available but will no longer accidentally retain portrait base64 blobs.
+
+### What is partially working
+- A save request that was already stuck in-flight before this patch will not magically repair itself; the fix applies to the next save attempt.
+
+### Open issues and deferred items
+- If the currently open browser tab is still showing the old stuck save request, the user may need to trigger one fresh save attempt after the patched code reloads.
+
+### Test evidence
+- `npx tsc --noEmit`
+- `npx eslint lib/store/story-store.ts app/actions/persistence.ts`

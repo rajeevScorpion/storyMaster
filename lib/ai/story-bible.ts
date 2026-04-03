@@ -86,12 +86,16 @@ export function validateGeneratedBeat(
   );
   const seenNames = new Map<string, string>();
   const seenIds = new Set<string>();
+  const newCharacterIds = Array.isArray(beat.newCharacterIds) ? beat.newCharacterIds : [];
+  const changedCharacterIds = Array.isArray(beat.changedCharacterIds) ? beat.changedCharacterIds : [];
 
   if (!beat.title?.trim()) issues.push('title is missing');
   if (!beat.storyText?.trim()) issues.push('storyText is missing');
   if (!beat.sceneSummary?.trim()) issues.push('sceneSummary is missing');
   if (!beat.imagePrompt?.trim()) issues.push('imagePrompt is missing');
   if (!beat.nextBeatGoal?.trim()) issues.push('nextBeatGoal is missing');
+  if (!Array.isArray(beat.newCharacterIds)) issues.push('newCharacterIds must be an array');
+  if (!Array.isArray(beat.changedCharacterIds)) issues.push('changedCharacterIds must be an array');
 
   if (beat.beatNumber !== expectedBeatNumber) {
     issues.push(`beatNumber should be ${expectedBeatNumber} but was ${beat.beatNumber}`);
@@ -112,6 +116,8 @@ export function validateGeneratedBeat(
   if (beat.characters.length === 0) {
     issues.push('characters array is empty');
   }
+
+  const beatCharacterIds = new Set(beat.characters.map((character) => character.id));
 
   for (const character of beat.characters) {
     if (!character.id?.trim()) issues.push('character id is missing');
@@ -144,6 +150,31 @@ export function validateGeneratedBeat(
       if (conflictingExisting) {
         issues.push(`new character "${character.name}" reuses an existing cast name`);
       }
+    }
+  }
+
+  for (const characterId of newCharacterIds) {
+    if (!beatCharacterIds.has(characterId)) {
+      issues.push(`newCharacterIds references missing character id ${characterId}`);
+    }
+    if (existingCharacters.has(characterId)) {
+      issues.push(`newCharacterIds includes existing character id ${characterId}`);
+    }
+  }
+
+  for (const characterId of changedCharacterIds) {
+    if (!beatCharacterIds.has(characterId)) {
+      issues.push(`changedCharacterIds references missing character id ${characterId}`);
+    }
+  }
+
+  if (!sessionState?.beats || sessionState.beats.length === 0) {
+    const missingInitialFlags = beat.characters
+      .filter((character) => character.name?.trim())
+      .map((character) => character.id)
+      .filter((characterId) => !newCharacterIds.includes(characterId));
+    if (missingInitialFlags.length > 0) {
+      issues.push(`beat 1 must flag all named characters in newCharacterIds: ${missingInitialFlags.join(', ')}`);
     }
   }
 

@@ -49,7 +49,6 @@ const AVAILABLE_VOICES = [
   'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat',
 ];
 
-const LEGACY_TASKS = new Set<TaskKey>(['visual_prompt']);
 const DEFAULT_VISUAL_STYLE = 'storybook illustration with painterly textures and expressive character acting, whimsical and playful emotional tone, warm color palette with sunlit golds, ambers, and rich reds, balanced visual detail with readable characters and selective environment richness';
 const DEFAULT_CHARACTER_ANCHORS = JSON.stringify([
   {
@@ -138,10 +137,21 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     selectedOptionLabel: 'Pip follows the lantern trail into the orchard',
   },
   visual_prompt: {
-    sceneDescription: 'A moonlit garden with glowing fireflies and an old stone fountain',
+    storyText: 'Pip steps into Mr. Huckle\'s antique shop to escape the rain, discovers a strange indigo umbrella between a grandfather clock and dusty globe, turns the brass sun dial, and watches golden light flood the room.',
+    sceneSummary: 'Pip discovers a magical umbrella inside a dim antique shop and triggers a burst of sunlight.',
+    imageIntent: 'storybook beat showing Pip entering from the rain, discovering the umbrella, touching the brass dial, and seeing sunlight transform the shop',
     characters: DEFAULT_CHARACTER_ANCHORS,
+    continuityNotes: JSON.stringify([
+      'Pip keeps the same oversized yellow raincoat and curious body language.',
+      'The umbrella has deep indigo fabric and a brass handle with weather dials.',
+      'The shop remains warm, dusty, and full of antique objects.',
+    ], null, 2),
     visualStyle: DEFAULT_VISUAL_STYLE,
-    beatNumber: '2',
+    beatNumber: '1',
+    storyState: DEFAULT_STORY_BIBLE,
+    newCharacterIds: JSON.stringify(['char_pip', 'char_barnaby'], null, 2),
+    changedCharacterIds: '[]',
+    previousStoryboardContext: 'None yet - first beat',
   },
   image_generation: {
     prompt: 'Low-angle medium-wide shot of Pip and Barnaby stopping beneath a hanging cluster of glowing orchard lanterns, one panel per sequential moment as the lanterns brighten and reveal a hidden brass map case.',
@@ -262,7 +272,6 @@ export default function PlaygroundStudio() {
   const promptTaskKey: PromptTaskKey | null = supportsPrompt ? selectedTask : null;
   const currentConfig = configs.find((config) => config.taskKey === selectedTask);
   const taskDef = TASK_DEFINITIONS.find((task) => task.key === selectedTask)!;
-  const isLegacyTask = LEGACY_TASKS.has(selectedTask);
   const validation = promptTaskKey ? validatePromptTemplate(promptTaskKey, draftPrompt) : null;
   const isModelChanged = currentConfig ? selectedModel !== currentConfig.modelId || (taskHasTemperature(selectedTask) && temperature !== (currentConfig.temperature ?? 0.7)) : false;
   const isDraftDirty = supportsPrompt && promptState ? draftPrompt !== promptState.draft.promptBody : false;
@@ -440,10 +449,19 @@ export default function PlaygroundStudio() {
     if (selectedTask === 'visual_prompt') {
       return (
         <div className="grid gap-3">
-          <textarea value={inputs.sceneDescription || ''} onChange={(event) => setInputs((current) => ({ ...current, sceneDescription: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Scene description" />
+          <textarea value={inputs.storyText || ''} onChange={(event) => setInputs((current) => ({ ...current, storyText: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat story text" />
+          <textarea value={inputs.sceneSummary || ''} onChange={(event) => setInputs((current) => ({ ...current, sceneSummary: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Scene summary" />
+          <textarea value={inputs.imageIntent || ''} onChange={(event) => setInputs((current) => ({ ...current, imageIntent: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Story writer visual intent" />
           <textarea value={inputs.characters || ''} onChange={(event) => setInputs((current) => ({ ...current, characters: event.target.value }))} rows={6} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Character continuity JSON" />
+          <textarea value={inputs.continuityNotes || ''} onChange={(event) => setInputs((current) => ({ ...current, continuityNotes: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Continuity notes JSON" />
           <input value={inputs.visualStyle || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyle: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style" />
-          <input value={inputs.beatNumber || ''} onChange={(event) => setInputs((current) => ({ ...current, beatNumber: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat number" />
+          <div className="grid gap-3 md:grid-cols-3">
+            <input value={inputs.beatNumber || ''} onChange={(event) => setInputs((current) => ({ ...current, beatNumber: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat number" />
+            <input value={inputs.newCharacterIds || ''} onChange={(event) => setInputs((current) => ({ ...current, newCharacterIds: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder='["char_new"]' />
+            <input value={inputs.changedCharacterIds || ''} onChange={(event) => setInputs((current) => ({ ...current, changedCharacterIds: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder='["char_changed"]' />
+          </div>
+          <textarea value={inputs.storyState || ''} onChange={(event) => setInputs((current) => ({ ...current, storyState: event.target.value }))} rows={8} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Compact story bible JSON" />
+          <textarea value={inputs.previousStoryboardContext || ''} onChange={(event) => setInputs((current) => ({ ...current, previousStoryboardContext: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Previous storyboard context" />
         </div>
       );
     }
@@ -509,9 +527,6 @@ export default function PlaygroundStudio() {
                     <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">{task.label}</p>
                     <div className="flex items-center gap-2">
-                      {LEGACY_TASKS.has(task.key) && (
-                        <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">Legacy</span>
-                      )}
                       {promptEnabled && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">Prompt</span>}
                     </div>
                   </div>
@@ -530,14 +545,9 @@ export default function PlaygroundStudio() {
                   <p className="mt-1 text-sm text-neutral-400">{taskDef.description}</p>
                 </div>
               <div className={`rounded-lg px-3 py-2 text-xs ${supportsPrompt ? 'border border-emerald-500/20 bg-emerald-500/5 text-emerald-200' : 'border border-white/10 bg-neutral-900/60 text-neutral-400'}`}>
-                  {isLegacyTask ? 'Legacy prompt retained for historical comparison' : supportsPrompt ? 'Prompt editing enabled' : 'Model-only task in v1'}
+                  {supportsPrompt ? 'Prompt editing enabled' : 'Model-only task in v1'}
               </div>
               </div>
-              {isLegacyTask && (
-                <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-200">
-                  This task is preserved for prompt history and experiments, but the live story runtime now goes directly from story generation to the image wrapper.
-                </div>
-              )}
               {currentConfig && <p className="mt-3 text-xs text-neutral-500">Production model: <span className="font-mono text-neutral-300">{productionConfigLabel}</span></p>}
               {supportsPrompt && promptState && <p className="mt-1 text-xs text-neutral-500">Published prompt: <span className="text-neutral-300">{promptState.published.source === 'database' ? 'Database' : 'Code default'}</span> | Last updated: <span className="text-neutral-300">{formatTimestamp(promptState.published.updatedAt)}</span></p>}
             </div>

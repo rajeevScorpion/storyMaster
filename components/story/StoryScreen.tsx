@@ -378,6 +378,26 @@ function StoryScreenInner({
     }
   }, [saveStatus, onSave, isSaving]);
 
+  // Recovery guard for a save request that got stuck before the payload-size fix landed.
+  // If saving remains unresolved for too long, flip back to unsaved so the smaller patched
+  // payload can retry automatically without forcing the user to reload and lose local assets.
+  useEffect(() => {
+    if (saveStatus !== 'saving' || !onSave) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const latest = useStoryStore.getState();
+      if (latest.saveStatus === 'saving') {
+        useStoryStore.setState({
+          isSaving: false,
+          saveStatus: 'unsaved',
+          error: latest.error || 'Cloud save timed out. Retrying with a smaller payload.',
+        });
+      }
+    }, 20000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [saveStatus, onSave]);
+
   // Auto-scroll focused option into view
   useEffect(() => {
     if (focusedOptionIndex >= 0 && optionRefs.current[focusedOptionIndex]) {

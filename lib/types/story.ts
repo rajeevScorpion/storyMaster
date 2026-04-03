@@ -14,6 +14,32 @@ export interface Option {
   intent: string;
 }
 
+export interface PortraitTask {
+  characterId: string;
+  characterName: string;
+  reason: 'new_character' | 'visual_change';
+  prompt: string;
+}
+
+export interface StoryboardFramePlan {
+  description: string;
+  prompt: string;
+  cameraAngle: string;
+  visualFocus: string[];
+  emotion: string;
+  continuityAnchor: string;
+}
+
+export interface StoryboardPlan {
+  sharedVisualInvariants: string[];
+  portraitTasks: PortraitTask[];
+  topLeft: StoryboardFramePlan;
+  topRight: StoryboardFramePlan;
+  bottomLeft: StoryboardFramePlan;
+  bottomRight: StoryboardFramePlan;
+  negativeConstraints: string[];
+}
+
 export interface StoryBeat {
   title: string;
   beatNumber: number;
@@ -27,6 +53,9 @@ export interface StoryBeat {
   clues: string[];
   nextBeatGoal: string;
   endingForecast: string[];
+  newCharacterIds?: string[];
+  changedCharacterIds?: string[];
+  storyboardPlan?: StoryboardPlan;
   imageUrl?: string;
   isStoryboard?: boolean;
   portraitImageUrl?: string;

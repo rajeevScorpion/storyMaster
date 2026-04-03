@@ -21,7 +21,7 @@ export const TASK_DEFINITIONS: {
   description: string;
 }[] = [
   { key: 'story_generation', label: 'Story Generation', description: 'Generates structured JSON story beats with characters, options, and continuity' },
-  { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Legacy composer step retained for prompt history and experiments; no longer used in the live runtime path' },
+  { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Builds structured 4-frame storyboard plans and portrait tasks from each story beat' },
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
   { key: 'portrait_generation', label: 'Portrait Generation', description: 'Generates character reference portraits for visual consistency across beats' },
   { key: 'tts', label: 'Text-to-Speech', description: 'Narrates story text with expressive voice acting' },

@@ -1,6 +1,6 @@
 'use server';
 
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { verifyAdmin } from '@/lib/supabase/admin';
 import { updateModelConfig, type TaskKey } from '@/lib/ai/model-config';
 import { estimateCost } from '@/lib/ai/pricing';
@@ -14,6 +14,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
+import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import {
   getPromptPlaygroundState,
   getPublishedPrompt,
@@ -33,53 +34,6 @@ const AVAILABLE_VOICES = [
 ] as const;
 
 const DEFAULT_VISUAL_STYLE = 'storybook illustration with painterly textures and expressive character acting, whimsical and playful emotional tone, warm color palette with sunlit golds, ambers, and rich reds, balanced visual detail with readable characters and selective environment richness';
-
-const beatSchema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING },
-    beatNumber: { type: Type.INTEGER },
-    isEnding: { type: Type.BOOLEAN },
-    storyText: { type: Type.STRING },
-    sceneSummary: { type: Type.STRING },
-    options: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          id: { type: Type.STRING },
-          label: { type: Type.STRING },
-          intent: { type: Type.STRING },
-        },
-        required: ['id', 'label', 'intent'],
-      },
-    },
-    characters: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          id: { type: Type.STRING },
-          name: { type: Type.STRING },
-          type: { type: Type.STRING },
-          appearanceSummary: { type: Type.STRING },
-          personalitySummary: { type: Type.STRING },
-        },
-        required: ['id', 'name', 'type', 'appearanceSummary', 'personalitySummary'],
-      },
-    },
-    continuityNotes: { type: Type.ARRAY, items: { type: Type.STRING } },
-    imagePrompt: { type: Type.STRING },
-    clues: { type: Type.ARRAY, items: { type: Type.STRING } },
-    nextBeatGoal: { type: Type.STRING },
-    endingForecast: { type: Type.ARRAY, items: { type: Type.STRING } },
-  },
-  required: [
-    'title', 'beatNumber', 'isEnding', 'storyText', 'sceneSummary',
-    'options', 'characters', 'continuityNotes', 'imagePrompt', 'clues',
-    'nextBeatGoal', 'endingForecast',
-  ],
-};
 
 export interface TestResult {
   output: string;
@@ -250,10 +204,17 @@ async function runVisualPromptTest(
   promptBody: string
 ): Promise<TestResult> {
   const prompt = resolvePromptTemplate(promptBody, {
-    sceneDescription: inputs.sceneDescription || '',
+    storyText: inputs.storyText || '',
+    sceneSummary: inputs.sceneSummary || '',
+    imageIntent: inputs.imageIntent || '',
     characters: inputs.characters || '[]',
+    continuityNotes: inputs.continuityNotes || '[]',
     visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
     beatNumber: inputs.beatNumber || '2',
+    storyState: inputs.storyState || '{}',
+    newCharacterIds: inputs.newCharacterIds || '[]',
+    changedCharacterIds: inputs.changedCharacterIds || '[]',
+    previousStoryboardContext: inputs.previousStoryboardContext || 'None yet - first beat',
   });
 
   const start = Date.now();
@@ -262,11 +223,13 @@ async function runVisualPromptTest(
     contents: prompt,
     config: {
       systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
+      responseMimeType: 'application/json',
+      responseSchema: storyboardPlanSchema,
       temperature,
     },
   });
   const latencyMs = Date.now() - start;
-  return buildResult(response.text || '', 'text', latencyMs, response.usageMetadata, modelId);
+  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runImageGenerationTest(

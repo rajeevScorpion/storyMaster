@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, Character } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { generateStoryBeat, generateImage, generateCharacterPortrait, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
+import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
 import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
@@ -107,6 +107,138 @@ function deriveOpenThreads(beats: StoryBeat[]): string[] {
   return Array.from(new Set(threads)).slice(-6);
 }
 
+function sanitizeCharactersForPersistence(characters: Character[]): Character[] {
+  return characters.map((character) => ({
+    ...character,
+    portraitBase64: undefined,
+  }));
+}
+
+function buildPersistableSessionSnapshot(
+  session: StorySession,
+  storyMap: StoryMap,
+  overrides: Partial<StorySession> = {}
+): StorySession {
+  return {
+    ...session,
+    ...overrides,
+    characters: sanitizeCharactersForPersistence(overrides.characters || session.characters),
+    beats: [],
+    storyMap,
+  };
+}
+
+function buildSessionContextToNode(session: StorySession, nodeId: string | null): Partial<StorySession> {
+  const beats = nodeId ? getBeatsToNode(session.storyMap, nodeId) : [];
+  const choiceHistory = nodeId ? getChoiceHistoryToNode(session.storyMap, nodeId) : [];
+  const storyConfig = normalizeStoryConfig(session.storyConfig);
+
+  return {
+    ...session,
+    storyConfig,
+    beats,
+    choiceHistory,
+    currentBeat: beats.length > 0 ? beats[beats.length - 1].beatNumber : 0,
+    characters: buildCharacterRegistry(beats, session.characters),
+    openThreads: deriveOpenThreads(beats),
+    status: beats.length > 0 && beats[beats.length - 1].isEnding ? 'completed' : 'active',
+  };
+}
+
+function stripSessionForPrompt(session: Partial<StorySession>): Partial<StorySession> {
+  const stripped = { ...session } as Partial<StorySession> & { storyMap?: StoryMap; narratorVoice?: string };
+  delete stripped.storyMap;
+  delete stripped.narratorVoice;
+  return stripped;
+}
+
+function buildReferenceFromValue(
+  type: ReferenceImage['type'],
+  value: string | undefined
+): ReferenceImage | null {
+  if (!value) return null;
+  if (value.startsWith('data:')) {
+    return { type, dataUrl: value };
+  }
+  return { type, url: value };
+}
+
+function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
+  return characters
+    .map((character) => buildReferenceFromValue('character', character.portraitBase64 || character.portraitUrl))
+    .filter((reference): reference is ReferenceImage => Boolean(reference));
+}
+
+function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
+  if (beat.beatNumber === 1) {
+    return collectPortraitReferences(beat.characters);
+  }
+
+  const relevantIds = new Set<string>([
+    ...(beat.newCharacterIds || []),
+    ...(beat.changedCharacterIds || []),
+    ...((beat.storyboardPlan?.portraitTasks || []).map((task) => task.characterId)),
+  ]);
+
+  if (relevantIds.size === 0) {
+    return [];
+  }
+
+  return collectPortraitReferences(
+    beat.characters.filter((character) => relevantIds.has(character.id))
+  );
+}
+
+function buildStoryboardReferenceImages(
+  beat: StoryBeat,
+  previousStoryboardUrl?: string,
+  portraitReferences: ReferenceImage[] = []
+): ReferenceImage[] {
+  if (beat.beatNumber === 1) {
+    return portraitReferences;
+  }
+
+  const references: ReferenceImage[] = [];
+  const sceneReference = buildReferenceFromValue('scene', previousStoryboardUrl);
+  if (sceneReference) {
+    references.push(sceneReference);
+  }
+
+  references.push(...portraitReferences);
+  return references;
+}
+
+async function generatePortraitsForStoryboardPlan(
+  beat: StoryBeat,
+  storyboardPlan: StoryboardPlan,
+  visualStyle: string,
+  modelOverrides?: StoryModelOverrides
+): Promise<ReferenceImage[]> {
+  if (!storyboardPlan.portraitTasks.length) {
+    return [];
+  }
+
+  const portraits = await Promise.all(
+    storyboardPlan.portraitTasks.map(async (task) => {
+      const character = beat.characters.find((candidate) => candidate.id === task.characterId);
+      if (!character) {
+        return null;
+      }
+
+      try {
+        const portrait = await generateCharacterPortrait(character, visualStyle, modelOverrides, task.prompt);
+        character.portraitBase64 = portrait;
+        return { type: 'character' as const, dataUrl: portrait };
+      } catch (error) {
+        console.error(`Portrait generation failed for storyboard task ${task.characterId}:`, error);
+        return null;
+      }
+    })
+  );
+
+  return portraits.filter((portrait): portrait is NonNullable<typeof portrait> => Boolean(portrait));
+}
+
 export const useStoryStore = create<StoryState>()(
     (set, get) => ({
       session: null,
@@ -170,8 +302,27 @@ export const useStoryStore = create<StoryState>()(
           set({ loadingClues: beat.clues });
 
           const lang = initialSession.storyConfig?.language || 'english';
+          const storyboardPlan = await composeStoryboardPlan(
+            beat,
+            initialSession,
+            initialSession.visualStyle!,
+            modelOverrides
+          );
+          beat.storyboardPlan = storyboardPlan;
+          beat.isStoryboard = true;
 
-          // Create storyMap immediately so we can save early and get a savedStoryId
+          const portraitRefs = initialSession.enableReferenceImages
+            ? await generatePortraitsForStoryboardPlan(
+                beat,
+                storyboardPlan,
+                initialSession.visualStyle!,
+                modelOverrides
+              )
+            : [];
+          const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
+
+          // Create storyMap once the canonical visual plan is ready so beat 1 persists
+          // portraits, storyboard metadata, and later image continuity anchors together.
           const storyMap = createStoryMap(beat);
           const rootNodeId = storyMap.rootNodeId;
 
@@ -244,45 +395,31 @@ export const useStoryStore = create<StoryState>()(
 
           // Step A: Generate portraits first (sequential, not parallel) so beat 1 scene can use
           // them as references — makes portrait the single source of truth from the very first image.
-          let portraitRefs: ReferenceImage[] = [];
-          if (initialSession.enableReferenceImages) {
-            const rawPortraits = await Promise.all(
-              beat.characters.map(char =>
-                generateCharacterPortrait(char, initialSession.visualStyle!, modelOverrides)
-                  .catch(() => null) // non-fatal: beat continues without portrait
-              )
-            );
-            beat.characters = beat.characters.map((char, i) => ({
-              ...char,
-              portraitBase64: (rawPortraits[i] as string | null) || undefined,
-            }));
-            portraitRefs = beat.characters
-              .filter(c => c.portraitBase64)
-              .map(c => ({ type: 'character' as const, base64: c.portraitBase64! }));
-          }
-
-          // Step B: Generate scene image (with portrait refs if available) + await voice in parallel
+          // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
+          // use them as direct visual references during the first 2x2 board generation.
           const [imageUrl, narratorVoice] = await Promise.all([
             generateImage(
-              beat.imagePrompt, beat.characters, initialSession.visualStyle!, modelOverrides,
-              portraitRefs.length > 0 ? portraitRefs : undefined, beat.beatNumber
+              storyboardPrompt,
+              beat.characters,
+              initialSession.visualStyle!,
+              modelOverrides,
+              portraitRefs.length > 0 ? portraitRefs : undefined,
+              beat.beatNumber
             ),
             voicePromise,
           ]);
 
           beat.imageUrl = imageUrl;
-          if (modelOverrides?.enableStoryboard) beat.isStoryboard = true;
 
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
 
-          // Update storyMap node with imageUrl (and audioUrl if narration already resolved)
+          // Update storyMap node with the final beat payload plus image/audio data.
           storyMap.nodes[rootNodeId] = {
             ...storyMap.nodes[rootNodeId],
             data: {
-              ...storyMap.nodes[rootNodeId].data,
+              ...beat,
               imageUrl,
-              ...(beat.isStoryboard ? { isStoryboard: true } : {}),
               ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
             },
           };
@@ -364,6 +501,24 @@ export const useStoryStore = create<StoryState>()(
 
           set({ loadingClues: beat.clues });
 
+          const storyboardPlan = await composeStoryboardPlan(
+            beat,
+            sessionForPrompt,
+            session.visualStyle,
+            modelOverrides
+          );
+          beat.storyboardPlan = storyboardPlan;
+          beat.isStoryboard = true;
+          const portraitRefs = session.enableReferenceImages
+            ? await generatePortraitsForStoryboardPlan(
+                beat,
+                storyboardPlan,
+                session.visualStyle,
+                modelOverrides
+              )
+            : [];
+          const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
+
           const lang = session.storyConfig?.language || 'english';
           const newNodeId = crypto.randomUUID();
           const parentId = session.storyMap.currentNodeId;
@@ -425,29 +580,22 @@ export const useStoryStore = create<StoryState>()(
             }
           }
 
-          // Build reference images for visual consistency (only if enabled)
-          const referenceImages: ReferenceImage[] = [];
-          if (session.enableReferenceImages) {
-            // Add character portraits
-            for (const char of beat.characters) {
-              const sessionChar = session.characters.find(c => c.id === char.id);
-              if (sessionChar?.portraitBase64) {
-                referenceImages.push({ type: 'character', base64: sessionChar.portraitBase64 });
-              }
-            }
-            // Add previous scene as style/environment reference
-            if (currentNode.data.imageUrl?.startsWith('data:')) {
-              referenceImages.push({ type: 'scene', base64: currentNode.data.imageUrl });
-            }
-          }
+          const referenceImages = buildStoryboardReferenceImages(
+            beat,
+            currentNode.data.imageUrl,
+            portraitRefs
+          );
 
           // Block loading on image only
           const imageUrl = await generateImage(
-            beat.imagePrompt, beat.characters, session.visualStyle,
-            modelOverrides, referenceImages.length > 0 ? referenceImages : undefined, beat.beatNumber
+            storyboardPrompt,
+            beat.characters,
+            session.visualStyle,
+            modelOverrides,
+            referenceImages.length > 0 ? referenceImages : undefined,
+            beat.beatNumber
           );
           beat.imageUrl = imageUrl;
-          if (modelOverrides?.enableStoryboard) beat.isStoryboard = true;
 
           const updatedMap = addChildNode(
             session.storyMap,
@@ -504,6 +652,10 @@ export const useStoryStore = create<StoryState>()(
                 ...newNode.data,
                 imageUrl: newNode.data.imageUrl?.startsWith('data:') ? undefined : newNode.data.imageUrl,
                 audioUrl: newNode.data.audioUrl?.startsWith('data:') ? undefined : newNode.data.audioUrl,
+                characters: newNode.data.characters.map((character) => ({
+                  ...character,
+                  portraitBase64: undefined,
+                })),
               },
             };
             saveBeatAction(session.savedStoryId, mergedMap.currentNodeId, cleanNode).catch(
@@ -691,31 +843,52 @@ export const useStoryStore = create<StoryState>()(
             // Falls back to default prompt and model config inside generateImage.
           }
 
-          // Build reference images for visual consistency (only if enabled)
-          const referenceImages: ReferenceImage[] = [];
-          if (session.enableReferenceImages) {
-            for (const char of node.data.characters) {
-              const sessionChar = session.characters.find(c => c.id === char.id);
-              if (sessionChar?.portraitBase64) {
-                referenceImages.push({ type: 'character', base64: sessionChar.portraitBase64 });
-              }
-            }
-            // Previous scene reference (parent node's image)
-            if (node.parentId) {
-              const parentNode = session.storyMap.nodes[node.parentId];
-              if (parentNode?.data.imageUrl?.startsWith('data:')) {
-                referenceImages.push({ type: 'scene', base64: parentNode.data.imageUrl });
-              }
-            }
+          const parentNode = node.parentId ? session.storyMap.nodes[node.parentId] : undefined;
+          const beatForRender: StoryBeat = {
+            ...node.data,
+            characters: node.data.characters.map((character) => ({ ...character })),
+          };
+
+          let storyboardPlan = beatForRender.storyboardPlan;
+          if (!storyboardPlan) {
+            const composerSession = stripSessionForPrompt(buildSessionContextToNode(session, node.parentId));
+            storyboardPlan = await composeStoryboardPlan(
+              beatForRender,
+              composerSession,
+              session.visualStyle,
+              modelOverrides
+            );
+          }
+          beatForRender.storyboardPlan = storyboardPlan;
+          beatForRender.isStoryboard = true;
+
+          let portraitReferences = session.enableReferenceImages
+            ? collectBeatPortraitReferences(beatForRender)
+            : [];
+
+          if (session.enableReferenceImages && portraitReferences.length === 0 && storyboardPlan.portraitTasks.length > 0) {
+            portraitReferences = await generatePortraitsForStoryboardPlan(
+              beatForRender,
+              storyboardPlan,
+              session.visualStyle,
+              modelOverrides
+            );
           }
 
+          const referenceImages = buildStoryboardReferenceImages(
+            beatForRender,
+            parentNode?.data.imageUrl,
+            portraitReferences
+          );
+          const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
+
           const imageUrl = await generateImage(
-            node.data.imagePrompt,
-            node.data.characters,
+            storyboardPrompt,
+            beatForRender.characters,
             session.visualStyle,
             modelOverrides,
             referenceImages.length > 0 ? referenceImages : undefined,
-            node.data.beatNumber
+            beatForRender.beatNumber
           );
 
           // Update the node with the new image
@@ -728,8 +901,9 @@ export const useStoryStore = create<StoryState>()(
               ...latestSession.storyMap.nodes[nodeId],
               data: {
                 ...latestSession.storyMap.nodes[nodeId].data,
+                ...beatForRender,
                 imageUrl,
-                isStoryboard: !!modelOverrides?.enableStoryboard,
+                isStoryboard: true,
               },
             },
           };
@@ -773,11 +947,10 @@ export const useStoryStore = create<StoryState>()(
         try {
           // Persist story to DB first to get a stable storyId for asset paths.
           // On first save this inserts and returns a new ID; on subsequent saves it updates.
-          const strippedForId = {
-            ...session,
-            beats: session.beats.map(b => ({ ...b, imageUrl: undefined, audioUrl: undefined })),
-            storyMap: stripBase64FromStoryMap(session.storyMap),
-          };
+          const strippedForId = buildPersistableSessionSnapshot(
+            session,
+            stripBase64FromStoryMap(session.storyMap)
+          );
           const { storyId } = await saveStoryAction(strippedForId, strippedForId.storyMap);
 
           // Upload assets using the stable storyId so images + audio always share the same folder
@@ -790,12 +963,9 @@ export const useStoryStore = create<StoryState>()(
 
           // Strip any remaining base64 and re-save with asset URLs
           const cleanMap = stripBase64FromStoryMap(updatedMap);
-          const strippedSession = {
-            ...session,
+          const strippedSession = buildPersistableSessionSnapshot(session, cleanMap, {
             savedStoryId: storyId,
-            beats: session.beats.map(b => ({ ...b, imageUrl: undefined, audioUrl: undefined })),
-            storyMap: cleanMap,
-          };
+          });
           await saveStoryAction(strippedSession, cleanMap);
 
           // Update local session with savedStoryId but keep original base64 URLs

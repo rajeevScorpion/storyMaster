@@ -10,6 +10,16 @@
 - From beat 2 onward, send the last storyboard plus any newly generated portraits as visual context to maintain continuity.
 - Keep the system fully backward compatible: no existing tables are dropped, no current flow is removed, and any DB changes remain additive only.
 
+## Current Status
+- Branch `feature/pro-story-generator-v1` now includes the locked live-flow wiring:
+  - `story_generation` emits `newCharacterIds` and `changedCharacterIds`
+  - `visual_prompt` runs as a structured storyboard composer in production
+  - beat 1 generates portraits before storyboard rendering
+  - beat 2+ storyboard rendering uses the previous storyboard image plus any newly generated portraits
+- Admin prompt playground has been updated to test the structured composer JSON rather than the legacy plain-text composer flow.
+- Persistence remains additive only. No migrations, table drops, or destructive schema changes were introduced in this implementation pass.
+- The remaining work on this branch is now quality tuning, richer fixtures, and further prompt refinement rather than core plumbing.
+
 ## Target Runtime Architecture
 
 ### 1. Story writer
