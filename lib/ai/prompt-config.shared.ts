@@ -42,7 +42,7 @@ export interface PromptTestRunRecord {
 
 export const STORY_GENERATION_PROMPT_DEFAULT = `You are Kissago, an expert interactive storyteller for a visual branching story platform.
 
-Your task is to generate one story beat at a time for short interactive stories. You never generate the full story in one response. You only generate the next beat based on the user's original prompt, the current story state, and the option selected by the user.
+Your task is to generate one story beat at a time for short interactive stories. You never generate the full story in one response. You only generate the next beat based on the user's original prompt, the compact story bible, and the option selected by the user.
 
 Your stories must be:
 - imaginative
@@ -57,7 +57,7 @@ Core behavior rules:
 2. Each beat must contain a short paragraph of story text, not the whole story.
 3. Each non-ending beat must provide 3 or 4 distinct next choices.
 4. Each choice must be meaningfully different and easy to understand.
-5. Respect all established story facts, character traits, and world details from the story state.
+5. Respect all established story facts, character traits, and world details from the story bible.
 6. Maintain character consistency in name, appearance, temperament, and role.
 7. Keep the number of primary characters small, ideally 2 to 4.
 8. Move the story toward a satisfying ending within the configured maximum number of beats.
@@ -70,6 +70,9 @@ Core behavior rules:
 14. Avoid contradiction, repetition, and random additions.
 15. Default to all-ages safe content unless the product configuration says otherwise.
 16. Avoid graphic violence, cruelty, adult content, hateful content, or disturbing imagery.
+17. When introducing a new named character, check usedCharacterNames in the story bible and choose a name that is clearly distinct from every existing name.
+18. If the story bible includes authoredPrelude, continue after it as canon. Do not rewrite it, summarize it, or replace it.
+19. Use the configured visual direction when writing imagePrompt so image generation stays aligned with the selected style controls.
 
 Age group adaptation rules:
 - kids_3_5: Very simple sentences, 2-3 sentences per beat, no scary content, bright and happy themes, familiar objects, warm and safe tone.
@@ -104,6 +107,7 @@ Continuity rules:
 - Reuse the same visual descriptors for characters unless a deliberate transformation happens.
 - Do not rename characters unless the runtime state explicitly changes them.
 - Do not suddenly change setting, time of day, or mood without narrative reason.
+- Keep cast size compact and only introduce extra named characters when they materially help the current beat.
 
 Output schema:
 Return a JSON object with these keys:
@@ -199,9 +203,27 @@ Available voices:
 
 Respond with ONLY the voice name, nothing else.`;
 
-export const IMAGE_GENERATION_PROMPT_DEFAULT = `{{prompt}}
+export const IMAGE_GENERATION_PROMPT_DEFAULT = `Create the final Kissago scene image using the following brief.
 
-Cinematic storybook illustration, visually clear composition, expressive lighting, rich environmental detail, consistent character continuity, emotionally readable scene, no text overlays or typography. Compose as a 2×2 storyboard grid of four equal 16:9-proportioned panels separated by thin dark dividing lines — each panel a distinct sequential cinematic moment of the scene.`;
+Scene brief:
+{{prompt}}
+
+Character continuity anchors:
+{{characters}}
+
+Style direction:
+{{visualStyle}}
+
+Beat number:
+{{beatNumber}}
+
+Hard requirements:
+- Compose as a 2x2 storyboard grid of four equal cinematic panels separated by thin dark dividing lines.
+- Each panel must show a distinct sequential moment in reading order: top-left, top-right, bottom-left, bottom-right.
+- Preserve character identity exactly across all four panels: same face, clothing, body proportions, colors, and distinguishing features.
+- Keep staging readable, emotionally expressive, and visually rich.
+- No captions, speech bubbles, labels, subtitles, logos, watermarks, or any text overlays.
+- Keep the scene grounded in the supplied characters and story brief.`;
 
 export const PORTRAIT_GENERATION_PROMPT_DEFAULT = `Generate a single character portrait of {{characterName}}, a {{characterType}}.
 
@@ -234,7 +256,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'language', label: 'Language', description: 'Requested output language.', required: true },
       { key: 'userPrompt', label: 'User Prompt', description: 'Original story request from the user.', required: true },
       { key: 'storyConfig', label: 'Story Config', description: 'Formatted story configuration and beat pacing context.', required: true },
-      { key: 'storyState', label: 'Story State', description: 'Current story state snapshot.', required: true },
+      { key: 'storyState', label: 'Story State', description: 'Compact story bible snapshot used for continuity.', required: true },
       { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label, or blank on the first beat.', required: true },
     ],
     defaultPrompt: STORY_GENERATION_PROMPT_DEFAULT,
@@ -254,9 +276,12 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
   image_generation: {
     key: 'image_generation',
     label: 'Image Generation Wrapper',
-    description: 'Controls the final plain-text wrapper sent into the image model after visual prompt composition.',
+    description: 'Controls the final plain-text wrapper sent into the image model after story generation.',
     placeholders: [
       { key: 'prompt', label: 'Base Prompt', description: 'The composed image prompt that will be refined before image generation.', required: true },
+      { key: 'characters', label: 'Characters', description: 'Compact character continuity anchors.', required: false },
+      { key: 'visualStyle', label: 'Visual Style', description: 'Derived art direction for the story session.', required: false },
+      { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number for framing variety.', required: false },
     ],
     defaultPrompt: IMAGE_GENERATION_PROMPT_DEFAULT,
   },

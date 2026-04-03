@@ -4,6 +4,17 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { StorySession, StoryBeat } from '@/lib/types/story';
 import { compressImage } from '@/lib/utils/image';
 import {
+  buildPromptCharacterAnchors,
+  buildValidationRepairNote,
+  formatStoryBible,
+  validateGeneratedBeat,
+} from '@/lib/ai/story-bible';
+import {
+  deriveVisualStyleSummary,
+  getPreludeText,
+  normalizeStoryConfig,
+} from '@/lib/ai/story-config';
+import {
   LOCKED_PROMPT_GUARDRAILS,
   getDefaultPromptBody,
   resolvePromptTemplate,
@@ -14,6 +25,7 @@ import type { Character } from '@/lib/types/story';
 export interface StoryModelOverrides {
   storyModel?: string;
   storyTemperature?: number;
+  // Legacy fields kept for compatibility with admin config payloads.
   composerModel?: string;
   composerTemperature?: number;
   imageModel?: string;
@@ -96,9 +108,17 @@ export async function generateStoryBeat(
   selectedOptionLabel?: string,
   modelOverrides?: StoryModelOverrides
 ): Promise<StoryBeat> {
+  const normalizedSessionState = sessionState
+    ? {
+        ...sessionState,
+        storyConfig: normalizeStoryConfig(sessionState.storyConfig),
+        visualStyle: sessionState.visualStyle || deriveVisualStyleSummary(sessionState.storyConfig?.visualSettings),
+      }
+    : null;
+
   if (userPrompt.toLowerCase() === 'mock') {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    const isFirstBeat = !sessionState?.beats || sessionState.beats.length === 0;
+    const isFirstBeat = !normalizedSessionState?.beats || normalizedSessionState.beats.length === 0;
 
     if (isFirstBeat) {
       return {
@@ -126,12 +146,12 @@ export async function generateStoryBeat(
 
     return {
       title: 'The Monkey and the Mountain Giant',
-      beatNumber: (sessionState?.currentBeat || 1) + 1,
+      beatNumber: (normalizedSessionState?.currentBeat || 1) + 1,
       isEnding: true,
       storyText: "The giant rock slowly opened one eye, then let out a deep, rumbling laugh that shook the leaves from the trees. 'Little monkey,' Bhoora the elephant chuckled, 'I am no rock, but I make an excellent climbing frame.' Miko grinned, realizing he had just made the biggest friend in the forest.",
       sceneSummary: 'The elephant wakes up and befriends the monkey.',
       options: [],
-      characters: sessionState?.characters || [],
+      characters: normalizedSessionState?.characters || [],
       continuityNotes: ['Miko and Bhoora are now friends.'],
       imagePrompt: "Cinematic children's storybook illustration of a small golden-brown monkey sitting happily on the head of a large soft-grey elephant, misty mountain forest path, morning light, whimsical, emotionally warm, highly detailed, consistent character design, soft painterly style.",
       clues: ['Friendship comes in all sizes.'],
@@ -140,33 +160,49 @@ export async function generateStoryBeat(
     };
   }
 
-  const lang = sessionState?.storyConfig?.language || 'english';
+  const lang = normalizedSessionState?.storyConfig?.language || 'english';
   const storyTemplate = modelOverrides?.storyPrompt || getDefaultPromptBody('story_generation');
-  const prompt = resolvePromptTemplate(storyTemplate, {
+  const basePrompt = resolvePromptTemplate(storyTemplate, {
     language: lang,
     userPrompt,
-    storyConfig: formatStoryConfig(sessionState),
-    storyState: formatStoryState(sessionState),
+    storyConfig: formatStoryConfig(normalizedSessionState),
+    storyState: formatStoryState(normalizedSessionState, selectedOptionLabel),
     selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
   });
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
-    const response = await ai.models.generateContent({
-      model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
-      contents: prompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_generation,
-        responseMimeType: 'application/json',
-        responseSchema: beatSchema,
-        temperature: modelOverrides?.storyTemperature ?? 0.7,
-      },
-    });
+    const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
+      const response = await ai.models.generateContent({
+        model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+        contents: repairNote
+          ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}`
+          : basePrompt,
+        config: {
+          systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_generation,
+          responseMimeType: 'application/json',
+          responseSchema: beatSchema,
+          temperature: modelOverrides?.storyTemperature ?? 0.7,
+        },
+      });
 
-    const text = response.text;
-    if (!text) throw new Error('Failed to generate story beat');
+      const text = response.text;
+      if (!text) throw new Error('Failed to generate story beat');
+      return JSON.parse(text) as StoryBeat;
+    };
 
-    return JSON.parse(text) as StoryBeat;
+    let beat = await generateAttempt();
+    const issues = validateGeneratedBeat(beat, normalizedSessionState);
+
+    if (issues.length > 0) {
+      beat = await generateAttempt(buildValidationRepairNote(issues));
+      const retryIssues = validateGeneratedBeat(beat, normalizedSessionState);
+      if (retryIssues.length > 0) {
+        throw new Error(`Story beat validation failed after retry: ${retryIssues.join('; ')}`);
+      }
+    }
+
+    return beat;
   } catch (error) {
     console.error('Story beat generation failed:', error);
     throw error;
@@ -193,27 +229,12 @@ export async function generateImage(
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
-    const composerTemplate = modelOverrides?.visualPrompt || getDefaultPromptBody('visual_prompt');
-    const composerPrompt = resolvePromptTemplate(composerTemplate, {
-      sceneDescription: prompt,
-      characters: JSON.stringify(characters, null, 2),
-      visualStyle,
-      beatNumber,
-    });
-
-    const composerResponse = await ai.models.generateContent({
-      model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
-      contents: composerPrompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
-        temperature: modelOverrides?.composerTemperature ?? 0.7,
-      },
-    });
-
-    const baseImagePrompt = composerResponse.text || prompt;
     const imageTemplate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
     const finalImagePrompt = resolvePromptTemplate(imageTemplate, {
-      prompt: baseImagePrompt,
+      prompt,
+      characters: buildPromptCharacterAnchors(characters),
+      visualStyle,
+      beatNumber,
     });
 
     const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
@@ -329,38 +350,26 @@ export async function generateCharacterPortrait(
 }
 
 function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
-  if (!sessionState?.storyConfig) {
-    return [
-      '- Language: english',
-      '- Age Group: all_ages',
-      '- Setting/Country: generic',
-      '- Maximum Beats: 6',
-      '- Current Beat: 1 of 6',
-    ].join('\n');
-  }
-
-  const cfg = sessionState.storyConfig;
+  const cfg = normalizeStoryConfig(sessionState?.storyConfig);
+  const prelude = getPreludeText(cfg);
   return [
     `- Language: ${cfg.language || 'english'}`,
     `- Age Group: ${cfg.ageGroup}`,
     `- Setting/Country: ${cfg.settingCountry}`,
     `- Maximum Beats: ${cfg.maxBeats}`,
-    `- Current Beat: ${(sessionState.currentBeat || 0) + 1} of ${cfg.maxBeats}`,
+    `- Current Beat: ${((sessionState?.currentBeat || 0) + 1)} of ${cfg.maxBeats}`,
+    `- Style Preset: ${cfg.visualSettings.preset}`,
+    `- Theme: ${cfg.visualSettings.theme}`,
+    `- Palette: ${cfg.visualSettings.palette}`,
+    `- Detail: ${cfg.visualSettings.detail}`,
+    `- Authoring Mode: ${cfg.authoring.mode}`,
+    `- Authored Prelude: ${prelude ? 'present' : 'absent'}`,
   ].join('\n');
 }
 
-function formatStoryState(sessionState: Partial<StorySession> | null): string {
-  if (!sessionState) {
-    return JSON.stringify({}, null, 2);
-  }
-
-  const { storyMap, storyConfig, ...safeState } = sessionState as any;
-  if (safeState.beats) {
-    safeState.beats = safeState.beats.map((beat: any) => {
-      const { imageUrl, audioUrl, ...rest } = beat;
-      return rest;
-    });
-  }
-
-  return JSON.stringify(safeState, null, 2);
+function formatStoryState(
+  sessionState: Partial<StorySession> | null,
+  selectedOptionLabel?: string
+): string {
+  return formatStoryBible(sessionState, selectedOptionLabel);
 }

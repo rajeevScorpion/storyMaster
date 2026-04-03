@@ -1,6 +1,12 @@
 'use client';
 
-import { AgeGroup, StoryLanguage } from '@/lib/types/story';
+import { AgeGroup, AuthoringMode, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import {
+  STORY_DETAIL_OPTIONS,
+  STORY_PALETTE_OPTIONS,
+  STORY_THEME_OPTIONS,
+  VISUAL_PRESET_OPTIONS,
+} from '@/lib/ai/story-config';
 import { motion } from 'motion/react';
 
 const LANGUAGE_OPTIONS: { value: StoryLanguage; label: string }[] = [
@@ -40,6 +46,12 @@ interface AdvancedOptionsProps {
   onCustomSettingChange: (v: string) => void;
   maxBeats: number;
   onMaxBeatsChange: (v: number) => void;
+  visualSettings: VisualSettings;
+  onVisualSettingsChange: (v: VisualSettings) => void;
+  authoringMode: AuthoringMode;
+  onAuthoringModeChange: (v: AuthoringMode) => void;
+  preludeText: string;
+  onPreludeTextChange: (v: string) => void;
 }
 
 export default function AdvancedOptions({
@@ -53,7 +65,20 @@ export default function AdvancedOptions({
   onCustomSettingChange,
   maxBeats,
   onMaxBeatsChange,
+  visualSettings,
+  onVisualSettingsChange,
+  authoringMode,
+  onAuthoringModeChange,
+  preludeText,
+  onPreludeTextChange,
 }: AdvancedOptionsProps) {
+  const setVisualSetting = <K extends keyof VisualSettings,>(key: K, value: VisualSettings[K]) => {
+    onVisualSettingsChange({
+      ...visualSettings,
+      [key]: value,
+    });
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, height: 0 }}
@@ -142,6 +167,106 @@ export default function AdvancedOptions({
             />
             <span className="text-xs text-neutral-500">8</span>
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm text-neutral-300 font-sans">Visual preset</label>
+          <select
+            value={visualSettings.preset}
+            onChange={(e) => setVisualSetting('preset', e.target.value as VisualSettings['preset'])}
+            className="w-full bg-neutral-800 border border-white/10 rounded-xl px-4 py-2.5 text-white font-sans text-sm outline-none focus:border-emerald-500/50 transition-colors appearance-none cursor-pointer"
+          >
+            {VISUAL_PRESET_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-neutral-500">
+            {VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description}
+          </p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="space-y-2">
+            <label className="text-sm text-neutral-300 font-sans">Theme</label>
+            <select
+              value={visualSettings.theme}
+              onChange={(e) => setVisualSetting('theme', e.target.value as VisualSettings['theme'])}
+              className="w-full bg-neutral-800 border border-white/10 rounded-xl px-4 py-2.5 text-white font-sans text-sm outline-none focus:border-emerald-500/50 transition-colors appearance-none cursor-pointer"
+            >
+              {STORY_THEME_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm text-neutral-300 font-sans">Palette</label>
+            <select
+              value={visualSettings.palette}
+              onChange={(e) => setVisualSetting('palette', e.target.value as VisualSettings['palette'])}
+              className="w-full bg-neutral-800 border border-white/10 rounded-xl px-4 py-2.5 text-white font-sans text-sm outline-none focus:border-emerald-500/50 transition-colors appearance-none cursor-pointer"
+            >
+              {STORY_PALETTE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm text-neutral-300 font-sans">Detail</label>
+            <select
+              value={visualSettings.detail}
+              onChange={(e) => setVisualSetting('detail', e.target.value as VisualSettings['detail'])}
+              className="w-full bg-neutral-800 border border-white/10 rounded-xl px-4 py-2.5 text-white font-sans text-sm outline-none focus:border-emerald-500/50 transition-colors appearance-none cursor-pointer"
+            >
+              {STORY_DETAIL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-3 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h4 className="text-sm text-neutral-200 font-sans">Start from my own writing</h4>
+              <p className="text-xs text-neutral-500 mt-1">
+                Keep your opening text visible as canon and let Kissago continue from it.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onAuthoringModeChange(authoringMode === 'seed_continue' ? 'prompt' : 'seed_continue')}
+              className={`relative h-7 w-12 rounded-full transition-colors ${
+                authoringMode === 'seed_continue' ? 'bg-emerald-500/70' : 'bg-neutral-700'
+              }`}
+              aria-pressed={authoringMode === 'seed_continue'}
+            >
+              <span
+                className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-transform ${
+                  authoringMode === 'seed_continue' ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          {authoringMode === 'seed_continue' && (
+            <textarea
+              value={preludeText}
+              onChange={(e) => onPreludeTextChange(e.target.value)}
+              rows={6}
+              placeholder="Paste the opening scene, a partial draft, or a complete setup that Kissago should continue from..."
+              className="w-full bg-neutral-800 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-neutral-500 font-sans text-sm outline-none focus:border-emerald-500/50 transition-colors"
+            />
+          )}
         </div>
       </div>
     </motion.div>

@@ -5,6 +5,7 @@ import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToP
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -266,6 +267,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
   storyMap = await signStoryMapAssetUrls(supabase, storyMap);
+  const storyConfig = normalizeStoryConfig(story.story_config as any);
 
   return {
     storySessionId: story.id,
@@ -275,13 +277,13 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     genre: story.genre || 'adventure',
     tone: story.tone || 'playful',
     targetAge: story.target_age || 'all_ages',
-    visualStyle: story.visual_style || 'cinematic storybook illustration',
+    visualStyle: story.visual_style || deriveVisualStyleSummary(storyConfig.visualSettings),
     currentBeat: 0,
-    maxBeats: (story.story_config as any)?.maxBeats || 6,
+    maxBeats: storyConfig.maxBeats,
     status: story.status as 'active' | 'completed' | 'error',
     characters: (story.characters || []) as any,
     setting: (story.setting || { world: 'unknown', timeOfDay: 'unknown', mood: 'unknown' }) as any,
-    storyConfig: (story.story_config || { language: 'english', ageGroup: 'all_ages', settingCountry: 'generic', maxBeats: 6 }) as any,
+    storyConfig,
     storyMap,
     beats: [],
     choiceHistory: [],

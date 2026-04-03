@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { useStoryStore } from '@/lib/store/story-store';
-import { AgeGroup, StoryConfig, StoryLanguage } from '@/lib/types/story';
+import { AgeGroup, StoryConfig, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
+import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
 
 interface LandingScreenProps {
   onBegin?: (prompt: string, config?: StoryConfig) => void;
@@ -24,6 +25,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [settingCountry, setSettingCountry] = useState('generic');
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
+  const [visualSettings, setVisualSettings] = useState<VisualSettings>(DEFAULT_STORY_CONFIG.visualSettings);
+  const [authoringMode, setAuthoringMode] = useState<StoryConfig['authoring']['mode']>(DEFAULT_STORY_CONFIG.authoring.mode);
+  const [preludeText, setPreludeText] = useState(DEFAULT_STORY_CONFIG.authoring.preludeText || '');
 
   // Restore prompt after OAuth redirect — use initializer pattern to avoid setState in effect
   useEffect(() => {
@@ -36,11 +40,16 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         const savedConfig = sessionStorage.getItem('kissago_pending_config');
         if (savedConfig) {
           try {
-            const config = JSON.parse(savedConfig) as StoryConfig;
+            const config = normalizeStoryConfig(JSON.parse(savedConfig) as StoryConfig);
             setLanguage(config.language);
             setAgeGroup(config.ageGroup);
-            setSettingCountry(config.settingCountry);
+            const isPresetSetting = ['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
+            setSettingCountry(isPresetSetting ? config.settingCountry : 'custom');
+            setCustomSetting(isPresetSetting ? '' : config.settingCountry);
             setMaxBeats(config.maxBeats);
+            setVisualSettings(config.visualSettings);
+            setAuthoringMode(config.authoring.mode);
+            setPreludeText(config.authoring.preludeText || '');
           } catch { /* ignore parse errors */ }
           sessionStorage.removeItem('kissago_pending_config');
         }
@@ -56,6 +65,11 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         ageGroup,
         settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
         maxBeats,
+        visualSettings,
+        authoring: {
+          mode: authoringMode,
+          preludeText: preludeText.trim(),
+        },
       };
       if (onBegin) {
         onBegin(prompt.trim(), config);
@@ -98,7 +112,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                   type="text"
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  placeholder="Tell me a story of a monkey and an elephant..."
+                  placeholder={authoringMode === 'seed_continue'
+                    ? 'Tell Kissago what should happen next in your story...'
+                    : 'Tell me a story of a monkey and an elephant...'}
                   className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
                   disabled={isLoading}
                 />
@@ -142,6 +158,12 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                     onCustomSettingChange={setCustomSetting}
                     maxBeats={maxBeats}
                     onMaxBeatsChange={setMaxBeats}
+                    visualSettings={visualSettings}
+                    onVisualSettingsChange={setVisualSettings}
+                    authoringMode={authoringMode}
+                    onAuthoringModeChange={setAuthoringMode}
+                    preludeText={preludeText}
+                    onPreludeTextChange={setPreludeText}
                   />
                 )}
               </AnimatePresence>

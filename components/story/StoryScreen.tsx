@@ -272,6 +272,7 @@ function StoryScreenInner({
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
+  const preludeText = currentBeat.beatNumber === 1 ? session.storyConfig.authoring.preludeText?.trim() : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
   const [showPublishDialog, setShowPublishDialog] = useState(false);
@@ -595,8 +596,19 @@ function StoryScreenInner({
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.4 }}
-                >
+                transition={{ duration: 0.4 }}
+              >
+                  {preludeText && !isMinimized && (
+                    <div className="mb-8 rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-5">
+                      <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300">
+                        Prelude
+                      </p>
+                      <p className="mt-3 text-base font-serif leading-relaxed text-neutral-300">
+                        {preludeText}
+                      </p>
+                    </div>
+                  )}
+
                   <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
                     isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
                   }`}>

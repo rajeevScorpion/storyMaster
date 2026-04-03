@@ -1,9 +1,10 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, Character } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { generateStoryBeat, generateImage, generateCharacterPortrait, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
 import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
+import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
@@ -18,14 +19,6 @@ import {
   getChoiceHistoryToNode,
   getCurrentNode,
 } from '../utils/story-map';
-
-
-const DEFAULT_CONFIG: StoryConfig = {
-  language: 'english',
-  ageGroup: 'all_ages',
-  settingCountry: 'generic',
-  maxBeats: 6,
-};
 
 interface PublishResult {
   alreadyPublished: boolean;
@@ -65,15 +58,53 @@ function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySe
   const currentNode = getCurrentNode(storyMap);
   const beats = getBeatsToNode(storyMap, storyMap.currentNodeId);
   const choiceHistory = getChoiceHistoryToNode(storyMap, storyMap.currentNodeId);
+  const storyConfig = normalizeStoryConfig(session.storyConfig);
   return {
     ...session,
+    storyConfig,
+    visualStyle: session.visualStyle || deriveVisualStyleSummary(storyConfig.visualSettings),
     storyMap,
     beats,
     choiceHistory,
     currentBeat: currentNode.data.beatNumber,
-    characters: currentNode.data.characters,
+    characters: buildCharacterRegistry(beats, session.characters),
+    openThreads: deriveOpenThreads(beats),
     status: currentNode.data.isEnding ? 'completed' : 'active',
   };
+}
+
+function buildCharacterRegistry(beats: StoryBeat[], fallbackCharacters: Character[]): Character[] {
+  const registry = new Map<string, Character>();
+
+  for (const beat of beats) {
+    for (const character of beat.characters) {
+      const existing = registry.get(character.id);
+      registry.set(character.id, {
+        ...existing,
+        ...character,
+        portraitBase64: character.portraitBase64 || existing?.portraitBase64,
+        portraitUrl: character.portraitUrl || existing?.portraitUrl,
+      });
+    }
+  }
+
+  for (const character of fallbackCharacters) {
+    if (!registry.has(character.id)) {
+      registry.set(character.id, character);
+    }
+  }
+
+  return Array.from(registry.values());
+}
+
+function deriveOpenThreads(beats: StoryBeat[]): string[] {
+  const threads = beats
+    .filter((beat) => !beat.isEnding)
+    .flatMap((beat) => [beat.nextBeatGoal, ...(beat.continuityNotes || [])])
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  return Array.from(new Set(threads)).slice(-6);
 }
 
 export const useStoryStore = create<StoryState>()(
@@ -97,7 +128,8 @@ export const useStoryStore = create<StoryState>()(
           loadingClues: ['Kissago is weaving the next moment...'],
         });
 
-        const storyConfig = config || DEFAULT_CONFIG;
+        const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
+        const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
 
         // Fetch active model config from DB (falls back to hardcoded defaults on error)
         let modelOverrides: StoryModelOverrides | undefined;
@@ -114,7 +146,7 @@ export const useStoryStore = create<StoryState>()(
             genre: 'adventure',
             tone: 'playful',
             targetAge: storyConfig.ageGroup,
-            visualStyle: 'cinematic storybook illustration',
+            visualStyle,
             currentBeat: 0,
             maxBeats: storyConfig.maxBeats,
             status: 'active',

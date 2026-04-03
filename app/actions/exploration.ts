@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
+import { deriveVisualStyleSummary, getPreludeText, normalizeStoryConfig } from '@/lib/ai/story-config';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -117,6 +118,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
   storyMap = await signStoryMapAssetUrls(supabase, storyMap);
+  const storyConfig = normalizeStoryConfig(dbStory.story_config as any);
 
   // Track exploration for non-owners
   if (!isOwner) {
@@ -143,13 +145,13 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     genre: dbStory.genre || 'adventure',
     tone: dbStory.tone || 'playful',
     targetAge: dbStory.target_age || 'all_ages',
-    visualStyle: dbStory.visual_style || 'cinematic storybook illustration',
+    visualStyle: dbStory.visual_style || deriveVisualStyleSummary(storyConfig.visualSettings),
     currentBeat: 0,
-    maxBeats: (dbStory.story_config as any)?.maxBeats || 6,
+    maxBeats: storyConfig.maxBeats,
     status: dbStory.status as 'active' | 'completed' | 'error',
     characters: (dbStory.characters || []) as any,
     setting: (dbStory.setting || { world: 'unknown', timeOfDay: 'unknown', mood: 'unknown' }) as any,
-    storyConfig: (dbStory.story_config || { language: 'english', ageGroup: 'all_ages', settingCountry: 'generic', maxBeats: 6 }) as any,
+    storyConfig,
     storyMap,
     beats: [],
     choiceHistory: [],
@@ -250,6 +252,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   };
   beats: StoryBeat[];
   choices: { fromBeat: number; optionLabel: string }[];
+  preludeText?: string;
 }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -258,11 +261,13 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices')
+    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices, stories(story_config)')
     .eq('id', storylineId)
     .single();
 
   if (slError || !storyline) throw new Error('Storyline not found');
+
+  const preludeText = getPreludeText((storyline as any).stories?.story_config);
 
   // Try normalized junction first
   const { data: junctionBeats } = await supabase
@@ -320,6 +325,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       },
       beats: signedBeats,
       choices,
+      ...(preludeText ? { preludeText } : {}),
     };
   }
 
@@ -340,6 +346,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     },
     beats: signedLegacyBeats,
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
+    ...(preludeText ? { preludeText } : {}),
   };
 }
 

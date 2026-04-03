@@ -36,6 +36,7 @@ import {
   PROMPT_TASK_KEYS,
   type PromptTaskKey,
   isPromptTaskKey,
+  resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
 import { formatCost, formatLatency } from '@/lib/ai/pricing';
@@ -48,21 +49,105 @@ const AVAILABLE_VOICES = [
   'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat',
 ];
 
+const LEGACY_TASKS = new Set<TaskKey>(['visual_prompt']);
+const DEFAULT_VISUAL_STYLE = 'storybook illustration with painterly textures and expressive character acting, whimsical and playful emotional tone, warm color palette with sunlit golds, ambers, and rich reds, balanced visual detail with readable characters and selective environment richness';
+const DEFAULT_CHARACTER_ANCHORS = JSON.stringify([
+  {
+    id: 'char_pip',
+    name: 'Pip',
+    type: 'fox',
+    appearanceSummary: 'small copper fox with a cream chest and bright teal satchel',
+    personalitySummary: 'curious, warm-hearted, quick-thinking',
+    hasReferencePortrait: true,
+  },
+  {
+    id: 'char_barnaby',
+    name: 'Barnaby',
+    type: 'hedgehog',
+    appearanceSummary: 'round hedgehog with an oversized moss-green scarf and tiny brass lantern',
+    personalitySummary: 'careful, loyal, softly funny',
+    hasReferencePortrait: true,
+  },
+], null, 2);
+const DEFAULT_STORY_BIBLE = JSON.stringify({
+  currentBeat: 2,
+  maxBeats: 6,
+  status: 'active',
+  selectedOptionLabel: 'Pip follows the lantern trail into the orchard',
+  authoredPrelude: 'Pip had already followed a strange bell into the orchard once before, and tonight the same silver lanterns were waiting for her again.',
+  worldFacts: {
+    language: 'english',
+    ageGroup: 'all_ages',
+    settingCountry: 'generic',
+    world: 'moonlit orchard village',
+    timeOfDay: 'night',
+    mood: 'curious',
+  },
+  visualDirection: {
+    summary: DEFAULT_VISUAL_STYLE,
+    storyboardMode: true,
+  },
+  usedCharacterNames: ['Pip', 'Barnaby'],
+  castRegistry: [
+    {
+      id: 'char_pip',
+      name: 'Pip',
+      type: 'fox',
+      appearanceSummary: 'small copper fox with a cream chest and bright teal satchel',
+      personalitySummary: 'curious, warm-hearted, quick-thinking',
+      introducedAtBeat: 1,
+      seenInBeats: [1, 2],
+      hasReferencePortrait: true,
+    },
+    {
+      id: 'char_barnaby',
+      name: 'Barnaby',
+      type: 'hedgehog',
+      appearanceSummary: 'round hedgehog with an oversized moss-green scarf and tiny brass lantern',
+      personalitySummary: 'careful, loyal, softly funny',
+      introducedAtBeat: 1,
+      seenInBeats: [1, 2],
+      hasReferencePortrait: true,
+    },
+  ],
+  choiceHistory: ['Pip follows the lantern trail into the orchard'],
+  openThreads: ['Find who left the glowing lanterns in the orchard', 'Decide whether Pip trusts Barnaby with the map'],
+  recentBeats: [
+    {
+      beatNumber: 1,
+      title: 'Lanterns in the Orchard',
+      sceneSummary: 'Pip finds a trail of floating lanterns beyond the village fence.',
+      storyTextExcerpt: 'Pip slipped through the orchard gate and discovered a trail of floating lanterns...',
+      nextBeatGoal: 'Reveal the keeper of the lanterns.',
+      continuityNotes: ['Pip has never seen the lantern keeper.'],
+      imagePromptExcerpt: 'wide establishing shot of Pip entering the orchard...',
+      isEnding: false,
+      isStoryboard: true,
+    },
+  ],
+  currentBeatGoal: 'Reveal the keeper of the lanterns and test whether Barnaby should be trusted.',
+  endingForecast: ['friendship', 'discovery'],
+}, null, 2);
+
 const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
   story_generation: {
-    userPrompt: 'A brave knight discovers a hidden door in an ancient castle',
+    userPrompt: 'Continue this whimsical orchard mystery and steer it toward a warm discovery ending.',
     language: 'english',
-    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Current Beat: 1 of 6',
-    storyState: '{}',
-    selectedOptionLabel: 'None yet - first beat',
+    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Current Beat: 3 of 6\n- Style Preset: storybook_illustration\n- Theme: whimsical\n- Palette: warm\n- Detail: balanced\n- Authoring Mode: seed_continue\n- Authored Prelude: present',
+    storyState: DEFAULT_STORY_BIBLE,
+    selectedOptionLabel: 'Pip follows the lantern trail into the orchard',
   },
   visual_prompt: {
     sceneDescription: 'A moonlit garden with glowing fireflies and an old stone fountain',
-    characters: '[]',
-    visualStyle: 'cinematic storybook illustration',
+    characters: DEFAULT_CHARACTER_ANCHORS,
+    visualStyle: DEFAULT_VISUAL_STYLE,
+    beatNumber: '2',
   },
   image_generation: {
-    prompt: 'A mystical forest at dawn with golden light filtering through ancient trees, cinematic storybook illustration',
+    prompt: 'Low-angle medium-wide shot of Pip and Barnaby stopping beneath a hanging cluster of glowing orchard lanterns, one panel per sequential moment as the lanterns brighten and reveal a hidden brass map case.',
+    characters: DEFAULT_CHARACTER_ANCHORS,
+    visualStyle: DEFAULT_VISUAL_STYLE,
+    beatNumber: '3',
   },
   tts: {
     storyText: 'Once upon a time, in a land far away, there lived a curious young fox who dreamed of touching the stars.',
@@ -75,7 +160,7 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     characterName: 'Miko',
     characterAppearance: 'small golden-brown monkey with a curled tail and expressive amber eyes, wearing a tiny red vest',
     characterType: 'monkey',
-    visualStyle: 'cinematic storybook illustration',
+    visualStyle: DEFAULT_VISUAL_STYLE,
   },
   voice_selection: {
     genre: 'fantasy',
@@ -177,11 +262,16 @@ export default function PlaygroundStudio() {
   const promptTaskKey: PromptTaskKey | null = supportsPrompt ? selectedTask : null;
   const currentConfig = configs.find((config) => config.taskKey === selectedTask);
   const taskDef = TASK_DEFINITIONS.find((task) => task.key === selectedTask)!;
+  const isLegacyTask = LEGACY_TASKS.has(selectedTask);
   const validation = promptTaskKey ? validatePromptTemplate(promptTaskKey, draftPrompt) : null;
   const isModelChanged = currentConfig ? selectedModel !== currentConfig.modelId || (taskHasTemperature(selectedTask) && temperature !== (currentConfig.temperature ?? 0.7)) : false;
   const isDraftDirty = supportsPrompt && promptState ? draftPrompt !== promptState.draft.promptBody : false;
   const isDraftDifferentFromPublished = supportsPrompt && promptState ? draftPrompt !== promptState.published.promptBody : false;
   const placeholderDefinitions = useMemo(() => promptTaskKey ? PROMPT_TASK_DEFINITIONS[promptTaskKey].placeholders : [], [promptTaskKey]);
+  const resolvedPromptPreview = useMemo(() => {
+    if (!supportsPrompt || !draftPrompt) return '';
+    return resolvePromptTemplate(draftPrompt, inputs);
+  }, [supportsPrompt, draftPrompt, inputs]);
 
   useEffect(() => {
     getActiveModelConfigs()
@@ -353,12 +443,22 @@ export default function PlaygroundStudio() {
           <textarea value={inputs.sceneDescription || ''} onChange={(event) => setInputs((current) => ({ ...current, sceneDescription: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Scene description" />
           <textarea value={inputs.characters || ''} onChange={(event) => setInputs((current) => ({ ...current, characters: event.target.value }))} rows={6} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Character continuity JSON" />
           <input value={inputs.visualStyle || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyle: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style" />
+          <input value={inputs.beatNumber || ''} onChange={(event) => setInputs((current) => ({ ...current, beatNumber: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat number" />
         </div>
       );
     }
 
     if (selectedTask === 'image_generation') {
-      return <textarea value={inputs.prompt || ''} onChange={(event) => setInputs((current) => ({ ...current, prompt: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Image prompt" />;
+      return (
+        <div className="grid gap-3">
+          <textarea value={inputs.prompt || ''} onChange={(event) => setInputs((current) => ({ ...current, prompt: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Image prompt" />
+          <textarea value={inputs.characters || ''} onChange={(event) => setInputs((current) => ({ ...current, characters: event.target.value }))} rows={6} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Character anchors JSON" />
+          <div className="grid gap-3 md:grid-cols-2">
+            <input value={inputs.visualStyle || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyle: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style" />
+            <input value={inputs.beatNumber || ''} onChange={(event) => setInputs((current) => ({ ...current, beatNumber: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat number" />
+          </div>
+        </div>
+      );
     }
 
     if (selectedTask === 'tts') {
@@ -406,9 +506,14 @@ export default function PlaygroundStudio() {
               const promptEnabled = PROMPT_TASK_KEYS.includes(task.key as PromptTaskKey);
               return (
                 <button key={task.key} onClick={() => setSelectedTask(task.key)} className={`w-full rounded-xl border p-3 text-left transition-all ${active ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-white/10 bg-white/5 text-neutral-300 hover:bg-white/10'}`}>
-                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">{task.label}</p>
-                    {promptEnabled && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">Prompt</span>}
+                    <div className="flex items-center gap-2">
+                      {LEGACY_TASKS.has(task.key) && (
+                        <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-300">Legacy</span>
+                      )}
+                      {promptEnabled && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">Prompt</span>}
+                    </div>
                   </div>
                   <p className="mt-0.5 truncate font-mono text-[11px] text-neutral-500">{config?.modelId || DEFAULT_MODELS[task.key].modelId}</p>
                 </button>
@@ -424,10 +529,15 @@ export default function PlaygroundStudio() {
                   <h2 className="text-base font-medium text-neutral-100">{taskDef.label}</h2>
                   <p className="mt-1 text-sm text-neutral-400">{taskDef.description}</p>
                 </div>
-                <div className={`rounded-lg px-3 py-2 text-xs ${supportsPrompt ? 'border border-emerald-500/20 bg-emerald-500/5 text-emerald-200' : 'border border-white/10 bg-neutral-900/60 text-neutral-400'}`}>
-                  {supportsPrompt ? 'Prompt editing enabled' : 'Model-only task in v1'}
-                </div>
+              <div className={`rounded-lg px-3 py-2 text-xs ${supportsPrompt ? 'border border-emerald-500/20 bg-emerald-500/5 text-emerald-200' : 'border border-white/10 bg-neutral-900/60 text-neutral-400'}`}>
+                  {isLegacyTask ? 'Legacy prompt retained for historical comparison' : supportsPrompt ? 'Prompt editing enabled' : 'Model-only task in v1'}
               </div>
+              </div>
+              {isLegacyTask && (
+                <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-200">
+                  This task is preserved for prompt history and experiments, but the live story runtime now goes directly from story generation to the image wrapper.
+                </div>
+              )}
               {currentConfig && <p className="mt-3 text-xs text-neutral-500">Production model: <span className="font-mono text-neutral-300">{productionConfigLabel}</span></p>}
               {supportsPrompt && promptState && <p className="mt-1 text-xs text-neutral-500">Published prompt: <span className="text-neutral-300">{promptState.published.source === 'database' ? 'Database' : 'Code default'}</span> | Last updated: <span className="text-neutral-300">{formatTimestamp(promptState.published.updatedAt)}</span></p>}
             </div>
@@ -506,6 +616,18 @@ export default function PlaygroundStudio() {
                   <button onClick={handleSaveDraft} disabled={!isDraftDirty || !validation?.isValid || saveStatus === 'saving'} className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm text-neutral-200 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50">{saveStatus === 'saving' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Save Draft</button>
                   <button onClick={() => { if (promptState) { setDraftPrompt(promptState.published.promptBody); setPromptMessage('Draft reset to the published prompt locally. Save if you want to persist it.'); } }} disabled={!promptState} className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 disabled:opacity-50"><RotateCcw size={15} />Reset to Published</button>
                   <button onClick={handlePublishDraft} disabled={!validation?.isValid || !isDraftDifferentFromPublished || publishStatus === 'publishing'} className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50">{publishStatus === 'publishing' ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}Publish Draft</button>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h4 className="text-xs uppercase tracking-wider text-neutral-400">Resolved Prompt Preview</h4>
+                    <span className="text-xs text-neutral-500">
+                      {resolvedPromptPreview.length.toLocaleString()} chars
+                    </span>
+                  </div>
+                  <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-neutral-950 p-3 font-mono text-xs text-neutral-300">
+                    {resolvedPromptPreview || 'Update the prompt or inputs to preview the final resolved prompt.'}
+                  </pre>
                 </div>
               </div>
             )}

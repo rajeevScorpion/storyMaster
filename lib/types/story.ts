@@ -37,11 +37,53 @@ export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'tee
 
 export type StoryLanguage = 'english' | 'hindi';
 
+export type VisualStylePreset =
+  | 'storybook_illustration'
+  | 'watercolor_fable'
+  | 'anime_cel'
+  | 'graphic_novel'
+  | 'three_d_animated'
+  | 'cinematic_photo';
+
+export type StoryTheme =
+  | 'whimsical'
+  | 'cozy'
+  | 'epic'
+  | 'mysterious'
+  | 'dark_fantasy'
+  | 'futuristic';
+
+export type StoryPalette =
+  | 'warm'
+  | 'vibrant'
+  | 'pastel'
+  | 'moody'
+  | 'earthy'
+  | 'neon';
+
+export type StoryDetailLevel = 'simple' | 'balanced' | 'lush';
+
+export interface VisualSettings {
+  preset: VisualStylePreset;
+  theme: StoryTheme;
+  palette: StoryPalette;
+  detail: StoryDetailLevel;
+}
+
+export type AuthoringMode = 'prompt' | 'seed_continue';
+
+export interface StoryAuthoringConfig {
+  mode: AuthoringMode;
+  preludeText?: string;
+}
+
 export interface StoryConfig {
   ageGroup: AgeGroup;
   settingCountry: string;
   maxBeats: number;
   language: StoryLanguage;
+  visualSettings: VisualSettings;
+  authoring: StoryAuthoringConfig;
 }
 
 export interface StoryNode {

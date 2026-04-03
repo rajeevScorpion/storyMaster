@@ -32,6 +32,8 @@ const AVAILABLE_VOICES = [
   'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat',
 ] as const;
 
+const DEFAULT_VISUAL_STYLE = 'storybook illustration with painterly textures and expressive character acting, whimsical and playful emotional tone, warm color palette with sunlit golds, ambers, and rich reds, balanced visual detail with readable characters and selective environment richness';
+
 const beatSchema = {
   type: Type.OBJECT,
   properties: {
@@ -250,7 +252,8 @@ async function runVisualPromptTest(
   const prompt = resolvePromptTemplate(promptBody, {
     sceneDescription: inputs.sceneDescription || '',
     characters: inputs.characters || '[]',
-    visualStyle: inputs.visualStyle || 'cinematic storybook illustration',
+    visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
+    beatNumber: inputs.beatNumber || '2',
   });
 
   const start = Date.now();
@@ -274,6 +277,9 @@ async function runImageGenerationTest(
 ): Promise<TestResult> {
   const wrappedPrompt = resolvePromptTemplate(promptBody, {
     prompt: inputs.prompt || '',
+    characters: inputs.characters || '[]',
+    visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
+    beatNumber: inputs.beatNumber || '2',
   });
 
   const start = Date.now();
@@ -310,7 +316,7 @@ async function runPortraitGenerationTest(
     characterName: inputs.characterName || 'Unknown',
     characterAppearance: inputs.characterAppearance || '',
     characterType: inputs.characterType || 'character',
-    visualStyle: inputs.visualStyle || 'cinematic storybook illustration',
+    visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
   });
 
   const start = Date.now();

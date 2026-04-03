@@ -143,6 +143,7 @@ interface StorylinePlayerProps {
   isLiked?: boolean;
   likeCount?: number;
   isLoggedIn?: boolean;
+  preludeText?: string;
 }
 
 export default function StorylinePlayer({
@@ -157,6 +158,7 @@ export default function StorylinePlayer({
   isLiked: initialLiked = false,
   likeCount: initialLikeCount = 0,
   isLoggedIn = false,
+  preludeText,
 }: StorylinePlayerProps) {
   const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(() => {
@@ -567,6 +569,16 @@ export default function StorylinePlayer({
                 className="w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 bg-neutral-900/80 max-h-[50vh]"
               >
                 <div className="p-5 md:p-10 flex-1 overflow-y-auto scrollbar-none">
+                  {currentIndex === 0 && preludeText && (
+                    <div className="mb-8 rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-5">
+                      <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300">
+                        Prelude
+                      </p>
+                      <p className="mt-3 text-base font-serif leading-relaxed text-neutral-300">
+                        {preludeText}
+                      </p>
+                    </div>
+                  )}
                   <p className="text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 text-neutral-300">
                     {currentBeat.storyText}
                   </p>
