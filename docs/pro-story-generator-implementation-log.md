@@ -376,3 +376,41 @@
 ### Test evidence
 - `npx tsc --noEmit`
 - `npx eslint lib/store/story-store.ts app/actions/persistence.ts`
+
+## Phase 10. Storyboard recovery and asset continuity hardening
+
+### Goals
+- Make the image-regenerate icon recover missing storyboard beats the same way the normal generation flow does.
+- Ensure beat 1 regeneration recreates portraits first and then uses them to render the storyboard.
+- Ensure regenerated portraits and storyboard images are auto-saved back through the full cloud-save pipeline.
+- Harden story loading so missing normalized beat asset fields can fall back to `story_map` JSONB metadata.
+
+### Files and systems touched
+- `components/story/StoryScreen.tsx`
+- `lib/store/story-store.ts`
+- `app/actions/persistence.ts`
+- `app/actions/exploration.ts`
+
+### Decisions made
+- Storyboard image failures now surface back to the story screen, so the regenerate icon can appear for broken storyboard URLs instead of only non-storyboard images.
+- Regeneration no longer performs a partial "upload just the grid image" persistence step.
+- After regeneration, the store now updates local beat data first and then reuses `saveStoryToCloud()` so portraits, storyboard image, and DB updates stay in the same path as normal saves.
+- Loading saved stories now merges missing `imageUrl`, `audioUrl`, and portrait-bearing character data from `story_map` JSONB when normalized beat rows are incomplete.
+
+### What is working
+- If a storyboard image is missing or fails to load, the image icon can be used to regenerate it.
+- Beat 1 regeneration will recreate required portraits first when they are missing, then pass those portraits into storyboard generation.
+- Later-beat regeneration still uses the previous storyboard plus any new-character portraits for continuity.
+- A successful regeneration now auto-saves via the normal cloud-save pipeline, which means regenerated portraits are uploaded alongside the regenerated storyboard image.
+- Reloaded stories can recover asset metadata from `story_map` when the normalized `beats` table is missing image/audio/portrait fields.
+
+### What is partially working
+- Existing broken stories whose asset rows are already incomplete still need one successful regeneration/save cycle to fully repair their storage-backed image state.
+
+### Open issues and deferred items
+- We should still add explicit server-side logging around browser storage upload failures so future asset-path issues are easier to trace without checking Supabase manually.
+- `StorylinePlayer` still uses its own storyboard rendering component; if we want identical recovery UX there, we should mirror the storyboard image-error signaling in that surface too.
+
+### Test evidence
+- `npx tsc --noEmit`
+- `npx eslint lib/store/story-store.ts app/actions/persistence.ts app/actions/exploration.ts components/story/StoryScreen.tsx`

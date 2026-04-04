@@ -116,6 +116,20 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
           ...storyMap.nodes[nodeId],
           data: {
             ...storyMap.nodes[nodeId].data,
+            ...(!storyMap.nodes[nodeId].data.imageUrl && jsonbNode.data.imageUrl
+              ? { imageUrl: jsonbNode.data.imageUrl }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
+              ? { audioUrl: jsonbNode.data.audioUrl }
+              : {}),
+            ...(jsonbNode.data.characters
+              ? {
+                  characters: mergeCharactersWithFallback(
+                    storyMap.nodes[nodeId].data.characters,
+                    jsonbNode.data.characters
+                  ),
+                }
+              : {}),
             ...(jsonbNode.data.isStoryboard ? { isStoryboard: true } : {}),
             ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
@@ -365,6 +379,33 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
     ...(preludeText ? { preludeText } : {}),
   };
+}
+
+function mergeCharactersWithFallback(
+  primary: StoryBeat['characters'],
+  fallback?: StoryBeat['characters']
+): StoryBeat['characters'] {
+  if (!fallback || fallback.length === 0) {
+    return primary;
+  }
+
+  const merged = new Map<string, StoryBeat['characters'][number]>();
+
+  for (const character of fallback) {
+    merged.set(character.id, { ...character });
+  }
+
+  for (const character of primary) {
+    const existing = merged.get(character.id);
+    merged.set(character.id, {
+      ...existing,
+      ...character,
+      portraitUrl: character.portraitUrl || existing?.portraitUrl,
+      portraitBase64: character.portraitBase64 || existing?.portraitBase64,
+    });
+  }
+
+  return Array.from(merged.values());
 }
 
 /**

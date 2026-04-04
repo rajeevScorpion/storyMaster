@@ -31,12 +31,16 @@ function StoryboardCycler({
   cycleOverride,
   cycleMs,
   playbackState,
+  onImageError,
+  onImageLoad,
 }: {
   gridUrl: string;
   audioUrl?: string;
   cycleOverride: boolean;
   cycleMs: number;
   playbackState: 'idle' | 'playing' | 'paused';
+  onImageError?: () => void;
+  onImageLoad?: () => void;
 }) {
   const [activePanel, setActivePanel] = useState(0);
   // null = waiting for audio metadata (hold panel 1); number = resolved ms per panel
@@ -116,7 +120,13 @@ function StoryboardCycler({
             style={{ transform: PANEL_TRANSFORMS[activePanel] }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={gridUrl} alt="" className="w-full h-full object-cover" />
+            <img
+              src={gridUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              onLoad={onImageLoad}
+              onError={onImageError}
+            />
           </div>
         </motion.div>
       </AnimatePresence>
@@ -311,8 +321,9 @@ function StoryScreenInner({
   const currentNodeId = session.storyMap.currentNodeId;
   const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
-  const imageLoadFailed = !!displayImageUrl && failedImageUrl === displayImageUrl;
-  const canRegenerateImage = !isStoryboard && (!currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed);
+  const imageKey = currentBeat.imageUrl || displayImageUrl;
+  const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
+  const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
@@ -441,6 +452,8 @@ function StoryScreenInner({
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
                 playbackState={playbackState}
+                onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
+                onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}
               />
             ) : displayImageUrl && (
               <Image
@@ -451,6 +464,7 @@ function StoryScreenInner({
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
+                onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                 onError={() => setFailedImageUrl(displayImageUrl)}
               />
             )}

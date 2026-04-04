@@ -6,9 +6,9 @@ import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoice
 import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
-import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatAssets } from '@/app/actions/persistence';
+import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadAsset, uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import { getPathToNode } from '../utils/story-map';
 import {
@@ -908,21 +908,21 @@ export const useStoryStore = create<StoryState>()(
             },
           };
           const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
+          const updatedSession = deriveSessionFields(latestSession, updatedMap);
           set({
-            session: deriveSessionFields(latestSession, updatedMap),
+            session: updatedSession,
             isRegeneratingImage: false,
-            saveStatus: 'unsaved',
+            saveStatus: 'idle',
           });
 
-          // Upload to storage and update DB if story is persisted
-          if (session.savedStoryId && session.savedByUserId) {
-            const storagePath = `${session.savedByUserId}/${session.savedStoryId}/${nodeId}/image.webp`;
-            try {
-              const storageUrl = await uploadAsset('story-assets', storagePath, imageUrl);
-              await updateBeatAssets(session.savedStoryId, nodeId, { imageUrl: storageUrl });
-            } catch (err) {
-              console.error('Failed to persist regenerated image:', err);
-            }
+          const authClient = createBrowserClient();
+          const { data: { user } } = await authClient.auth.getUser();
+          const saveUserId = user?.id || updatedSession.savedByUserId;
+
+          if (saveUserId && !updatedSession.sourceStoryOwnerId) {
+            await get().saveStoryToCloud(saveUserId);
+          } else if (!updatedSession.sourceStoryOwnerId) {
+            set({ saveStatus: 'unsaved' });
           }
         } catch (error) {
           console.error('Image regeneration failed:', error);
