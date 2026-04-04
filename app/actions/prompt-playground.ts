@@ -58,7 +58,7 @@ export interface RunPlaygroundTestInput {
 }
 
 function getApiKey(): string {
-  const key = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+  const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('Missing GEMINI_API_KEY');
   return key;
 }

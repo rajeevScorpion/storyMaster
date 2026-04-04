@@ -1,8 +1,8 @@
 'use client';
 
-import { GoogleGenAI } from '@google/genai';
 import { StorySession, StoryBeat, StoryboardPlan } from '@/lib/types/story';
 import { compressImage } from '@/lib/utils/image';
+import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
 import {
   buildPromptCharacterAnchors,
   buildValidationRepairNote,
@@ -15,12 +15,10 @@ import {
   normalizeStoryConfig,
 } from '@/lib/ai/story-config';
 import {
-  LOCKED_PROMPT_GUARDRAILS,
   getDefaultPromptBody,
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
 import type { Character } from '@/lib/types/story';
 
@@ -115,24 +113,18 @@ export async function generateStoryBeat(
   });
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
     const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
-      const response = await ai.models.generateContent({
+      const text = await callGeminiText({
+        task: 'story_generation',
         model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
-        contents: repairNote
-          ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}`
-          : basePrompt,
-        config: {
-          systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_generation,
-          responseMimeType: 'application/json',
-          responseSchema: beatSchema,
-          temperature: modelOverrides?.storyTemperature ?? 0.7,
-        },
+        prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
+        temperature: modelOverrides?.storyTemperature ?? 0.7,
       });
-
-      const text = response.text;
-      if (!text) throw new Error('Failed to generate story beat');
-      return JSON.parse(text) as StoryBeat;
+      try {
+        return JSON.parse(text) as StoryBeat;
+      } catch {
+        throw new Error(`Failed to parse story beat JSON: ${text.slice(0, 200)}`);
+      }
     };
 
     let beat = await generateAttempt();
@@ -165,7 +157,6 @@ export async function composeStoryboardPlan(
   visualStyle: string,
   modelOverrides?: StoryModelOverrides
 ): Promise<StoryboardPlan> {
-  const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
   const composerTemplateCandidate = modelOverrides?.visualPrompt || getDefaultPromptBody('visual_prompt');
   const composerTemplate = validatePromptTemplate('visual_prompt', composerTemplateCandidate).isValid
     ? composerTemplateCandidate
@@ -185,23 +176,18 @@ export async function composeStoryboardPlan(
     previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
   });
 
-  const response = await ai.models.generateContent({
+  const text = await callGeminiText({
+    task: 'visual_prompt',
     model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
-      responseMimeType: 'application/json',
-      responseSchema: storyboardPlanSchema,
-      temperature: modelOverrides?.composerTemperature ?? 0.5,
-    },
+    prompt,
+    temperature: modelOverrides?.composerTemperature ?? 0.5,
   });
 
-  const text = response.text;
-  if (!text) {
-    throw new Error('Failed to compose storyboard plan');
+  try {
+    return JSON.parse(text) as StoryboardPlan;
+  } catch {
+    throw new Error(`Failed to parse storyboard plan JSON: ${text.slice(0, 200)}`);
   }
-
-  return JSON.parse(text) as StoryboardPlan;
 }
 
 export function renderStoryboardPlan(plan: StoryboardPlan): string {
@@ -269,7 +255,6 @@ export async function generateImage(
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
     const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
     const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
       ? imageTemplateCandidate
@@ -287,18 +272,33 @@ export async function generateImage(
     const maxH = isStoryboard ? STORYBOARD_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
     const qual = isStoryboard ? STORYBOARD_QUALITY    : IMAGE_QUALITY;
 
-    const response = await requestImageResponse(ai, imageModel, finalImagePrompt, referenceImages, isStoryboard);
-    const initialImage = extractInlineImage(response);
-    if (initialImage) {
-      return await compressImage(initialImage, maxW, maxH, qual);
+    const referenceParts = await resolveReferenceImageParts(referenceImages);
+    const imageSize = isStoryboard ? '2K' : '1K';
+
+    const result = await callGeminiImage({
+      task: 'image_generation',
+      model: imageModel,
+      prompt: finalImagePrompt,
+      referenceParts,
+      aspectRatio: '16:9',
+      imageSize,
+    });
+
+    if (result.dataUrl) {
+      return await compressImage(result.dataUrl, maxW, maxH, qual);
     }
 
-    const fallbackPrompt = (response.text || '').trim();
-    if (fallbackPrompt && fallbackPrompt !== finalImagePrompt) {
-      const retryResponse = await requestImageResponse(ai, imageModel, fallbackPrompt, referenceImages, isStoryboard);
-      const retryImage = extractInlineImage(retryResponse);
-      if (retryImage) {
-        return await compressImage(retryImage, maxW, maxH, qual);
+    if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
+      const retryResult = await callGeminiImage({
+        task: 'image_generation',
+        model: imageModel,
+        prompt: result.fallbackText,
+        referenceParts,
+        aspectRatio: '16:9',
+        imageSize,
+      });
+      if (retryResult.dataUrl) {
+        return await compressImage(retryResult.dataUrl, maxW, maxH, qual);
       }
     }
 
@@ -309,50 +309,18 @@ export async function generateImage(
   }
 }
 
-async function requestImageResponse(
-  ai: GoogleGenAI,
-  modelId: string,
-  prompt: string,
-  referenceImages?: ReferenceImage[],
-  storyboard?: boolean
-) {
-  // Build contents: text prompt + optional reference image parts
-  const hasRefs = referenceImages && referenceImages.length > 0;
-  let contents: any = prompt;
-
-  if (hasRefs) {
-    const parts: any[] = [{ text: prompt }];
-    for (const ref of referenceImages) {
-      const dataUrl = await resolveReferenceImageDataUrl(ref);
-      if (!dataUrl) continue;
-      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (match) {
-        parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
-      }
-    }
-    contents = [{ role: 'user', parts }];
-  }
-
-  return ai.models.generateContent({
-    model: modelId,
-    contents,
-    config: {
-      imageConfig: {
-        aspectRatio: '16:9',
-        imageSize: storyboard ? '2K' : '1K',
-      },
-    },
-  });
-}
-
-function extractInlineImage(response: Awaited<ReturnType<typeof requestImageResponse>>) {
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) {
-      return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): Promise<InlineImagePart[]> {
+  if (!referenceImages || referenceImages.length === 0) return [];
+  const parts: InlineImagePart[] = [];
+  for (const ref of referenceImages) {
+    const dataUrl = await resolveReferenceImageDataUrl(ref);
+    if (!dataUrl) continue;
+    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+      parts.push({ mimeType: match[1], data: match[2] });
     }
   }
-
-  return null;
+  return parts;
 }
 
 export async function generateCharacterPortrait(
@@ -362,7 +330,6 @@ export async function generateCharacterPortrait(
   promptOverride?: string
 ): Promise<string> {
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
     const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
     const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
       ? portraitTemplateCandidate
@@ -375,21 +342,16 @@ export async function generateCharacterPortrait(
     });
 
     const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
-    const response = await ai.models.generateContent({
+    const result = await callGeminiImage({
+      task: 'portrait_generation',
       model: portraitModel,
-      contents: prompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.portrait_generation,
-        imageConfig: {
-          aspectRatio: '1:1',
-          imageSize: '1K',
-        },
-      },
+      prompt,
+      aspectRatio: '1:1',
+      imageSize: '1K',
     });
 
-    const image = extractInlineImage(response);
-    if (image) {
-      return await compressImage(image, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY);
+    if (result.dataUrl) {
+      return await compressImage(result.dataUrl, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY);
     }
 
     throw new Error('No portrait image generated');
