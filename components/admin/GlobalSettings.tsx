@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { getGlobalSettings, setStoryboardMode, setCycleOverride, setCycleMs } from '@/app/actions/admin';
+import { getGlobalSettings, setStoryboardMode, setCycleOverride, setCycleMs, setStoryboardVignette } from '@/app/actions/admin';
 
 function ToggleRow({
   label,
@@ -43,13 +43,16 @@ export default function GlobalSettings() {
   const [cycleMs, setCycleMsState] = useState(5000);
   const [cycleMsInput, setCycleMsInput] = useState('5000');
   const [cycleMsSaving, setCycleMsSaving] = useState(false);
+  const [vignetteEnabled, setVignetteEnabled] = useState(true);
+  const [vignetteToggling, setVignetteToggling] = useState(false);
 
   useEffect(() => {
-    getGlobalSettings().then(({ storyboardMode, cycleOverride: co, cycleMs: cm }) => {
+    getGlobalSettings().then(({ storyboardMode, cycleOverride: co, cycleMs: cm, vignetteEnabled: ve }) => {
       setStoryboardEnabled(storyboardMode);
       setCycleOverrideState(co);
       setCycleMsState(cm);
       setCycleMsInput(String(cm));
+      setVignetteEnabled(ve);
       setLoading(false);
     });
   }, []);
@@ -107,6 +110,23 @@ export default function GlobalSettings() {
                 setCycleOverrideState(next);
               } finally {
                 setCycleOverrideToggling(false);
+              }
+            }}
+          />
+
+          <ToggleRow
+            label="Storyboard Vignette"
+            description="Apply a soft vignette to storyboard artwork only, while keeping UI chrome above the effect."
+            checked={vignetteEnabled}
+            toggling={vignetteToggling}
+            onToggle={async () => {
+              setVignetteToggling(true);
+              const next = !vignetteEnabled;
+              try {
+                await setStoryboardVignette(next);
+                setVignetteEnabled(next);
+              } finally {
+                setVignetteToggling(false);
               }
             }}
           />

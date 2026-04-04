@@ -97,7 +97,7 @@ export async function getAllModelConfigs(): Promise<ModelConfig[]> {
 
 let flagCache: Map<string, { data: boolean; ts: number }> = new Map();
 
-export async function getFeatureFlag(flagKey: string): Promise<boolean> {
+export async function getFeatureFlag(flagKey: string, fallback = false): Promise<boolean> {
   const cached = flagCache.get(flagKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.data;
 
@@ -109,11 +109,11 @@ export async function getFeatureFlag(flagKey: string): Promise<boolean> {
       .eq('flag_key', flagKey)
       .single();
 
-    if (error || !data) return false;
+    if (error || !data) return fallback;
     flagCache.set(flagKey, { data: data.enabled, ts: Date.now() });
     return data.enabled;
   } catch {
-    return false;
+    return fallback;
   }
 }
 

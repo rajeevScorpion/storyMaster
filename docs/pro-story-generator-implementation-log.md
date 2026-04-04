@@ -414,3 +414,43 @@
 ### Test evidence
 - `npx tsc --noEmit`
 - `npx eslint lib/store/story-store.ts app/actions/persistence.ts app/actions/exploration.ts components/story/StoryScreen.tsx`
+
+## Phase 11. Storyboard vignette scoping and admin toggle
+
+### Goals
+- Keep the vignette as a storyboard-art treatment instead of letting it read like a UI-wide dimmer.
+- Make the effect controllable from admin global settings.
+- Apply the same vignette behavior in both the live story reader and the storyline player.
+
+### Files and systems touched
+- `components/story/StoryScreen.tsx`
+- `components/story/StorylinePlayer.tsx`
+- `components/story/StoryboardVignette.tsx`
+- `components/admin/GlobalSettings.tsx`
+- `app/actions/admin.ts`
+- `lib/ai/model-config.ts`
+- `supabase/migrations/014_storyboard_vignette_flag.sql`
+- `supabase/migrations/014_storyboard_vignette_flag_rollback.sql`
+
+### Decisions made
+- The vignette now uses a dedicated radial overlay component instead of duplicated inset box-shadow styles.
+- The new global flag is `storyboard_vignette_enabled`, seeded on by default.
+- Runtime readers fall back to `enabled` even before the migration is applied, so current visual behavior is preserved in environments that have not run the new SQL yet.
+- The admin playground controls the flag alongside existing storyboard mode and timing settings.
+
+### What is working
+- Storyboard readers now render a shared vignette overlay only on storyboard image surfaces.
+- The live story reader and storyline player both consume the same vignette runtime setting from `getStoryboardSettings()`.
+- Admin global settings can toggle the storyboard vignette on and off without affecting other story-generation settings.
+- The new flag is additive and does not modify or repurpose existing feature-flag rows.
+
+### What is partially working
+- The vignette can now be disabled globally, but any further art-direction tuning of strength or falloff would still be a visual polish pass rather than a functional requirement.
+
+### Open issues and deferred items
+- If we later add more storyboard-based surfaces, they should reuse `StoryboardVignette` instead of reintroducing inline shadow styling.
+- The admin playground does not yet include per-surface previewing for vignette strength; the current toggle is binary only.
+
+### Test evidence
+- `npx tsc --noEmit`
+- `npx eslint app/actions/admin.ts components/admin/GlobalSettings.tsx components/story/StoryScreen.tsx components/story/StorylinePlayer.tsx lib/ai/model-config.ts`
