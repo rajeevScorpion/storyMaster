@@ -40,6 +40,7 @@ import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+import StoryboardVignette from './StoryboardVignette';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 
@@ -55,28 +56,32 @@ function StoryboardCycler({
   audioUrl,
   cycleOverride,
   cycleMs,
+  vignetteEnabled,
   playbackState,
 }: {
   gridUrl: string;
   audioUrl?: string;
   cycleOverride: boolean;
   cycleMs: number;
+  vignetteEnabled: boolean;
   playbackState: 'idle' | 'playing' | 'paused';
 }) {
   const [activePanel, setActivePanel] = useState(0);
-  const [panelDurationMs, setPanelDurationMs] = useState<number | null>(null);
+  const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
   const hasAudio = !!audioUrl;
   const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+  const panelDurationMs = cycleOverride
+    ? cycleMs
+    : !audioUrl
+    ? STORYBOARD_ADVANCE_MS
+    : resolvedAudioDurationMs ?? STORYBOARD_ADVANCE_MS;
 
   useEffect(() => {
-    setActivePanel(0);
     prevPlaybackStateRef.current = 'idle';
-    if (cycleOverride) { setPanelDurationMs(cycleMs); return; }
-    if (!audioUrl) { setPanelDurationMs(STORYBOARD_ADVANCE_MS); return; }
-    setPanelDurationMs(null);
+    if (cycleOverride || !audioUrl) return;
     const audio = new Audio();
-    const onMeta = () => { const d = audio.duration; setPanelDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS); };
-    const onError = () => setPanelDurationMs(STORYBOARD_ADVANCE_MS);
+    const onMeta = () => { const d = audio.duration; setResolvedAudioDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS); };
+    const onError = () => setResolvedAudioDurationMs(STORYBOARD_ADVANCE_MS);
     audio.addEventListener('loadedmetadata', onMeta);
     audio.addEventListener('error', onError);
     audio.src = audioUrl;
@@ -87,13 +92,21 @@ function StoryboardCycler({
     if (panelDurationMs === null) return;
     const prev = prevPlaybackStateRef.current;
     prevPlaybackStateRef.current = playbackState;
+    let resetPanelTimeout: number | undefined;
     if (hasAudio && !cycleOverride && prev === 'idle' && playbackState === 'playing') {
-      setActivePanel(0);
+      resetPanelTimeout = window.setTimeout(() => setActivePanel(0), 0);
     }
     const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
-    if (!shouldCycle) return;
+    if (!shouldCycle) {
+      return () => {
+        if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
+      };
+    }
     const id = setInterval(() => setActivePanel(p => Math.min(p + 1, 3)), panelDurationMs);
-    return () => clearInterval(id);
+    return () => {
+      if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
+      clearInterval(id);
+    };
   }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
 
   return (
@@ -116,7 +129,7 @@ function StoryboardCycler({
           </div>
         </motion.div>
       </AnimatePresence>
-      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 50px rgba(0,0,0,0.65)' }} />
+      <StoryboardVignette enabled={vignetteEnabled} />
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
         {PANEL_TRANSFORMS.map((_, i) => (
           <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'}`} />
@@ -143,6 +156,7 @@ interface StorylinePlayerProps {
   isLiked?: boolean;
   likeCount?: number;
   isLoggedIn?: boolean;
+  preludeText?: string;
 }
 
 export default function StorylinePlayer({
@@ -157,6 +171,7 @@ export default function StorylinePlayer({
   isLiked: initialLiked = false,
   likeCount: initialLikeCount = 0,
   isLoggedIn = false,
+  preludeText,
 }: StorylinePlayerProps) {
   const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(() => {
@@ -180,9 +195,10 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number }>({
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
+    vignetteEnabled: true,
   });
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
@@ -391,10 +407,12 @@ export default function StorylinePlayer({
           <>
             <div className={`absolute inset-0 transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}>
               <StoryboardCycler
+                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}`}
                 gridUrl={currentBeat.imageUrl}
                 audioUrl={currentBeat.audioUrl || undefined}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
+                vignetteEnabled={cycleSettings.vignetteEnabled}
                 playbackState={playbackState}
               />
             </div>
@@ -567,6 +585,16 @@ export default function StorylinePlayer({
                 className="w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 bg-neutral-900/80 max-h-[50vh]"
               >
                 <div className="p-5 md:p-10 flex-1 overflow-y-auto scrollbar-none">
+                  {currentIndex === 0 && preludeText && (
+                    <div className="mb-8 rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-5">
+                      <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300">
+                        Prelude
+                      </p>
+                      <p className="mt-3 text-base font-serif leading-relaxed text-neutral-300">
+                        {preludeText}
+                      </p>
+                    </div>
+                  )}
                   <p className="text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 text-neutral-300">
                     {currentBeat.storyText}
                   </p>

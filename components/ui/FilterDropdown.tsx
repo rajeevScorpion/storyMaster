@@ -9,14 +9,23 @@ export interface FilterDropdownOption {
   label: string;
 }
 
+type DropdownSize = 'compact' | 'form';
+type DropdownMode = 'popover' | 'inline';
+
 export default function FilterDropdown({
   value,
   options,
   onChange,
+  fullWidth = false,
+  size = 'compact',
+  mode = 'popover',
 }: {
   value: string;
   options: FilterDropdownOption[];
   onChange: (value: string) => void;
+  fullWidth?: boolean;
+  size?: DropdownSize;
+  mode?: DropdownMode;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -32,20 +41,44 @@ export default function FilterDropdown({
   }, []);
 
   const selected = options.find((o) => o.value === value);
+  const isForm = size === 'form';
+  const containerClassName = fullWidth ? 'relative w-full' : 'relative';
+  const triggerClassName = [
+    'flex items-center border bg-neutral-800/80 transition-all duration-200',
+    fullWidth ? 'w-full justify-between' : 'gap-2',
+    isForm ? 'min-h-12 rounded-2xl px-4 py-3 text-left text-sm' : 'rounded-xl px-3 py-2 text-sm',
+    isOpen
+      ? 'border-emerald-500/40 text-emerald-300'
+      : 'border-white/10 text-neutral-200 hover:border-white/20',
+    mode === 'popover' && isOpen ? 'rounded-b-none' : '',
+    mode === 'inline' && isOpen ? 'rounded-b-none' : '',
+  ].join(' ');
+  const menuWrapperClassName = mode === 'inline'
+    ? 'relative z-10 -mt-px w-full overflow-hidden'
+    : `absolute top-full left-0 z-50 -mt-px overflow-hidden ${fullWidth ? 'w-full' : 'w-max min-w-full'}`;
+  const menuClassName = [
+    'bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
+    isForm ? 'rounded-2xl rounded-t-none py-1.5' : 'rounded-xl rounded-t-none py-1',
+  ].join(' ');
+  const optionClassName = [
+    'w-full flex items-center gap-2 transition-colors',
+    isForm ? 'px-4 py-3 text-sm text-left' : 'px-3 py-2 text-sm text-left',
+  ].join(' ');
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className={containerClassName}>
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`flex items-center gap-2 bg-neutral-800/80 border px-3 py-2 text-sm cursor-pointer transition-all duration-200 ${
-          isOpen
-            ? 'border-emerald-500/40 rounded-xl rounded-b-none text-emerald-300'
-            : 'border-white/10 rounded-xl text-neutral-200 hover:border-white/20'
-        }`}
+        className={triggerClassName}
+        aria-expanded={isOpen}
+        aria-haspopup="listbox"
       >
-        {selected?.label || options[0]?.label}
+        <span className={fullWidth ? 'min-w-0 flex-1 truncate' : ''}>
+          {selected?.label || options[0]?.label}
+        </span>
         <ChevronDown
-          className={`w-3.5 h-3.5 transition-transform duration-200 ${
+          className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${
             isOpen ? 'rotate-180 text-emerald-400' : 'text-neutral-500'
           }`}
         />
@@ -58,21 +91,24 @@ export default function FilterDropdown({
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute top-full -mt-px left-0 z-50 w-max min-w-full overflow-hidden"
+            className={menuWrapperClassName}
           >
-            <div className="bg-neutral-900/95 backdrop-blur-xl border border-emerald-500/40 rounded-xl rounded-t-none shadow-2xl pt-1 pb-1">
+            <div className={menuClassName} role="listbox">
               {options.map((opt) => (
                 <button
+                  type="button"
                   key={opt.value}
                   onClick={() => {
                     onChange(opt.value);
                     setIsOpen(false);
                   }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                  className={`${optionClassName} ${
                     opt.value === value
                       ? 'text-emerald-400'
                       : 'text-neutral-400 hover:bg-emerald-500/10 hover:text-emerald-300'
                   }`}
+                  role="option"
+                  aria-selected={opt.value === value}
                 >
                   <Check
                     className={`w-3 h-3 shrink-0 ${

@@ -14,6 +14,32 @@ export interface Option {
   intent: string;
 }
 
+export interface PortraitTask {
+  characterId: string;
+  characterName: string;
+  reason: 'new_character' | 'visual_change';
+  prompt: string;
+}
+
+export interface StoryboardFramePlan {
+  description: string;
+  prompt: string;
+  cameraAngle: string;
+  visualFocus: string[];
+  emotion: string;
+  continuityAnchor: string;
+}
+
+export interface StoryboardPlan {
+  sharedVisualInvariants: string[];
+  portraitTasks: PortraitTask[];
+  topLeft: StoryboardFramePlan;
+  topRight: StoryboardFramePlan;
+  bottomLeft: StoryboardFramePlan;
+  bottomRight: StoryboardFramePlan;
+  negativeConstraints: string[];
+}
+
 export interface StoryBeat {
   title: string;
   beatNumber: number;
@@ -27,6 +53,9 @@ export interface StoryBeat {
   clues: string[];
   nextBeatGoal: string;
   endingForecast: string[];
+  newCharacterIds?: string[];
+  changedCharacterIds?: string[];
+  storyboardPlan?: StoryboardPlan;
   imageUrl?: string;
   isStoryboard?: boolean;
   portraitImageUrl?: string;
@@ -37,11 +66,53 @@ export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'tee
 
 export type StoryLanguage = 'english' | 'hindi';
 
+export type VisualStylePreset =
+  | 'storybook_illustration'
+  | 'watercolor_fable'
+  | 'anime_cel'
+  | 'graphic_novel'
+  | 'three_d_animated'
+  | 'cinematic_photo';
+
+export type StoryTheme =
+  | 'whimsical'
+  | 'cozy'
+  | 'epic'
+  | 'mysterious'
+  | 'dark_fantasy'
+  | 'futuristic';
+
+export type StoryPalette =
+  | 'warm'
+  | 'vibrant'
+  | 'pastel'
+  | 'moody'
+  | 'earthy'
+  | 'neon';
+
+export type StoryDetailLevel = 'simple' | 'balanced' | 'lush';
+
+export interface VisualSettings {
+  preset: VisualStylePreset;
+  theme: StoryTheme;
+  palette: StoryPalette;
+  detail: StoryDetailLevel;
+}
+
+export type AuthoringMode = 'prompt' | 'seed_continue';
+
+export interface StoryAuthoringConfig {
+  mode: AuthoringMode;
+  preludeText?: string;
+}
+
 export interface StoryConfig {
   ageGroup: AgeGroup;
   settingCountry: string;
   maxBeats: number;
   language: StoryLanguage;
+  visualSettings: VisualSettings;
+  authoring: StoryAuthoringConfig;
 }
 
 export interface StoryNode {

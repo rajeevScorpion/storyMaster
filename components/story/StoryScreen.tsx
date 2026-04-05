@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
@@ -15,6 +15,7 @@ import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { getStoryboardSettings } from '@/app/actions/admin';
+import StoryboardVignette from './StoryboardVignette';
 
 // translate(x%, y%) shifts by % of the element's own dimensions (200% of viewport)
 // so translate(-50%, 0%) = shift left by 50% of 200vw = 100vw → shows right half
@@ -30,45 +31,43 @@ function StoryboardCycler({
   audioUrl,
   cycleOverride,
   cycleMs,
+  vignetteEnabled,
   playbackState,
+  onImageError,
+  onImageLoad,
 }: {
   gridUrl: string;
   audioUrl?: string;
   cycleOverride: boolean;
   cycleMs: number;
+  vignetteEnabled: boolean;
   playbackState: 'idle' | 'playing' | 'paused';
+  onImageError?: () => void;
+  onImageLoad?: () => void;
 }) {
   const [activePanel, setActivePanel] = useState(0);
-  // null = waiting for audio metadata (hold panel 1); number = resolved ms per panel
-  const [panelDurationMs, setPanelDurationMs] = useState<number | null>(null);
+  const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
   const hasAudio = !!audioUrl;
   const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+  const panelDurationMs = cycleOverride
+    ? cycleMs
+    : !audioUrl
+    ? STORYBOARD_ADVANCE_MS
+    : resolvedAudioDurationMs ?? STORYBOARD_ADVANCE_MS;
 
   // Effect 1: resolve panel duration whenever the beat changes
   useEffect(() => {
-    setActivePanel(0);
     prevPlaybackStateRef.current = 'idle';
 
-    if (cycleOverride) {
-      // Manual override: start immediately, no audio wait
-      setPanelDurationMs(cycleMs);
-      return;
-    }
-
-    if (!audioUrl) {
-      // No narration: start immediately at fallback speed
-      setPanelDurationMs(STORYBOARD_ADVANCE_MS);
-      return;
-    }
+    if (cycleOverride || !audioUrl) return;
 
     // Narration present: hold panel 1 until audio metadata is known
-    setPanelDurationMs(null);
     const audio = new Audio();
     const onMeta = () => {
       const d = audio.duration;
-      setPanelDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS);
+      setResolvedAudioDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS);
     };
-    const onError = () => setPanelDurationMs(STORYBOARD_ADVANCE_MS);
+    const onError = () => setResolvedAudioDurationMs(STORYBOARD_ADVANCE_MS);
     audio.addEventListener('loadedmetadata', onMeta);
     audio.addEventListener('error', onError);
     audio.src = audioUrl; // triggers metadata load — no play()
@@ -86,17 +85,25 @@ function StoryboardCycler({
     prevPlaybackStateRef.current = playbackState;
 
     // Reset to panel 1 when replaying after narration ended
+    let resetPanelTimeout: number | undefined;
     if (hasAudio && !cycleOverride && prev === 'idle' && playbackState === 'playing') {
-      setActivePanel(0);
+      resetPanelTimeout = window.setTimeout(() => setActivePanel(0), 0);
     }
 
     // With narration: only cycle while playing
     // Without narration / override: cycle freely (playbackState stays 'idle')
     const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
-    if (!shouldCycle) return;
+    if (!shouldCycle) {
+      return () => {
+        if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
+      };
+    }
 
     const id = setInterval(() => setActivePanel(p => Math.min(p + 1, 3)), panelDurationMs);
-    return () => clearInterval(id);
+    return () => {
+      if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
+      clearInterval(id);
+    };
   }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
 
   return (
@@ -116,12 +123,17 @@ function StoryboardCycler({
             style={{ transform: PANEL_TRANSFORMS[activePanel] }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={gridUrl} alt="" className="w-full h-full object-cover" />
+            <img
+              src={gridUrl}
+              alt=""
+              className="w-full h-full object-cover"
+              onLoad={onImageLoad}
+              onError={onImageError}
+            />
           </div>
         </motion.div>
       </AnimatePresence>
-      {/* Vignette */}
-      <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: 'inset 0 0 50px rgba(0,0,0,0.65)' }} />
+      <StoryboardVignette enabled={vignetteEnabled} />
       {/* Indicator dots */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
         {PANEL_TRANSFORMS.map((_, i) => (
@@ -159,15 +171,17 @@ export default function StoryScreen() {
   const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
   const isSaving = useStoryStore((state) => state.isSaving);
   const saveStatus = useStoryStore((state) => state.saveStatus);
+  const saveWarning = useStoryStore((state) => state.saveWarning);
   const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
   const { user } = useAuth();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number }>({
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
+    vignetteEnabled: true,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -215,6 +229,7 @@ export default function StoryScreen() {
       toggleStoryMode={toggleStoryMode}
       isSaving={isSaving}
       saveStatus={saveStatus}
+      saveWarning={saveWarning}
       onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id) : undefined}
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
@@ -243,6 +258,7 @@ function StoryScreenInner({
   toggleStoryMode,
   isSaving,
   saveStatus,
+  saveWarning,
   onSave,
   lastPublishResult,
   cycleSettings,
@@ -266,12 +282,14 @@ function StoryScreenInner({
   toggleStoryMode: () => void;
   isSaving: boolean;
   saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
+  saveWarning: string | null;
   onSave?: () => void;
-  lastPublishResult: { alreadyPublished: boolean; storylineId: string } | null;
-  cycleSettings: { cycleOverride: boolean; cycleMs: number };
+  lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
+  cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean };
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
+  const preludeText = currentBeat.beatNumber === 1 ? session.storyConfig.authoring.preludeText?.trim() : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
   const [showPublishDialog, setShowPublishDialog] = useState(false);
@@ -310,8 +328,9 @@ function StoryScreenInner({
   const currentNodeId = session.storyMap.currentNodeId;
   const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
-  const imageLoadFailed = !!displayImageUrl && failedImageUrl === displayImageUrl;
-  const canRegenerateImage = !isStoryboard && (!currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed);
+  const imageKey = currentBeat.imageUrl || displayImageUrl;
+  const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
+  const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
@@ -377,6 +396,26 @@ function StoryScreenInner({
     }
   }, [saveStatus, onSave, isSaving]);
 
+  // Recovery guard for a save request that got stuck before the payload-size fix landed.
+  // If saving remains unresolved for too long, flip back to unsaved so the smaller patched
+  // payload can retry automatically without forcing the user to reload and lose local assets.
+  useEffect(() => {
+    if (saveStatus !== 'saving' || !onSave) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const latest = useStoryStore.getState();
+      if (latest.saveStatus === 'saving') {
+        useStoryStore.setState({
+          isSaving: false,
+          saveStatus: 'unsaved',
+          error: latest.error || 'Cloud save timed out. Retrying with a smaller payload.',
+        });
+      }
+    }, 20000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [saveStatus, onSave]);
+
   // Auto-scroll focused option into view
   useEffect(() => {
     if (focusedOptionIndex >= 0 && optionRefs.current[focusedOptionIndex]) {
@@ -415,11 +454,15 @@ function StoryScreenInner({
           >
             {isStoryboard ? (
               <StoryboardCycler
+                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}`}
                 gridUrl={currentBeat.imageUrl!}
                 audioUrl={currentBeat.audioUrl}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
+                vignetteEnabled={cycleSettings.vignetteEnabled}
                 playbackState={playbackState}
+                onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
+                onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}
               />
             ) : displayImageUrl && (
               <Image
@@ -430,6 +473,7 @@ function StoryScreenInner({
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
+                onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                 onError={() => setFailedImageUrl(displayImageUrl)}
               />
             )}
@@ -459,10 +503,12 @@ function StoryScreenInner({
           {onSave && (
             <button
               onClick={onSave}
-              disabled={isSaving || saveStatus === 'saved'}
+              disabled={isSaving || (saveStatus === 'saved' && !saveWarning)}
               className={`p-2 rounded-full transition-all duration-300 ${
                 saveStatus === 'saving'
                   ? 'text-amber-400'
+                  : saveStatus === 'saved' && saveWarning
+                  ? 'text-amber-400 hover:bg-white/10'
                   : saveStatus === 'saved'
                   ? 'text-emerald-400'
                   : saveStatus === 'unsaved'
@@ -472,6 +518,8 @@ function StoryScreenInner({
               title={
                 saveStatus === 'saving'
                   ? 'Saving...'
+                  : saveStatus === 'saved' && saveWarning
+                  ? saveWarning
                   : saveStatus === 'saved'
                   ? 'Saved to cloud'
                   : saveStatus === 'unsaved'
@@ -481,6 +529,8 @@ function StoryScreenInner({
             >
               {saveStatus === 'saving' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
+              ) : saveStatus === 'saved' && saveWarning ? (
+                <AlertTriangle className="w-4 h-4" />
               ) : saveStatus === 'saved' ? (
                 <CheckCircle2 className="w-4 h-4" />
               ) : saveStatus === 'unsaved' ? (
@@ -595,8 +645,19 @@ function StoryScreenInner({
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  transition={{ duration: 0.4 }}
-                >
+                transition={{ duration: 0.4 }}
+              >
+                  {preludeText && !isMinimized && (
+                    <div className="mb-8 rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-5">
+                      <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300">
+                        Prelude
+                      </p>
+                      <p className="mt-3 text-base font-serif leading-relaxed text-neutral-300">
+                        {preludeText}
+                      </p>
+                    </div>
+                  )}
+
                   <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
                     isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
                   }`}>
@@ -615,7 +676,12 @@ function StoryScreenInner({
                       {/* Auto-publish status */}
                       {lastPublishResult && (
                         <div className="mt-4">
-                          {lastPublishResult.alreadyPublished ? (
+                          {lastPublishResult.error ? (
+                            <div className="flex items-center gap-2 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3">
+                              <AlertTriangle className="w-4 h-4 shrink-0" />
+                              <span>Publishing failed — {lastPublishResult.error}</span>
+                            </div>
+                          ) : lastPublishResult.alreadyPublished ? (
                             <div className="flex items-center gap-2 text-sm text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3">
                               <Check className="w-4 h-4 shrink-0" />
                               <span>This path is already published.</span>

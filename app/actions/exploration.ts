@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
+import { deriveVisualStyleSummary, getPreludeText, normalizeStoryConfig } from '@/lib/ai/story-config';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -106,9 +107,45 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
   if (beats && beats.length > 0) {
     // Always start from root node — exploration begins from beat 1
     storyMap = reconstructStoryMap(beats as DbBeat[], null);
+    const rawMap = dbStory.story_map;
+    if (rawMap && typeof rawMap === 'object' && 'nodes' in rawMap) {
+      const jsonbMap = rawMap as unknown as StoryMap;
+      for (const nodeId of Object.keys(storyMap.nodes)) {
+        const jsonbNode = jsonbMap.nodes?.[nodeId];
+        if (!jsonbNode?.data) continue;
+        storyMap.nodes[nodeId] = {
+          ...storyMap.nodes[nodeId],
+          data: {
+            ...storyMap.nodes[nodeId].data,
+            ...(!storyMap.nodes[nodeId].data.imageUrl && jsonbNode.data.imageUrl
+              ? { imageUrl: jsonbNode.data.imageUrl }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
+              ? { audioUrl: jsonbNode.data.audioUrl }
+              : {}),
+            ...(jsonbNode.data.characters
+              ? {
+                  characters: mergeCharactersWithFallback(
+                    storyMap.nodes[nodeId].data.characters,
+                    jsonbNode.data.characters
+                  ),
+                }
+              : {}),
+            ...(jsonbNode.data.isStoryboard ? { isStoryboard: true } : {}),
+            ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
+            ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
+            ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+          },
+        };
+      }
+    }
   } else {
     // Fallback to legacy story_map JSONB
-    storyMap = dbStory.story_map as unknown as StoryMap;
+    const rawFallbackMap = dbStory.story_map;
+    if (!rawFallbackMap || typeof rawFallbackMap !== 'object' || !('nodes' in rawFallbackMap)) {
+      throw new Error('Story map is missing or corrupted');
+    }
+    storyMap = rawFallbackMap as unknown as StoryMap;
     // Reset to root for legacy maps too
     if (storyMap.rootNodeId) {
       storyMap = { ...storyMap, currentNodeId: storyMap.rootNodeId };
@@ -117,6 +154,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
   storyMap = await signStoryMapAssetUrls(supabase, storyMap);
+  const storyConfig = normalizeStoryConfig(dbStory.story_config as any);
 
   // Track exploration for non-owners
   if (!isOwner) {
@@ -143,13 +181,13 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     genre: dbStory.genre || 'adventure',
     tone: dbStory.tone || 'playful',
     targetAge: dbStory.target_age || 'all_ages',
-    visualStyle: dbStory.visual_style || 'cinematic storybook illustration',
+    visualStyle: dbStory.visual_style || deriveVisualStyleSummary(storyConfig.visualSettings),
     currentBeat: 0,
-    maxBeats: (dbStory.story_config as any)?.maxBeats || 6,
+    maxBeats: storyConfig.maxBeats,
     status: dbStory.status as 'active' | 'completed' | 'error',
     characters: (dbStory.characters || []) as any,
     setting: (dbStory.setting || { world: 'unknown', timeOfDay: 'unknown', mood: 'unknown' }) as any,
-    storyConfig: (dbStory.story_config || { language: 'english', ageGroup: 'all_ages', settingCountry: 'generic', maxBeats: 6 }) as any,
+    storyConfig,
     storyMap,
     beats: [],
     choiceHistory: [],
@@ -250,6 +288,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   };
   beats: StoryBeat[];
   choices: { fromBeat: number; optionLabel: string }[];
+  preludeText?: string;
 }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -258,11 +297,13 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices')
+    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices, stories(story_config)')
     .eq('id', storylineId)
     .single();
 
   if (slError || !storyline) throw new Error('Storyline not found');
+
+  const preludeText = getPreludeText((storyline as any).stories?.story_config);
 
   // Try normalized junction first
   const { data: junctionBeats } = await supabase
@@ -320,6 +361,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       },
       beats: signedBeats,
       choices,
+      ...(preludeText ? { preludeText } : {}),
     };
   }
 
@@ -340,7 +382,35 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     },
     beats: signedLegacyBeats,
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
+    ...(preludeText ? { preludeText } : {}),
   };
+}
+
+function mergeCharactersWithFallback(
+  primary: StoryBeat['characters'],
+  fallback?: StoryBeat['characters']
+): StoryBeat['characters'] {
+  if (!fallback || fallback.length === 0) {
+    return primary;
+  }
+
+  const merged = new Map<string, StoryBeat['characters'][number]>();
+
+  for (const character of fallback) {
+    merged.set(character.id, { ...character });
+  }
+
+  for (const character of primary) {
+    const existing = merged.get(character.id);
+    merged.set(character.id, {
+      ...existing,
+      ...character,
+      portraitUrl: character.portraitUrl || existing?.portraitUrl,
+      portraitBase64: character.portraitBase64 || existing?.portraitBase64,
+    });
+  }
+
+  return Array.from(merged.values());
 }
 
 /**

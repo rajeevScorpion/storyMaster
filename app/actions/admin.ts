@@ -182,17 +182,20 @@ export async function getGlobalSettings(): Promise<{
   storyboardMode: boolean;
   cycleOverride: boolean;
   cycleMs: number;
+  vignetteEnabled: boolean;
 }> {
   await verifyAdmin();
-  const [storyboardMode, cycleOverride, cycleMsStr] = await Promise.all([
+  const [storyboardMode, cycleOverride, cycleMsStr, vignetteEnabled] = await Promise.all([
     getFeatureFlag('storyboard_mode'),
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
+    getFeatureFlag('storyboard_vignette_enabled', true),
   ]);
   return {
     storyboardMode,
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
+    vignetteEnabled,
   };
 }
 
@@ -211,15 +214,22 @@ export async function setCycleMs(ms: number): Promise<void> {
   await setFeatureFlagValue('storyboard_cycle_ms', String(ms));
 }
 
+export async function setStoryboardVignette(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('storyboard_vignette_enabled', enabled);
+}
+
 // Public (no admin gate) — read by StoryScreen to pace storyboard panels
-export async function getStoryboardSettings(): Promise<{ cycleOverride: boolean; cycleMs: number }> {
-  const [cycleOverride, cycleMsStr] = await Promise.all([
+export async function getStoryboardSettings(): Promise<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean }> {
+  const [cycleOverride, cycleMsStr, vignetteEnabled] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
+    getFeatureFlag('storyboard_vignette_enabled', true),
   ]);
   return {
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
+    vignetteEnabled,
   };
 }
 

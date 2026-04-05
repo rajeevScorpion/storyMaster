@@ -5,6 +5,7 @@ import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToP
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -28,6 +29,40 @@ function stripBase64(storyMap: StoryMap): StoryMap {
     };
   }
   return { ...storyMap, nodes };
+}
+
+function sanitizeSessionCharacters(session: StorySession): StorySession['characters'] {
+  return (session.characters || []).map((character) => ({
+    ...character,
+    portraitBase64: undefined,
+  }));
+}
+
+function mergeCharactersWithFallback(
+  primary: StoryBeat['characters'],
+  fallback?: StoryBeat['characters']
+): StoryBeat['characters'] {
+  if (!fallback || fallback.length === 0) {
+    return primary;
+  }
+
+  const merged = new Map<string, StoryBeat['characters'][number]>();
+
+  for (const character of fallback) {
+    merged.set(character.id, { ...character });
+  }
+
+  for (const character of primary) {
+    const existing = merged.get(character.id);
+    merged.set(character.id, {
+      ...existing,
+      ...character,
+      portraitUrl: character.portraitUrl || existing?.portraitUrl,
+      portraitBase64: character.portraitBase64 || existing?.portraitBase64,
+    });
+  }
+
+  return Array.from(merged.values());
 }
 
 /**
@@ -151,7 +186,7 @@ function reconstructStoryMap(beats: DbBeat[], currentNodeId?: string | null): St
 export async function saveStory(
   session: StorySession,
   storyMapWithUrls: StoryMap
-): Promise<{ storyId: string }> {
+): Promise<{ storyId: string; beatsWarning?: string }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
@@ -168,7 +203,7 @@ export async function saveStory(
     target_age: session.targetAge,
     story_config: session.storyConfig as unknown as Record<string, unknown>,
     story_map: cleanMap as unknown as Record<string, unknown>,
-    characters: session.characters as unknown as Record<string, unknown>[],
+    characters: sanitizeSessionCharacters(session) as unknown as Record<string, unknown>[],
     setting: session.setting as unknown as Record<string, unknown>,
     status: session.status,
     narrator_voice: session.narratorVoice || null,
@@ -210,7 +245,8 @@ export async function saveStory(
       .upsert(beatRows, { onConflict: 'story_id,node_id' });
 
     if (beatsError) {
-      console.error('Failed to upsert beats (non-fatal):', beatsError.message);
+      console.error('Failed to upsert beats:', beatsError.message);
+      return { storyId, beatsWarning: 'Beat data failed to sync — publishing may be unavailable until next save' };
     }
   }
 
@@ -246,17 +282,37 @@ export async function loadStory(storyId: string): Promise<StorySession> {
   let storyMap: StoryMap;
   if (beats && beats.length > 0) {
     storyMap = reconstructStoryMap(beats as DbBeat[], story.current_node_id);
-    // Merge isStoryboard from JSONB story_map for beats that predate the is_storyboard column
+    // Merge fields that only live inside story_map JSONB so older normalized rows still
+    // preserve storyboard metadata and additive compatibility fields.
     if (story.story_map) {
       const jsonbMap = story.story_map as unknown as StoryMap;
       for (const nodeId of Object.keys(storyMap.nodes)) {
         const jsonbNode = jsonbMap.nodes?.[nodeId];
-        if (jsonbNode?.data?.isStoryboard && !storyMap.nodes[nodeId].data.isStoryboard) {
-          storyMap.nodes[nodeId] = {
-            ...storyMap.nodes[nodeId],
-            data: { ...storyMap.nodes[nodeId].data, isStoryboard: true },
-          };
-        }
+        if (!jsonbNode?.data) continue;
+        storyMap.nodes[nodeId] = {
+          ...storyMap.nodes[nodeId],
+          data: {
+            ...storyMap.nodes[nodeId].data,
+            ...(!storyMap.nodes[nodeId].data.imageUrl && jsonbNode.data.imageUrl
+              ? { imageUrl: jsonbNode.data.imageUrl }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
+              ? { audioUrl: jsonbNode.data.audioUrl }
+              : {}),
+            ...(jsonbNode.data.characters
+              ? {
+                  characters: mergeCharactersWithFallback(
+                    storyMap.nodes[nodeId].data.characters,
+                    jsonbNode.data.characters
+                  ),
+                }
+              : {}),
+            ...(jsonbNode.data.isStoryboard ? { isStoryboard: true } : {}),
+            ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
+            ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
+            ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+          },
+        };
       }
     }
   } else {
@@ -266,22 +322,24 @@ export async function loadStory(storyId: string): Promise<StorySession> {
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
   storyMap = await signStoryMapAssetUrls(supabase, storyMap);
+  const storyConfig = normalizeStoryConfig(story.story_config as any);
 
   return {
     storySessionId: story.id,
     savedStoryId: story.id,
+    savedByUserId: story.user_id,
     userPrompt: story.user_prompt,
     title: story.title,
     genre: story.genre || 'adventure',
     tone: story.tone || 'playful',
     targetAge: story.target_age || 'all_ages',
-    visualStyle: story.visual_style || 'cinematic storybook illustration',
+    visualStyle: story.visual_style || deriveVisualStyleSummary(storyConfig.visualSettings),
     currentBeat: 0,
-    maxBeats: (story.story_config as any)?.maxBeats || 6,
+    maxBeats: storyConfig.maxBeats,
     status: story.status as 'active' | 'completed' | 'error',
     characters: (story.characters || []) as any,
     setting: (story.setting || { world: 'unknown', timeOfDay: 'unknown', mood: 'unknown' }) as any,
-    storyConfig: (story.story_config || { language: 'english', ageGroup: 'all_ages', settingCountry: 'generic', maxBeats: 6 }) as any,
+    storyConfig,
     storyMap,
     beats: [],
     choiceHistory: [],
@@ -501,7 +559,26 @@ export async function autoPublishStoryline(
     .select('id')
     .single();
 
-  if (slError) throw new Error(`Failed to publish storyline: ${slError.message}`);
+  if (slError) {
+    // Handle concurrent publish race: another request beat us to the INSERT
+    if (slError.code === '23505') {
+      const { data: dup } = await supabase
+        .from('storylines')
+        .select('id')
+        .eq('path_hash', pathHash)
+        .maybeSingle();
+      if (dup) {
+        await supabase
+          .from('saved_storylines')
+          .upsert(
+            { user_id: user.id, storyline_id: dup.id },
+            { onConflict: 'user_id,storyline_id' }
+          );
+        return { alreadyPublished: true, storylineId: dup.id };
+      }
+    }
+    throw new Error(`Failed to publish storyline: ${slError.message}`);
+  }
 
   // Create storyline_beats junction rows
   const junctionRows = nodePath.map((nodeId, index) => {
