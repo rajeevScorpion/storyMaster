@@ -15,14 +15,14 @@ Update the **Status** column as each item is resolved. Add `Fixed: YYYY-MM-DD` t
 | C-1  | 🔴 Critical | ✅ Fixed 2026-04-03 | `app/actions/story-runtime.ts`      | Client-side Gemini API key in browser bundle |
 | C-2  | 🔴 Critical | ✅ Fixed 2026-04-03 | `app/actions/prompt-playground.ts`  | NEXT_PUBLIC key fallback in server action    |
 | C-3  | 🔴 Critical | ✅ Fixed 2026-04-03 | `supabase/migrations/014_*.sql`     | Migration 014 depends on 013's column silently |
-| H-1  | 🟠 High     | ⏳ Pending    | `lib/store/story-store.ts`               | Unhandled Promise in narration pipeline      |
-| H-2  | 🟠 High     | ⏳ Pending    | `app/actions/story-runtime.ts`           | JSON.parse with no try/catch on API responses |
-| H-3  | 🟠 High     | ⏳ Pending    | `app/actions/persistence.ts`             | Beat upsert failure silently continues       |
-| H-4  | 🟠 High     | ⏳ Pending    | `app/actions/persistence.ts`             | Double-publish race condition                |
-| H-5  | 🟠 High     | ⏳ Pending    | `lib/store/story-store.ts`               | Multi-step publish has no rollback/error state |
-| H-6  | 🟠 High     | ⏳ Pending    | `lib/ai/story-bible.ts`                  | beat.options accessed without null guard     |
-| H-7  | 🟠 High     | ⏳ Pending    | `app/actions/exploration.ts`             | Unsafe `as unknown as` casts on DB results   |
-| H-8  | 🟠 High     | ⏳ Pending    | `components/story/StoryScreen.tsx`       | panelDurationMs can be null → storyboard freezes |
+| H-1  | 🟠 High     | ✅ Fixed 2026-04-05 | `lib/store/story-store.ts`          | Unhandled Promise in narration pipeline      |
+| H-2  | 🟠 High     | ✅ Fixed 2026-04-03 | `app/actions/story-runtime.ts`      | JSON.parse with no try/catch on API responses |
+| H-3  | 🟠 High     | ✅ Fixed 2026-04-05 | `app/actions/persistence.ts`        | Beat upsert failure silently continues       |
+| H-4  | 🟠 High     | ✅ Fixed 2026-04-05 | `app/actions/persistence.ts`        | Double-publish race condition                |
+| H-5  | 🟠 High     | ✅ Fixed 2026-04-05 | `lib/store/story-store.ts`          | Multi-step publish has no rollback/error state |
+| H-6  | 🟠 High     | ✅ Fixed 2026-04-05 | `lib/ai/story-bible.ts`             | beat.options accessed without null guard     |
+| H-7  | 🟠 High     | ✅ Fixed 2026-04-05 | `app/actions/exploration.ts`        | Unsafe `as unknown as` casts on DB results   |
+| H-8  | 🟠 High     | ✅ Fixed 2026-04-05 | `components/story/StoryScreen.tsx`  | panelDurationMs can be null → storyboard freezes |
 | M-1  | 🟡 Medium   | ⏳ Pending    | `components/story/LandingScreen.tsx`     | sessionStorage parsed without schema validation |
 | M-2  | 🟡 Medium   | ⏳ Pending    | `lib/ai/story-config.ts`                 | normalizeStoryConfig accepts invalid enum values |
 | M-3  | 🟡 Medium   | ⏳ Pending    | `lib/ai/model-config.ts`                 | Empty catch blocks mask model config failures |
@@ -88,7 +88,7 @@ ALTER TABLE feature_flags ADD COLUMN IF NOT EXISTS value TEXT NULL;
 
 ### H-1 — Unhandled Promise in narration pipeline
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `lib/store/story-store.ts` ~lines 354–393
 
 `Promise.all([voicePromise, earlySavePromise])` chains further narration work but has no `.catch()`. Failures are silently swallowed; the loading state may never clear.
@@ -99,7 +99,7 @@ ALTER TABLE feature_flags ADD COLUMN IF NOT EXISTS value TEXT NULL;
 
 ### H-2 — JSON.parse without try/catch on API responses
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-03
 **File:** `app/actions/story-runtime.ts` lines 135, 204
 
 ```ts
@@ -115,7 +115,7 @@ Malformed JSON from Gemini (quota error pages, partial streaming responses) thro
 
 ### H-3 — Beat upsert failure silently continues
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `app/actions/persistence.ts` ~lines 242–250
 
 ```ts
@@ -133,7 +133,7 @@ The "non-fatal" assumption is incorrect: if beats fail to save, the `story_map` 
 
 ### H-4 — Double-publish race condition
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05 (partial — pre-check retained; 23505 error handler added as race guard; see note)
 **File:** `app/actions/persistence.ts` ~lines 477–494
 
 Check-then-insert pattern with a TOCTOU window:
@@ -149,7 +149,7 @@ if (existing) return; // ← race window here
 
 ### H-5 — Multi-step publish has no rollback/error state
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `lib/store/story-store.ts` ~lines 645–735
 
 Auto-publish runs four steps sequentially (saveBeat → copyCover → setCoverImage → publishStoryline). If step 2 or 3 fails, step 1's data is committed but the storyline is never published — story left in limbo with no user feedback.
@@ -160,7 +160,7 @@ Auto-publish runs four steps sequentially (saveBeat → copyCover → setCoverIm
 
 ### H-6 — beat.options accessed without null guard in validator
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `lib/ai/story-bible.ts` ~lines 108–114
 
 ```ts
@@ -175,7 +175,7 @@ If the AI returns a beat without an `options` field, this throws a TypeError ins
 
 ### H-7 — Unsafe type casts on DB results
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `app/actions/exploration.ts` lines 94, 111, 143, 152
 
 ```ts
@@ -190,7 +190,7 @@ No runtime shape validation. Schema drift or migration errors cause silent incor
 
 ### H-8 — panelDurationMs can be null → storyboard freezes
 **Severity:** 🟠 High
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **Files:** `components/story/StoryScreen.tsx` ~lines 53–56, `components/story/StorylinePlayer.tsx` ~lines 76–79
 
 ```ts

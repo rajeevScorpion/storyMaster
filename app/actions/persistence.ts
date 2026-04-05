@@ -186,7 +186,7 @@ function reconstructStoryMap(beats: DbBeat[], currentNodeId?: string | null): St
 export async function saveStory(
   session: StorySession,
   storyMapWithUrls: StoryMap
-): Promise<{ storyId: string }> {
+): Promise<{ storyId: string; beatsWarning?: string }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
@@ -245,7 +245,8 @@ export async function saveStory(
       .upsert(beatRows, { onConflict: 'story_id,node_id' });
 
     if (beatsError) {
-      console.error('Failed to upsert beats (non-fatal):', beatsError.message);
+      console.error('Failed to upsert beats:', beatsError.message);
+      return { storyId, beatsWarning: 'Beat data failed to sync — publishing may be unavailable until next save' };
     }
   }
 
@@ -558,7 +559,26 @@ export async function autoPublishStoryline(
     .select('id')
     .single();
 
-  if (slError) throw new Error(`Failed to publish storyline: ${slError.message}`);
+  if (slError) {
+    // Handle concurrent publish race: another request beat us to the INSERT
+    if (slError.code === '23505') {
+      const { data: dup } = await supabase
+        .from('storylines')
+        .select('id')
+        .eq('path_hash', pathHash)
+        .maybeSingle();
+      if (dup) {
+        await supabase
+          .from('saved_storylines')
+          .upsert(
+            { user_id: user.id, storyline_id: dup.id },
+            { onConflict: 'user_id,storyline_id' }
+          );
+        return { alreadyPublished: true, storylineId: dup.id };
+      }
+    }
+    throw new Error(`Failed to publish storyline: ${slError.message}`);
+  }
 
   // Create storyline_beats junction rows
   const junctionRows = nodePath.map((nodeId, index) => {

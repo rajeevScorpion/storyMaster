@@ -23,6 +23,7 @@ import {
 interface PublishResult {
   alreadyPublished: boolean;
   storylineId: string;
+  error?: string;
 }
 
 interface StoryState {
@@ -36,6 +37,7 @@ interface StoryState {
   storyMode: boolean;
   isSaving: boolean;
   saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
+  saveWarning: string | null;
   lastPublishResult: PublishResult | null;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
@@ -251,6 +253,7 @@ export const useStoryStore = create<StoryState>()(
       storyMode: false,
       isSaving: false,
       saveStatus: 'idle' as const,
+      saveWarning: null,
       lastPublishResult: null,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
@@ -390,6 +393,9 @@ export const useStoryStore = create<StoryState>()(
                 console.error('Narration generation failed:', err);
                 set({ isGeneratingAudio: false });
               });
+            }).catch((err) => {
+              console.error('Narration pipeline failed:', err);
+              set({ isGeneratingAudio: false });
             });
           }
 
@@ -731,7 +737,10 @@ export const useStoryStore = create<StoryState>()(
                 .then((result) => {
                   set({ lastPublishResult: result });
                 })
-                .catch((err) => console.error('Auto-publish failed:', err));
+                .catch((err) => {
+                  console.error('Auto-publish failed:', err);
+                  set({ lastPublishResult: { alreadyPublished: false, storylineId: '', error: err.message || 'Publishing failed' } });
+                });
             }
           }
         } catch (error: any) {
@@ -951,7 +960,7 @@ export const useStoryStore = create<StoryState>()(
             session,
             stripBase64FromStoryMap(session.storyMap)
           );
-          const { storyId } = await saveStoryAction(strippedForId, strippedForId.storyMap);
+          const { storyId, beatsWarning: w1 } = await saveStoryAction(strippedForId, strippedForId.storyMap);
 
           // Upload assets using the stable storyId so images + audio always share the same folder
           const nodeIds = Object.keys(session.storyMap.nodes);
@@ -966,7 +975,7 @@ export const useStoryStore = create<StoryState>()(
           const strippedSession = buildPersistableSessionSnapshot(session, cleanMap, {
             savedStoryId: storyId,
           });
-          await saveStoryAction(strippedSession, cleanMap);
+          const { beatsWarning: w2 } = await saveStoryAction(strippedSession, cleanMap);
 
           // Update local session with savedStoryId but keep original base64 URLs
           // (storage URLs are for DB only — story-assets bucket is private)
@@ -977,7 +986,7 @@ export const useStoryStore = create<StoryState>()(
             { ...(latestSession || session), savedStoryId: storyId, savedByUserId: userId },
             latestMap
           );
-          set({ session: updatedSession, isSaving: false, saveStatus: 'saved' });
+          set({ session: updatedSession, isSaving: false, saveStatus: 'saved', saveWarning: w1 ?? w2 ?? null });
         } catch (error: any) {
           set({ isSaving: false, saveStatus: 'unsaved', error: error.message || 'Failed to save story' });
         }

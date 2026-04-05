@@ -107,8 +107,9 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
   if (beats && beats.length > 0) {
     // Always start from root node — exploration begins from beat 1
     storyMap = reconstructStoryMap(beats as DbBeat[], null);
-    if (dbStory.story_map) {
-      const jsonbMap = dbStory.story_map as unknown as StoryMap;
+    const rawMap = dbStory.story_map;
+    if (rawMap && typeof rawMap === 'object' && 'nodes' in rawMap) {
+      const jsonbMap = rawMap as unknown as StoryMap;
       for (const nodeId of Object.keys(storyMap.nodes)) {
         const jsonbNode = jsonbMap.nodes?.[nodeId];
         if (!jsonbNode?.data) continue;
@@ -140,7 +141,11 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     }
   } else {
     // Fallback to legacy story_map JSONB
-    storyMap = dbStory.story_map as unknown as StoryMap;
+    const rawFallbackMap = dbStory.story_map;
+    if (!rawFallbackMap || typeof rawFallbackMap !== 'object' || !('nodes' in rawFallbackMap)) {
+      throw new Error('Story map is missing or corrupted');
+    }
+    storyMap = rawFallbackMap as unknown as StoryMap;
     // Reset to root for legacy maps too
     if (storyMap.rootNodeId) {
       storyMap = { ...storyMap, currentNodeId: storyMap.rootNodeId };

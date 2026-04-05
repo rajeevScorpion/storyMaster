@@ -105,6 +105,11 @@ export function validateGeneratedBeat(
     issues.push(`beatNumber exceeds configured maxBeats (${maxBeats})`);
   }
 
+  if (!Array.isArray(beat.options)) {
+    issues.push('options must be an array');
+    return issues;
+  }
+
   if (beat.isEnding) {
     if (beat.options.length !== 0) {
       issues.push('ending beats must return an empty options array');

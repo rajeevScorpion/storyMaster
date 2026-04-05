@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
@@ -53,7 +53,7 @@ function StoryboardCycler({
     ? cycleMs
     : !audioUrl
     ? STORYBOARD_ADVANCE_MS
-    : resolvedAudioDurationMs;
+    : resolvedAudioDurationMs ?? STORYBOARD_ADVANCE_MS;
 
   // Effect 1: resolve panel duration whenever the beat changes
   useEffect(() => {
@@ -171,6 +171,7 @@ export default function StoryScreen() {
   const toggleStoryMode = useStoryStore((state) => state.toggleStoryMode);
   const isSaving = useStoryStore((state) => state.isSaving);
   const saveStatus = useStoryStore((state) => state.saveStatus);
+  const saveWarning = useStoryStore((state) => state.saveWarning);
   const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
@@ -228,6 +229,7 @@ export default function StoryScreen() {
       toggleStoryMode={toggleStoryMode}
       isSaving={isSaving}
       saveStatus={saveStatus}
+      saveWarning={saveWarning}
       onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id) : undefined}
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
@@ -256,6 +258,7 @@ function StoryScreenInner({
   toggleStoryMode,
   isSaving,
   saveStatus,
+  saveWarning,
   onSave,
   lastPublishResult,
   cycleSettings,
@@ -279,8 +282,9 @@ function StoryScreenInner({
   toggleStoryMode: () => void;
   isSaving: boolean;
   saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
+  saveWarning: string | null;
   onSave?: () => void;
-  lastPublishResult: { alreadyPublished: boolean; storylineId: string } | null;
+  lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
   cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean };
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -499,10 +503,12 @@ function StoryScreenInner({
           {onSave && (
             <button
               onClick={onSave}
-              disabled={isSaving || saveStatus === 'saved'}
+              disabled={isSaving || (saveStatus === 'saved' && !saveWarning)}
               className={`p-2 rounded-full transition-all duration-300 ${
                 saveStatus === 'saving'
                   ? 'text-amber-400'
+                  : saveStatus === 'saved' && saveWarning
+                  ? 'text-amber-400 hover:bg-white/10'
                   : saveStatus === 'saved'
                   ? 'text-emerald-400'
                   : saveStatus === 'unsaved'
@@ -512,6 +518,8 @@ function StoryScreenInner({
               title={
                 saveStatus === 'saving'
                   ? 'Saving...'
+                  : saveStatus === 'saved' && saveWarning
+                  ? saveWarning
                   : saveStatus === 'saved'
                   ? 'Saved to cloud'
                   : saveStatus === 'unsaved'
@@ -521,6 +529,8 @@ function StoryScreenInner({
             >
               {saveStatus === 'saving' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
+              ) : saveStatus === 'saved' && saveWarning ? (
+                <AlertTriangle className="w-4 h-4" />
               ) : saveStatus === 'saved' ? (
                 <CheckCircle2 className="w-4 h-4" />
               ) : saveStatus === 'unsaved' ? (
@@ -666,7 +676,12 @@ function StoryScreenInner({
                       {/* Auto-publish status */}
                       {lastPublishResult && (
                         <div className="mt-4">
-                          {lastPublishResult.alreadyPublished ? (
+                          {lastPublishResult.error ? (
+                            <div className="flex items-center gap-2 text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-3">
+                              <AlertTriangle className="w-4 h-4 shrink-0" />
+                              <span>Publishing failed — {lastPublishResult.error}</span>
+                            </div>
+                          ) : lastPublishResult.alreadyPublished ? (
                             <div className="flex items-center gap-2 text-sm text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3">
                               <Check className="w-4 h-4 shrink-0" />
                               <span>This path is already published.</span>

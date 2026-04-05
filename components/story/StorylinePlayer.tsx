@@ -74,7 +74,7 @@ function StoryboardCycler({
     ? cycleMs
     : !audioUrl
     ? STORYBOARD_ADVANCE_MS
-    : resolvedAudioDurationMs;
+    : resolvedAudioDurationMs ?? STORYBOARD_ADVANCE_MS;
 
   useEffect(() => {
     prevPlaybackStateRef.current = 'idle';
