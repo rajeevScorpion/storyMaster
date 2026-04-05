@@ -25,11 +25,11 @@ Update the **Status** column as each item is resolved. Add `Fixed: YYYY-MM-DD` t
 | H-8  | 🟠 High     | ✅ Fixed 2026-04-05 | `components/story/StoryScreen.tsx`  | panelDurationMs can be null → storyboard freezes |
 | M-1  | 🟡 Medium   | ⏳ Pending    | `components/story/LandingScreen.tsx`     | sessionStorage parsed without schema validation |
 | M-2  | 🟡 Medium   | ⏳ Pending    | `lib/ai/story-config.ts`                 | normalizeStoryConfig accepts invalid enum values |
-| M-3  | 🟡 Medium   | ⏳ Pending    | `lib/ai/model-config.ts`                 | Empty catch blocks mask model config failures |
-| M-4  | 🟡 Medium   | ⏳ Pending    | `components/admin/GlobalSettings.tsx`    | Unhandled rejection on settings load         |
-| M-5  | 🟡 Medium   | ⏳ Pending    | `components/admin/GlobalSettings.tsx`    | parseInt validation bug (NaN guard by accident) |
+| M-3  | 🟡 Medium   | ✅ Fixed 2026-04-05 | `lib/ai/model-config.ts`            | Empty catch blocks mask model config failures |
+| M-4  | 🟡 Medium   | ✅ Fixed 2026-04-05 | `components/admin/GlobalSettings.tsx` | Unhandled rejection on settings load       |
+| M-5  | 🟡 Medium   | ✅ Fixed 2026-04-05 | `components/admin/GlobalSettings.tsx` | parseInt validation bug (NaN guard by accident) |
 | M-6  | 🟡 Medium   | ⏳ Pending    | `supabase/migrations/011_*_rollback.sql` | Rollback chain broken — DROP TABLE destroys 012-014 data |
-| M-7  | 🟡 Medium   | ⏳ Pending    | `app/actions/story-runtime.ts`           | No timeout on Gemini API calls               |
+| M-7  | 🟡 Medium   | ✅ Fixed 2026-04-05 | `app/actions/gemini-proxy.ts`       | No timeout on Gemini API calls               |
 | L-1  | ⚪ Low      | ⏳ Pending    | `supabase/migrations/`                   | Missing 001_initial_schema_rollback.sql      |
 | L-2  | ⚪ Low      | ⏳ Pending    | `supabase/migrations/010_*_rollback.sql` | Inconsistent SQL style in 010 rollback       |
 | L-3  | ⚪ Low      | ⏳ Pending    | `lib/ai/story-bible.ts`                  | beat.beatNumber can be undefined in registry |
@@ -232,7 +232,7 @@ Invalid strings for `preset`, `theme`, `palette`, `detail` pass through unchecke
 
 ### M-3 — Empty catch blocks mask model config failures
 **Severity:** 🟡 Medium
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `lib/ai/model-config.ts` lines 54, 86, 115, 149
 
 Silent fallback to defaults with no logging makes model misconfiguration invisible in production.
@@ -243,7 +243,7 @@ Silent fallback to defaults with no logging makes model misconfiguration invisib
 
 ### M-4 — Unhandled rejection on GlobalSettings load
 **Severity:** 🟡 Medium
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `components/admin/GlobalSettings.tsx` line 50
 
 `getGlobalSettings().then(...)` has no `.catch()`. Silent failure; admin page shows stale/default values.
@@ -254,7 +254,7 @@ Silent fallback to defaults with no logging makes model misconfiguration invisib
 
 ### M-5 — parseInt validation bug in GlobalSettings
 **Severity:** 🟡 Medium
-**Status:** ⏳ Pending
+**Status:** ✅ Fixed 2026-04-05
 **File:** `components/admin/GlobalSettings.tsx` lines 61, 151, 156
 
 ```ts
@@ -285,8 +285,8 @@ Rolling back past 011 destroys all data inserted by 012, 013, and 014. The 014 r
 
 ### M-7 — No timeout on Gemini API calls
 **Severity:** 🟡 Medium
-**Status:** ⏳ Pending
-**File:** `app/actions/story-runtime.ts` (all AI call sites)
+**Status:** ✅ Fixed 2026-04-05
+**File:** `app/actions/gemini-proxy.ts` (30s text, 90s image)
 
 Long-running or hung API calls freeze the UI indefinitely with no recovery.
 

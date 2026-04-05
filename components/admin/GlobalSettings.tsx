@@ -36,6 +36,7 @@ function ToggleRow({
 
 export default function GlobalSettings() {
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [storyboardEnabled, setStoryboardEnabled] = useState(false);
   const [storyboardToggling, setStoryboardToggling] = useState(false);
   const [cycleOverride, setCycleOverrideState] = useState(false);
@@ -47,19 +48,25 @@ export default function GlobalSettings() {
   const [vignetteToggling, setVignetteToggling] = useState(false);
 
   useEffect(() => {
-    getGlobalSettings().then(({ storyboardMode, cycleOverride: co, cycleMs: cm, vignetteEnabled: ve }) => {
-      setStoryboardEnabled(storyboardMode);
-      setCycleOverrideState(co);
-      setCycleMsState(cm);
-      setCycleMsInput(String(cm));
-      setVignetteEnabled(ve);
-      setLoading(false);
-    });
+    getGlobalSettings()
+      .then(({ storyboardMode, cycleOverride: co, cycleMs: cm, vignetteEnabled: ve }) => {
+        setStoryboardEnabled(storyboardMode);
+        setCycleOverrideState(co);
+        setCycleMsState(cm);
+        setCycleMsInput(String(cm));
+        setVignetteEnabled(ve);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error('GlobalSettings: failed to load settings:', err);
+        setLoadError(err.message || 'Failed to load settings');
+        setLoading(false);
+      });
   }, []);
 
   async function handleCycleMsSave() {
     const ms = parseInt(cycleMsInput, 10);
-    if (!ms || ms < 500) return;
+    if (!Number.isFinite(ms) || ms < 500) return;
     setCycleMsSaving(true);
     try {
       await setCycleMs(ms);
@@ -69,10 +76,18 @@ export default function GlobalSettings() {
     }
   }
 
+  const parsedMs = parseInt(cycleMsInput, 10);
+
   return (
     <div className="mx-auto max-w-7xl">
       <h1 className="mb-1 text-2xl text-neutral-100">Global Settings</h1>
       <p className="mb-8 text-sm text-neutral-400">Runtime feature flags that apply globally to all story generation. Premium-user scoping can be added later.</p>
+
+      {loadError && (
+        <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
+          Failed to load settings — {loadError}. Try refreshing the page.
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading settings...</div>
@@ -148,12 +163,12 @@ export default function GlobalSettings() {
                 <span className="text-xs text-neutral-500">ms</span>
                 <button
                   onClick={handleCycleMsSave}
-                  disabled={cycleMsSaving || !cycleMsInput || parseInt(cycleMsInput, 10) < 500}
+                  disabled={cycleMsSaving || !Number.isFinite(parsedMs) || parsedMs < 500}
                   className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
                 >
                   {cycleMsSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
                 </button>
-                {cycleMs !== parseInt(cycleMsInput, 10) && parseInt(cycleMsInput, 10) >= 500 && (
+                {cycleMs !== parsedMs && parsedMs >= 500 && (
                   <span className="text-xs text-amber-400">Unsaved</span>
                 )}
               </div>

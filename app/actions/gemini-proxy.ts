@@ -5,6 +5,18 @@ import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 
+const GEMINI_TEXT_TIMEOUT_MS = 30_000;
+const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Gemini timeout after ${ms / 1000}s (${label})`)), ms)
+    ),
+  ]);
+}
+
 function getAI(): GoogleGenAI {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('Missing GEMINI_API_KEY');
@@ -27,16 +39,20 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
     visual_prompt: storyboardPlanSchema,
   } as const;
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: prompt,
-    config: {
-      systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
-      responseMimeType: 'application/json',
-      responseSchema: schemaMap[task],
-      temperature: temperature ?? 0.7,
-    },
-  });
+  const response = await withTimeout(
+    ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
+        responseMimeType: 'application/json',
+        responseSchema: schemaMap[task],
+        temperature: temperature ?? 0.7,
+      },
+    }),
+    GEMINI_TEXT_TIMEOUT_MS,
+    task
+  );
 
   const text = response.text;
   if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
@@ -67,11 +83,9 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
   const ai = getAI();
 
   const hasRefs = referenceParts && referenceParts.length > 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let contents: any = prompt;
 
   if (hasRefs) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const parts: any[] = [{ text: prompt }];
     for (const ref of referenceParts) {
       parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
@@ -82,17 +96,21 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
   const systemInstruction =
     task === 'portrait_generation' ? LOCKED_PROMPT_GUARDRAILS.portrait_generation : undefined;
 
-  const response = await ai.models.generateContent({
-    model,
-    contents,
-    config: {
-      ...(systemInstruction ? { systemInstruction } : {}),
-      imageConfig: {
-        aspectRatio: aspectRatio ?? '16:9',
-        imageSize: imageSize ?? '1K',
+  const response = await withTimeout(
+    ai.models.generateContent({
+      model,
+      contents,
+      config: {
+        ...(systemInstruction ? { systemInstruction } : {}),
+        imageConfig: {
+          aspectRatio: aspectRatio ?? '16:9',
+          imageSize: imageSize ?? '1K',
+        },
       },
-    },
-  });
+    }),
+    GEMINI_IMAGE_TIMEOUT_MS,
+    task
+  );
 
   for (const part of response.candidates?.[0]?.content?.parts ?? []) {
     if (part.inlineData) {

@@ -51,7 +51,8 @@ export async function getModelConfig(task: TaskKey): Promise<{ model: string; te
     };
     setCache(config);
     return { model: config.modelId, temperature: config.temperature };
-  } catch {
+  } catch (err) {
+    console.error('model-config: getModelConfig failed, using defaults:', err);
     const fallback = DEFAULT_MODELS[task];
     return { model: fallback.modelId, temperature: fallback.temperature };
   }
@@ -83,7 +84,8 @@ export async function getAllModelConfigs(): Promise<ModelConfig[]> {
 
     configs.forEach(setCache);
     return configs;
-  } catch {
+  } catch (err) {
+    console.error('model-config: getAllModelConfigs failed, using defaults:', err);
     return Object.entries(DEFAULT_MODELS).map(([key, val]) => ({
       taskKey: key as TaskKey,
       modelId: val.modelId,
@@ -112,7 +114,8 @@ export async function getFeatureFlag(flagKey: string, fallback = false): Promise
     if (error || !data) return fallback;
     flagCache.set(flagKey, { data: data.enabled, ts: Date.now() });
     return data.enabled;
-  } catch {
+  } catch (err) {
+    console.error('model-config: getFeatureFlag failed, using fallback:', err);
     return fallback;
   }
 }
@@ -144,7 +147,8 @@ export async function getFeatureFlagValue(flagKey: string): Promise<string | nul
     if (error || !data) return null;
     flagValueCache.set(flagKey, { data: data.value ?? null, ts: Date.now() });
     return data.value ?? null;
-  } catch {
+  } catch (err) {
+    console.error('model-config: getFeatureFlagValue failed:', err);
     return null;
   }
 }
