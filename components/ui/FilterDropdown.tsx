@@ -19,6 +19,7 @@ export default function FilterDropdown({
   fullWidth = false,
   size = 'compact',
   mode = 'popover',
+  ariaLabel,
 }: {
   value: string;
   options: FilterDropdownOption[];
@@ -26,6 +27,7 @@ export default function FilterDropdown({
   fullWidth?: boolean;
   size?: DropdownSize;
   mode?: DropdownMode;
+  ariaLabel?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -42,7 +44,11 @@ export default function FilterDropdown({
 
   const selected = options.find((o) => o.value === value);
   const isForm = size === 'form';
-  const containerClassName = fullWidth ? 'relative w-full' : 'relative';
+  const containerClassName = [
+    'relative',
+    fullWidth ? 'w-full' : '',
+    isOpen ? 'z-20' : '',
+  ].join(' ').trim();
   const triggerClassName = [
     'flex items-center border bg-neutral-800/80 transition-all duration-200',
     fullWidth ? 'w-full justify-between' : 'gap-2',
@@ -53,9 +59,10 @@ export default function FilterDropdown({
     mode === 'popover' && isOpen ? 'rounded-b-none' : '',
     mode === 'inline' && isOpen ? 'rounded-b-none' : '',
   ].join(' ');
-  const menuWrapperClassName = mode === 'inline'
-    ? 'relative z-10 -mt-px w-full overflow-hidden'
-    : `absolute top-full left-0 z-50 -mt-px overflow-hidden ${fullWidth ? 'w-full' : 'w-max min-w-full'}`;
+  const menuWrapperClassName = [
+    'absolute top-full left-0 z-50 -mt-px overflow-hidden',
+    mode === 'inline' || fullWidth ? 'w-full' : 'w-max min-w-full',
+  ].join(' ');
   const menuClassName = [
     'bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
     isForm ? 'rounded-2xl rounded-t-none py-1.5' : 'rounded-xl rounded-t-none py-1',
@@ -73,6 +80,7 @@ export default function FilterDropdown({
         className={triggerClassName}
         aria-expanded={isOpen}
         aria-haspopup="listbox"
+        aria-label={ariaLabel}
       >
         <span className={fullWidth ? 'min-w-0 flex-1 truncate' : ''}>
           {selected?.label || options[0]?.label}

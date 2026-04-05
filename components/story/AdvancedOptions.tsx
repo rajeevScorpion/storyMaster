@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState } from 'react';
 import { AgeGroup, AuthoringMode, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import {
   STORY_DETAIL_OPTIONS,
@@ -86,14 +86,6 @@ interface AdvancedOptionsProps {
   onPreludeTextChange: (v: string) => void;
 }
 
-function FieldLabel({ children }: { children: ReactNode }) {
-  return (
-    <label className="text-[11px] font-sans uppercase tracking-[0.24em] text-neutral-500">
-      {children}
-    </label>
-  );
-}
-
 export default function AdvancedOptions({
   language,
   onLanguageChange,
@@ -112,6 +104,8 @@ export default function AdvancedOptions({
   preludeText,
   onPreludeTextChange,
 }: AdvancedOptionsProps) {
+  const [allowOverflow, setAllowOverflow] = useState(false);
+
   const setVisualSetting = <K extends keyof VisualSettings,>(key: K, value: VisualSettings[K]) => {
     onVisualSettingsChange({
       ...visualSettings,
@@ -125,41 +119,34 @@ export default function AdvancedOptions({
       animate={{ opacity: 1, height: 'auto' }}
       exit={{ opacity: 0, height: 0 }}
       transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-      className="overflow-hidden"
+      onAnimationStart={() => setAllowOverflow(false)}
+      onAnimationComplete={() => setAllowOverflow(true)}
+      className={allowOverflow ? 'overflow-visible' : 'overflow-hidden'}
     >
       <div className="mx-auto mt-6 w-full max-w-4xl rounded-[28px] border border-white/10 bg-neutral-900/60 p-5 backdrop-blur-md md:p-6 lg:p-7">
-        <h3 className="text-sm font-sans uppercase tracking-[0.28em] text-neutral-400">
-          Story Settings
-        </h3>
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+          <div className="space-y-4 text-left">
+            <FilterDropdown
+              value={language}
+              options={LANGUAGE_OPTIONS}
+              onChange={(value) => onLanguageChange(value as StoryLanguage)}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Story language"
+            />
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-          <div className="space-y-5 text-left">
-            <div className="space-y-2">
-              <FieldLabel>Language</FieldLabel>
-              <FilterDropdown
-                value={language}
-                options={LANGUAGE_OPTIONS}
-                onChange={(value) => onLanguageChange(value as StoryLanguage)}
-                fullWidth
-                size="form"
-                mode="inline"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <FieldLabel>Age Group</FieldLabel>
-              <FilterDropdown
-                value={ageGroup}
-                options={AGE_GROUP_OPTIONS}
-                onChange={(value) => onAgeGroupChange(value as AgeGroup)}
-                fullWidth
-                size="form"
-                mode="inline"
-              />
-            </div>
+            <FilterDropdown
+              value={ageGroup}
+              options={AGE_GROUP_OPTIONS}
+              onChange={(value) => onAgeGroupChange(value as AgeGroup)}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Age group"
+            />
 
             <div className="space-y-2">
-              <FieldLabel>Setting / Country</FieldLabel>
               <FilterDropdown
                 value={SETTING_PRESETS.includes(settingCountry) ? settingCountry : 'custom'}
                 options={SETTING_OPTIONS}
@@ -170,6 +157,7 @@ export default function AdvancedOptions({
                 fullWidth
                 size="form"
                 mode="inline"
+                ariaLabel="Setting or country"
               />
               {settingCountry === 'custom' && (
                 <input
@@ -177,14 +165,14 @@ export default function AdvancedOptions({
                   value={customSetting}
                   onChange={(e) => onCustomSettingChange(e.target.value)}
                   placeholder="Enter your setting..."
+                  aria-label="Custom setting"
                   className="min-h-12 w-full rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
                 />
               )}
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <FieldLabel>Story Length</FieldLabel>
+              <div className="flex items-center justify-end gap-3">
                 <p className="text-sm font-sans text-neutral-300">
                   <span className="text-emerald-400">{maxBeats}</span> beats
                 </p>
@@ -197,6 +185,7 @@ export default function AdvancedOptions({
                   max={8}
                   value={maxBeats}
                   onChange={(e) => onMaxBeatsChange(Number(e.target.value))}
+                  aria-label="Story length"
                   className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-emerald-500"
                 />
                 <span className="text-xs text-neutral-500">8</span>
@@ -206,7 +195,6 @@ export default function AdvancedOptions({
 
           <div className="space-y-5 text-left">
             <div className="space-y-2">
-              <FieldLabel>Visual Preset</FieldLabel>
               <FilterDropdown
                 value={visualSettings.preset}
                 options={VISUAL_PRESET_DROPDOWN_OPTIONS}
@@ -214,6 +202,7 @@ export default function AdvancedOptions({
                 fullWidth
                 size="form"
                 mode="inline"
+                ariaLabel="Visual preset"
               />
               <p className="text-xs leading-relaxed text-neutral-500">
                 {VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description}
@@ -221,41 +210,35 @@ export default function AdvancedOptions({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="space-y-2">
-                <FieldLabel>Theme</FieldLabel>
-                <FilterDropdown
-                  value={visualSettings.theme}
-                  options={THEME_OPTIONS}
-                  onChange={(value) => setVisualSetting('theme', value as VisualSettings['theme'])}
-                  fullWidth
-                  size="form"
-                  mode="inline"
-                />
-              </div>
+              <FilterDropdown
+                value={visualSettings.theme}
+                options={THEME_OPTIONS}
+                onChange={(value) => setVisualSetting('theme', value as VisualSettings['theme'])}
+                fullWidth
+                size="form"
+                mode="inline"
+                ariaLabel="Theme"
+              />
 
-              <div className="space-y-2">
-                <FieldLabel>Palette</FieldLabel>
-                <FilterDropdown
-                  value={visualSettings.palette}
-                  options={PALETTE_OPTIONS}
-                  onChange={(value) => setVisualSetting('palette', value as VisualSettings['palette'])}
-                  fullWidth
-                  size="form"
-                  mode="inline"
-                />
-              </div>
+              <FilterDropdown
+                value={visualSettings.palette}
+                options={PALETTE_OPTIONS}
+                onChange={(value) => setVisualSetting('palette', value as VisualSettings['palette'])}
+                fullWidth
+                size="form"
+                mode="inline"
+                ariaLabel="Palette"
+              />
 
-              <div className="space-y-2">
-                <FieldLabel>Detail</FieldLabel>
-                <FilterDropdown
-                  value={visualSettings.detail}
-                  options={DETAIL_OPTIONS}
-                  onChange={(value) => setVisualSetting('detail', value as VisualSettings['detail'])}
-                  fullWidth
-                  size="form"
-                  mode="inline"
-                />
-              </div>
+              <FilterDropdown
+                value={visualSettings.detail}
+                options={DETAIL_OPTIONS}
+                onChange={(value) => setVisualSetting('detail', value as VisualSettings['detail'])}
+                fullWidth
+                size="form"
+                mode="inline"
+                ariaLabel="Detail"
+              />
             </div>
 
             <div className="space-y-4 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
