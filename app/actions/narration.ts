@@ -8,6 +8,18 @@ import {
   resolvePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
+import { getFeatureFlagValue } from '@/lib/ai/model-config';
+
+const GEMINI_TTS_TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Gemini timeout after ${ms / 1000}s (${label})`)), ms)
+    ),
+  ]);
+}
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -73,18 +85,25 @@ async function callGeminiTTS(
       language,
     }
   );
-  const response = await ai.models.generateContent({
-    model: ttsConfig.model,
-    contents: [{ parts: [{ text: ttsPrompt }] }],
-    config: {
-      responseModalities: ['AUDIO'],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName },
+  const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
+  const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
+
+  const response = await withTimeout(
+    ai.models.generateContent({
+      model: ttsConfig.model,
+      contents: [{ parts: [{ text: ttsPrompt }] }],
+      config: {
+        responseModalities: ['AUDIO'],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: { voiceName },
+          },
         },
       },
-    },
-  });
+    }),
+    ttsTimeoutMs,
+    'tts'
+  );
 
   const audioPart = response.candidates?.[0]?.content?.parts?.find(
     (p: any) => p.inlineData

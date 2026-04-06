@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { getGlobalSettings, setStoryboardMode, setCycleOverride, setCycleMs, setStoryboardVignette } from '@/app/actions/admin';
+import { getGlobalSettings, setStoryboardMode, setCycleOverride, setCycleMs, setStoryboardVignette, setTextTimeout, setImageTimeout, setTtsTimeout, setCloudSaveTimeout } from '@/app/actions/admin';
 
 function ToggleRow({
   label,
@@ -46,15 +46,35 @@ export default function GlobalSettings() {
   const [cycleMsSaving, setCycleMsSaving] = useState(false);
   const [vignetteEnabled, setVignetteEnabled] = useState(true);
   const [vignetteToggling, setVignetteToggling] = useState(false);
+  const [textTimeoutMs, setTextTimeoutMs] = useState(30000);
+  const [textTimeoutInput, setTextTimeoutInput] = useState('30');
+  const [textTimeoutSaving, setTextTimeoutSaving] = useState(false);
+  const [imageTimeoutMs, setImageTimeoutMs] = useState(90000);
+  const [imageTimeoutInput, setImageTimeoutInput] = useState('90');
+  const [imageTimeoutSaving, setImageTimeoutSaving] = useState(false);
+  const [ttsTimeoutMs, setTtsTimeoutMs] = useState(120000);
+  const [ttsTimeoutInput, setTtsTimeoutInput] = useState('120');
+  const [ttsTimeoutSaving, setTtsTimeoutSaving] = useState(false);
+  const [cloudSaveTimeoutMs, setCloudSaveTimeoutMs] = useState(20000);
+  const [cloudSaveTimeoutInput, setCloudSaveTimeoutInput] = useState('20');
+  const [cloudSaveTimeoutSaving, setCloudSaveTimeoutSaving] = useState(false);
 
   useEffect(() => {
     getGlobalSettings()
-      .then(({ storyboardMode, cycleOverride: co, cycleMs: cm, vignetteEnabled: ve }) => {
+      .then(({ storyboardMode, cycleOverride: co, cycleMs: cm, vignetteEnabled: ve, textTimeoutMs: tt, imageTimeoutMs: it, ttsTimeoutMs: at, cloudSaveTimeoutMs: st }) => {
         setStoryboardEnabled(storyboardMode);
         setCycleOverrideState(co);
         setCycleMsState(cm);
         setCycleMsInput(String(cm));
         setVignetteEnabled(ve);
+        setTextTimeoutMs(tt);
+        setTextTimeoutInput(String(Math.round(tt / 1000)));
+        setImageTimeoutMs(it);
+        setImageTimeoutInput(String(Math.round(it / 1000)));
+        setTtsTimeoutMs(at);
+        setTtsTimeoutInput(String(Math.round(at / 1000)));
+        setCloudSaveTimeoutMs(st);
+        setCloudSaveTimeoutInput(String(Math.round(st / 1000)));
         setLoading(false);
       })
       .catch((err) => {
@@ -76,6 +96,24 @@ export default function GlobalSettings() {
     }
   }
 
+  async function handleTimeoutSave(
+    inputVal: string,
+    minSec: number,
+    setter: (ms: number) => Promise<void>,
+    setMs: (ms: number) => void,
+    setSaving: (v: boolean) => void
+  ) {
+    const sec = parseInt(inputVal, 10);
+    if (!Number.isFinite(sec) || sec < minSec) return;
+    setSaving(true);
+    try {
+      await setter(sec * 1000);
+      setMs(sec * 1000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const parsedMs = parseInt(cycleMsInput, 10);
 
   return (
@@ -92,6 +130,7 @@ export default function GlobalSettings() {
       {loading ? (
         <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading settings...</div>
       ) : (
+        <div className="space-y-6">
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
           <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Storyboard</h2>
 
@@ -174,6 +213,50 @@ export default function GlobalSettings() {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Generation Timeouts</h2>
+          <p className="text-xs text-neutral-400 -mt-2">All values in seconds. Changes take effect on the next generation call.</p>
+
+          {([
+            { label: 'Text / Story', description: 'Max wait for a story beat (JSON) from Gemini.', value: textTimeoutMs, input: textTimeoutInput, setInput: setTextTimeoutInput, saving: textTimeoutSaving, setSaving: setTextTimeoutSaving, setter: setTextTimeout, setMs: setTextTimeoutMs, min: 5, defaultSec: 30 },
+            { label: 'Image', description: 'Max wait for image generation from Gemini.', value: imageTimeoutMs, input: imageTimeoutInput, setInput: setImageTimeoutInput, saving: imageTimeoutSaving, setSaving: setImageTimeoutSaving, setter: setImageTimeout, setMs: setImageTimeoutMs, min: 10, defaultSec: 90 },
+            { label: 'Audio / TTS', description: 'Max wait for text-to-speech narration from Gemini.', value: ttsTimeoutMs, input: ttsTimeoutInput, setInput: setTtsTimeoutInput, saving: ttsTimeoutSaving, setSaving: setTtsTimeoutSaving, setter: setTtsTimeout, setMs: setTtsTimeoutMs, min: 10, defaultSec: 120 },
+            { label: 'Cloud Save Guard', description: 'Max wait before flipping a stuck save back to unsaved for retry.', value: cloudSaveTimeoutMs, input: cloudSaveTimeoutInput, setInput: setCloudSaveTimeoutInput, saving: cloudSaveTimeoutSaving, setSaving: setCloudSaveTimeoutSaving, setter: setCloudSaveTimeout, setMs: setCloudSaveTimeoutMs, min: 5, defaultSec: 20 },
+          ] as const).map(({ label, description, value, input, setInput, saving, setSaving, setter, setMs, min, defaultSec }) => {
+            const parsed = parseInt(input, 10);
+            const currentSec = Math.round(value / 1000);
+            return (
+              <div key={label} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <p className="text-sm font-medium text-neutral-100 mb-1">{label}</p>
+                <p className="text-xs text-neutral-400 mb-3">{description} Default: {defaultSec}s.</p>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    min={min}
+                    step={5}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    placeholder={String(defaultSec)}
+                  />
+                  <span className="text-xs text-neutral-500">s</span>
+                  <button
+                    onClick={() => handleTimeoutSave(input, min, setter, setMs, setSaving)}
+                    disabled={saving || !Number.isFinite(parsed) || parsed < min}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                  >
+                    {saving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                  </button>
+                  {currentSec !== parsed && parsed >= min && (
+                    <span className="text-xs text-amber-400">Unsaved</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
         </div>
       )}
     </div>
