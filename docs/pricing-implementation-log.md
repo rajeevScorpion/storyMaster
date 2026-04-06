@@ -509,3 +509,65 @@ Coin display refinement:
 - story-length caps intentionally remain beat-based because they represent story structure, not wallet currency
 - updated future seed pack labels in `019_pricing_seed_data.sql` to coin names for fresh environments
 - added `020_rename_seeded_topup_pack_labels_to_coins.sql` so already-seeded environments like `kissagoStage` can align their stored pack names through a tracked migration
+
+## Execution Slice 4 - Pricing Runtime Snapshot
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- add a read-only server-side pricing snapshot without changing story generation behavior
+- make tier-aware limits and future billing/account views consume one normalized entitlement shape
+- keep pricing reads safe for both signed-in and signed-out visitors
+
+Work completed:
+
+- added `app/actions/pricing-runtime.ts`
+- added `lib/pricing/snapshot.ts`
+- added `lib/pricing/wallet.ts`
+- extended `lib/types/pricing.ts` with:
+  - `PricingRuntimeControls`
+  - richer `EffectivePricingSnapshot`
+  - `PricingRuntimeContext`
+- implemented a server action that:
+  - authenticates the current user when available
+  - reads pricing data through the service-role client
+  - returns a free-plan fallback snapshot for anonymous users
+- implemented runtime control normalization from `feature_flags`
+- implemented effective plan selection from:
+  - explicit market override when provided
+  - active entitled subscription when present
+  - billing customer fallback
+  - published free plan fallback
+- implemented wallet availability aggregation from:
+  - `beat_grants`
+  - `beat_spend_reservations`
+- applied pending reservation hold conservatively in promo -> subscription -> top-up order
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/pricing-runtime.ts lib/pricing/snapshot.ts lib/pricing/wallet.ts lib/types/pricing.ts`
+
+Tradeoffs / decisions:
+
+- the runtime snapshot is available even while `pricing_snapshot_enabled` is still off
+  This keeps the read layer testable before any consumer starts relying on it
+- market resolution is intentionally conservative:
+  - explicit market override wins
+  - then explicit country hint
+  - then active subscription market
+  - then billing customer market
+  - then `ROW`
+- pending reservations are deducted without allocation rows by using the planned wallet-consumption priority
+  This gives a safe display value now and can be replaced with exact reservation allocation later if needed
+- signed-out users receive a published free-plan snapshot instead of an auth error
+  This keeps future setup UI integration fail-safe
+
+Open risks / notes:
+
+- no UI is consuming the runtime snapshot yet
+- no checkout, grants, or subscriptions are being created yet, so most users will still resolve to free-plan wallet totals
+- temporary tester `Studio` access and migration grants are not yet materialized into the snapshot because the billing and wallet grant slices have not been implemented

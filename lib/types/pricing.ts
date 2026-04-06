@@ -216,10 +216,30 @@ export interface BeatAvailability {
   total: number;
 }
 
+export interface PricingRuntimeControls {
+  pricingAdminTabEnabled: boolean;
+  pricingSnapshotEnabled: boolean;
+  pricingCheckoutEnabled: boolean;
+  pricingShadowMeteringEnabled: boolean;
+  pricingHardEnforcementEnabled: boolean;
+  pricingStoryLengthUiLimitsEnabled: boolean;
+  defaultGracePeriodDays: number;
+  defaultCarryForwardCapMultiplier: number;
+  reservationTimeoutSeconds: number;
+  migrationGrantBeats: number;
+  testerStudioDurationDays: number;
+  routingProviderIn: BillingProvider;
+  routingProviderRow: BillingProvider;
+}
+
 export interface EffectivePricingSnapshot {
+  pricingMarketKey: PricingMarketKey;
+  routingProvider: BillingProvider;
   planKey: PlanKey;
   planTierRank: number;
+  planVersionId: string | null;
   billingProvider: BillingProvider | null;
+  billingInterval: BillingInterval | null;
   billingCountryCode: string | null;
   currencyCode: string;
   billingStatus: string;
@@ -233,4 +253,10 @@ export interface EffectivePricingSnapshot {
   availableSubscriptionBeats: number;
   availableTopupBeats: number;
   availableTotalBeats: number;
+}
+
+export interface PricingRuntimeContext {
+  userId: string | null;
+  controls: PricingRuntimeControls;
+  snapshot: EffectivePricingSnapshot;
 }
