@@ -178,10 +178,11 @@ export default function StoryScreen() {
   const { user } = useAuth();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean }>({
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
+    cloudSaveTimeoutMs: 20000,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -285,7 +286,7 @@ function StoryScreenInner({
   saveWarning: string | null;
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
-  cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean };
+  cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number };
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -411,10 +412,10 @@ function StoryScreenInner({
           error: latest.error || 'Cloud save timed out. Retrying with a smaller payload.',
         });
       }
-    }, 20000);
+    }, cycleSettings.cloudSaveTimeoutMs);
 
     return () => window.clearTimeout(timeoutId);
-  }, [saveStatus, onSave]);
+  }, [saveStatus, onSave, cycleSettings.cloudSaveTimeoutMs]);
 
   // Auto-scroll focused option into view
   useEffect(() => {

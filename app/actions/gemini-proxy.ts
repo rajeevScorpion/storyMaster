@@ -4,9 +4,11 @@ import { GoogleGenAI } from '@google/genai';
 import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
+import { getFeatureFlagValue } from '@/lib/ai/model-config';
 
 const GEMINI_TEXT_TIMEOUT_MS = 30_000;
 const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
+const GEMINI_TTS_TIMEOUT_MS = 120_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -39,6 +41,9 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
     visual_prompt: storyboardPlanSchema,
   } as const;
 
+  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
+  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
+
   const response = await withTimeout(
     ai.models.generateContent({
       model,
@@ -50,7 +55,7 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
         temperature: temperature ?? 0.7,
       },
     }),
-    GEMINI_TEXT_TIMEOUT_MS,
+    timeoutMs,
     task
   );
 
@@ -96,6 +101,9 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
   const systemInstruction =
     task === 'portrait_generation' ? LOCKED_PROMPT_GUARDRAILS.portrait_generation : undefined;
 
+  const imgFlagVal = await getFeatureFlagValue('gemini_image_timeout_ms');
+  const imgTimeoutMs = (imgFlagVal ? parseInt(imgFlagVal, 10) : 0) || GEMINI_IMAGE_TIMEOUT_MS;
+
   const response = await withTimeout(
     ai.models.generateContent({
       model,
@@ -108,7 +116,7 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
         },
       },
     }),
-    GEMINI_IMAGE_TIMEOUT_MS,
+    imgTimeoutMs,
     task
   );
 
