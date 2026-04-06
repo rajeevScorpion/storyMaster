@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
-import { generateAndPersistNarration, generateNarrationOnly, selectNarratorVoiceServer } from '@/app/actions/narration';
+import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
 import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
@@ -210,6 +210,23 @@ function buildStoryboardReferenceImages(
   return references;
 }
 
+async function resolveNarratorVoice(session: StorySession): Promise<string> {
+  if (session.narratorVoice) {
+    return session.narratorVoice;
+  }
+
+  if (!session.savedStoryId) {
+    return DEFAULT_VOICE;
+  }
+
+  try {
+    return (await getNarratorVoiceForStory(session.savedStoryId)) || DEFAULT_VOICE;
+  } catch (error) {
+    console.error('Failed to resolve locked narrator voice:', error);
+    return DEFAULT_VOICE;
+  }
+}
+
 async function generatePortraitsForStoryboardPlan(
   beat: StoryBeat,
   storyboardPlan: StoryboardPlan,
@@ -353,9 +370,24 @@ export const useStoryStore = create<StoryState>()(
             return undefined;
           });
 
+          const lockedVoicePromise = Promise.all([voicePromise, earlySavePromise]).then(
+            async ([voice, storyId]) => {
+              if (!storyId) {
+                return voice;
+              }
+
+              try {
+                return await ensureNarratorVoiceLocked(storyId, voice);
+              } catch (error) {
+                console.error('Failed to persist locked narrator voice:', error);
+                return voice;
+              }
+            }
+          );
+
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
           if (initialSession.userPrompt !== 'mock') {
-            Promise.all([voicePromise, earlySavePromise]).then(([voice, storyId]) => {
+            Promise.all([lockedVoicePromise, earlySavePromise]).then(([voice, storyId]) => {
               set({ isGeneratingAudio: true });
 
               const narrationFn = storyId
@@ -412,7 +444,7 @@ export const useStoryStore = create<StoryState>()(
               portraitRefs.length > 0 ? portraitRefs : undefined,
               beat.beatNumber
             ),
-            voicePromise,
+            lockedVoicePromise,
           ]);
 
           beat.imageUrl = imageUrl;
@@ -536,7 +568,15 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: start narration in parallel with image generation
           // Voice is locked at story start — use it directly or fall back to default constant
-          const voiceForBeat = session.narratorVoice || DEFAULT_VOICE;
+          const voiceForBeat = await resolveNarratorVoice(session);
+          if (!session.narratorVoice && voiceForBeat !== DEFAULT_VOICE) {
+            set((state) => state.session ? {
+              session: {
+                ...state.session,
+                narratorVoice: voiceForBeat,
+              },
+            } : state);
+          }
           let narrationPromise: Promise<void> | null = null;
           if (session.userPrompt.toLowerCase() !== 'mock') {
             set({ isGeneratingAudio: true });
@@ -793,7 +833,15 @@ export const useStoryStore = create<StoryState>()(
           const lang = session.storyConfig?.language || 'english';
 
           // Use locked voice — selected once at story start, never re-queried
-          const voiceName = session.narratorVoice || DEFAULT_VOICE;
+          const voiceName = await resolveNarratorVoice(session);
+          if (!session.narratorVoice && voiceName !== DEFAULT_VOICE) {
+            set((state) => state.session ? {
+              session: {
+                ...state.session,
+                narratorVoice: voiceName,
+              },
+            } : state);
+          }
 
           let audioUrl: string;
 
@@ -1006,7 +1054,13 @@ export const useStoryStore = create<StoryState>()(
             console.log(`[loadStory] Loaded ${nodeCount} nodes, ${branchPoints} branch points`);
           }
 
-          set({ session: fullSession, isLoading: false });
+          set({
+            session: fullSession,
+            isLoading: false,
+            isSaving: false,
+            saveStatus: 'saved',
+            saveWarning: null,
+          });
         } catch (error: any) {
           set({ isLoading: false, error: error.message || 'Failed to load story' });
         }

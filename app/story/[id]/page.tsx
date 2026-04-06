@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
@@ -15,8 +15,9 @@ export default function StoryPage() {
   const params = useParams();
   const router = useRouter();
   const storyId = params.id as string;
-  const { user, isLoading: authLoading, signInWithGoogle } = useAuth();
+  const { user, isLoading: authLoading, openAuthDialog } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
+  const hasRequestedAuthRef = useRef(false);
 
   const session = useStoryStore((s) => s.session);
   const isLoading = useStoryStore((s) => s.isLoading);
@@ -28,15 +29,20 @@ export default function StoryPage() {
     if (authLoading) return;
 
     if (!user) {
-      signInWithGoogle();
+      if (!hasRequestedAuthRef.current) {
+        hasRequestedAuthRef.current = true;
+        openAuthDialog('sign_in', `/story/${storyId}`);
+      }
       return;
     }
+
+    hasRequestedAuthRef.current = false;
 
     // Only load if we don't already have this story loaded
     if (!session || session.savedStoryId !== storyId) {
       loadStoryFromCloud(storyId);
     }
-  }, [storyId, user, authLoading, session, loadStoryFromCloud, router, signInWithGoogle]);
+  }, [storyId, user, authLoading, session, loadStoryFromCloud, openAuthDialog]);
 
   if (error) {
     return (

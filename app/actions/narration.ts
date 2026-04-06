@@ -224,6 +224,68 @@ export async function generateNarrationOnly(
 }
 
 /**
+ * Lock the narrator voice for a story exactly once.
+ * If a voice is already stored, it wins over any newly proposed voice.
+ */
+export async function ensureNarratorVoiceLocked(
+  storyId: string,
+  proposedVoiceName: string
+): Promise<string> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  const { data: story, error: storyError } = await supabase
+    .from('stories')
+    .select('narrator_voice')
+    .eq('id', storyId)
+    .single();
+
+  if (storyError) {
+    throw new Error(`Failed to load narrator voice: ${storyError.message}`);
+  }
+
+  const existingVoice = story?.narrator_voice?.trim();
+  if (existingVoice) {
+    return existingVoice;
+  }
+
+  const { error: updateError } = await supabase
+    .from('stories')
+    .update({ narrator_voice: proposedVoiceName })
+    .eq('id', storyId)
+    .eq('user_id', user.id);
+
+  if (updateError) {
+    throw new Error(`Failed to lock narrator voice: ${updateError.message}`);
+  }
+
+  return proposedVoiceName;
+}
+
+/**
+ * Read the already-locked narrator voice for a story.
+ */
+export async function getNarratorVoiceForStory(storyId: string): Promise<string | null> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  const { data: story, error: storyError } = await supabase
+    .from('stories')
+    .select('narrator_voice')
+    .eq('id', storyId)
+    .single();
+
+  if (storyError) {
+    throw new Error(`Failed to fetch narrator voice: ${storyError.message}`);
+  }
+
+  const voice = story?.narrator_voice?.trim();
+  return voice || null;
+}
+
+/**
  * Select narrator voice server-side.
  */
 export async function selectNarratorVoiceServer(

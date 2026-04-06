@@ -434,8 +434,8 @@ function StoryScreenInner({
     ? 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950/60 via-neutral-950/35 to-transparent'
     : 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent';
   const headerGradientClass = isLoading
-    ? 'relative z-10 p-4 md:p-6 pl-16 md:pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/45 via-neutral-950/15 to-transparent shrink-0'
-    : 'relative z-10 p-4 md:p-6 pl-16 md:pl-36 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0';
+    ? 'relative z-10 p-4 md:p-6 pl-16 pr-20 md:pl-36 md:pr-24 flex justify-between items-center bg-gradient-to-b from-neutral-950/45 via-neutral-950/15 to-transparent shrink-0'
+    : 'relative z-10 p-4 md:p-6 pl-16 pr-20 md:pl-36 md:pr-24 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0';
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>

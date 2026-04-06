@@ -83,7 +83,7 @@ function isCacheFresh(entry?: GalleryCacheEntry): boolean {
 }
 
 export default function GalleryPage() {
-  const { user, signInWithGoogle } = useAuth();
+  const { user, openAuthDialog } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
 
   // Genre showcase state
@@ -370,7 +370,7 @@ export default function GalleryPage() {
               isLoggedIn={!!user}
               onToggleSave={handleToggleSave}
               onGenreClick={handleGenreClick}
-              onAuthRequired={signInWithGoogle}
+              onAuthRequired={(returnTo) => openAuthDialog('sign_in', returnTo)}
             />
           )}
         </section>
@@ -429,7 +429,7 @@ export default function GalleryPage() {
                         isLoggedIn={!!user}
                         isWide={isBig}
                         onToggleSave={handleToggleSave}
-                        onAuthRequired={signInWithGoogle}
+                        onAuthRequired={(returnTo) => openAuthDialog('sign_in', returnTo)}
                       />
                     </motion.div>
                   );

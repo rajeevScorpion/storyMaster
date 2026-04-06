@@ -22,10 +22,10 @@ export default function StorylinePreview({
   coverImageUrl,
   beatCount,
 }: StorylinePreviewProps) {
-  const { signInWithGoogle } = useAuth();
+  const { openAuthDialog } = useAuth();
 
   const handleSignIn = () => {
-    signInWithGoogle(`/storyline/${storylineId}`);
+    openAuthDialog('sign_in', `/storyline/${storylineId}`);
   };
 
   return (
@@ -109,7 +109,7 @@ export default function StorylinePreview({
               </button>
 
               <p className="text-xs text-neutral-600 text-center">
-                Sign in with Google to read the full story, listen to narration, and explore branching paths.
+                Sign in to read the full story, listen to narration, and explore branching paths.
               </p>
             </div>
           </div>

@@ -15,7 +15,7 @@ interface SignedOutScreenProps {
 }
 
 export default function SignedOutScreen({ coverImageUrl }: SignedOutScreenProps) {
-  const { signInWithGoogle } = useAuth();
+  const { openAuthDialog } = useAuth();
 
   // Clear all client-side state on mount
   useEffect(() => {
@@ -63,7 +63,7 @@ export default function SignedOutScreen({ coverImageUrl }: SignedOutScreenProps)
 
             <div className="space-y-3 pt-2">
               <button
-                onClick={() => signInWithGoogle('/')}
+                onClick={() => openAuthDialog('sign_in', '/')}
                 className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-500/50 transition-all duration-200 font-medium"
               >
                 <LogIn className="w-5 h-5" />

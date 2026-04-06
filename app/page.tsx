@@ -18,7 +18,7 @@ function HomeContent() {
   const isLoading = useStoryStore((state) => state.isLoading);
   const error = useStoryStore((state) => state.error);
   const resetStory = useStoryStore((state) => state.resetStory);
-  const { user, signInWithGoogle } = useAuth();
+  const { user, openAuthDialog } = useAuth();
   const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
   const hasRedirected = useRef(false);
@@ -45,7 +45,7 @@ function HomeContent() {
       if (config) {
         sessionStorage.setItem('kissago_pending_config', JSON.stringify(config));
       }
-      await signInWithGoogle();
+      openAuthDialog('sign_in');
       return;
     }
     // User is authenticated, start the story
