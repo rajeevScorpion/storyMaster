@@ -334,3 +334,178 @@ Open implementation-tuning questions:
 - exact one-time migration grant size
 - exact temporary `Studio` duration for testers and admins
 - exact reservation auto-expiry timeout
+
+## Execution Slice 1 - Schema and Types
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- land the additive pricing foundation without changing runtime story behavior
+- keep rollout controls off by default
+- prepare the repo for safe stage-first manual migration runs
+
+Work completed:
+
+- added `015_pricing_catalog.sql` plus rollback
+- added `016_billing_core.sql` plus rollback
+- added `017_wallet_core.sql` plus rollback
+- added `018_pricing_runtime_flags.sql` plus rollback
+- added `019_pricing_seed_data.sql` plus rollback
+- added shared domain types in `lib/types/pricing.ts`
+- extended `lib/types/database.ts` with pricing, billing, wallet, and audit table types
+- seeded pricing rollout flags with all pricing enforcement and checkout switches off by default
+- seeded launch-safe catalog data with:
+  - `free` published for `IN` and `ROW`
+  - `ROW` paid plans and top-ups published from the current USD strategy baseline
+  - `IN` paid plans and top-ups as draft placeholders pending final India pricing
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint lib/types/database.ts lib/types/pricing.ts`
+
+Tradeoffs / decisions:
+
+- India commercial values were not frozen autonomously in SQL; the migration keeps India paid pricing in `draft` with zero-value placeholders so admin can finalize them safely later
+- seeded story-length caps stay conservative for now:
+  - `free`: `4`
+  - `plus`: `8`
+  - `studio`: `8`
+  This keeps the initial seed aligned with the app's currently proven story-length range until the pricing-aware UI layer is implemented
+- pricing, billing, wallet, and audit tables have RLS enabled with no client policies in this slice
+  Future reads and writes are expected to flow through verified server-side admin or service-role paths
+
+Open risks / notes:
+
+- the new pricing migrations have not yet been run on `kissagoStage`
+- SQL syntax still needs real validation in Supabase SQL editor, especially the seed migration and partial indexes
+- provider product and price references are intentionally left empty in the initial seed data
+- no runtime snapshot, checkout, wallet mutation, or enforcement code exists yet
+
+Stage validation update:
+
+- `015` through `019` were run manually on `kissagoStage` without SQL errors
+- the additive pricing foundation is now validated on the staging database before any runtime pricing code has been introduced
+
+## Execution Slice 2 - Pricing Admin Data Layer
+
+Current working status:
+
+- complete for plan drafts, top-up drafts, action-cost updates, runtime settings, and admin state reads
+- promotion mutation behavior intentionally paused pending one schema-level product decision
+
+Goal:
+
+- give the future pricing admin workspace a reliable server-side contract
+- support safe draft and publish flows where the schema already supports them
+- keep audit coverage in place for commercially sensitive changes
+
+Work completed:
+
+- added `app/actions/pricing-admin.ts`
+- added admin read aggregation for:
+  - pricing plans and grouped plan versions
+  - top-up packs
+  - action costs
+  - promotions
+  - runtime settings
+  - recent publish audit history
+- added draft-save, publish, and archive actions for plan versions
+- added draft-save, publish, and archive actions for top-up packs
+- added immediate-update action for pricing action costs
+- added immediate-update action for pricing runtime settings backed by `feature_flags`
+- added pricing runtime setting definitions and metadata in `lib/types/pricing.ts`
+- wired audit writes for plan, top-up, action-cost, and runtime-setting mutations
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/pricing-admin.ts lib/types/pricing.ts lib/types/database.ts`
+
+Tradeoffs / decisions:
+
+- promotion reads are included, but promotion write actions are intentionally not implemented yet
+- the current `pricing_promotions` schema uses one row per `promo_key`, so it does not support a true simultaneous live-plus-draft promotion model
+- plans and top-ups do support safe draft/publish behavior because they are effectively variant-versioned in the current schema
+
+Open risks / notes:
+
+- before Slice 3 pricing UI, we need to choose one promotion direction:
+  - accept immediate-save promotion edits in v1
+  - or add a follow-up migration to version promotions properly
+- provider product and price refs are still unset and expected to be filled from admin later
+
+## Execution Slice 3 - Pricing Admin Workspace UI
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- keep `/admin/playground` as the admin route
+- add pricing as an internal workspace beside the existing prompt playground
+- give admins a fast, minimal UI for launch pricing operations
+
+Work completed:
+
+- added `components/admin/AdminPlaygroundWorkspace.tsx`
+- updated `/admin/playground` to render workspace tabs instead of only the prompt playground
+- added `components/admin/PricingStudio.tsx`
+- implemented pricing workspace sections for:
+  - runtime controls
+  - plan draft and publish management
+  - top-up draft and publish management
+  - action-cost editing
+  - promotion management
+  - recent audit visibility
+- completed the v1 promotion decision in code:
+  - promotions are immediate-save
+  - promotion archive is immediate
+  - plans and top-ups remain draft/publish
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/pricing-admin.ts components/admin/AdminPlaygroundWorkspace.tsx components/admin/PricingStudio.tsx app/admin/playground/page.tsx lib/types/pricing.ts lib/types/database.ts`
+
+Tradeoffs / decisions:
+
+- the pricing workspace is visible inside the admin playground now so it can be tested on stage without another manual gating step
+- `pricing_admin_tab_enabled` still exists as a runtime setting, but the admin-only workspace itself is not hidden behind that flag in this implementation slice
+- promotions are intentionally simpler than plans and top-ups in v1:
+  - no parallel draft/live promo versions
+  - direct save to the current row
+
+Open risks / notes:
+
+- provider refs, live India commercial values, and future checkout-specific metadata still need to be filled from admin before billing work is useful
+- no customer-facing pricing UI, checkout flow, snapshot runtime, or beat enforcement exists yet
+
+Navigation refinement:
+
+- `/admin/playground` now maps back to prompts only
+- pricing moved to its own admin route at `/admin/pricing`
+- admin sidebar labels now read:
+  - `Content`
+  - `Backfill`
+  - `Prompts Playground`
+  - `Pricing and offers`
+  - `Global Settings`
+
+Coin display refinement:
+
+- user-facing pricing values in admin now use `coins` while internal storage remains `beats`
+- conversion is fixed at `10 coins = 1 beat`
+- converted admin editors for:
+  - monthly included allowance
+  - top-up amounts
+  - action costs
+  - promotion bonuses
+  - migration grant runtime setting
+- story-length caps intentionally remain beat-based because they represent story structure, not wallet currency
+- updated future seed pack labels in `019_pricing_seed_data.sql` to coin names for fresh environments
+- added `020_rename_seeded_topup_pack_labels_to_coins.sql` so already-seeded environments like `kissagoStage` can align their stored pack names through a tracked migration
