@@ -17,7 +17,8 @@ function HomeContent() {
   const session = useStoryStore((state) => state.session);
   const isLoading = useStoryStore((state) => state.isLoading);
   const error = useStoryStore((state) => state.error);
-  const resetStory = useStoryStore((state) => state.resetStory);
+  const errorAction = useStoryStore((state) => state.errorAction);
+  const clearError = useStoryStore((state) => state.clearError);
   const { user, openAuthDialog } = useAuth();
   const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
@@ -72,8 +73,16 @@ function HomeContent() {
       {error && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-500/10 border border-red-500/50 text-red-200 px-6 py-3 rounded-2xl flex items-center gap-4 shadow-2xl backdrop-blur-md">
           <p className="text-sm font-medium">{error}</p>
+          {errorAction && (
+            <button
+              onClick={() => router.push(errorAction.href)}
+              className="text-xs uppercase tracking-wider font-bold hover:text-white transition-colors"
+            >
+              {errorAction.label}
+            </button>
+          )}
           <button
-            onClick={resetStory}
+            onClick={clearError}
             className="text-xs uppercase tracking-wider font-bold hover:text-white transition-colors"
           >
             Dismiss

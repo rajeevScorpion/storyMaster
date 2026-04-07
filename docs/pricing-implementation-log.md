@@ -826,3 +826,54 @@ Open risks / notes:
 - `021` still needs to be run manually on `kissagoStage` before end-to-end enforcement testing
 - the story flows are not spending coins yet
   That wiring starts in the next slice
+
+## Execution Slice 8 - Story Spend Enforcement
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- reserve and finalize coins around the two billable story actions
+- keep revisiting explored branches, image regeneration, and narration regeneration free
+- surface wallet-related denials without blowing away the active story screen
+
+Work completed:
+
+- updated `lib/store/story-store.ts`
+  - `startStory` now authorizes coin spend before generation
+  - `continueStory` now authorizes coin spend only for genuinely new branches
+  - hard-mode reservations finalize on success
+  - failed runs release their reservations
+  - pricing denials now set a wallet-aware error state instead of looking like generic load failures
+  - added `errorAction` and `clearError`
+- updated `app/page.tsx`
+  - top-level error banner now supports wallet CTA and dismisses without resetting the story session
+- updated `app/story/[id]/page.tsx` and `app/explore/[id]/page.tsx`
+  - full-page load failure is kept only for true load errors
+  - in-session billing errors now render as dismissible banners
+- updated `components/story/LandingScreen.tsx`
+  - plain-language note for the start-story coin cost when payment controls are active
+- updated `components/story/StoryScreen.tsx`
+  - plain-language note that a new branch uses coins while reopening an explored path stays free
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/page.tsx app/story/[id]/page.tsx app/explore/[id]/page.tsx components/story/LandingScreen.tsx components/story/StoryScreen.tsx lib/store/story-store.ts`
+
+Tradeoffs / decisions:
+
+- story generation only becomes billable after authorization succeeds
+  This keeps checkout and wallet failures from burning model spend
+- reservation finalization happens before the new beat is shown
+  If coin sync fails, the user sees an error instead of silently getting an unpaid beat
+- the home page still requires sign-in before story creation just as it already did
+  The new enforcement layer mainly hardens the server path and the continue-story flow
+
+Open risks / notes:
+
+- the wallet UI still has a preview-style fallback in a few places
+  That gets cleaned up in the next slice when the user-facing pricing surfaces are aligned with the live grants
+- admin recovery tools are not wired into the pricing page yet

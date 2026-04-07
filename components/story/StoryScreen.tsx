@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
+import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
@@ -176,6 +177,7 @@ export default function StoryScreen() {
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
   const { user } = useAuth();
+  const { data: pricing } = usePricingRuntime();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
   const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number }>({
@@ -205,6 +207,8 @@ export default function StoryScreen() {
 
   const currentBeat = currentNode.data;
   const isEnding = currentBeat.isEnding;
+  const continueCoinCost = (pricing.actionCosts.continue_story_new_beat ?? 1) * 10;
+  const showCoinHint = pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled;
 
   const hasExistingBranch = (optionId: string) =>
     findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId) !== null;
@@ -234,6 +238,8 @@ export default function StoryScreen() {
       onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id) : undefined}
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
+      continueCoinCost={continueCoinCost}
+      showCoinHint={showCoinHint}
     />
   );
 }
@@ -263,6 +269,8 @@ function StoryScreenInner({
   onSave,
   lastPublishResult,
   cycleSettings,
+  continueCoinCost,
+  showCoinHint,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -287,6 +295,8 @@ function StoryScreenInner({
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
   cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number };
+  continueCoinCost: number;
+  showCoinHint: boolean;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -785,9 +795,16 @@ function StoryScreenInner({
 
               {/* Header with toggle */}
               <div className="flex items-center justify-between mb-3 px-4 shrink-0">
-                <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
-                  What happens next?
-                </h3>
+                <div>
+                  <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
+                    What happens next?
+                  </h3>
+                  {showCoinHint && (
+                    <p className="mt-1 text-[11px] font-sans text-neutral-500">
+                      A new path uses {continueCoinCost.toLocaleString()} coins. Reopening an explored path stays free.
+                    </p>
+                  )}
+                </div>
                 <button
                   onClick={() => setIsMinimized(!isMinimized)}
                   className="p-1.5 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"

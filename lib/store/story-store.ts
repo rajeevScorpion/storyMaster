@@ -3,6 +3,11 @@ import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPl
 import { v4 as uuidv4 } from 'uuid';
 import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
+import {
+  authorizeCurrentUserBillableAction,
+  finalizeCurrentUserBillableAction,
+  releaseCurrentUserBillableAction,
+} from '@/app/actions/pricing-enforcement';
 import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
@@ -10,6 +15,7 @@ import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
+import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
@@ -26,11 +32,17 @@ interface PublishResult {
   error?: string;
 }
 
+interface StoryErrorAction {
+  label: string;
+  href: string;
+}
+
 interface StoryState {
   session: StorySession | null;
   isLoading: boolean;
   loadingClues: string[];
   error: string | null;
+  errorAction: StoryErrorAction | null;
   isGeneratingAudio: boolean;
   isRegeneratingImage: boolean;
   audioReadyNodeId: string | null;
@@ -54,6 +66,7 @@ interface StoryState {
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
   clearPublishResult: () => void;
+  clearError: () => void;
 }
 
 function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
@@ -227,6 +240,51 @@ async function resolveNarratorVoice(session: StorySession): Promise<string> {
   }
 }
 
+function getHardReservationId(
+  authorization: PricingBillableActionAuthorization | null
+): string | null {
+  return authorization?.status === 'allowed' && authorization.mode === 'hard'
+    ? authorization.reservationId
+    : null;
+}
+
+function buildPricingErrorState(
+  authorization: PricingBillableActionAuthorization,
+  actionLabel: 'start_story' | 'continue_story'
+): { error: string; errorAction: StoryErrorAction | null } | null {
+  if (authorization.status === 'bypassed' || authorization.status === 'allowed') {
+    return null;
+  }
+
+  if (authorization.reason === 'sign_in_required') {
+    return {
+      error: 'Sign in to keep creating stories with your coin wallet.',
+      errorAction: null,
+    };
+  }
+
+  const actionText = actionLabel === 'start_story' ? 'start this story' : 'create a new path';
+  const availableCoins = authorization.availableCoins.toLocaleString();
+
+  if (authorization.reason === 'checkout_unavailable') {
+    return {
+      error: `You need ${authorization.coinCost.toLocaleString()} coins to ${actionText}, and checkout is still closed for this test. You currently have ${availableCoins} coins.`,
+      errorAction: {
+        label: 'Open Wallet',
+        href: '/wallet',
+      },
+    };
+  }
+
+  return {
+    error: `You need ${authorization.coinCost.toLocaleString()} coins to ${actionText}. You currently have ${availableCoins} coins.`,
+    errorAction: {
+      label: 'Open Wallet',
+      href: '/wallet',
+    },
+  };
+}
+
 async function generatePortraitsForStoryboardPlan(
   beat: StoryBeat,
   storyboardPlan: StoryboardPlan,
@@ -264,6 +322,7 @@ export const useStoryStore = create<StoryState>()(
       isLoading: false,
       loadingClues: [],
       error: null,
+      errorAction: null,
       isGeneratingAudio: false,
       isRegeneratingImage: false,
       audioReadyNodeId: null,
@@ -274,14 +333,51 @@ export const useStoryStore = create<StoryState>()(
       lastPublishResult: null,
 
       startStory: async (prompt: string, config?: StoryConfig) => {
+        const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
+        const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
+        const initialSessionId = uuidv4();
+        let billingAuthorization: PricingBillableActionAuthorization;
+        try {
+          billingAuthorization = await authorizeCurrentUserBillableAction({
+            actionKey: 'start_story_initial_beat',
+            idempotencyKey: `start_story:${initialSessionId}`,
+            metadata: {
+              language: storyConfig.language,
+              ageGroup: storyConfig.ageGroup,
+              maxBeats: storyConfig.maxBeats,
+              settingCountry: storyConfig.settingCountry,
+            },
+          });
+        } catch (error: any) {
+          set({
+            isLoading: false,
+            loadingClues: [],
+            error: error?.message || 'Unable to check your wallet right now.',
+            errorAction: null,
+          });
+          return;
+        }
+
+        const pricingErrorState = buildPricingErrorState(billingAuthorization, 'start_story');
+        if (pricingErrorState) {
+          set({
+            isLoading: false,
+            loadingClues: [],
+            error: pricingErrorState.error,
+            errorAction: pricingErrorState.errorAction,
+          });
+          return;
+        }
+
         set({
           isLoading: true,
           error: null,
+          errorAction: null,
           loadingClues: ['Kissago is weaving the next moment...'],
         });
 
-        const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
-        const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
+        const reservationId = getHardReservationId(billingAuthorization);
+        let shouldReleaseReservation = Boolean(reservationId);
 
         // Fetch active model config from DB (falls back to hardcoded defaults on error)
         let modelOverrides: StoryModelOverrides | undefined;
@@ -293,7 +389,7 @@ export const useStoryStore = create<StoryState>()(
 
         try {
           const initialSession: Partial<StorySession> = {
-            storySessionId: uuidv4(),
+            storySessionId: initialSessionId,
             userPrompt: prompt,
             genre: 'adventure',
             tone: 'playful',
@@ -452,6 +548,20 @@ export const useStoryStore = create<StoryState>()(
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
 
+          if (reservationId) {
+            await finalizeCurrentUserBillableAction({
+              reservationId,
+              storyId: earlySavedStoryId ?? null,
+              relatedEntityId: rootNodeId,
+              metadata: {
+                action: 'start_story_initial_beat',
+                storySessionId: initialSessionId,
+                title: beat.title,
+              },
+            });
+            shouldReleaseReservation = false;
+          }
+
           // Update storyMap node with the final beat payload plus image/audio data.
           storyMap.nodes[rootNodeId] = {
             ...storyMap.nodes[rootNodeId],
@@ -481,10 +591,31 @@ export const useStoryStore = create<StoryState>()(
             session: fullSession,
             isLoading: false,
             saveStatus: 'unsaved',
+            error: null,
+            errorAction: null,
             ...audioExtra,
           });
         } catch (error: any) {
-          set({ isLoading: false, error: error.message || 'Failed to start story' });
+          if (reservationId && shouldReleaseReservation) {
+            try {
+              await releaseCurrentUserBillableAction({
+                reservationId,
+                reason: 'start_story_failed',
+                releaseStatus: 'failed',
+                metadata: {
+                  message: error?.message || 'Failed to start story',
+                },
+              });
+            } catch (releaseError) {
+              console.error('Failed to release start-story reservation:', releaseError);
+            }
+          }
+
+          set({
+            isLoading: false,
+            error: error.message || 'Failed to start story',
+            errorAction: null,
+          });
         }
       },
 
@@ -504,14 +635,52 @@ export const useStoryStore = create<StoryState>()(
           return;
         }
 
+        let billingAuthorization: PricingBillableActionAuthorization;
+        try {
+          billingAuthorization = await authorizeCurrentUserBillableAction({
+            actionKey: 'continue_story_new_beat',
+            idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
+            relatedStoryId: session.savedStoryId ?? null,
+            relatedNodeId: session.storyMap.currentNodeId,
+            metadata: {
+              selectedOptionId: optionId,
+              selectedOptionLabel: selectedOption.label,
+              currentBeat: currentNode.data.beatNumber,
+            },
+          });
+        } catch (error: any) {
+          set({
+            isLoading: false,
+            loadingClues: [],
+            error: error?.message || 'Unable to check your wallet right now.',
+            errorAction: null,
+          });
+          return;
+        }
+
+        const pricingErrorState = buildPricingErrorState(billingAuthorization, 'continue_story');
+        if (pricingErrorState) {
+          set({
+            isLoading: false,
+            loadingClues: [],
+            error: pricingErrorState.error,
+            errorAction: pricingErrorState.errorAction,
+          });
+          return;
+        }
+
         // No existing branch — generate new beat
         set({
           isLoading: true,
           error: null,
+          errorAction: null,
           loadingClues: currentNode.data.clues.length > 0
             ? currentNode.data.clues
             : ['Kissago is weaving the next moment...'],
         });
+
+        const reservationId = getHardReservationId(billingAuthorization);
+        let shouldReleaseReservation = Boolean(reservationId);
 
         try {
           // Build session state for Gemini with linear path beats
@@ -676,6 +845,22 @@ export const useStoryStore = create<StoryState>()(
             },
           };
 
+          if (reservationId) {
+            await finalizeCurrentUserBillableAction({
+              reservationId,
+              storyId: session.savedStoryId ?? null,
+              relatedEntityId: newNodeId,
+              metadata: {
+                action: 'continue_story_new_beat',
+                optionId,
+                optionLabel: selectedOption.label,
+                parentNodeId: parentId,
+                newNodeId,
+              },
+            });
+            shouldReleaseReservation = false;
+          }
+
           // If narration already resolved, signal readiness immediately
           const audioExtra = resolvedAudioUrl
             ? { isGeneratingAudio: false, audioReadyNodeId: newNodeId }
@@ -685,6 +870,8 @@ export const useStoryStore = create<StoryState>()(
             session: deriveSessionFields(latestSession, mergedMap),
             isLoading: false,
             saveStatus: 'unsaved',
+            error: null,
+            errorAction: null,
             ...audioExtra,
           });
 
@@ -784,7 +971,28 @@ export const useStoryStore = create<StoryState>()(
             }
           }
         } catch (error: any) {
-          set({ isLoading: false, error: error.message || 'Failed to continue story' });
+          if (reservationId && shouldReleaseReservation) {
+            try {
+              await releaseCurrentUserBillableAction({
+                reservationId,
+                reason: 'continue_story_failed',
+                releaseStatus: 'failed',
+                metadata: {
+                  message: error?.message || 'Failed to continue story',
+                  optionId,
+                  currentNodeId: session.storyMap.currentNodeId,
+                },
+              });
+            } catch (releaseError) {
+              console.error('Failed to release continue-story reservation:', releaseError);
+            }
+          }
+
+          set({
+            isLoading: false,
+            error: error.message || 'Failed to continue story',
+            errorAction: null,
+          });
         }
       },
 
@@ -802,7 +1010,7 @@ export const useStoryStore = create<StoryState>()(
       },
 
       resetStory: () => {
-        set({ session: null, error: null, isLoading: false, loadingClues: [] });
+        set({ session: null, error: null, errorAction: null, isLoading: false, loadingClues: [] });
       },
 
       restartExploration: () => {
@@ -1099,6 +1307,10 @@ export const useStoryStore = create<StoryState>()(
 
       clearPublishResult: () => {
         set({ lastPublishResult: null });
+      },
+
+      clearError: () => {
+        set({ error: null, errorAction: null });
       },
     })
 );

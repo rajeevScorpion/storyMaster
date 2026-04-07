@@ -35,6 +35,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const effectiveMaxBeats = storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
+  const startStoryCoinCost = (pricing.actionCosts.start_story_initial_beat ?? 1) * 10;
 
   // Restore prompt after OAuth redirect — use initializer pattern to avoid setState in effect
   useEffect(() => {
@@ -144,6 +145,12 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
               </div>
 
             </div>
+
+            {(pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled) && (
+              <p className="mt-3 text-center text-xs font-sans text-neutral-500">
+                Starting a new story uses {startStoryCoinCost.toLocaleString()} coins when payment controls are active.
+              </p>
+            )}
           </form>
 
         </motion.div>

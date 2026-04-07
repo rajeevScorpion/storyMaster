@@ -22,6 +22,8 @@ export default function ExplorePage() {
   const session = useStoryStore((s) => s.session);
   const isLoading = useStoryStore((s) => s.isLoading);
   const error = useStoryStore((s) => s.error);
+  const errorAction = useStoryStore((s) => s.errorAction);
+  const clearError = useStoryStore((s) => s.clearError);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
 
@@ -44,7 +46,7 @@ export default function ExplorePage() {
     }
   }, [storyId, user, authLoading, session, exploreStoryTree, openAuthDialog]);
 
-  if (error) {
+  if (error && !hasMatchingSession) {
     return (
       <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-8">
         <div className="text-center">
@@ -76,6 +78,26 @@ export default function ExplorePage() {
         isOpen={showMyStories}
         onClose={() => setShowMyStories(false)}
       />
+
+      {hasMatchingSession && error && (
+        <div className="fixed top-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-2xl border border-red-500/50 bg-red-500/10 px-6 py-3 text-red-200 shadow-2xl backdrop-blur-md">
+          <p className="text-sm font-medium">{error}</p>
+          {errorAction && (
+            <button
+              onClick={() => router.push(errorAction.href)}
+              className="text-xs font-bold uppercase tracking-wider transition-colors hover:text-white"
+            >
+              {errorAction.label}
+            </button>
+          )}
+          <button
+            onClick={clearError}
+            className="text-xs font-bold uppercase tracking-wider transition-colors hover:text-white"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {hasMatchingSession ? (
         <StoryScreen />
