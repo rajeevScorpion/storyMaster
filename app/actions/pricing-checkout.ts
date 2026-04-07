@@ -34,6 +34,10 @@ export async function prepareRazorpayCheckout(
       throw new Error('This plan is not purchasable');
     }
 
+    if (version.provider === 'razorpay' && version.billing_interval === 'annual') {
+      throw new Error('Yearly checkout is not available yet for the India market. Please use a monthly plan while we test monthly refills end to end.');
+    }
+
     const blockingSubscriptionsResult = await supabase
       .from('billing_subscriptions')
       .select('*')

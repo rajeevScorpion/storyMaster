@@ -56,7 +56,8 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
   const displayName = user.user_metadata?.full_name || user.email || 'User';
   const totalCoins = pricing.snapshot.availableTotalBeats * COINS_PER_BEAT;
   const monthlyAllowanceCoins = pricing.snapshot.monthlyIncludedBeats * COINS_PER_BEAT;
-  const displayCoins = totalCoins > 0 ? totalCoins : monthlyAllowanceCoins;
+  const showAllowancePreview = !pricing.controls.pricingSnapshotEnabled;
+  const displayCoins = showAllowancePreview ? monthlyAllowanceCoins : totalCoins;
   const refillLabel = pricing.snapshot.nextResetAt
     ? new Date(pricing.snapshot.nextResetAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     : null;
@@ -103,10 +104,12 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                 <div>
                   <p className="text-[11px] uppercase tracking-[0.16em] text-emerald-300/80">{planLabel}</p>
                   <p className="mt-1 text-lg font-medium text-neutral-100">
-                    {pricingLoading ? '...' : `${displayCoins.toLocaleString()} ${totalCoins > 0 ? 'coins' : 'coins / month'}`}
+                    {pricingLoading ? '...' : `${displayCoins.toLocaleString()} ${showAllowancePreview ? 'coins / month' : 'coins'}`}
                   </p>
                   <p className="mt-1 text-xs text-neutral-400">
-                    {totalCoins > 0
+                    {showAllowancePreview
+                      ? 'Plan allowance preview while live wallet tracking is still switched off.'
+                      : totalCoins > 0
                       ? (
                         pricing.snapshot.isInGracePeriod
                           ? 'Payment issue detected. Access is still active for now.'
@@ -114,7 +117,9 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                             ? `Refills on ${refillLabel}`
                             : 'Wallet summary for your current account'
                       )
-                      : 'Monthly allowance preview while billing is being wired up.'}
+                      : refillLabel
+                        ? `Wallet is empty for now. Refills on ${refillLabel}.`
+                        : 'Wallet is empty for now. Top up or change plans to keep creating.'}
                   </p>
                 </div>
                 <div className="rounded-xl bg-emerald-500/10 p-2 text-emerald-300">

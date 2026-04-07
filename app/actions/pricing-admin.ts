@@ -1,5 +1,11 @@
 'use server';
 
+import {
+  ensureFreeAllowanceForUser,
+  expireStaleReservations,
+  reconcileRazorpaySubscription,
+  reconcileRazorpayTopup,
+} from '@/lib/pricing/enforcement';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
 import type {
   DbPricingActionCost,
@@ -17,6 +23,7 @@ import {
   PRICING_MARKET_KEYS,
   PRICING_RUNTIME_SETTING_DEFINITIONS,
   PROMOTION_MARKET_SCOPES,
+  COINS_PER_BEAT,
   type BillingInterval,
   type BillingProvider,
   type PlanKey,
@@ -121,6 +128,46 @@ export interface UpdatePricingRuntimeSettingInput {
   key: PricingRuntimeFlagKey;
   enabled?: boolean;
   value?: string | null;
+}
+
+export interface ReconcilePricingSubscriptionInput {
+  providerSubscriptionId?: string | null;
+  billingOrderId?: string | null;
+}
+
+export interface ReconcilePricingSubscriptionResult {
+  billingSubscriptionId: string | null;
+  providerSubscriptionId: string;
+  subscriptionStatus: string;
+  grantedCoins: number;
+}
+
+export interface ReconcilePricingTopupInput {
+  billingOrderId: string;
+  razorpayPaymentId?: string | null;
+}
+
+export interface ReconcilePricingTopupResult {
+  billingOrderId: string;
+  paymentId: string;
+  grantedCoins: number;
+}
+
+export interface RefreshFreeAllowanceInput {
+  userId: string;
+  pricingMarketKey?: PricingMarketKey | null;
+  countryCode?: string | null;
+}
+
+export interface RefreshFreeAllowanceResult {
+  granted: boolean;
+  grantId: string | null;
+  grantedCoins: number;
+  expiresAt: string | null;
+}
+
+export interface ExpirePricingReservationsResult {
+  expiredCount: number;
 }
 
 export async function getPricingAdminState(): Promise<PricingAdminState> {
@@ -699,6 +746,69 @@ export async function updatePricingRuntimeSettings(
   }
 
   return getPricingRuntimeSettingsInternal(supabase);
+}
+
+export async function reconcilePricingSubscription(
+  input: ReconcilePricingSubscriptionInput
+): Promise<ReconcilePricingSubscriptionResult> {
+  await verifyAdmin();
+
+  const result = await reconcileRazorpaySubscription({
+    providerSubscriptionId: normalizeText(input.providerSubscriptionId),
+    billingOrderId: normalizeText(input.billingOrderId),
+  });
+
+  return {
+    billingSubscriptionId: result.billingSubscriptionId,
+    providerSubscriptionId: result.providerSubscriptionId,
+    subscriptionStatus: result.subscriptionStatus,
+    grantedCoins: result.grantedCoins,
+  };
+}
+
+export async function reconcilePricingTopup(
+  input: ReconcilePricingTopupInput
+): Promise<ReconcilePricingTopupResult> {
+  await verifyAdmin();
+
+  const result = await reconcileRazorpayTopup({
+    billingOrderId: input.billingOrderId.trim(),
+    razorpayPaymentId: normalizeText(input.razorpayPaymentId),
+  });
+
+  return {
+    billingOrderId: result.billingOrderId,
+    paymentId: result.paymentId,
+    grantedCoins: result.grantedCoins,
+  };
+}
+
+export async function refreshUserFreeAllowance(
+  input: RefreshFreeAllowanceInput
+): Promise<RefreshFreeAllowanceResult> {
+  await verifyAdmin();
+
+  if (!input.userId.trim()) {
+    throw new Error('User id is required');
+  }
+
+  const result = await ensureFreeAllowanceForUser(input.userId.trim(), {
+    pricingMarketKey: input.pricingMarketKey ?? null,
+    countryCode: normalizeText(input.countryCode),
+  });
+
+  return {
+    granted: result.granted,
+    grantId: result.grantId,
+    grantedCoins: result.beatsGranted * COINS_PER_BEAT,
+    expiresAt: result.expiresAt,
+  };
+}
+
+export async function expirePricingReservations(): Promise<ExpirePricingReservationsResult> {
+  await verifyAdmin();
+  const expiredCount = await expireStaleReservations();
+  return { expiredCount };
 }
 
 async function getPricingAdminStateInternal(supabase: AdminClient): Promise<PricingAdminState> {

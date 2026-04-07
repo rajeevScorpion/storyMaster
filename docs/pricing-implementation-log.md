@@ -3,7 +3,7 @@
 Date started: 2026-04-05
 Active branch: `pricing`
 Owner: Codex + user
-Status: Phase 2 complete
+Status: Implementation slices complete locally; stage validation pending
 
 ## Working Rules
 
@@ -877,3 +877,90 @@ Open risks / notes:
 - the wallet UI still has a preview-style fallback in a few places
   That gets cleaned up in the next slice when the user-facing pricing surfaces are aligned with the live grants
 - admin recovery tools are not wired into the pricing page yet
+
+## Execution Slice 9 - Live Wallet Surfaces and Recovery Tools
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- make the wallet and user menu reflect true grant-backed balances once live pricing is enabled
+- keep India checkout monthly-only for the Razorpay rollout
+- give admins safe stage-only recovery tools instead of asking them to edit database rows by hand
+
+Work completed:
+
+- updated `components/pricing/WalletPage.tsx`
+  - real-wallet display now takes priority over the old preview fallback
+  - preview mode is shown only when live pricing reads are still switched off or the visitor is signed out
+  - India market now keeps checkout monthly-only in the UI
+  - yearly purchase controls are visibly held back for the Razorpay rollout
+- updated `components/auth/UserMenu.tsx`
+  - wallet summary now follows the same live-versus-preview rules as `/wallet`
+- updated `app/actions/pricing-checkout.ts`
+  - yearly Razorpay subscription checkout is now explicitly blocked on the server path
+- updated `app/actions/pricing-admin.ts`
+  - added manual recovery actions for:
+    - subscription reconcile
+    - top-up reconcile
+    - stale reservation expiry
+    - one-user free allowance refresh
+- updated `components/admin/PricingStudio.tsx`
+  - added a non-technical `Recovery Tools` section for internal testing support
+
+Verification:
+
+- pending local typecheck and lint after the final documentation slice
+
+Tradeoffs / decisions:
+
+- India yearly offers are not deleted from the pricing catalog
+  They are simply kept out of checkout until yearly billing can safely issue monthly refills
+- the wallet still supports a preview mode
+  That is intentional so internal testers can understand plan shape before the stage flags are switched on
+- admin recovery tools do not write pricing audit entries yet
+  They are operational support tools, not catalog-edit actions
+
+Open risks / notes:
+
+- `021_pricing_enforcement_primitives.sql` still must be run manually on `kissagoStage` before end-to-end enforcement testing can begin
+- the next step is the explicit stage rollout and validation sequence rather than more product-surface work
+
+## Execution Slice 10 - Stage Rollout Runbook
+
+Current working status:
+
+- complete in documentation
+
+Goal:
+
+- give the stage environment a precise, repeatable checklist for end-to-end Razorpay validation
+- keep production protected while stage enforcement is exercised in full
+
+Work completed:
+
+- added `docs/razorpay-stage-rollout-runbook.md`
+- documented:
+  - the exact stage guardrails
+  - the required env and webhook setup
+  - the manual `021` migration prerequisite
+  - the India monthly-plan and coin-pack publishing rules
+  - the runtime-flag activation order
+  - the end-to-end wallet, checkout, spend, failure, bypass, and recovery test sequence
+  - the most useful Supabase validation queries
+
+Verification:
+
+- documentation only
+
+Tradeoffs / decisions:
+
+- stage rollout keeps India yearly variants unpublished and out of checkout even if the catalog contains them
+- the runbook assumes manual Supabase migration execution because that is the repo workflow being used for this project
+
+Open risks / notes:
+
+- end-to-end payment testing still needs to be run manually by the user on `kissagoStage`
+- production should stay flag-off until that manual validation is complete

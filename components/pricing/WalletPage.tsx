@@ -19,6 +19,7 @@ import type {
   PricingPlanOfferCard,
   PricingWalletPageData,
 } from '@/lib/types/pricing';
+import { COINS_PER_BEAT } from '@/lib/types/pricing';
 
 declare global {
   interface Window {
@@ -70,14 +71,20 @@ function titleCase(value: string) {
 
 function getSelectedPlanVersionId(offer: PricingPlanOfferCard, interval: BillingInterval) {
   return interval === 'annual'
-    ? offer.annualPlanVersionId ?? offer.monthlyPlanVersionId
-    : offer.monthlyPlanVersionId ?? offer.annualPlanVersionId;
+    ? offer.annualPlanVersionId
+    : offer.monthlyPlanVersionId;
 }
 
 function getSelectedPlanProvider(offer: PricingPlanOfferCard, interval: BillingInterval) {
   return interval === 'annual'
-    ? offer.annualProvider ?? offer.monthlyProvider
-    : offer.monthlyProvider ?? offer.annualProvider;
+    ? offer.annualProvider
+    : offer.monthlyProvider;
+}
+
+function getSelectedPlanPriceMinor(offer: PricingPlanOfferCard, interval: BillingInterval) {
+  return interval === 'annual'
+    ? offer.annualPriceMinor
+    : offer.monthlyPriceMinor;
 }
 
 export default function WalletPage() {
@@ -120,12 +127,25 @@ export default function WalletPage() {
     void loadWalletData();
   }, [loadWalletData, pricingData.userId]);
 
-  const totalCoins = pricingData.snapshot.availableTotalBeats * 10;
-  const monthlyAllowanceCoins = pricingData.snapshot.monthlyIncludedBeats * 10;
-  const displayHeadlineCoins = totalCoins > 0 ? totalCoins : monthlyAllowanceCoins;
-  const subscriptionCoins = pricingData.snapshot.availableSubscriptionBeats * 10;
-  const topupCoins = pricingData.snapshot.availableTopupBeats * 10;
-  const bonusCoins = pricingData.snapshot.availablePromoBeats * 10;
+  const usingRazorpayMarket = pricingData.snapshot.routingProvider === 'razorpay';
+  const yearlyCheckoutDeferred =
+    usingRazorpayMarket && pricingData.snapshot.pricingMarketKey === 'IN';
+
+  useEffect(() => {
+    if (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') {
+      setSelectedPlanInterval('monthly');
+    }
+  }, [selectedPlanInterval, yearlyCheckoutDeferred]);
+
+  const showAllowancePreview =
+    !pricingData.userId || !pricingData.controls.pricingSnapshotEnabled;
+  const totalCoins = pricingData.snapshot.availableTotalBeats * COINS_PER_BEAT;
+  const monthlyAllowanceCoins = pricingData.snapshot.monthlyIncludedBeats * COINS_PER_BEAT;
+  const displayHeadlineCoins = showAllowancePreview ? monthlyAllowanceCoins : totalCoins;
+  const subscriptionCoins = pricingData.snapshot.availableSubscriptionBeats * COINS_PER_BEAT;
+  const displaySubscriptionCoins = showAllowancePreview ? monthlyAllowanceCoins : subscriptionCoins;
+  const topupCoins = pricingData.snapshot.availableTopupBeats * COINS_PER_BEAT;
+  const bonusCoins = pricingData.snapshot.availablePromoBeats * COINS_PER_BEAT;
 
   const offers = walletData?.planOffers ?? [];
   const topups = walletData?.topupOffers ?? [];
@@ -133,7 +153,6 @@ export default function WalletPage() {
 
   const currentPlan = offers.find((offer) => offer.isCurrentPlan) ?? null;
   const primaryTopup = topups[0] ?? null;
-  const usingRazorpayMarket = pricingData.snapshot.routingProvider === 'razorpay';
   const marketLabel = pricingData.snapshot.pricingMarketKey === 'IN' ? 'India' : 'Outside India';
   const headlineActionDisabled =
     !walletData?.checkoutEnabled ||
@@ -144,6 +163,15 @@ export default function WalletPage() {
   const handlePlanCheckout = useCallback(async (offer: PricingPlanOfferCard) => {
     const planVersionId = getSelectedPlanVersionId(offer, selectedPlanInterval);
     const provider = getSelectedPlanProvider(offer, selectedPlanInterval);
+
+    if (
+      selectedPlanInterval === 'annual' &&
+      pricingData.snapshot.pricingMarketKey === 'IN' &&
+      pricingData.snapshot.routingProvider === 'razorpay'
+    ) {
+      setCheckoutError('Yearly checkout for India comes a little later. Use monthly plans while we test monthly refills end to end.');
+      return;
+    }
 
     if (!planVersionId) {
       setCheckoutError('This plan interval is not ready yet.');
@@ -182,7 +210,7 @@ export default function WalletPage() {
     } finally {
       setCheckoutBusyKey(null);
     }
-  }, [loadWalletData, pricingData.snapshot.pricingMarketKey, refreshPricing, router, selectedPlanInterval]);
+  }, [loadWalletData, pricingData.snapshot.pricingMarketKey, pricingData.snapshot.routingProvider, refreshPricing, router, selectedPlanInterval]);
 
   const handleTopupCheckout = useCallback(async (topupPackId: string, packKey: string, provider: string | null) => {
     if (provider !== 'razorpay') {
@@ -293,17 +321,21 @@ export default function WalletPage() {
                 <h2 className="mt-2 text-4xl font-serif text-neutral-100 md:text-5xl">
                   {pricingLoading ? '...' : displayHeadlineCoins.toLocaleString()}
                   <span className="ml-2 text-base font-sans text-neutral-400">
-                    {totalCoins > 0 ? 'coins remaining' : 'coins / month'}
+                    {showAllowancePreview ? 'coins / month' : 'coins remaining'}
                   </span>
                 </h2>
                 <p className="mt-3 text-sm text-neutral-400">
-                  {totalCoins > 0
+                  {showAllowancePreview
+                    ? 'This is your plan allowance preview. Once live pricing is switched on for this environment, this area will show the real coins in your wallet.'
+                    : totalCoins > 0
                     ? pricingData.snapshot.isInGracePeriod
                     ? `Payment issue detected. Your access stays active until ${formatDate(pricingData.snapshot.currentPeriodEndsAt)}.`
                     : pricingData.snapshot.nextResetAt
                     ? `Your plan refills on ${formatDate(pricingData.snapshot.nextResetAt)}.`
                     : 'You can keep creating with your current wallet balance.'
-                    : 'This shows your current monthly plan allowance while billing and wallet grants are still being wired up.'}
+                    : pricingData.snapshot.nextResetAt
+                    ? `Your wallet is empty right now. It refills on ${formatDate(pricingData.snapshot.nextResetAt)} unless you top up first.`
+                    : 'Your wallet is empty right now. Top up or change plans to keep creating.'}
                 </p>
               </div>
 
@@ -325,6 +357,8 @@ export default function WalletPage() {
                     ? 'Upgrade coming soon'
                     : !usingRazorpayMarket
                     ? 'India checkout first'
+                    : yearlyCheckoutDeferred && checkoutBusyKey === null
+                    ? 'Upgrade plan'
                     : !razorpayReady
                     ? 'Loading checkout'
                     : checkoutBusyKey !== null
@@ -357,7 +391,12 @@ export default function WalletPage() {
             </div>
 
             <div className="mt-6 grid gap-3 md:grid-cols-3">
-              <BalanceCard icon={CreditCard} label="Subscription coins" value={subscriptionCoins} hint="Monthly refill bucket" />
+              <BalanceCard
+                icon={CreditCard}
+                label="Subscription coins"
+                value={displaySubscriptionCoins}
+                hint={showAllowancePreview ? 'Preview of your monthly plan refill' : 'Monthly refill bucket'}
+              />
               <BalanceCard icon={WalletIcon} label="Top-up coins" value={topupCoins} hint="Non-expiring coin packs" />
               <BalanceCard icon={Sparkles} label="Bonus coins" value={bonusCoins} hint="Promos and rewards" />
             </div>
@@ -432,7 +471,8 @@ export default function WalletPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedPlanInterval('annual')}
-                      className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'annual' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'}`}
+                      disabled={yearlyCheckoutDeferred}
+                      className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'annual' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'} disabled:cursor-not-allowed disabled:opacity-50`}
                     >
                       Yearly
                     </button>
@@ -441,16 +481,22 @@ export default function WalletPage() {
                 </div>
               </div>
 
+              {yearlyCheckoutDeferred && (
+                <div className="mb-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                  India checkout is monthly-only for this stage rollout. Yearly plans stay out of checkout until monthly refills for annual billing are ready.
+                </div>
+              )}
+
               <div className="grid gap-4 md:grid-cols-3">
                 {offers.map((offer) => {
-                  const selectedPrice = selectedPlanInterval === 'annual'
-                    ? offer.annualPriceMinor ?? offer.monthlyPriceMinor
-                    : offer.monthlyPriceMinor ?? offer.annualPriceMinor;
+                  const selectedPrice = getSelectedPlanPriceMinor(offer, selectedPlanInterval);
                   const selectedProvider = getSelectedPlanProvider(offer, selectedPlanInterval);
                   const buttonDisabled =
                     offer.isCurrentPlan ||
                     !pricingData.userId ||
                     !walletData?.checkoutEnabled ||
+                    (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') ||
+                    selectedProvider == null ||
                     selectedProvider !== 'razorpay' ||
                     !razorpayReady ||
                     checkoutBusyKey !== null;
@@ -485,6 +531,9 @@ export default function WalletPage() {
                             {formatPrice(offer.currencyCode, offer.monthlyPriceMinor)} monthly · {formatPrice(offer.currencyCode, offer.annualPriceMinor)} yearly
                           </p>
                         )}
+                        {selectedPlanInterval === 'annual' && selectedPrice == null && (
+                          <p className="text-neutral-500">Yearly pricing is not live for this plan yet.</p>
+                        )}
                         <p>{offer.canAccessDownloads ? 'Downloads included' : 'Hosted sharing included'}</p>
                         <p>{offer.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Kissago branding stays'}</p>
                       </div>
@@ -501,6 +550,12 @@ export default function WalletPage() {
                           ? 'Sign in to continue'
                           : !walletData?.checkoutEnabled
                           ? 'Checkout coming soon'
+                          : yearlyCheckoutDeferred && selectedPlanInterval === 'annual'
+                          ? 'Yearly comes later'
+                          : selectedProvider == null
+                          ? selectedPlanInterval === 'annual'
+                            ? 'Yearly coming soon'
+                            : 'Checkout coming soon'
                           : selectedProvider !== 'razorpay'
                           ? 'Stripe comes next'
                           : !razorpayReady

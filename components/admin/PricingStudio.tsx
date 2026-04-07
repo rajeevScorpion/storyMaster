@@ -8,19 +8,25 @@ import {
   CreditCard,
   Loader2,
   Megaphone,
+  RotateCcw,
   RefreshCw,
   Save,
   Settings2,
   ShieldAlert,
   Sparkles,
+  Wrench,
 } from 'lucide-react';
 import {
   archivePricingPlanVersion,
   archivePricingPromotion,
   archivePricingTopupPack,
+  expirePricingReservations,
   getPricingAdminState,
   publishPricingPlanVersion,
   publishPricingTopupPack,
+  reconcilePricingSubscription,
+  reconcilePricingTopup,
+  refreshUserFreeAllowance,
   savePricingActionCost,
   savePricingPlanDraft,
   savePricingPromotion,
@@ -295,6 +301,14 @@ export default function PricingStudio() {
   const [actionCostDrafts, setActionCostDrafts] = useState<Record<string, ActionCostDraft>>({});
   const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, RuntimeDraft>>({});
   const [promotionEditor, setPromotionEditor] = useState<PromotionEditorState>(defaultPromotionEditor());
+  const [recoveryDrafts, setRecoveryDrafts] = useState({
+    subscriptionId: '',
+    subscriptionBillingOrderId: '',
+    topupBillingOrderId: '',
+    topupPaymentId: '',
+    freeGrantUserId: '',
+    freeGrantMarket: 'IN' as PricingMarketKey,
+  });
 
   useEffect(() => {
     void (async () => {
@@ -380,14 +394,19 @@ export default function PricingStudio() {
     ));
   }
 
-  async function runMutation<T>(key: string, action: () => Promise<T>, onSuccess: (result: T) => void, successMessage: string) {
+  async function runMutation<T>(
+    key: string,
+    action: () => Promise<T>,
+    onSuccess: (result: T) => void | Promise<void>,
+    successMessage: string | ((result: T) => string)
+  ) {
     setBusyKey(key);
     setError(null);
     setMessage(null);
     try {
       const result = await action();
-      onSuccess(result);
-      setMessage(successMessage);
+      await onSuccess(result);
+      setMessage(typeof successMessage === 'function' ? successMessage(result) : successMessage);
     } catch (err: any) {
       setError(err.message || 'Something went wrong');
     } finally {
@@ -865,6 +884,173 @@ export default function PricingStudio() {
                     'Promotion archived'
                   );
                 }}
+              />
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard
+        title="Recovery Tools"
+        description="Use these only during internal testing when a payment or wallet event needs a manual nudge."
+        icon={Wrench}
+      >
+        <div className="mb-4 rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+          These tools are here to help stage testing. They do not change your pricing catalog. They only help a user wallet catch up when checkout or webhook events need manual support.
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+            <p className="text-sm font-medium text-neutral-100">Reconcile a Razorpay subscription</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+              Use this when a monthly plan payment succeeded, but the plan or refill is not showing up in the user wallet yet.
+            </p>
+            <div className="mt-4 grid gap-3">
+              <InputField label="Razorpay Subscription ID">
+                <input
+                  value={recoveryDrafts.subscriptionId}
+                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, subscriptionId: event.target.value }))}
+                  placeholder="sub_..."
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+              <InputField label="Or Billing Order ID">
+                <input
+                  value={recoveryDrafts.subscriptionBillingOrderId}
+                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, subscriptionBillingOrderId: event.target.value }))}
+                  placeholder="Internal billing order id"
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+            </div>
+            <div className="mt-4">
+              <ActionButton
+                busy={busyKey === 'recovery:subscription'}
+                label="Refresh subscription"
+                icon={RotateCcw}
+                onClick={() => void runMutation(
+                  'recovery:subscription',
+                  () => reconcilePricingSubscription({
+                    providerSubscriptionId: recoveryDrafts.subscriptionId,
+                    billingOrderId: recoveryDrafts.subscriptionBillingOrderId,
+                  }),
+                  () => {},
+                  (result) => {
+                    const granted = result.grantedCoins > 0
+                      ? ` and granted ${formatWholeNumber(result.grantedCoins)} coins`
+                      : '';
+                    return `Subscription ${result.providerSubscriptionId} is now ${result.subscriptionStatus}${granted}.`;
+                  }
+                )}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+            <p className="text-sm font-medium text-neutral-100">Reconcile a coin-pack payment</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+              Use this when a top-up payment succeeded, but the purchased coins did not appear in the wallet.
+            </p>
+            <div className="mt-4 grid gap-3">
+              <InputField label="Billing Order ID">
+                <input
+                  value={recoveryDrafts.topupBillingOrderId}
+                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, topupBillingOrderId: event.target.value }))}
+                  placeholder="Internal billing order id"
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+              <InputField label="Razorpay Payment ID">
+                <input
+                  value={recoveryDrafts.topupPaymentId}
+                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, topupPaymentId: event.target.value }))}
+                  placeholder="pay_..."
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+            </div>
+            <div className="mt-4">
+              <ActionButton
+                busy={busyKey === 'recovery:topup'}
+                label="Add missing coins"
+                icon={RotateCcw}
+                onClick={() => void runMutation(
+                  'recovery:topup',
+                  () => reconcilePricingTopup({
+                    billingOrderId: recoveryDrafts.topupBillingOrderId,
+                    razorpayPaymentId: recoveryDrafts.topupPaymentId,
+                  }),
+                  () => {},
+                  (result) => `Top-up ${result.billingOrderId} is synced. ${formatWholeNumber(result.grantedCoins)} coins were added to the wallet.`
+                )}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+            <p className="text-sm font-medium text-neutral-100">Refresh a free monthly refill</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+              Use this when a free tester account should have its monthly refill, but the wallet has not picked it up yet.
+            </p>
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px]">
+              <InputField label="User ID">
+                <input
+                  value={recoveryDrafts.freeGrantUserId}
+                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, freeGrantUserId: event.target.value }))}
+                  placeholder="User UUID"
+                  className={INPUT_CLASS}
+                />
+              </InputField>
+              <SelectField label="Market">
+                <select
+                  value={recoveryDrafts.freeGrantMarket}
+                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, freeGrantMarket: event.target.value as PricingMarketKey }))}
+                  className={INPUT_CLASS}
+                >
+                  {PRICING_MARKET_KEYS.map((market) => (
+                    <option key={market} value={market}>{market}</option>
+                  ))}
+                </select>
+              </SelectField>
+            </div>
+            <div className="mt-4">
+              <ActionButton
+                busy={busyKey === 'recovery:free-grant'}
+                label="Refresh free refill"
+                icon={RotateCcw}
+                onClick={() => void runMutation(
+                  'recovery:free-grant',
+                  () => refreshUserFreeAllowance({
+                    userId: recoveryDrafts.freeGrantUserId,
+                    pricingMarketKey: recoveryDrafts.freeGrantMarket,
+                  }),
+                  () => {},
+                  (result) => result.granted
+                    ? `A free monthly refill of ${formatWholeNumber(result.grantedCoins)} coins was added.`
+                    : 'This user already has the current monthly free refill.'
+                )}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+            <p className="text-sm font-medium text-neutral-100">Release stale coin holds</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+              Use this when an interrupted test left coins in a temporary hold and you want Kissago to clear old holds right away.
+            </p>
+            <div className="mt-6">
+              <ActionButton
+                busy={busyKey === 'recovery:expire'}
+                label="Release old holds"
+                icon={RotateCcw}
+                onClick={() => void runMutation(
+                  'recovery:expire',
+                  () => expirePricingReservations(),
+                  () => {},
+                  (result) => result.expiredCount > 0
+                    ? `${result.expiredCount} stale coin holds were released.`
+                    : 'No stale coin holds needed to be released.'
+                )}
               />
             </div>
           </div>
