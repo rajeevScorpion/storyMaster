@@ -44,7 +44,7 @@ interface SelectedPlanVariant {
   version: DbPricingPlanVersion;
 }
 
-const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing']);
+const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'authenticated']);
 
 export function buildPricingRuntimeControls(
   featureFlags: RuntimeFlagRow[]
@@ -57,6 +57,7 @@ export function buildPricingRuntimeControls(
     pricingCheckoutEnabled: getBooleanControl(rows, 'pricing_checkout_enabled'),
     pricingShadowMeteringEnabled: getBooleanControl(rows, 'pricing_shadow_metering_enabled'),
     pricingHardEnforcementEnabled: getBooleanControl(rows, 'pricing_hard_enforcement_enabled'),
+    pricingAdminBypassEnabled: getBooleanControl(rows, 'pricing_admin_bypass_enabled'),
     pricingStoryLengthUiLimitsEnabled: getBooleanControl(rows, 'pricing_story_length_ui_limits_enabled'),
     defaultGracePeriodDays: getIntegerControl(rows, 'pricing_default_grace_period_days'),
     defaultCarryForwardCapMultiplier: getIntegerControl(rows, 'pricing_default_carry_forward_cap_multiplier'),
@@ -122,6 +123,7 @@ function buildEffectivePricingSnapshotWithControls(
     input.beatReservations ?? [],
     now
   );
+  const freeAllowanceResetAt = selectFreeAllowanceResetAt(input.beatGrants ?? [], now);
 
   if (!selectedPlan || !selectedVersion) {
     return buildFallbackFreeSnapshot(resolvedMarket, controls, currentCustomer?.country_code ?? input.countryCode ?? null);
@@ -146,7 +148,7 @@ function buildEffectivePricingSnapshotWithControls(
     billingStatus: activeSubscription?.status ?? 'free',
     isInGracePeriod,
     currentPeriodEndsAt: activeSubscription?.current_period_end ?? null,
-    nextResetAt: activeSubscription?.current_period_end ?? null,
+    nextResetAt: activeSubscription?.current_period_end ?? freeAllowanceResetAt,
     storyLengthCap: selectedVersion.story_length_cap,
     canAccessDownloads: Boolean(selectedPlan.feature_flags_json?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(selectedPlan.feature_flags_json?.canAccessUnbrandedExports ?? false),
@@ -352,6 +354,23 @@ function getRoutingProviderForMarket(
   return pricingMarketKey === 'IN'
     ? controls.routingProviderIn
     : controls.routingProviderRow;
+}
+
+function selectFreeAllowanceResetAt(
+  beatGrants: DbBeatGrant[],
+  now: Date
+): string | null {
+  const activeFreeGrants = beatGrants
+    .filter((grant) =>
+      grant.source_type === 'free_allowance' &&
+      grant.expires_at &&
+      new Date(grant.expires_at).getTime() > now.getTime()
+    )
+    .sort((left, right) =>
+      new Date(left.expires_at!).getTime() - new Date(right.expires_at!).getTime()
+    );
+
+  return activeFreeGrants[0]?.expires_at ?? null;
 }
 
 function getBooleanControl(

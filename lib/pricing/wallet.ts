@@ -10,6 +10,7 @@ const SUBSCRIPTION_LIKE_SOURCE_TYPES = new Set<BeatGrantSourceType>([
   'carry_forward',
   'admin_adjustment',
   'migration_grant',
+  'free_allowance',
 ]);
 
 export interface WalletAvailability extends BeatAvailability {

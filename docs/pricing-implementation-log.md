@@ -760,3 +760,69 @@ Verification:
 
 - `npx tsc --noEmit`
 - `npx eslint components/admin/PricingStudio.tsx lib/types/pricing.ts app/actions/pricing-admin.ts`
+
+## Execution Slice 7 - Enforcement Primitives
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- add the missing database and service primitives needed for real coin enforcement
+- support lazy monthly free-plan grants and a safe stage-admin bypass
+- make reservations and spend finalization atomic before story generation is charged
+
+Work completed:
+
+- added `supabase/migrations/021_pricing_enforcement_primitives.sql`
+  - extends `beat_grants.source_type` with `free_allowance`
+  - seeds `pricing_admin_bypass_enabled`
+  - adds atomic SQL helpers for:
+    - authorizing spend reservations
+    - finalizing reservations into usage + allocations
+    - releasing reservations
+    - expiring stale reservations
+- added `supabase/migrations/021_pricing_enforcement_primitives_rollback.sql`
+- added `lib/pricing/enforcement.ts`
+  - lazy free monthly allowance grants anchored to the auth-user anniversary
+  - hard-enforcement authorization
+  - shadow-metering logging
+  - finalize/release wrappers
+  - stale-reservation expiry
+  - Razorpay manual subscription/top-up reconcile helpers for admin tools
+- added `app/actions/pricing-enforcement.ts`
+  - current-user server-action wrappers for story creation
+- updated `lib/types/pricing.ts`
+  - `free_allowance`
+  - `pricing_admin_bypass_enabled`
+  - structured billable-action authorization result types
+  - runtime action-cost map on pricing context
+- updated `lib/pricing/snapshot.ts`
+  - admin bypass runtime control
+  - `authenticated` subscription status treated as entitled
+  - free-plan next-reset derived from free allowance expiry
+- updated `lib/pricing/wallet.ts`
+  - free monthly allowance now counts inside the refill bucket
+- updated `app/actions/pricing-runtime.ts`
+  - lazy free allowance creation when live pricing snapshot reads are enabled
+  - action-cost loading for runtime consumers
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/pricing-enforcement.ts app/actions/pricing-runtime.ts components/pricing/PricingRuntimeProvider.tsx lib/pricing/enforcement.ts lib/pricing/snapshot.ts lib/pricing/wallet.ts lib/types/pricing.ts`
+
+Tradeoffs / decisions:
+
+- annual Razorpay logic is still intentionally deferred
+  The new primitives support monthly enforcement and admin recovery first
+- free-plan monthly grants are only created when pricing is actually live for the user flow
+  This avoids mutating production-like data while rollout flags stay off
+- shadow metering uses reservation rows as the lightweight audit trail instead of inventing a separate log table
+
+Open risks / notes:
+
+- `021` still needs to be run manually on `kissagoStage` before end-to-end enforcement testing
+- the story flows are not spending coins yet
+  That wiring starts in the next slice

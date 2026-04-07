@@ -24,6 +24,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     pricingCheckoutEnabled: false,
     pricingShadowMeteringEnabled: false,
     pricingHardEnforcementEnabled: false,
+    pricingAdminBypassEnabled: false,
     pricingStoryLengthUiLimitsEnabled: false,
     defaultGracePeriodDays: 5,
     defaultCarryForwardCapMultiplier: 2,
@@ -32,6 +33,13 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     testerStudioDurationDays: 90,
     routingProviderIn: 'razorpay',
     routingProviderRow: 'stripe',
+  },
+  actionCosts: {
+    start_story_initial_beat: 1,
+    continue_story_new_beat: 1,
+    regenerate_image: 1,
+    regenerate_narration: 1,
+    export_video_future: 5,
   },
   snapshot: {
     pricingMarketKey: 'ROW',

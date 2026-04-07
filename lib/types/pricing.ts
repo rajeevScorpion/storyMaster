@@ -31,6 +31,7 @@ export const BEAT_GRANT_SOURCE_TYPES = [
   'promotion',
   'admin_adjustment',
   'migration_grant',
+  'free_allowance',
 ] as const;
 export type BeatGrantSourceType = (typeof BEAT_GRANT_SOURCE_TYPES)[number];
 
@@ -70,6 +71,7 @@ export const PRICING_RUNTIME_FLAG_KEYS = [
   'pricing_checkout_enabled',
   'pricing_shadow_metering_enabled',
   'pricing_hard_enforcement_enabled',
+  'pricing_admin_bypass_enabled',
   'pricing_story_length_ui_limits_enabled',
   'pricing_default_grace_period_days',
   'pricing_default_carry_forward_cap_multiplier',
@@ -148,6 +150,16 @@ export const PRICING_RUNTIME_SETTING_DEFINITIONS: readonly PricingRuntimeSetting
     description: 'Controls whether a paid action can be stopped when the wallet does not allow it.',
     enabledHelp: 'When this is on, users can be blocked from paid actions if they do not have enough coins.',
     disabledHelp: 'When this is off, no one is blocked for coin reasons.',
+  },
+  {
+    key: 'pricing_admin_bypass_enabled',
+    kind: 'boolean',
+    defaultEnabled: false,
+    defaultValue: null,
+    label: 'Let Stage Admin Skip Coin Checks',
+    description: 'Gives the configured admin account a safe escape hatch during internal testing.',
+    enabledHelp: 'When this is on, the stage admin can keep testing story creation even if coins or checkout are not in the right state.',
+    disabledHelp: 'When this is off, the admin account is treated like any other user for coin checks.',
   },
   {
     key: 'pricing_story_length_ui_limits_enabled',
@@ -250,6 +262,7 @@ export interface PricingRuntimeControls {
   pricingCheckoutEnabled: boolean;
   pricingShadowMeteringEnabled: boolean;
   pricingHardEnforcementEnabled: boolean;
+  pricingAdminBypassEnabled: boolean;
   pricingStoryLengthUiLimitsEnabled: boolean;
   defaultGracePeriodDays: number;
   defaultCarryForwardCapMultiplier: number;
@@ -288,6 +301,7 @@ export interface PricingRuntimeContext {
   userId: string | null;
   controls: PricingRuntimeControls;
   snapshot: EffectivePricingSnapshot;
+  actionCosts: Record<string, number>;
 }
 
 export interface PricingPlanOfferCard {
@@ -335,6 +349,82 @@ export interface PricingWalletPageData {
   planOffers: PricingPlanOfferCard[];
   topupOffers: PricingTopupOfferCard[];
   recentActivity: PricingWalletActivityItem[];
+}
+
+export type PricingAuthorizationDeniedReason =
+  | 'sign_in_required'
+  | 'insufficient_balance'
+  | 'checkout_unavailable';
+
+export type PricingAuthorizationMode = 'soft' | 'shadow' | 'hard';
+
+export interface PricingBillableActionAllowedResult {
+  status: 'allowed';
+  mode: PricingAuthorizationMode;
+  reservationId: string | null;
+  beatCost: number;
+  coinCost: number;
+  availableBeats: number;
+  availableCoins: number;
+  expiresAt: string | null;
+}
+
+export interface PricingBillableActionDeniedResult {
+  status: 'denied';
+  reason: PricingAuthorizationDeniedReason;
+  beatCost: number;
+  coinCost: number;
+  availableBeats: number;
+  availableCoins: number;
+}
+
+export interface PricingBillableActionBypassedResult {
+  status: 'bypassed';
+  reason: 'admin_bypass';
+  beatCost: number;
+  coinCost: number;
+}
+
+export type PricingBillableActionAuthorization =
+  | PricingBillableActionAllowedResult
+  | PricingBillableActionDeniedResult
+  | PricingBillableActionBypassedResult;
+
+export interface AuthorizeBillableActionInput {
+  actionKey: PricingActionKey;
+  idempotencyKey: string;
+  relatedStoryId?: string | null;
+  relatedNodeId?: string | null;
+  relatedStorylineId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FinalizeBillableActionInput {
+  reservationId: string;
+  storyId?: string | null;
+  storylineId?: string | null;
+  relatedEntityId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ReleaseBillableActionInput {
+  reservationId: string;
+  reason: string;
+  releaseStatus?: 'released' | 'failed' | 'expired';
+  metadata?: Record<string, unknown>;
+}
+
+export interface FinalizeBillableActionResult {
+  reservationId: string;
+  usageEventId: string;
+  beatCost: number;
+  coinCost: number;
+}
+
+export interface ReleaseBillableActionResult {
+  reservationId: string;
+  released: boolean;
+  finalStatus: string;
 }
 
 export type RazorpayCheckoutKind = 'subscription' | 'topup';

@@ -1,5 +1,6 @@
 'use server';
 
+import { ensureFreeAllowanceForUser, expireStaleReservations } from '@/lib/pricing/enforcement';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -8,6 +9,7 @@ import type {
   DbBeatSpendReservation,
   DbBillingCustomer,
   DbBillingSubscription,
+  DbPricingActionCost,
   DbPricingPlan,
   DbPricingPlanVersion,
   DbPricingTopupPack,
@@ -39,6 +41,10 @@ export async function getPricingRuntimeContext(
 ): Promise<PricingRuntimeContext> {
   const userId = await getCurrentUserId();
   const supabase = createAdminClient();
+
+  if (userId) {
+    await expireStaleReservations({ supabase });
+  }
 
   const [plansResult, versionsResult, runtimeFlagsResult] = await Promise.all([
     supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }),
@@ -91,6 +97,50 @@ export async function getPricingRuntimeContext(
     billingSubscriptions = (subscriptionsResult.data ?? []) as DbBillingSubscription[];
     beatGrants = (grantsResult.data ?? []) as DbBeatGrant[];
     beatReservations = (reservationsResult.data ?? []) as DbBeatSpendReservation[];
+
+    const withWalletBase = buildPricingRuntimeContextData({
+      pricingMarketKey: input.pricingMarketKey ?? null,
+      countryCode: input.countryCode ?? null,
+      plans: (plansResult.data ?? []) as DbPricingPlan[],
+      planVersions: (versionsResult.data ?? []) as DbPricingPlanVersion[],
+      featureFlags: (runtimeFlagsResult.data ?? []) as RuntimeFlagRow[],
+      billingCustomers,
+      billingSubscriptions,
+      beatGrants,
+      beatReservations,
+    });
+
+    if (
+      withWalletBase.controls.pricingSnapshotEnabled &&
+      withWalletBase.snapshot.planKey === 'free'
+    ) {
+      const grantResult = await ensureFreeAllowanceForUser(userId, {
+        pricingMarketKey: input.pricingMarketKey ?? null,
+        countryCode: input.countryCode ?? null,
+        supabase,
+      });
+
+      if (grantResult.granted) {
+        const [grantsReload, reservationsReload] = await Promise.all([
+          supabase
+            .from('beat_grants')
+            .select('*')
+            .eq('user_id', userId)
+            .order('granted_at', { ascending: false }),
+          supabase
+            .from('beat_spend_reservations')
+            .select('*')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false }),
+        ]);
+
+        throwIfQueryFailed(grantsReload.error, 'Failed to reload beat grants after free allowance');
+        throwIfQueryFailed(reservationsReload.error, 'Failed to reload beat reservations after free allowance');
+
+        beatGrants = (grantsReload.data ?? []) as DbBeatGrant[];
+        beatReservations = (reservationsReload.data ?? []) as DbBeatSpendReservation[];
+      }
+    }
   }
 
   const { controls, snapshot } = buildPricingRuntimeContextData({
@@ -105,10 +155,13 @@ export async function getPricingRuntimeContext(
     beatReservations,
   });
 
+  const actionCosts = await loadActionCosts(supabase);
+
   return {
     userId,
     controls,
     snapshot,
+    actionCosts,
   };
 }
 
@@ -279,6 +332,8 @@ function buildWalletActivity(
 
 function getGrantTitle(sourceType: DbBeatGrant['source_type']): string {
   switch (sourceType) {
+    case 'free_allowance':
+      return 'Free monthly refill';
     case 'subscription':
     case 'carry_forward':
       return 'Monthly refill';
@@ -297,6 +352,8 @@ function getGrantTitle(sourceType: DbBeatGrant['source_type']): string {
 
 function getGrantSubtitle(sourceType: DbBeatGrant['source_type']): string {
   switch (sourceType) {
+    case 'free_allowance':
+      return 'Included with your free plan';
     case 'subscription':
       return 'Included with your active plan';
     case 'carry_forward':
@@ -333,4 +390,34 @@ function getSpendTitle(actionKey: string): string {
 
 function beatsToCoins(value: number): number {
   return value * COINS_PER_BEAT;
+}
+
+async function loadActionCosts(
+  supabase: ReturnType<typeof createAdminClient>
+): Promise<Record<string, number>> {
+  const result = await supabase
+    .from('pricing_action_costs')
+    .select('*')
+    .eq('is_active', true)
+    .order('effective_from', { ascending: false });
+
+  throwIfQueryFailed(result.error, 'Failed to load active pricing action costs');
+
+  const rows = (result.data ?? []) as DbPricingActionCost[];
+  const now = Date.now();
+  const costs = new Map<string, number>();
+
+  for (const row of rows) {
+    if (costs.has(row.action_key)) {
+      continue;
+    }
+
+    const startsAt = new Date(row.effective_from).getTime();
+    const endsAt = row.effective_to ? new Date(row.effective_to).getTime() : Number.POSITIVE_INFINITY;
+    if (startsAt <= now && now < endsAt) {
+      costs.set(row.action_key, row.beat_cost);
+    }
+  }
+
+  return Object.fromEntries(costs);
 }
