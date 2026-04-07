@@ -731,3 +731,32 @@ Open risks / notes:
 - subscription lifecycle management is still intentionally minimal
   Users should not create overlapping live subscriptions until the account-management slice exists
 - webhook setup still needs manual configuration in Razorpay test mode, including the signing secret
+
+## Runtime Controls UX Refinement
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- make runtime control switches understandable to non-technical admins
+- explain clearly what changes when a control is on versus off
+
+Work completed:
+
+- expanded runtime setting definitions in `lib/types/pricing.ts` with:
+  - friendlier labels
+  - plain-language descriptions
+  - `enabledHelp`
+  - `disabledHelp`
+- updated `app/actions/pricing-admin.ts` so the admin page receives the richer runtime-setting copy
+- updated `components/admin/PricingStudio.tsx` so each runtime control card now shows:
+  - what the control is for
+  - what happens right now based on the switch position
+  - a clearer fallback sentence instead of the technical `Default:` label
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint components/admin/PricingStudio.tsx lib/types/pricing.ts app/actions/pricing-admin.ts`

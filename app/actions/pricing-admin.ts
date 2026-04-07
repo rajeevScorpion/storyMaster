@@ -39,6 +39,8 @@ export interface PricingAdminRuntimeSetting {
   kind: PricingRuntimeSettingKind;
   label: string;
   description: string;
+  enabledHelp: string;
+  disabledHelp: string;
   enabled: boolean;
   value: string | null;
   defaultEnabled: boolean;
@@ -759,6 +761,8 @@ async function getPricingRuntimeSettingsInternal(supabase: AdminClient): Promise
       kind: definition.kind,
       label: definition.label,
       description: definition.description,
+      enabledHelp: definition.enabledHelp,
+      disabledHelp: definition.disabledHelp,
       enabled: row?.enabled ?? definition.defaultEnabled,
       value: row?.value ?? definition.defaultValue,
       defaultEnabled: definition.defaultEnabled,

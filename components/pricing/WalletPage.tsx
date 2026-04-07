@@ -10,7 +10,7 @@ import { prepareRazorpayCheckout } from '@/app/actions/pricing-checkout';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
-import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay';
+import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay-shared';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
 import type {

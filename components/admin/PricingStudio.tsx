@@ -433,7 +433,7 @@ export default function PricingStudio() {
         {message && <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
       </div>
 
-      <SectionCard title="Runtime Controls" description="Immediate-save pricing knobs and rollout flags." icon={Settings2}>
+      <SectionCard title="Runtime Controls" description="Use these switches to decide what people can see, buy, and experience. Each card explains what changes when it is on or off." icon={Settings2}>
         <div className="grid gap-4 lg:grid-cols-2">
           {state.runtimeSettings.map((setting) => {
             const draft = runtimeDrafts[setting.key] ?? { enabled: setting.enabled, value: setting.value ?? '' };
@@ -452,6 +452,15 @@ export default function PricingStudio() {
                   </button>
                 </div>
 
+                <div className="mt-4 rounded-xl border border-white/10 bg-neutral-950/40 px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-neutral-500">
+                    {draft.enabled ? 'What this means right now' : 'What happens while this is off'}
+                  </p>
+                  <p className="mt-2 text-sm text-neutral-200">
+                    {draft.enabled ? setting.enabledHelp : setting.disabledHelp}
+                  </p>
+                </div>
+
                 {setting.kind !== 'boolean' && (
                   <div className="mt-4 flex items-center gap-3">
                     <input
@@ -468,7 +477,9 @@ export default function PricingStudio() {
                 )}
 
                 <div className="mt-4 flex items-center justify-between gap-3">
-                  <p className="text-[11px] uppercase tracking-wider text-neutral-500">Default: {formatRuntimeDefaultValue(setting.key, setting.defaultValue, setting.defaultEnabled)}</p>
+                  <p className="text-[11px] uppercase tracking-wider text-neutral-500">
+                    If this is off, Kissago uses: {formatRuntimeDefaultValue(setting.key, setting.defaultValue, setting.defaultEnabled)}
+                  </p>
                   <ActionButton
                     busy={busyKey === `runtime:${setting.key}`}
                     label="Save"
