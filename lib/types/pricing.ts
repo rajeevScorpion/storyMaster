@@ -268,6 +268,10 @@ export interface PricingPlanOfferCard {
   description: string | null;
   tierRank: number;
   currencyCode: string;
+  monthlyPlanVersionId: string | null;
+  annualPlanVersionId: string | null;
+  monthlyProvider: BillingProvider | null;
+  annualProvider: BillingProvider | null;
   monthlyPriceMinor: number | null;
   annualPriceMinor: number | null;
   monthlyCoins: number;
@@ -279,11 +283,13 @@ export interface PricingPlanOfferCard {
 }
 
 export interface PricingTopupOfferCard {
+  topupPackId: string;
   packKey: string;
   name: string;
   currencyCode: string;
   priceMinor: number;
   coinAmount: number;
+  provider: BillingProvider | null;
 }
 
 export interface PricingWalletActivityItem {
@@ -302,3 +308,44 @@ export interface PricingWalletPageData {
   topupOffers: PricingTopupOfferCard[];
   recentActivity: PricingWalletActivityItem[];
 }
+
+export type RazorpayCheckoutKind = 'subscription' | 'topup';
+
+export interface PrepareRazorpaySubscriptionCheckoutInput {
+  kind: 'subscription';
+  planVersionId: string;
+}
+
+export interface PrepareRazorpayTopupCheckoutInput {
+  kind: 'topup';
+  topupPackId: string;
+}
+
+export type PrepareRazorpayCheckoutInput =
+  | PrepareRazorpaySubscriptionCheckoutInput
+  | PrepareRazorpayTopupCheckoutInput;
+
+interface PreparedRazorpayCheckoutBase {
+  keyId: string;
+  internalOrderId: string;
+  displayName: string;
+  description: string;
+  userName: string | null;
+  userEmail: string | null;
+}
+
+export interface PreparedRazorpaySubscriptionCheckout extends PreparedRazorpayCheckoutBase {
+  kind: 'subscription';
+  razorpaySubscriptionId: string;
+}
+
+export interface PreparedRazorpayTopupCheckout extends PreparedRazorpayCheckoutBase {
+  kind: 'topup';
+  razorpayOrderId: string;
+  amountMinor: number;
+  currencyCode: string;
+}
+
+export type PreparedRazorpayCheckout =
+  | PreparedRazorpaySubscriptionCheckout
+  | PreparedRazorpayTopupCheckout;

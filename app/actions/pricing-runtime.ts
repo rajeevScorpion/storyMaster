@@ -222,6 +222,10 @@ function buildPlanOffers(
       description: plan.description,
       tierRank: plan.tier_rank,
       currencyCode: primary?.currency_code ?? 'USD',
+      monthlyPlanVersionId: monthly?.id ?? null,
+      annualPlanVersionId: annual?.id ?? null,
+      monthlyProvider: monthly?.provider ?? null,
+      annualProvider: annual?.provider ?? null,
       monthlyPriceMinor: monthly?.price_minor ?? null,
       annualPriceMinor: annual?.price_minor ?? null,
       monthlyCoins: beatsToCoins(primary?.monthly_included_beats ?? 0),
@@ -236,11 +240,13 @@ function buildPlanOffers(
 
 function buildTopupOffers(topups: DbPricingTopupPack[]): PricingTopupOfferCard[] {
   return topups.map((pack) => ({
+    topupPackId: pack.id,
     packKey: pack.pack_key,
     name: pack.name,
     currencyCode: pack.currency_code,
     priceMinor: pack.price_minor,
     coinAmount: beatsToCoins(pack.beat_amount),
+    provider: pack.provider,
   }));
 }
 

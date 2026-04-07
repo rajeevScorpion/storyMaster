@@ -653,3 +653,81 @@ Open risks / notes:
 - India paid offers remain draft-only until final values are published from admin, so `IN` market offer coverage is intentionally incomplete
 - recent wallet activity will be sparse or empty until billing grants and spend events are live
 - the UI is broader than the original narrow rollout recommendation, but this is acceptable for internal-only testing before public launch
+
+## Execution Slice 6 - Razorpay Billing Foundation
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- integrate the first real hosted checkout path using Razorpay only
+- keep Stripe deferred without blocking future multi-provider support
+- make internal India-market checkout testable through the new wallet UI
+
+Work completed:
+
+- added `lib/billing/razorpay.ts`
+  - REST-based Razorpay client helpers
+  - signature verification helpers for:
+    - order checkout
+    - subscription checkout
+    - webhooks
+- added `lib/billing/razorpay-sync.ts`
+  - Razorpay customer upsert
+  - subscription state sync into `billing_subscriptions`
+  - idempotent top-up grants
+  - idempotent initial subscription-cycle grants when current cycle timing is available
+- added `app/actions/pricing-checkout.ts`
+  - authenticated Razorpay checkout preparation for:
+    - subscriptions
+    - top-ups
+  - lazy Razorpay plan creation for published plan versions without provider refs
+- added `app/api/billing/razorpay/verify/route.ts`
+  - post-checkout signature verification
+  - billing order updates
+  - top-up grants
+  - subscription sync after successful authorization
+- added `app/api/billing/razorpay/webhook/route.ts`
+  - webhook signature validation
+  - append-only webhook event capture
+  - duplicate event suppression via `x-razorpay-event-id`
+  - subscription/order follow-up processing
+- updated `components/pricing/PricingRuntimeProvider.tsx`
+  - persisted market override for internal testing
+- updated `components/pricing/WalletPage.tsx`
+  - market selector
+  - monthly/yearly plan toggle
+  - Razorpay checkout script loading
+  - live checkout buttons for Razorpay-backed offers
+  - success/error feedback after checkout verification
+- updated `app/actions/pricing-runtime.ts` and `lib/types/pricing.ts`
+  - wallet offers now carry plan version ids, top-up ids, and provider metadata
+- updated `.env.example`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `ADMIN_USER_ID`
+  - `RAZORPAY_KEY_ID`
+  - `RAZORPAY_KEY_SECRET`
+  - `RAZORPAY_WEBHOOK_SECRET`
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/pricing-checkout.ts app/actions/pricing-runtime.ts app/api/billing/razorpay/verify/route.ts app/api/billing/razorpay/webhook/route.ts components/pricing/PricingRuntimeProvider.tsx components/pricing/WalletPage.tsx lib/billing/razorpay.ts lib/billing/razorpay-sync.ts lib/types/pricing.ts`
+
+Tradeoffs / decisions:
+
+- Razorpay is the only live checkout provider in this slice
+  `ROW` offers can still render, but Stripe is intentionally deferred
+- the wallet now includes an explicit market selector because the pricing runtime otherwise defaults new users to `ROW`
+- top-up grants are applied immediately after successful verification because that path is simple and idempotent
+- subscription activation is synced now, and the initial cycle grant is attempted when Razorpay returns current cycle timing
+- ongoing renewal-cycle grants are still conservative and will rely on later webhook refinement if edge cases appear
+
+Open risks / notes:
+
+- India paid plan versions and top-up packs still need to be published from admin with final values before Razorpay checkout can be meaningfully tested
+- subscription lifecycle management is still intentionally minimal
+  Users should not create overlapping live subscriptions until the account-management slice exists
+- webhook setup still needs manual configuration in Razorpay test mode, including the signing secret

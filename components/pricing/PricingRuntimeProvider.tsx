@@ -3,14 +3,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { useAuth } from '@/lib/hooks/useAuth';
-import type { PricingRuntimeContext } from '@/lib/types/pricing';
+import type { PricingMarketKey, PricingRuntimeContext } from '@/lib/types/pricing';
 
 interface PricingRuntimeContextValue {
   data: PricingRuntimeContext;
   isLoading: boolean;
   error: string | null;
+  marketOverride: PricingMarketKey | null;
+  setMarketOverride: (value: PricingMarketKey | null) => void;
   refresh: () => Promise<void>;
 }
+
+const PRICING_MARKET_STORAGE_KEY = 'kissago_pricing_market_override';
 
 const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
   userId: null,
@@ -58,6 +62,8 @@ const PricingRuntimeContextValue = createContext<PricingRuntimeContextValue>({
   data: DEFAULT_PRICING_RUNTIME_CONTEXT,
   isLoading: true,
   error: null,
+  marketOverride: null,
+  setMarketOverride: () => {},
   refresh: async () => {},
 });
 
@@ -66,13 +72,26 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
   const [data, setData] = useState<PricingRuntimeContext>(DEFAULT_PRICING_RUNTIME_CONTEXT);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [marketOverride, setMarketOverrideState] = useState<PricingMarketKey | null>(null);
+  const [marketReady, setMarketReady] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(PRICING_MARKET_STORAGE_KEY);
+      if (stored === 'IN' || stored === 'ROW') {
+        setMarketOverrideState(stored);
+      }
+    } finally {
+      setMarketReady(true);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const next = await getPricingRuntimeContext();
+      const next = await getPricingRuntimeContext({ pricingMarketKey: marketOverride });
       setData(next);
     } catch (err: any) {
       setError(err?.message || 'Failed to load pricing context');
@@ -80,22 +99,34 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
     } finally {
       setIsLoading(false);
     }
+  }, [marketOverride]);
+
+  const setMarketOverride = useCallback((value: PricingMarketKey | null) => {
+    setMarketOverrideState(value);
+
+    if (value) {
+      window.localStorage.setItem(PRICING_MARKET_STORAGE_KEY, value);
+    } else {
+      window.localStorage.removeItem(PRICING_MARKET_STORAGE_KEY);
+    }
   }, []);
 
   useEffect(() => {
-    if (authLoading) {
+    if (authLoading || !marketReady) {
       return;
     }
 
     void load();
-  }, [authLoading, load, user?.id]);
+  }, [authLoading, load, marketReady, user?.id]);
 
   const value = useMemo<PricingRuntimeContextValue>(() => ({
     data,
     isLoading,
     error,
+    marketOverride,
+    setMarketOverride,
     refresh: load,
-  }), [data, error, isLoading, load]);
+  }), [data, error, isLoading, load, marketOverride, setMarketOverride]);
 
   return (
     <PricingRuntimeContextValue.Provider value={value}>
