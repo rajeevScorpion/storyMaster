@@ -2,9 +2,12 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
-import { User, LogOut, LogIn, BookMarked, Loader2 } from 'lucide-react';
+import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
+import Link from 'next/link';
+import { COINS_PER_BEAT } from '@/lib/types/pricing';
 
 interface UserMenuProps {
   onMyStories?: () => void;
@@ -12,6 +15,7 @@ interface UserMenuProps {
 
 export default function UserMenu({ onMyStories }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
+  const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -50,6 +54,13 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
 
   const avatarUrl = user.user_metadata?.avatar_url;
   const displayName = user.user_metadata?.full_name || user.email || 'User';
+  const totalCoins = pricing.snapshot.availableTotalBeats * COINS_PER_BEAT;
+  const monthlyAllowanceCoins = pricing.snapshot.monthlyIncludedBeats * COINS_PER_BEAT;
+  const displayCoins = totalCoins > 0 ? totalCoins : monthlyAllowanceCoins;
+  const refillLabel = pricing.snapshot.nextResetAt
+    ? new Date(pricing.snapshot.nextResetAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    : null;
+  const planLabel = `${pricing.snapshot.planKey.charAt(0).toUpperCase()}${pricing.snapshot.planKey.slice(1)} plan`;
 
   return (
     <div ref={menuRef} className="relative">
@@ -87,7 +98,40 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
               <p className="text-xs text-neutral-500 truncate">{user.email}</p>
             </div>
 
+            <div className="mx-3 mt-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.16em] text-emerald-300/80">{planLabel}</p>
+                  <p className="mt-1 text-lg font-medium text-neutral-100">
+                    {pricingLoading ? '...' : `${displayCoins.toLocaleString()} ${totalCoins > 0 ? 'coins' : 'coins / month'}`}
+                  </p>
+                  <p className="mt-1 text-xs text-neutral-400">
+                    {totalCoins > 0
+                      ? (
+                        pricing.snapshot.isInGracePeriod
+                          ? 'Payment issue detected. Access is still active for now.'
+                          : refillLabel
+                            ? `Refills on ${refillLabel}`
+                            : 'Wallet summary for your current account'
+                      )
+                      : 'Monthly allowance preview while billing is being wired up.'}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-emerald-500/10 p-2 text-emerald-300">
+                  <Coins className="h-4 w-4" />
+                </div>
+              </div>
+            </div>
+
             <div className="py-1">
+              <Link
+                href="/wallet"
+                onClick={() => setIsOpen(false)}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
+              >
+                <Wallet className="w-4 h-4" />
+                Wallet & Billing
+              </Link>
               {onMyStories && (
                 <button
                   onClick={() => {

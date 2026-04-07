@@ -238,6 +238,7 @@ export interface EffectivePricingSnapshot {
   planKey: PlanKey;
   planTierRank: number;
   planVersionId: string | null;
+  monthlyIncludedBeats: number;
   billingProvider: BillingProvider | null;
   billingInterval: BillingInterval | null;
   billingCountryCode: string | null;
@@ -259,4 +260,45 @@ export interface PricingRuntimeContext {
   userId: string | null;
   controls: PricingRuntimeControls;
   snapshot: EffectivePricingSnapshot;
+}
+
+export interface PricingPlanOfferCard {
+  planKey: PlanKey;
+  name: string;
+  description: string | null;
+  tierRank: number;
+  currencyCode: string;
+  monthlyPriceMinor: number | null;
+  annualPriceMinor: number | null;
+  monthlyCoins: number;
+  storyLengthCap: number;
+  canAccessDownloads: boolean;
+  canAccessUnbrandedExports: boolean;
+  creatorControls: boolean;
+  isCurrentPlan: boolean;
+}
+
+export interface PricingTopupOfferCard {
+  packKey: string;
+  name: string;
+  currencyCode: string;
+  priceMinor: number;
+  coinAmount: number;
+}
+
+export interface PricingWalletActivityItem {
+  id: string;
+  kind: 'grant' | 'spend';
+  title: string;
+  subtitle: string;
+  coinsDelta: number;
+  occurredAt: string;
+}
+
+export interface PricingWalletPageData {
+  pricingMarketKey: PricingMarketKey;
+  checkoutEnabled: boolean;
+  planOffers: PricingPlanOfferCard[];
+  topupOffers: PricingTopupOfferCard[];
+  recentActivity: PricingWalletActivityItem[];
 }

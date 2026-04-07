@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, StoryConfig, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
@@ -15,9 +17,11 @@ interface LandingScreenProps {
 }
 
 export default function LandingScreen({ onBegin }: LandingScreenProps) {
+  const router = useRouter();
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
   const isLoading = useStoryStore((state) => state.isLoading);
+  const { data: pricing } = usePricingRuntime();
 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [language, setLanguage] = useState<StoryLanguage>('english');
@@ -28,6 +32,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [visualSettings, setVisualSettings] = useState<VisualSettings>(DEFAULT_STORY_CONFIG.visualSettings);
   const [authoringMode, setAuthoringMode] = useState<StoryConfig['authoring']['mode']>(DEFAULT_STORY_CONFIG.authoring.mode);
   const [preludeText, setPreludeText] = useState(DEFAULT_STORY_CONFIG.authoring.preludeText || '');
+  const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
+  const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
+  const effectiveMaxBeats = storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
 
   // Restore prompt after OAuth redirect — use initializer pattern to avoid setState in effect
   useEffect(() => {
@@ -64,7 +71,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         language,
         ageGroup,
         settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
-        maxBeats,
+        maxBeats: effectiveMaxBeats,
         visualSettings,
         authoring: {
           mode: authoringMode,
@@ -172,14 +179,18 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                 onSettingCountryChange={setSettingCountry}
                 customSetting={customSetting}
                 onCustomSettingChange={setCustomSetting}
-                maxBeats={maxBeats}
-                onMaxBeatsChange={setMaxBeats}
+                maxBeats={effectiveMaxBeats}
+                onMaxBeatsChange={(value) => setMaxBeats(storyLengthUiEnabled ? Math.min(value, storyLengthCap) : value)}
                 visualSettings={visualSettings}
                 onVisualSettingsChange={setVisualSettings}
                 authoringMode={authoringMode}
                 onAuthoringModeChange={setAuthoringMode}
                 preludeText={preludeText}
                 onPreludeTextChange={setPreludeText}
+                pricingStoryLengthCap={storyLengthCap}
+                pricingStoryLengthUiLimitsEnabled={storyLengthUiEnabled}
+                currentPlanLabel={pricing.snapshot.planKey}
+                onViewPlans={() => router.push('/wallet')}
               />
             )}
           </AnimatePresence>

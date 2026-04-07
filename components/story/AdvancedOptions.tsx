@@ -10,6 +10,7 @@ import {
 } from '@/lib/ai/story-config';
 import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
+import { Coins } from 'lucide-react';
 
 const LANGUAGE_OPTIONS: FilterDropdownOption[] = [
   { value: 'english', label: 'English' },
@@ -84,6 +85,10 @@ interface AdvancedOptionsProps {
   onAuthoringModeChange: (v: AuthoringMode) => void;
   preludeText: string;
   onPreludeTextChange: (v: string) => void;
+  pricingStoryLengthCap?: number;
+  pricingStoryLengthUiLimitsEnabled?: boolean;
+  currentPlanLabel?: string;
+  onViewPlans?: () => void;
 }
 
 export default function AdvancedOptions({
@@ -103,8 +108,14 @@ export default function AdvancedOptions({
   onAuthoringModeChange,
   preludeText,
   onPreludeTextChange,
+  pricingStoryLengthCap = 8,
+  pricingStoryLengthUiLimitsEnabled = false,
+  currentPlanLabel = 'free',
+  onViewPlans,
 }: AdvancedOptionsProps) {
   const [allowOverflow, setAllowOverflow] = useState(false);
+  const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
+  const planLabel = `${currentPlanLabel.charAt(0).toUpperCase()}${currentPlanLabel.slice(1)} plan limit`;
 
   const setVisualSetting = <K extends keyof VisualSettings,>(key: K, value: VisualSettings[K]) => {
     onVisualSettingsChange({
@@ -172,8 +183,18 @@ export default function AdvancedOptions({
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
-              <div className="flex items-center justify-end gap-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  {pricingStoryLengthUiLimitsEnabled && (
+                    <p className="text-xs uppercase tracking-[0.16em] text-neutral-500">
+                      {planLabel}
+                    </p>
+                  )}
+                </div>
                 <p className="text-sm font-sans text-neutral-300">
+                  {pricingStoryLengthUiLimitsEnabled && (
+                    <span className="mr-2 text-xs text-neutral-500">up to {sliderMax}</span>
+                  )}
                   <span className="text-emerald-400">{maxBeats}</span> beats
                 </p>
               </div>
@@ -182,14 +203,37 @@ export default function AdvancedOptions({
                 <input
                   type="range"
                   min={3}
-                  max={8}
+                  max={sliderMax}
                   value={maxBeats}
                   onChange={(e) => onMaxBeatsChange(Number(e.target.value))}
                   aria-label="Story length"
                   className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-emerald-500"
                 />
-                <span className="text-xs text-neutral-500">8</span>
+                <span className="text-xs text-neutral-500">{sliderMax}</span>
               </div>
+
+              {pricingStoryLengthUiLimitsEnabled && sliderMax < 8 && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="rounded-xl bg-emerald-500/10 p-2 text-emerald-300">
+                      <Coins className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-neutral-100">Your current plan allows up to {sliderMax} beats per story.</p>
+                      <p className="mt-1 text-xs text-neutral-500">Upgrade for longer story adventures and more monthly coins.</p>
+                    </div>
+                  </div>
+                  {onViewPlans && (
+                    <button
+                      type="button"
+                      onClick={onViewPlans}
+                      className="rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-200 hover:bg-white/10"
+                    >
+                      See plans
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

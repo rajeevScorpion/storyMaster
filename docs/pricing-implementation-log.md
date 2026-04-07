@@ -571,3 +571,85 @@ Open risks / notes:
 - no UI is consuming the runtime snapshot yet
 - no checkout, grants, or subscriptions are being created yet, so most users will still resolve to free-plan wallet totals
 - temporary tester `Studio` access and migration grants are not yet materialized into the snapshot because the billing and wallet grant slices have not been implemented
+
+## User UI Planning Addendum
+
+Current working status:
+
+- user-facing pricing UX baseline documented before implementation
+
+Work completed:
+
+- added `docs/pricing-user-ui-spec.md`
+- froze the recommended V1 user-facing pricing surfaces:
+  - story-length limit messaging in setup
+  - wallet summary in the user menu
+  - future `/wallet` page direction
+  - future recent activity / spend history direction
+- aligned the user-facing copy and tone around `coins`
+- kept the first rollout family-friendly and intentionally non-financial in feel
+
+Tradeoffs / decisions:
+
+- the recommended first implementation slice for customer UI stays intentionally narrow:
+  - setup limit messaging
+  - wallet summary
+- the full wallet page is specified now, but recommended for a later slice after the first user-visible rollout proves stable
+- `/wallet` is the recommended route because it feels simpler and warmer than a deeper account billing path
+
+## Execution Slice 5 - User Pricing UI
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- add the first customer-facing pricing surfaces while checkout and billing are still non-live
+- make pricing visible inside the product without changing generation enforcement yet
+- keep the experience warm and lightweight for internal testing
+
+Work completed:
+
+- added `components/pricing/PricingRuntimeProvider.tsx`
+- added `lib/hooks/usePricingRuntime.ts`
+- added `app/wallet/page.tsx`
+- added `components/pricing/WalletPage.tsx`
+- extended `app/actions/pricing-runtime.ts` with wallet page reads for:
+  - public plan offers
+  - top-up offers
+  - recent wallet activity
+- extended `lib/types/pricing.ts` and `lib/pricing/snapshot.ts` with:
+  - `monthlyIncludedBeats`
+  - wallet page DTOs
+- updated `components/Providers.tsx` to provide pricing runtime context app-wide
+- updated `components/auth/UserMenu.tsx` to show:
+  - current plan
+  - coin summary
+  - `Wallet & Billing` entry
+- updated `components/story/AdvancedOptions.tsx` to support:
+  - plan-aware story length cap messaging
+  - upgrade CTA
+- updated `components/story/LandingScreen.tsx` to:
+  - consume runtime pricing
+  - clamp setup max beats to the active plan cap when the UI limit flag is enabled
+  - route plan CTA clicks to `/wallet`
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/pricing-runtime.ts components/Providers.tsx components/auth/UserMenu.tsx components/story/AdvancedOptions.tsx components/story/LandingScreen.tsx components/pricing/PricingRuntimeProvider.tsx components/pricing/WalletPage.tsx lib/hooks/usePricingRuntime.ts lib/pricing/snapshot.ts lib/pricing/wallet.ts lib/types/pricing.ts app/wallet/page.tsx`
+
+Tradeoffs / decisions:
+
+- checkout buttons are intentionally disabled until the billing slice is implemented
+- story-length UI caps only activate when `pricing_story_length_ui_limits_enabled` is on
+- wallet UI falls back to the monthly included allowance when live wallet grants do not yet exist
+  This avoids showing a misleading zero balance during internal testing
+- recent activity intentionally summarizes grants and spend events without exposing allocation internals
+
+Open risks / notes:
+
+- India paid offers remain draft-only until final values are published from admin, so `IN` market offer coverage is intentionally incomplete
+- recent wallet activity will be sparse or empty until billing grants and spend events are live
+- the UI is broader than the original narrow rollout recommendation, but this is acceptable for internal-only testing before public launch
