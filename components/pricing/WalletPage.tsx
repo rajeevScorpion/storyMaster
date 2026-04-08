@@ -11,6 +11,7 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import { RAZORPAY_CHECKOUT_SCRIPT_URL } from '@/lib/billing/razorpay-shared';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
+import { PRICING_RUNTIME_REFRESH_EVENT } from '@/lib/pricing/runtime-events';
 import { getPricingWalletPageData } from '@/app/actions/pricing-runtime';
 import type {
   BillingInterval,
@@ -167,6 +168,19 @@ export default function WalletPage() {
   useEffect(() => {
     void loadWalletData();
   }, [loadWalletData, pricingData.userId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleRefresh = () => {
+      void loadWalletData();
+    };
+
+    window.addEventListener(PRICING_RUNTIME_REFRESH_EVENT, handleRefresh);
+    return () => window.removeEventListener(PRICING_RUNTIME_REFRESH_EVENT, handleRefresh);
+  }, [loadWalletData]);
 
   const usingRazorpayMarket = pricingData.snapshot.routingProvider === 'razorpay';
   const yearlyCheckoutDeferred =

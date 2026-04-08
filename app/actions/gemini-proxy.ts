@@ -10,6 +10,37 @@ const GEMINI_TEXT_TIMEOUT_MS = 30_000;
 const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
 
+function geminiNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+async function timeGeminiStep<T>(
+  scope: string,
+  meta: Record<string, unknown>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const startedAt = geminiNowMs();
+  try {
+    const result = await fn();
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(geminiNowMs() - startedAt),
+      success: true,
+      ...meta,
+    });
+    return result;
+  } catch (error) {
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(geminiNowMs() - startedAt),
+      success: false,
+      ...meta,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw error;
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
@@ -44,19 +75,27 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
   const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
   const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
 
-  const response = await withTimeout(
-    ai.models.generateContent({
+  const response = await timeGeminiStep(
+    `gemini_proxy.${task}`,
+    {
       model,
-      contents: prompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
-        responseMimeType: 'application/json',
-        responseSchema: schemaMap[task],
-        temperature: temperature ?? 0.7,
-      },
-    }),
-    timeoutMs,
-    task
+      timeoutMs,
+      promptChars: prompt.length,
+    },
+    () => withTimeout(
+      ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
+          responseMimeType: 'application/json',
+          responseSchema: schemaMap[task],
+          temperature: temperature ?? 0.7,
+        },
+      }),
+      timeoutMs,
+      task
+    )
   );
 
   const text = response.text;
@@ -104,20 +143,32 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
   const imgFlagVal = await getFeatureFlagValue('gemini_image_timeout_ms');
   const imgTimeoutMs = (imgFlagVal ? parseInt(imgFlagVal, 10) : 0) || GEMINI_IMAGE_TIMEOUT_MS;
 
-  const response = await withTimeout(
-    ai.models.generateContent({
+  const response = await timeGeminiStep(
+    `gemini_proxy.${task}`,
+    {
       model,
-      contents,
-      config: {
-        ...(systemInstruction ? { systemInstruction } : {}),
-        imageConfig: {
-          aspectRatio: aspectRatio ?? '16:9',
-          imageSize: imageSize ?? '1K',
+      timeoutMs: imgTimeoutMs,
+      hasReferences: Boolean(hasRefs),
+      referenceCount: referenceParts?.length ?? 0,
+      aspectRatio: aspectRatio ?? '16:9',
+      imageSize: imageSize ?? '1K',
+      promptChars: prompt.length,
+    },
+    () => withTimeout(
+      ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          ...(systemInstruction ? { systemInstruction } : {}),
+          imageConfig: {
+            aspectRatio: aspectRatio ?? '16:9',
+            imageSize: imageSize ?? '1K',
+          },
         },
-      },
-    }),
-    imgTimeoutMs,
-    task
+      }),
+      imgTimeoutMs,
+      task
+    )
   );
 
   for (const part of response.candidates?.[0]?.content?.parts ?? []) {

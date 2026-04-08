@@ -98,6 +98,37 @@ interface ReconcileRazorpayTopupResult {
   paymentId: string;
 }
 
+function enforcementNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+async function timeEnforcementStep<T>(
+  scope: string,
+  meta: Record<string, unknown>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const startedAt = enforcementNowMs();
+  try {
+    const result = await fn();
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(enforcementNowMs() - startedAt),
+      success: true,
+      ...meta,
+    });
+    return result;
+  } catch (error) {
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(enforcementNowMs() - startedAt),
+      success: false,
+      ...meta,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw error;
+  }
+}
+
 export async function ensureFreeAllowanceForUser(
   userId: string,
   options: {
@@ -203,157 +234,166 @@ export async function authorizeBillableAction(input: {
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
 }): Promise<PricingBillableActionAuthorization> {
-  const actionCost = await loadActionCost(input.actionKey);
-  const beatCost = actionCost?.beat_cost ?? 0;
-  const coinCost = beatCost * COINS_PER_BEAT;
+  return timeEnforcementStep(
+    'pricing.authorize_billable_action',
+    {
+      actionKey: input.actionKey,
+      hasUser: Boolean(input.userId),
+    },
+    async () => {
+      const actionCost = await loadActionCost(input.actionKey);
+      const beatCost = actionCost?.beat_cost ?? 0;
+      const coinCost = beatCost * COINS_PER_BEAT;
 
-  if (!input.userId) {
-    return {
-      status: 'denied',
-      reason: 'sign_in_required',
-      beatCost,
-      coinCost,
-      availableBeats: 0,
-      availableCoins: 0,
-    };
-  }
+      if (!input.userId) {
+        return {
+          status: 'denied',
+          reason: 'sign_in_required',
+          beatCost,
+          coinCost,
+          availableBeats: 0,
+          availableCoins: 0,
+        };
+      }
 
-  const supabase = createAdminClient();
-  await expireStaleReservations({ supabase });
+      const supabase = createAdminClient();
+      await expireStaleReservations({ supabase });
 
-  let state = await loadPricingState(supabase, input.userId, {
-    pricingMarketKey: input.pricingMarketKey,
-    countryCode: input.countryCode,
-  });
-
-  const shouldEnsureFreeAllowance =
-    state.snapshot.planKey === 'free' &&
-    (
-      state.controls.pricingSnapshotEnabled ||
-      state.controls.pricingShadowMeteringEnabled ||
-      state.controls.pricingHardEnforcementEnabled
-    );
-
-  if (shouldEnsureFreeAllowance) {
-    const grantResult = await ensureFreeAllowanceForUser(input.userId, {
-      pricingMarketKey: input.pricingMarketKey,
-      countryCode: input.countryCode,
-      supabase,
-    });
-
-    if (grantResult.granted) {
-      state = await loadPricingState(supabase, input.userId, {
+      let state = await loadPricingState(supabase, input.userId, {
         pricingMarketKey: input.pricingMarketKey,
         countryCode: input.countryCode,
       });
-    }
-  }
 
-  if (isAdminBypassEnabledForUser(input.userId, state.controls)) {
-    return {
-      status: 'bypassed',
-      reason: 'admin_bypass',
-      beatCost,
-      coinCost,
-    };
-  }
+      const shouldEnsureFreeAllowance =
+        state.snapshot.planKey === 'free' &&
+        (
+          state.controls.pricingSnapshotEnabled ||
+          state.controls.pricingShadowMeteringEnabled ||
+          state.controls.pricingHardEnforcementEnabled
+        );
 
-  if (beatCost <= 0) {
-    return {
-      status: 'allowed',
-      mode: 'soft',
-      reservationId: null,
-      beatCost,
-      coinCost,
-      availableBeats: state.snapshot.availableTotalBeats,
-      availableCoins: state.snapshot.availableTotalBeats * COINS_PER_BEAT,
-      expiresAt: null,
-    };
-  }
+      if (shouldEnsureFreeAllowance) {
+        const grantResult = await ensureFreeAllowanceForUser(input.userId, {
+          pricingMarketKey: input.pricingMarketKey,
+          countryCode: input.countryCode,
+          supabase,
+        });
 
-  const availableBeats = state.snapshot.availableTotalBeats;
-  const availableCoins = availableBeats * COINS_PER_BEAT;
+        if (grantResult.granted) {
+          state = await loadPricingState(supabase, input.userId, {
+            pricingMarketKey: input.pricingMarketKey,
+            countryCode: input.countryCode,
+          });
+        }
+      }
 
-  if (!state.controls.pricingHardEnforcementEnabled) {
-    if (state.controls.pricingShadowMeteringEnabled) {
-      await logShadowMeteringAttempt(supabase, input.userId, {
-        actionKey: input.actionKey,
-        beatCost,
-        idempotencyKey: input.idempotencyKey,
-        relatedStoryId: input.relatedStoryId ?? null,
-        relatedNodeId: input.relatedNodeId ?? null,
-        relatedStorylineId: input.relatedStorylineId ?? null,
-        metadata: {
+      if (isAdminBypassEnabledForUser(input.userId, state.controls)) {
+        return {
+          status: 'bypassed',
+          reason: 'admin_bypass',
+          beatCost,
+          coinCost,
+        };
+      }
+
+      if (beatCost <= 0) {
+        return {
+          status: 'allowed',
+          mode: 'soft',
+          reservationId: null,
+          beatCost,
+          coinCost,
+          availableBeats: state.snapshot.availableTotalBeats,
+          availableCoins: state.snapshot.availableTotalBeats * COINS_PER_BEAT,
+          expiresAt: null,
+        };
+      }
+
+      const availableBeats = state.snapshot.availableTotalBeats;
+      const availableCoins = availableBeats * COINS_PER_BEAT;
+
+      if (!state.controls.pricingHardEnforcementEnabled) {
+        if (state.controls.pricingShadowMeteringEnabled) {
+          await logShadowMeteringAttempt(supabase, input.userId, {
+            actionKey: input.actionKey,
+            beatCost,
+            idempotencyKey: input.idempotencyKey,
+            relatedStoryId: input.relatedStoryId ?? null,
+            relatedNodeId: input.relatedNodeId ?? null,
+            relatedStorylineId: input.relatedStorylineId ?? null,
+            metadata: {
+              ...(input.metadata ?? {}),
+              shadowOutcome: availableBeats >= beatCost ? 'would_allow' : 'would_deny',
+            },
+            status: availableBeats >= beatCost ? 'released' : 'failed',
+          });
+        }
+
+        return {
+          status: 'allowed',
+          mode: state.controls.pricingShadowMeteringEnabled ? 'shadow' : 'soft',
+          reservationId: null,
+          beatCost,
+          coinCost,
+          availableBeats,
+          availableCoins,
+          expiresAt: null,
+        };
+      }
+
+      if (availableBeats < beatCost) {
+        return {
+          status: 'denied',
+          reason: state.controls.pricingCheckoutEnabled ? 'insufficient_balance' : 'checkout_unavailable',
+          beatCost,
+          coinCost,
+          availableBeats,
+          availableCoins,
+        };
+      }
+
+      const expiresAt = new Date(Date.now() + state.controls.reservationTimeoutSeconds * 1000).toISOString();
+      const authorizeResult = await supabase.rpc('pricing_authorize_spend', {
+        p_user_id: input.userId,
+        p_action_key: input.actionKey,
+        p_requested_beat_cost: beatCost,
+        p_idempotency_key: input.idempotencyKey,
+        p_related_story_id: input.relatedStoryId ?? null,
+        p_related_node_id: input.relatedNodeId ?? null,
+        p_related_storyline_id: input.relatedStorylineId ?? null,
+        p_expires_at: expiresAt,
+        p_metadata_json: {
           ...(input.metadata ?? {}),
-          shadowOutcome: availableBeats >= beatCost ? 'would_allow' : 'would_deny',
+          authorizationMode: 'hard',
         },
-        status: availableBeats >= beatCost ? 'released' : 'failed',
       });
+
+      throwIfQueryFailed(authorizeResult.error, 'Failed to reserve coins for billable action');
+
+      const row = (authorizeResult.data?.[0] ?? null) as RpcAuthorizeSpendRow | null;
+      if (!row || row.reservation_status !== 'pending' || !row.reservation_id) {
+        return {
+          status: 'denied',
+          reason: state.controls.pricingCheckoutEnabled ? 'insufficient_balance' : 'checkout_unavailable',
+          beatCost,
+          coinCost,
+          availableBeats,
+          availableCoins,
+        };
+      }
+
+      return {
+        status: 'allowed',
+        mode: 'hard',
+        reservationId: row.reservation_id,
+        beatCost,
+        coinCost,
+        availableBeats: row.available_beats,
+        availableCoins: row.available_beats * COINS_PER_BEAT,
+        expiresAt,
+      };
     }
-
-    return {
-      status: 'allowed',
-      mode: state.controls.pricingShadowMeteringEnabled ? 'shadow' : 'soft',
-      reservationId: null,
-      beatCost,
-      coinCost,
-      availableBeats,
-      availableCoins,
-      expiresAt: null,
-    };
-  }
-
-  if (availableBeats < beatCost) {
-    return {
-      status: 'denied',
-      reason: state.controls.pricingCheckoutEnabled ? 'insufficient_balance' : 'checkout_unavailable',
-      beatCost,
-      coinCost,
-      availableBeats,
-      availableCoins,
-    };
-  }
-
-  const expiresAt = new Date(Date.now() + state.controls.reservationTimeoutSeconds * 1000).toISOString();
-  const authorizeResult = await supabase.rpc('pricing_authorize_spend', {
-    p_user_id: input.userId,
-    p_action_key: input.actionKey,
-    p_requested_beat_cost: beatCost,
-    p_idempotency_key: input.idempotencyKey,
-    p_related_story_id: input.relatedStoryId ?? null,
-    p_related_node_id: input.relatedNodeId ?? null,
-    p_related_storyline_id: input.relatedStorylineId ?? null,
-    p_expires_at: expiresAt,
-    p_metadata_json: {
-      ...(input.metadata ?? {}),
-      authorizationMode: 'hard',
-    },
-  });
-
-  throwIfQueryFailed(authorizeResult.error, 'Failed to reserve coins for billable action');
-
-  const row = (authorizeResult.data?.[0] ?? null) as RpcAuthorizeSpendRow | null;
-  if (!row || row.reservation_status !== 'pending' || !row.reservation_id) {
-    return {
-      status: 'denied',
-      reason: state.controls.pricingCheckoutEnabled ? 'insufficient_balance' : 'checkout_unavailable',
-      beatCost,
-      coinCost,
-      availableBeats,
-      availableCoins,
-    };
-  }
-
-  return {
-    status: 'allowed',
-    mode: 'hard',
-    reservationId: row.reservation_id,
-    beatCost,
-    coinCost,
-    availableBeats: row.available_beats,
-    availableCoins: row.available_beats * COINS_PER_BEAT,
-    expiresAt,
-  };
+  );
 }
 
 export async function finalizeBillableAction(input: {
@@ -539,74 +579,80 @@ async function loadPricingState(
     countryCode?: string | null;
   } = {}
 ): Promise<LoadedPricingState> {
-  const [plansResult, planVersionsResult, featureFlagsResult, customersResult, subscriptionsResult, grantsResult, reservationsResult] = await Promise.all([
-    supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }),
-    supabase.from('pricing_plan_versions').select('*').order('created_at', { ascending: false }),
-    supabase
-      .from('feature_flags')
-      .select('flag_key, enabled, value')
-      .in('flag_key', PRICING_RUNTIME_SETTING_DEFINITIONS.map((definition) => definition.key)),
-    supabase
-      .from('billing_customers')
-      .select('*')
-      .eq('user_id', userId)
-      .order('updated_at', { ascending: false }),
-    supabase
-      .from('billing_subscriptions')
-      .select('*')
-      .eq('user_id', userId)
-      .order('updated_at', { ascending: false }),
-    supabase
-      .from('beat_grants')
-      .select('*')
-      .eq('user_id', userId)
-      .order('granted_at', { ascending: false }),
-    supabase
-      .from('beat_spend_reservations')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false }),
-  ]);
+  return timeEnforcementStep(
+    'pricing.load_state',
+    { userId, pricingMarketKey: options.pricingMarketKey ?? null },
+    async () => {
+      const [plansResult, planVersionsResult, featureFlagsResult, customersResult, subscriptionsResult, grantsResult, reservationsResult] = await Promise.all([
+        supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }),
+        supabase.from('pricing_plan_versions').select('*').order('created_at', { ascending: false }),
+        supabase
+          .from('feature_flags')
+          .select('flag_key, enabled, value')
+          .in('flag_key', PRICING_RUNTIME_SETTING_DEFINITIONS.map((definition) => definition.key)),
+        supabase
+          .from('billing_customers')
+          .select('*')
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false }),
+        supabase
+          .from('billing_subscriptions')
+          .select('*')
+          .eq('user_id', userId)
+          .order('updated_at', { ascending: false }),
+        supabase
+          .from('beat_grants')
+          .select('*')
+          .eq('user_id', userId)
+          .order('granted_at', { ascending: false }),
+        supabase
+          .from('beat_spend_reservations')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false }),
+      ]);
 
-  throwIfQueryFailed(plansResult.error, 'Failed to load pricing plans');
-  throwIfQueryFailed(planVersionsResult.error, 'Failed to load pricing plan versions');
-  throwIfQueryFailed(featureFlagsResult.error, 'Failed to load pricing runtime flags');
-  throwIfQueryFailed(customersResult.error, 'Failed to load billing customers');
-  throwIfQueryFailed(subscriptionsResult.error, 'Failed to load billing subscriptions');
-  throwIfQueryFailed(grantsResult.error, 'Failed to load beat grants');
-  throwIfQueryFailed(reservationsResult.error, 'Failed to load beat reservations');
+      throwIfQueryFailed(plansResult.error, 'Failed to load pricing plans');
+      throwIfQueryFailed(planVersionsResult.error, 'Failed to load pricing plan versions');
+      throwIfQueryFailed(featureFlagsResult.error, 'Failed to load pricing runtime flags');
+      throwIfQueryFailed(customersResult.error, 'Failed to load billing customers');
+      throwIfQueryFailed(subscriptionsResult.error, 'Failed to load billing subscriptions');
+      throwIfQueryFailed(grantsResult.error, 'Failed to load beat grants');
+      throwIfQueryFailed(reservationsResult.error, 'Failed to load beat reservations');
 
-  const plans = (plansResult.data ?? []) as DbPricingPlan[];
-  const planVersions = (planVersionsResult.data ?? []) as DbPricingPlanVersion[];
-  const featureFlags = (featureFlagsResult.data ?? []) as RuntimeFlagRow[];
-  const billingCustomers = (customersResult.data ?? []) as DbBillingCustomer[];
-  const billingSubscriptions = (subscriptionsResult.data ?? []) as DbBillingSubscription[];
-  const beatGrants = (grantsResult.data ?? []) as DbBeatGrant[];
-  const beatReservations = (reservationsResult.data ?? []) as DbBeatSpendReservation[];
+      const plans = (plansResult.data ?? []) as DbPricingPlan[];
+      const planVersions = (planVersionsResult.data ?? []) as DbPricingPlanVersion[];
+      const featureFlags = (featureFlagsResult.data ?? []) as RuntimeFlagRow[];
+      const billingCustomers = (customersResult.data ?? []) as DbBillingCustomer[];
+      const billingSubscriptions = (subscriptionsResult.data ?? []) as DbBillingSubscription[];
+      const beatGrants = (grantsResult.data ?? []) as DbBeatGrant[];
+      const beatReservations = (reservationsResult.data ?? []) as DbBeatSpendReservation[];
 
-  const { controls, snapshot } = buildPricingRuntimeContextData({
-    pricingMarketKey: options.pricingMarketKey ?? null,
-    countryCode: options.countryCode ?? null,
-    plans,
-    planVersions,
-    featureFlags,
-    billingCustomers,
-    billingSubscriptions,
-    beatGrants,
-    beatReservations,
-  });
+      const { controls, snapshot } = buildPricingRuntimeContextData({
+        pricingMarketKey: options.pricingMarketKey ?? null,
+        countryCode: options.countryCode ?? null,
+        plans,
+        planVersions,
+        featureFlags,
+        billingCustomers,
+        billingSubscriptions,
+        beatGrants,
+        beatReservations,
+      });
 
-  return {
-    plans,
-    planVersions,
-    featureFlags,
-    billingCustomers,
-    billingSubscriptions,
-    beatGrants,
-    beatReservations,
-    controls,
-    snapshot,
-  };
+      return {
+        plans,
+        planVersions,
+        featureFlags,
+        billingCustomers,
+        billingSubscriptions,
+        beatGrants,
+        beatReservations,
+        controls,
+        snapshot,
+      };
+    }
+  );
 }
 
 async function loadActionCost(actionKey: PricingActionKey): Promise<DbPricingActionCost | null> {

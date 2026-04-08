@@ -22,6 +22,37 @@ import {
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
 import type { Character } from '@/lib/types/story';
 
+function runtimeNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+async function timeRuntimeStep<T>(
+  scope: string,
+  meta: Record<string, unknown>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const startedAt = runtimeNowMs();
+  try {
+    const result = await fn();
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(runtimeNowMs() - startedAt),
+      success: true,
+      ...meta,
+    });
+    return result;
+  } catch (error) {
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(runtimeNowMs() - startedAt),
+      success: false,
+      ...meta,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw error;
+  }
+}
+
 export interface StoryModelOverrides {
   storyModel?: string;
   storyTemperature?: number;
@@ -43,6 +74,7 @@ export async function generateStoryBeat(
   selectedOptionLabel?: string,
   modelOverrides?: StoryModelOverrides
 ): Promise<StoryBeat> {
+  const beatNumber = (sessionState?.currentBeat || 0) + 1;
   const normalizedSessionState = sessionState
     ? {
         ...sessionState,
@@ -113,24 +145,37 @@ export async function generateStoryBeat(
   });
 
   try {
-    const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
-      const text = await callGeminiText({
-        task: 'story_generation',
-        model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
-        prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
-        temperature: modelOverrides?.storyTemperature ?? 0.7,
-      });
-      try {
-        return JSON.parse(text) as StoryBeat;
-      } catch {
-        throw new Error(`Failed to parse story beat JSON: ${text.slice(0, 200)}`);
+    const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => timeRuntimeStep(
+      'story_runtime.generate_story_beat.attempt',
+      {
+        beatNumber,
+        hasRepairNote: Boolean(repairNote),
+        language: lang,
+      },
+      async () => {
+        const text = await callGeminiText({
+          task: 'story_generation',
+          model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+          prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
+          temperature: modelOverrides?.storyTemperature ?? 0.7,
+        });
+        try {
+          return JSON.parse(text) as StoryBeat;
+        } catch {
+          throw new Error(`Failed to parse story beat JSON: ${text.slice(0, 200)}`);
+        }
       }
-    };
+    );
 
     let beat = await generateAttempt();
     const issues = validateGeneratedBeat(beat, normalizedSessionState);
 
     if (issues.length > 0) {
+      console.info('[timing:story_runtime.generate_story_beat.validation_retry]', {
+        beatNumber,
+        issueCount: issues.length,
+        issues,
+      });
       beat = await generateAttempt(buildValidationRepairNote(issues));
       const retryIssues = validateGeneratedBeat(beat, normalizedSessionState);
       if (retryIssues.length > 0) {
@@ -157,37 +202,46 @@ export async function composeStoryboardPlan(
   visualStyle: string,
   modelOverrides?: StoryModelOverrides
 ): Promise<StoryboardPlan> {
-  const composerTemplateCandidate = modelOverrides?.visualPrompt || getDefaultPromptBody('visual_prompt');
-  const composerTemplate = validatePromptTemplate('visual_prompt', composerTemplateCandidate).isValid
-    ? composerTemplateCandidate
-    : getDefaultPromptBody('visual_prompt');
-  const previousBeat = sessionState?.beats?.[sessionState.beats.length - 1];
-  const prompt = resolvePromptTemplate(composerTemplate, {
-    storyText: beat.storyText,
-    sceneSummary: beat.sceneSummary,
-    imageIntent: beat.imagePrompt,
-    characters: buildPromptCharacterAnchors(beat.characters),
-    continuityNotes: JSON.stringify(beat.continuityNotes || [], null, 2),
-    visualStyle,
-    beatNumber: beat.beatNumber,
-    storyState: formatStoryState(sessionState),
-    newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState), null, 2),
-    changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat), null, 2),
-    previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
-  });
+  return timeRuntimeStep(
+    'story_runtime.compose_storyboard_plan',
+    {
+      beatNumber: beat.beatNumber,
+      characterCount: beat.characters.length,
+    },
+    async () => {
+      const composerTemplateCandidate = modelOverrides?.visualPrompt || getDefaultPromptBody('visual_prompt');
+      const composerTemplate = validatePromptTemplate('visual_prompt', composerTemplateCandidate).isValid
+        ? composerTemplateCandidate
+        : getDefaultPromptBody('visual_prompt');
+      const previousBeat = sessionState?.beats?.[sessionState.beats.length - 1];
+      const prompt = resolvePromptTemplate(composerTemplate, {
+        storyText: beat.storyText,
+        sceneSummary: beat.sceneSummary,
+        imageIntent: beat.imagePrompt,
+        characters: buildPromptCharacterAnchors(beat.characters),
+        continuityNotes: JSON.stringify(beat.continuityNotes || [], null, 2),
+        visualStyle,
+        beatNumber: beat.beatNumber,
+        storyState: formatStoryState(sessionState),
+        newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState), null, 2),
+        changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat), null, 2),
+        previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
+      });
 
-  const text = await callGeminiText({
-    task: 'visual_prompt',
-    model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
-    prompt,
-    temperature: modelOverrides?.composerTemperature ?? 0.5,
-  });
+      const text = await callGeminiText({
+        task: 'visual_prompt',
+        model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
+        prompt,
+        temperature: modelOverrides?.composerTemperature ?? 0.5,
+      });
 
-  try {
-    return JSON.parse(text) as StoryboardPlan;
-  } catch {
-    throw new Error(`Failed to parse storyboard plan JSON: ${text.slice(0, 200)}`);
-  }
+      try {
+        return JSON.parse(text) as StoryboardPlan;
+      } catch {
+        throw new Error(`Failed to parse storyboard plan JSON: ${text.slice(0, 200)}`);
+      }
+    }
+  );
 }
 
 export function renderStoryboardPlan(plan: StoryboardPlan): string {
@@ -255,54 +309,97 @@ export async function generateImage(
   }
 
   try {
-    const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
-    const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
-      ? imageTemplateCandidate
-      : getDefaultPromptBody('image_generation');
-    const finalImagePrompt = resolvePromptTemplate(imageTemplate, {
-      prompt,
-      characters: buildPromptCharacterAnchors(characters),
-      visualStyle,
-      beatNumber,
-    });
+    return await timeRuntimeStep(
+      'story_runtime.generate_image',
+      {
+        beatNumber: beatNumber ?? null,
+        characterCount: characters.length,
+        referenceCount: referenceImages?.length ?? 0,
+      },
+      async () => {
+        const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
+        const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
+          ? imageTemplateCandidate
+          : getDefaultPromptBody('image_generation');
+        const finalImagePrompt = resolvePromptTemplate(imageTemplate, {
+          prompt,
+          characters: buildPromptCharacterAnchors(characters),
+          visualStyle,
+          beatNumber,
+        });
 
-    const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
-    const isStoryboard = true;
-    const maxW = isStoryboard ? STORYBOARD_MAX_WIDTH  : IMAGE_MAX_WIDTH;
-    const maxH = isStoryboard ? STORYBOARD_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
-    const qual = isStoryboard ? STORYBOARD_QUALITY    : IMAGE_QUALITY;
+        const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
+        const isStoryboard = true;
+        const maxW = isStoryboard ? STORYBOARD_MAX_WIDTH  : IMAGE_MAX_WIDTH;
+        const maxH = isStoryboard ? STORYBOARD_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
+        const qual = isStoryboard ? STORYBOARD_QUALITY    : IMAGE_QUALITY;
 
-    const referenceParts = await resolveReferenceImageParts(referenceImages);
-    const imageSize = isStoryboard ? '2K' : '1K';
+        const referenceParts = await resolveReferenceImageParts(referenceImages);
+        const imageSize = isStoryboard ? '2K' : '1K';
 
-    const result = await callGeminiImage({
-      task: 'image_generation',
-      model: imageModel,
-      prompt: finalImagePrompt,
-      referenceParts,
-      aspectRatio: '16:9',
-      imageSize,
-    });
+        const result = await timeRuntimeStep(
+          'story_runtime.generate_image.gemini',
+          {
+            beatNumber: beatNumber ?? null,
+            referencePartCount: referenceParts.length,
+            hasRetryFallback: false,
+          },
+          () => callGeminiImage({
+            task: 'image_generation',
+            model: imageModel,
+            prompt: finalImagePrompt,
+            referenceParts,
+            aspectRatio: '16:9',
+            imageSize,
+          })
+        );
 
-    if (result.dataUrl) {
-      return await compressImage(result.dataUrl, maxW, maxH, qual);
-    }
+        if (result.dataUrl) {
+          return await timeRuntimeStep(
+            'story_runtime.generate_image.compress',
+            {
+              beatNumber: beatNumber ?? null,
+              width: maxW,
+              height: maxH,
+            },
+            () => compressImage(result.dataUrl!, maxW, maxH, qual)
+          );
+        }
 
-    if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
-      const retryResult = await callGeminiImage({
-        task: 'image_generation',
-        model: imageModel,
-        prompt: result.fallbackText,
-        referenceParts,
-        aspectRatio: '16:9',
-        imageSize,
-      });
-      if (retryResult.dataUrl) {
-        return await compressImage(retryResult.dataUrl, maxW, maxH, qual);
+        if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
+          const retryResult = await timeRuntimeStep(
+            'story_runtime.generate_image.gemini_retry',
+            {
+              beatNumber: beatNumber ?? null,
+              referencePartCount: referenceParts.length,
+              hasRetryFallback: true,
+            },
+            () => callGeminiImage({
+              task: 'image_generation',
+              model: imageModel,
+              prompt: result.fallbackText!,
+              referenceParts,
+              aspectRatio: '16:9',
+              imageSize,
+            })
+          );
+          if (retryResult.dataUrl) {
+            return await timeRuntimeStep(
+              'story_runtime.generate_image.compress',
+              {
+                beatNumber: beatNumber ?? null,
+                width: maxW,
+                height: maxH,
+                retry: true,
+              },
+              () => compressImage(retryResult.dataUrl!, maxW, maxH, qual)
+            );
+          }
+        }
+
+        throw new Error('No image generated');
       }
-    }
-
-    throw new Error('No image generated');
+    );
   } catch (error) {
     console.error('Image generation failed:', error);
     return `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`;
@@ -311,16 +408,26 @@ export async function generateImage(
 
 async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): Promise<InlineImagePart[]> {
   if (!referenceImages || referenceImages.length === 0) return [];
-  const parts: InlineImagePart[] = [];
-  for (const ref of referenceImages) {
-    const dataUrl = await resolveReferenceImageDataUrl(ref);
-    if (!dataUrl) continue;
-    const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    if (match) {
-      parts.push({ mimeType: match[1], data: match[2] });
+
+  return timeRuntimeStep(
+    'story_runtime.resolve_reference_parts',
+    { referenceCount: referenceImages.length },
+    async () => {
+      const resolvedDataUrls = await Promise.all(
+        referenceImages.map((ref) => resolveReferenceImageDataUrl(ref))
+      );
+
+      const parts: InlineImagePart[] = [];
+      for (const dataUrl of resolvedDataUrls) {
+        if (!dataUrl) continue;
+        const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          parts.push({ mimeType: match[1], data: match[2] });
+        }
+      }
+      return parts;
     }
-  }
-  return parts;
+  );
 }
 
 export async function generateCharacterPortrait(
@@ -330,31 +437,46 @@ export async function generateCharacterPortrait(
   promptOverride?: string
 ): Promise<string> {
   try {
-    const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
-    const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
-      ? portraitTemplateCandidate
-      : getDefaultPromptBody('portrait_generation');
-    const prompt = promptOverride || resolvePromptTemplate(portraitTemplate, {
-      characterName: character.name,
-      characterAppearance: character.appearanceSummary,
-      characterType: character.type,
-      visualStyle,
-    });
+    return await timeRuntimeStep(
+      'story_runtime.generate_character_portrait',
+      {
+        characterId: character.id,
+        characterName: character.name,
+      },
+      async () => {
+        const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
+        const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
+          ? portraitTemplateCandidate
+          : getDefaultPromptBody('portrait_generation');
+        const prompt = promptOverride || resolvePromptTemplate(portraitTemplate, {
+          characterName: character.name,
+          characterAppearance: character.appearanceSummary,
+          characterType: character.type,
+          visualStyle,
+        });
 
-    const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
-    const result = await callGeminiImage({
-      task: 'portrait_generation',
-      model: portraitModel,
-      prompt,
-      aspectRatio: '1:1',
-      imageSize: '1K',
-    });
+        const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
+        const result = await callGeminiImage({
+          task: 'portrait_generation',
+          model: portraitModel,
+          prompt,
+          aspectRatio: '1:1',
+          imageSize: '1K',
+        });
 
-    if (result.dataUrl) {
-      return await compressImage(result.dataUrl, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY);
-    }
+        if (result.dataUrl) {
+          return await timeRuntimeStep(
+            'story_runtime.generate_character_portrait.compress',
+            {
+              characterId: character.id,
+            },
+            () => compressImage(result.dataUrl!, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY)
+          );
+        }
 
-    throw new Error('No portrait image generated');
+        throw new Error('No portrait image generated');
+      }
+    );
   } catch (error) {
     console.error(`Portrait generation failed for ${character.name}:`, error);
     throw error;

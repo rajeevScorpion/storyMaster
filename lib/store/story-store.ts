@@ -16,6 +16,12 @@ import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorat
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
+import {
+  createStoryLoadingStage,
+  type StoryLoadingFlow,
+  type StoryLoadingStage,
+} from '@/lib/story/loading-progress';
+import { dispatchPricingRuntimeRefresh } from '@/lib/pricing/runtime-events';
 import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
@@ -37,10 +43,25 @@ interface StoryErrorAction {
   href: string;
 }
 
+interface GenerationTimingStep {
+  key: string;
+  label: string;
+  durationMs: number;
+  meta?: Record<string, unknown>;
+}
+
+interface GenerationTimingSummary {
+  scope: string;
+  totalMs: number;
+  steps: GenerationTimingStep[];
+  meta?: Record<string, unknown>;
+}
+
 interface StoryState {
   session: StorySession | null;
   isLoading: boolean;
   loadingClues: string[];
+  loadingStage: StoryLoadingStage | null;
   error: string | null;
   errorAction: StoryErrorAction | null;
   isGeneratingAudio: boolean;
@@ -223,6 +244,46 @@ function buildStoryboardReferenceImages(
   return references;
 }
 
+function nowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+async function measureAsyncStep<T>(
+  steps: GenerationTimingStep[],
+  key: string,
+  label: string,
+  fn: () => Promise<T>,
+  meta?: Record<string, unknown>
+): Promise<T> {
+  const startedAt = nowMs();
+  try {
+    return await fn();
+  } finally {
+    steps.push({
+      key,
+      label,
+      durationMs: Math.round(nowMs() - startedAt),
+      ...(meta ? { meta } : {}),
+    });
+  }
+}
+
+function logGenerationTiming(summary: GenerationTimingSummary) {
+  console.info(`[timing:${summary.scope}]`, summary);
+}
+
+function setLoadingStage(
+  setState: (partial: Partial<StoryState>) => void,
+  flow: StoryLoadingFlow,
+  step: StoryLoadingStage['currentStepKey']
+) {
+  setState({
+    loadingStage: createStoryLoadingStage(flow, step),
+  });
+}
+
 async function resolveNarratorVoice(session: StorySession): Promise<string> {
   if (session.narratorVoice) {
     return session.narratorVoice;
@@ -321,6 +382,7 @@ export const useStoryStore = create<StoryState>()(
       session: null,
       isLoading: false,
       loadingClues: [],
+      loadingStage: null,
       error: null,
       errorAction: null,
       isGeneratingAudio: false,
@@ -336,22 +398,51 @@ export const useStoryStore = create<StoryState>()(
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
         const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
         const initialSessionId = uuidv4();
+        const generationStartedAt = nowMs();
+        const timingSteps: GenerationTimingStep[] = [];
         let billingAuthorization: PricingBillableActionAuthorization;
+        set({
+          isLoading: true,
+          error: null,
+          errorAction: null,
+          loadingClues: ['Kissago is weaving the next moment...'],
+          loadingStage: createStoryLoadingStage('start_story', 'wallet'),
+        });
         try {
-          billingAuthorization = await authorizeCurrentUserBillableAction({
-            actionKey: 'start_story_initial_beat',
-            idempotencyKey: `start_story:${initialSessionId}`,
-            metadata: {
-              language: storyConfig.language,
-              ageGroup: storyConfig.ageGroup,
+          billingAuthorization = await measureAsyncStep(
+            timingSteps,
+            'wallet_authorization',
+            'Authorize story start',
+            () => authorizeCurrentUserBillableAction({
+              actionKey: 'start_story_initial_beat',
+              idempotencyKey: `start_story:${initialSessionId}`,
+              metadata: {
+                language: storyConfig.language,
+                ageGroup: storyConfig.ageGroup,
+                maxBeats: storyConfig.maxBeats,
+                settingCountry: storyConfig.settingCountry,
+              },
+            }),
+            {
               maxBeats: storyConfig.maxBeats,
-              settingCountry: storyConfig.settingCountry,
+              language: storyConfig.language,
+            }
+          );
+        } catch (error: any) {
+          logGenerationTiming({
+            scope: 'start_story',
+            totalMs: Math.round(nowMs() - generationStartedAt),
+            steps: timingSteps,
+            meta: {
+              success: false,
+              failureStage: 'wallet_authorization',
+              message: error?.message || 'Unable to check your wallet right now.',
             },
           });
-        } catch (error: any) {
           set({
             isLoading: false,
             loadingClues: [],
+            loadingStage: null,
             error: error?.message || 'Unable to check your wallet right now.',
             errorAction: null,
           });
@@ -363,18 +454,12 @@ export const useStoryStore = create<StoryState>()(
           set({
             isLoading: false,
             loadingClues: [],
+            loadingStage: null,
             error: pricingErrorState.error,
             errorAction: pricingErrorState.errorAction,
           });
           return;
         }
-
-        set({
-          isLoading: true,
-          error: null,
-          errorAction: null,
-          loadingClues: ['Kissago is weaving the next moment...'],
-        });
 
         const reservationId = getHardReservationId(billingAuthorization);
         let shouldReleaseReservation = Boolean(reservationId);
@@ -382,7 +467,12 @@ export const useStoryStore = create<StoryState>()(
         // Fetch active model config from DB (falls back to hardcoded defaults on error)
         let modelOverrides: StoryModelOverrides | undefined;
         try {
-          modelOverrides = await getStoryModelOverrides();
+          modelOverrides = await measureAsyncStep(
+            timingSteps,
+            'model_overrides',
+            'Load model and prompt overrides',
+            () => getStoryModelOverrides()
+          );
         } catch {
           // Non-critical: story.ts has hardcoded fallbacks
         }
@@ -413,26 +503,46 @@ export const useStoryStore = create<StoryState>()(
             safetyProfile: storyConfig.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
           };
 
-          const beat = await generateStoryBeat(prompt, initialSession, undefined, modelOverrides);
+          setLoadingStage(set, 'start_story', 'beat');
+          const beat = await measureAsyncStep(
+            timingSteps,
+            'story_generation',
+            'Generate opening beat',
+            () => generateStoryBeat(prompt, initialSession, undefined, modelOverrides)
+          );
 
           set({ loadingClues: beat.clues });
 
           const lang = initialSession.storyConfig?.language || 'english';
-          const storyboardPlan = await composeStoryboardPlan(
-            beat,
-            initialSession,
-            initialSession.visualStyle!,
-            modelOverrides
+          setLoadingStage(set, 'start_story', 'visual');
+          const storyboardPlan = await measureAsyncStep(
+            timingSteps,
+            'storyboard_plan',
+            'Compose storyboard plan',
+            () => composeStoryboardPlan(
+              beat,
+              initialSession,
+              initialSession.visualStyle!,
+              modelOverrides
+            )
           );
           beat.storyboardPlan = storyboardPlan;
           beat.isStoryboard = true;
 
           const portraitRefs = initialSession.enableReferenceImages
-            ? await generatePortraitsForStoryboardPlan(
-                beat,
-                storyboardPlan,
-                initialSession.visualStyle!,
-                modelOverrides
+            ? await measureAsyncStep(
+                timingSteps,
+                'portrait_generation',
+                'Generate reference portraits',
+                () => generatePortraitsForStoryboardPlan(
+                  beat,
+                  storyboardPlan,
+                  initialSession.visualStyle!,
+                  modelOverrides
+                ),
+                {
+                  portraitTaskCount: storyboardPlan.portraitTasks.length,
+                }
               )
             : [];
           const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
@@ -447,44 +557,63 @@ export const useStoryStore = create<StoryState>()(
           let earlySavedStoryId: string | undefined;
 
           // Start voice selection (fast ~1s)
-          const voicePromise = selectNarratorVoiceServer(
-            initialSession.genre!,
-            initialSession.tone!,
-            initialSession.targetAge!,
-            lang
+          const voicePromise = measureAsyncStep(
+            timingSteps,
+            'voice_selection',
+            'Select narrator voice',
+            () => selectNarratorVoiceServer(
+              initialSession.genre!,
+              initialSession.tone!,
+              initialSession.targetAge!,
+              lang
+            ),
+            { background: true }
           );
 
           // Early save: get a savedStoryId so narration can persist directly to Supabase
-          const earlySavePromise = saveStoryAction(
-            { ...initialSession, title: beat.title } as StorySession,
-            storyMap
-          ).then(({ storyId }) => {
-            earlySavedStoryId = storyId;
-            return storyId;
-          }).catch((err) => {
-            console.error('Early save failed (narration will use base64 fallback):', err);
-            return undefined;
-          });
+          const earlySavePromise = measureAsyncStep(
+            timingSteps,
+            'early_save',
+            'Create initial story record',
+            () => saveStoryAction(
+              { ...initialSession, title: beat.title } as StorySession,
+              storyMap
+            ).then(({ storyId }) => {
+              earlySavedStoryId = storyId;
+              return storyId;
+            }).catch((err) => {
+              console.error('Early save failed (narration will use base64 fallback):', err);
+              return undefined;
+            }),
+            { background: true }
+          );
 
-          const lockedVoicePromise = Promise.all([voicePromise, earlySavePromise]).then(
-            async ([voice, storyId]) => {
-              if (!storyId) {
-                return voice;
-              }
+          const lockedVoicePromise = measureAsyncStep(
+            timingSteps,
+            'voice_lock',
+            'Lock narrator voice',
+            () => Promise.all([voicePromise, earlySavePromise]).then(
+              async ([voice, storyId]) => {
+                if (!storyId) {
+                  return voice;
+                }
 
-              try {
-                return await ensureNarratorVoiceLocked(storyId, voice);
-              } catch (error) {
-                console.error('Failed to persist locked narrator voice:', error);
-                return voice;
+                try {
+                  return await ensureNarratorVoiceLocked(storyId, voice);
+                } catch (error) {
+                  console.error('Failed to persist locked narrator voice:', error);
+                  return voice;
+                }
               }
-            }
+            ),
+            { background: true }
           );
 
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
           if (initialSession.userPrompt !== 'mock') {
             Promise.all([lockedVoicePromise, earlySavePromise]).then(([voice, storyId]) => {
               set({ isGeneratingAudio: true });
+              const narrationStartedAt = nowMs();
 
               const narrationFn = storyId
                 ? generateAndPersistNarration(
@@ -497,6 +626,11 @@ export const useStoryStore = create<StoryState>()(
                   );
 
               narrationFn.then((audioUrl) => {
+                console.info('[timing:start_story.narration]', {
+                  durationMs: Math.round(nowMs() - narrationStartedAt),
+                  mode: storyId ? 'persisted' : 'base64_fallback',
+                  success: true,
+                });
                 resolvedAudioUrl = audioUrl;
                 const latestSession = get().session;
                 if (!latestSession) return;
@@ -518,6 +652,12 @@ export const useStoryStore = create<StoryState>()(
                   audioReadyNodeId: rootId,
                 });
               }).catch((err) => {
+                console.info('[timing:start_story.narration]', {
+                  durationMs: Math.round(nowMs() - narrationStartedAt),
+                  mode: storyId ? 'persisted' : 'base64_fallback',
+                  success: false,
+                  message: err instanceof Error ? err.message : 'Narration generation failed',
+                });
                 console.error('Narration generation failed:', err);
                 set({ isGeneratingAudio: false });
               });
@@ -531,14 +671,24 @@ export const useStoryStore = create<StoryState>()(
           // them as references — makes portrait the single source of truth from the very first image.
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
+          setLoadingStage(set, 'start_story', 'image');
           const [imageUrl, narratorVoice] = await Promise.all([
-            generateImage(
-              storyboardPrompt,
-              beat.characters,
-              initialSession.visualStyle!,
-              modelOverrides,
-              portraitRefs.length > 0 ? portraitRefs : undefined,
-              beat.beatNumber
+            measureAsyncStep(
+              timingSteps,
+              'image_generation',
+              'Render opening storyboard image',
+              () => generateImage(
+                storyboardPrompt,
+                beat.characters,
+                initialSession.visualStyle!,
+                modelOverrides,
+                portraitRefs.length > 0 ? portraitRefs : undefined,
+                beat.beatNumber
+              ),
+              {
+                referenceCount: portraitRefs.length,
+                beatNumber: beat.beatNumber,
+              }
             ),
             lockedVoicePromise,
           ]);
@@ -549,16 +699,22 @@ export const useStoryStore = create<StoryState>()(
           await earlySavePromise;
 
           if (reservationId) {
-            await finalizeCurrentUserBillableAction({
-              reservationId,
-              storyId: earlySavedStoryId ?? null,
-              relatedEntityId: rootNodeId,
-              metadata: {
-                action: 'start_story_initial_beat',
-                storySessionId: initialSessionId,
-                title: beat.title,
-              },
-            });
+            setLoadingStage(set, 'start_story', 'finish');
+            await measureAsyncStep(
+              timingSteps,
+              'billing_finalize',
+              'Finalize story-start coin spend',
+              () => finalizeCurrentUserBillableAction({
+                reservationId,
+                storyId: earlySavedStoryId ?? null,
+                relatedEntityId: rootNodeId,
+                metadata: {
+                  action: 'start_story_initial_beat',
+                  storySessionId: initialSessionId,
+                  title: beat.title,
+                },
+              })
+            );
             shouldReleaseReservation = false;
           }
 
@@ -591,9 +747,22 @@ export const useStoryStore = create<StoryState>()(
             session: fullSession,
             isLoading: false,
             saveStatus: 'unsaved',
+            loadingStage: null,
             error: null,
             errorAction: null,
             ...audioExtra,
+          });
+          dispatchPricingRuntimeRefresh();
+          logGenerationTiming({
+            scope: 'start_story',
+            totalMs: Math.round(nowMs() - generationStartedAt),
+            steps: timingSteps,
+            meta: {
+              success: true,
+              beatNumber: beat.beatNumber,
+              storyId: earlySavedStoryId ?? null,
+              usedReferencePortraits: portraitRefs.length,
+            },
           });
         } catch (error: any) {
           if (reservationId && shouldReleaseReservation) {
@@ -611,8 +780,19 @@ export const useStoryStore = create<StoryState>()(
             }
           }
 
+          logGenerationTiming({
+            scope: 'start_story',
+            totalMs: Math.round(nowMs() - generationStartedAt),
+            steps: timingSteps,
+            meta: {
+              success: false,
+              failureStage: get().loadingStage?.currentStepKey ?? 'unknown',
+              message: error?.message || 'Failed to start story',
+            },
+          });
           set({
             isLoading: false,
+            loadingStage: null,
             error: error.message || 'Failed to start story',
             errorAction: null,
           });
@@ -626,6 +806,8 @@ export const useStoryStore = create<StoryState>()(
         const currentNode = getCurrentNode(session.storyMap);
         const selectedOption = currentNode.data.options.find((o) => o.id === optionId);
         if (!selectedOption) return;
+        const generationStartedAt = nowMs();
+        const timingSteps: GenerationTimingStep[] = [];
 
         // Check if branch already exists — instant load, no API call
         const existingChildId = findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId);
@@ -637,21 +819,42 @@ export const useStoryStore = create<StoryState>()(
 
         let billingAuthorization: PricingBillableActionAuthorization;
         try {
-          billingAuthorization = await authorizeCurrentUserBillableAction({
-            actionKey: 'continue_story_new_beat',
-            idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
-            relatedStoryId: session.savedStoryId ?? null,
-            relatedNodeId: session.storyMap.currentNodeId,
-            metadata: {
-              selectedOptionId: optionId,
-              selectedOptionLabel: selectedOption.label,
+          billingAuthorization = await measureAsyncStep(
+            timingSteps,
+            'wallet_authorization',
+            'Authorize branch continuation',
+            () => authorizeCurrentUserBillableAction({
+              actionKey: 'continue_story_new_beat',
+              idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
+              relatedStoryId: session.savedStoryId ?? null,
+              relatedNodeId: session.storyMap.currentNodeId,
+              metadata: {
+                selectedOptionId: optionId,
+                selectedOptionLabel: selectedOption.label,
+                currentBeat: currentNode.data.beatNumber,
+              },
+            }),
+            {
               currentBeat: currentNode.data.beatNumber,
+              selectedOptionId: optionId,
+            }
+          );
+        } catch (error: any) {
+          logGenerationTiming({
+            scope: 'continue_story',
+            totalMs: Math.round(nowMs() - generationStartedAt),
+            steps: timingSteps,
+            meta: {
+              success: false,
+              failureStage: 'wallet_authorization',
+              optionId,
+              message: error?.message || 'Unable to check your wallet right now.',
             },
           });
-        } catch (error: any) {
           set({
             isLoading: false,
             loadingClues: [],
+            loadingStage: null,
             error: error?.message || 'Unable to check your wallet right now.',
             errorAction: null,
           });
@@ -663,6 +866,7 @@ export const useStoryStore = create<StoryState>()(
           set({
             isLoading: false,
             loadingClues: [],
+            loadingStage: null,
             error: pricingErrorState.error,
             errorAction: pricingErrorState.errorAction,
           });
@@ -677,6 +881,7 @@ export const useStoryStore = create<StoryState>()(
           loadingClues: currentNode.data.clues.length > 0
             ? currentNode.data.clues
             : ['Kissago is weaving the next moment...'],
+          loadingStage: createStoryLoadingStage('continue_story', 'wallet'),
         });
 
         const reservationId = getHardReservationId(billingAuthorization);
@@ -701,27 +906,56 @@ export const useStoryStore = create<StoryState>()(
           // Fetch active model config (non-blocking fallback to defaults)
           let modelOverrides: StoryModelOverrides | undefined;
           try {
-            modelOverrides = await getStoryModelOverrides();
+            modelOverrides = await measureAsyncStep(
+              timingSteps,
+              'model_overrides',
+              'Load model and prompt overrides',
+              () => getStoryModelOverrides()
+            );
           } catch { /* falls back to hardcoded defaults */ }
 
-          const beat = await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label, modelOverrides);
+          setLoadingStage(set, 'continue_story', 'beat');
+          const beat = await measureAsyncStep(
+            timingSteps,
+            'story_generation',
+            'Generate continued beat',
+            () => generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label, modelOverrides),
+            {
+              selectedOptionId: optionId,
+              selectedOptionLabel: selectedOption.label,
+            }
+          );
 
           set({ loadingClues: beat.clues });
 
-          const storyboardPlan = await composeStoryboardPlan(
-            beat,
-            sessionForPrompt,
-            session.visualStyle,
-            modelOverrides
+          setLoadingStage(set, 'continue_story', 'visual');
+          const storyboardPlan = await measureAsyncStep(
+            timingSteps,
+            'storyboard_plan',
+            'Compose storyboard plan',
+            () => composeStoryboardPlan(
+              beat,
+              sessionForPrompt,
+              session.visualStyle,
+              modelOverrides
+            )
           );
           beat.storyboardPlan = storyboardPlan;
           beat.isStoryboard = true;
           const portraitRefs = session.enableReferenceImages
-            ? await generatePortraitsForStoryboardPlan(
-                beat,
-                storyboardPlan,
-                session.visualStyle,
-                modelOverrides
+            ? await measureAsyncStep(
+                timingSteps,
+                'portrait_generation',
+                'Generate reference portraits',
+                () => generatePortraitsForStoryboardPlan(
+                  beat,
+                  storyboardPlan,
+                  session.visualStyle,
+                  modelOverrides
+                ),
+                {
+                  portraitTaskCount: storyboardPlan.portraitTasks.length,
+                }
               )
             : [];
           const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
@@ -737,7 +971,12 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: start narration in parallel with image generation
           // Voice is locked at story start — use it directly or fall back to default constant
-          const voiceForBeat = await resolveNarratorVoice(session);
+          const voiceForBeat = await measureAsyncStep(
+            timingSteps,
+            'voice_resolution',
+            'Resolve locked narrator voice',
+            () => resolveNarratorVoice(session)
+          );
           if (!session.narratorVoice && voiceForBeat !== DEFAULT_VOICE) {
             set((state) => state.session ? {
               session: {
@@ -749,8 +988,15 @@ export const useStoryStore = create<StoryState>()(
           let narrationPromise: Promise<void> | null = null;
           if (session.userPrompt.toLowerCase() !== 'mock') {
             set({ isGeneratingAudio: true });
+            const narrationStartedAt = nowMs();
 
             const handleNarrationResolved = (audioUrl: string) => {
+              console.info('[timing:continue_story.narration]', {
+                durationMs: Math.round(nowMs() - narrationStartedAt),
+                mode: session.savedStoryId ? 'persisted' : 'base64_fallback',
+                success: true,
+                nodeId: newNodeId,
+              });
               resolvedAudioUrl = audioUrl;
               const latestSession = get().session;
               if (!latestSession) return;
@@ -773,6 +1019,13 @@ export const useStoryStore = create<StoryState>()(
             };
 
             const handleNarrationError = (err: unknown) => {
+              console.info('[timing:continue_story.narration]', {
+                durationMs: Math.round(nowMs() - narrationStartedAt),
+                mode: session.savedStoryId ? 'persisted' : 'base64_fallback',
+                success: false,
+                nodeId: newNodeId,
+                message: err instanceof Error ? err.message : 'Narration generation failed',
+              });
               console.error('Narration generation failed:', err);
               set({ isGeneratingAudio: false });
             };
@@ -802,13 +1055,23 @@ export const useStoryStore = create<StoryState>()(
           );
 
           // Block loading on image only
-          const imageUrl = await generateImage(
-            storyboardPrompt,
-            beat.characters,
-            session.visualStyle,
-            modelOverrides,
-            referenceImages.length > 0 ? referenceImages : undefined,
-            beat.beatNumber
+          setLoadingStage(set, 'continue_story', 'image');
+          const imageUrl = await measureAsyncStep(
+            timingSteps,
+            'image_generation',
+            'Render branch storyboard image',
+            () => generateImage(
+              storyboardPrompt,
+              beat.characters,
+              session.visualStyle,
+              modelOverrides,
+              referenceImages.length > 0 ? referenceImages : undefined,
+              beat.beatNumber
+            ),
+            {
+              beatNumber: beat.beatNumber,
+              referenceCount: referenceImages.length,
+            }
           );
           beat.imageUrl = imageUrl;
 
@@ -846,18 +1109,24 @@ export const useStoryStore = create<StoryState>()(
           };
 
           if (reservationId) {
-            await finalizeCurrentUserBillableAction({
-              reservationId,
-              storyId: session.savedStoryId ?? null,
-              relatedEntityId: newNodeId,
-              metadata: {
-                action: 'continue_story_new_beat',
-                optionId,
-                optionLabel: selectedOption.label,
-                parentNodeId: parentId,
-                newNodeId,
-              },
-            });
+            setLoadingStage(set, 'continue_story', 'finish');
+            await measureAsyncStep(
+              timingSteps,
+              'billing_finalize',
+              'Finalize branch coin spend',
+              () => finalizeCurrentUserBillableAction({
+                reservationId,
+                storyId: session.savedStoryId ?? null,
+                relatedEntityId: newNodeId,
+                metadata: {
+                  action: 'continue_story_new_beat',
+                  optionId,
+                  optionLabel: selectedOption.label,
+                  parentNodeId: parentId,
+                  newNodeId,
+                },
+              })
+            );
             shouldReleaseReservation = false;
           }
 
@@ -870,9 +1139,24 @@ export const useStoryStore = create<StoryState>()(
             session: deriveSessionFields(latestSession, mergedMap),
             isLoading: false,
             saveStatus: 'unsaved',
+            loadingStage: null,
             error: null,
             errorAction: null,
             ...audioExtra,
+          });
+          dispatchPricingRuntimeRefresh();
+          logGenerationTiming({
+            scope: 'continue_story',
+            totalMs: Math.round(nowMs() - generationStartedAt),
+            steps: timingSteps,
+            meta: {
+              success: true,
+              beatNumber: beat.beatNumber,
+              optionId,
+              optionLabel: selectedOption.label,
+              newNodeId,
+              usedReferenceImages: referenceImages.length,
+            },
           });
 
           // Fire-and-forget: incremental beat save if story is persisted
@@ -988,8 +1272,21 @@ export const useStoryStore = create<StoryState>()(
             }
           }
 
+          logGenerationTiming({
+            scope: 'continue_story',
+            totalMs: Math.round(nowMs() - generationStartedAt),
+            steps: timingSteps,
+            meta: {
+              success: false,
+              failureStage: get().loadingStage?.currentStepKey ?? 'unknown',
+              optionId,
+              optionLabel: selectedOption.label,
+              message: error?.message || 'Failed to continue story',
+            },
+          });
           set({
             isLoading: false,
+            loadingStage: null,
             error: error.message || 'Failed to continue story',
             errorAction: null,
           });
@@ -1010,7 +1307,7 @@ export const useStoryStore = create<StoryState>()(
       },
 
       resetStory: () => {
-        set({ session: null, error: null, errorAction: null, isLoading: false, loadingClues: [] });
+        set({ session: null, error: null, errorAction: null, isLoading: false, loadingClues: [], loadingStage: null });
       },
 
       restartExploration: () => {
@@ -1249,7 +1546,7 @@ export const useStoryStore = create<StoryState>()(
       },
 
       loadStoryFromCloud: async (storyId: string) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, error: null, loadingStage: null });
 
         try {
           const session = await loadStoryAction(storyId);
@@ -1265,17 +1562,18 @@ export const useStoryStore = create<StoryState>()(
           set({
             session: fullSession,
             isLoading: false,
+            loadingStage: null,
             isSaving: false,
             saveStatus: 'saved',
             saveWarning: null,
           });
         } catch (error: any) {
-          set({ isLoading: false, error: error.message || 'Failed to load story' });
+          set({ isLoading: false, loadingStage: null, error: error.message || 'Failed to load story' });
         }
       },
 
       exploreStoryTree: async (storyId: string) => {
-        set({ isLoading: true, error: null, lastPublishResult: null });
+        set({ isLoading: true, error: null, loadingStage: null, lastPublishResult: null });
 
         try {
           const session = await loadStoryTreeAction(storyId);
@@ -1286,9 +1584,9 @@ export const useStoryStore = create<StoryState>()(
             console.log(`[exploreStory] Loaded ${nodeCount} nodes, exploration=${fullSession.explorationMode}`);
           }
 
-          set({ session: fullSession, isLoading: false, saveStatus: 'saved' });
+          set({ session: fullSession, isLoading: false, loadingStage: null, saveStatus: 'saved' });
         } catch (error: any) {
-          set({ isLoading: false, error: error.message || 'Failed to load story for exploration' });
+          set({ isLoading: false, loadingStage: null, error: error.message || 'Failed to load story for exploration' });
         }
       },
 

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { useAuth } from '@/lib/hooks/useAuth';
+import { PRICING_RUNTIME_REFRESH_EVENT } from '@/lib/pricing/runtime-events';
 import type { PricingMarketKey, PricingRuntimeContext } from '@/lib/types/pricing';
 
 interface PricingRuntimeContextValue {
@@ -126,6 +127,21 @@ export default function PricingRuntimeProvider({ children }: { children: ReactNo
 
     void load();
   }, [authLoading, load, marketReady, user?.id]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleRefresh = () => {
+      if (!authLoading && marketReady) {
+        void load();
+      }
+    };
+
+    window.addEventListener(PRICING_RUNTIME_REFRESH_EVENT, handleRefresh);
+    return () => window.removeEventListener(PRICING_RUNTIME_REFRESH_EVENT, handleRefresh);
+  }, [authLoading, load, marketReady]);
 
   const value = useMemo<PricingRuntimeContextValue>(() => ({
     data,

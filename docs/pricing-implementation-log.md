@@ -258,6 +258,94 @@ Current working status:
 
 Discovery notes:
 
+## Execution Slice - Beat Timing Instrumentation and Loading Feedback
+
+Date: 2026-04-08
+
+Goal:
+
+- measure beat-generation latency by major stage before attempting deeper optimization
+- improve the loading experience with truthful stage-based progress instead of a generic spinner
+
+Status:
+
+- complete locally
+
+Work completed:
+
+- added structured client-side timing summaries for both `startStory` and `continueStory`
+- captured timed steps for:
+  - wallet authorization
+  - model and prompt override loading
+  - story beat generation
+  - storyboard plan composition
+  - portrait generation
+  - narrator voice resolution and locking
+  - initial story save
+  - image generation
+  - billable-action finalize
+- added narration timing logs for start-story and continue-story background narration paths
+- added server-side timing logs in `app/actions/story-runtime.ts` for:
+  - story beat generation attempts
+  - validation retries
+  - storyboard plan composition
+  - reference-image resolution
+  - image generation
+  - image compression
+  - portrait generation
+- added server-side timing logs in `app/actions/narration.ts` for:
+  - Gemini TTS calls
+  - narration upload
+  - beat audio persistence
+  - signed URL creation
+- added server-side timing logs in `lib/pricing/enforcement.ts` for:
+  - authorization flow
+  - pricing-state load
+- introduced staged loading metadata in the story store and upgraded the shared loading overlay with:
+  - step-based progress
+  - active step description
+  - segmented stage indicators
+- made a low-risk latency improvement by parallelizing reference-image fetch preparation before image generation
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint lib/store/story-store.ts components/story/LoadingState.tsx app/actions/story-runtime.ts app/actions/narration.ts lib/pricing/enforcement.ts lib/story/loading-progress.ts`
+
+Tradeoffs / decisions:
+
+- kept the progress UI coarse and truthful instead of showing a fake precise percentage
+- limited optimization to a safe reference-fetch parallelization change during the instrumentation pass
+- left the creative quality path intact: storyboard planning, portraits, and 2K storyboard rendering still run as before
+
+Open risks / notes:
+
+- timing data still needs to be captured from real local and stage runs before choosing the next optimization target
+- full autosave persistence is not yet instrumented in the same detail as beat generation
+- if pricing authorization proves meaningfully expensive, caching or partial-state loading may become a follow-up optimization slice
+
+Initial timing findings from local testing:
+
+- `pricing.load_state` is currently taking roughly `228ms` to `594ms` per call
+- `pricing.authorize_billable_action` took roughly `1.7s` in the sampled continuation flow, so the pricing layer is a noticeable part of perceived latency
+- `narration.call_gemini_tts` took roughly `13.1s`
+- full persisted narration generation took roughly `18.7s`, driven mainly by TTS plus beat-row persistence
+- the first critical blocker uncovered by this pass was not performance but a database finalize failure:
+  - `pricing_finalize_reservation` failed with `column reference "usage_event_id" is ambiguous`
+  - this is fixed in `022_fix_pricing_finalize_reservation_ambiguity.sql`
+
+Immediate next optimization priorities suggested by the first timing sample:
+
+- reduce repeated pricing-state reads during authorization
+- instrument or streamline beat-row persistence after narration upload
+- capture more image-generation timings from stage runs now that reference-image prep is parallelized
+
+Follow-up correctness fix:
+
+- user-visible coin balances were not refreshing after successful beat finalization because the app-wide pricing provider kept stale runtime state in memory
+- fixed by dispatching a pricing refresh event after successful `startStory` and `continueStory` finalization
+- the pricing runtime provider and wallet page now listen for that event and reload fresh wallet state
+
 - `startStory` in `lib/store/story-store.ts` creates beat 1 and already interleaves story generation, storyboard composition, image generation, narration, and early persistence
 - `continueStory` has two paths:
   - instant branch navigation when a child already exists

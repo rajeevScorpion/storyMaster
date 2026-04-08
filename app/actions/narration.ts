@@ -12,6 +12,37 @@ import { getFeatureFlagValue } from '@/lib/ai/model-config';
 
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
 
+function narrationNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+async function timeNarrationStep<T>(
+  scope: string,
+  meta: Record<string, unknown>,
+  fn: () => Promise<T>
+): Promise<T> {
+  const startedAt = narrationNowMs();
+  try {
+    const result = await fn();
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(narrationNowMs() - startedAt),
+      success: true,
+      ...meta,
+    });
+    return result;
+  } catch (error) {
+    console.info(`[timing:${scope}]`, {
+      durationMs: Math.round(narrationNowMs() - startedAt),
+      success: false,
+      ...meta,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+    throw error;
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
@@ -74,46 +105,56 @@ async function callGeminiTTS(
   voiceName: string,
   language: string
 ): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: getApiKey() });
-  const ttsConfig = await getModelConfig('tts');
-  const ttsPrompt = resolvePromptTemplate(
-    await getPublishedPrompt('tts'),
+  return timeNarrationStep(
+    'narration.call_gemini_tts',
     {
-      storyText,
-      tone,
-      genre,
       language,
+      voiceName,
+      storyLength: storyText.length,
+    },
+    async () => {
+      const ai = new GoogleGenAI({ apiKey: getApiKey() });
+      const ttsConfig = await getModelConfig('tts');
+      const ttsPrompt = resolvePromptTemplate(
+        await getPublishedPrompt('tts'),
+        {
+          storyText,
+          tone,
+          genre,
+          language,
+        }
+      );
+      const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
+      const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
+
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: ttsConfig.model,
+          contents: [{ parts: [{ text: ttsPrompt }] }],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName },
+              },
+            },
+          },
+        }),
+        ttsTimeoutMs,
+        'tts'
+      );
+
+      const audioPart = response.candidates?.[0]?.content?.parts?.find(
+        (p: any) => p.inlineData
+      );
+
+      if (!audioPart?.inlineData?.data) {
+        throw new Error('No audio generated');
+      }
+
+      return audioPart.inlineData.data;
     }
   );
-  const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
-  const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
-
-  const response = await withTimeout(
-    ai.models.generateContent({
-      model: ttsConfig.model,
-      contents: [{ parts: [{ text: ttsPrompt }] }],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName },
-          },
-        },
-      },
-    }),
-    ttsTimeoutMs,
-    'tts'
-  );
-
-  const audioPart = response.candidates?.[0]?.content?.parts?.find(
-    (p: any) => p.inlineData
-  );
-
-  if (!audioPart?.inlineData?.data) {
-    throw new Error('No audio generated');
-  }
-
-  return audioPart.inlineData.data; // raw PCM base64
 }
 
 /**
@@ -129,82 +170,109 @@ export async function generateAndPersistNarration(
   savedStoryId: string,
   nodeId: string
 ): Promise<{ audioUrl: string }> {
-  const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language);
-  const wavBuffer = pcmToWavBuffer(pcmBase64);
+  return timeNarrationStep(
+    'narration.generate_and_persist',
+    {
+      storyId: savedStoryId,
+      nodeId,
+      language,
+      voiceName,
+    },
+    async () => {
+      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language);
+      const wavBuffer = pcmToWavBuffer(pcmBase64);
 
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error('Not authenticated');
+      const supabase = await createClient();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) throw new Error('Not authenticated');
 
-  const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.wav`;
+      const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.wav`;
 
-  // Retry upload up to 3 times with backoff (transient "fetch failed" errors)
-  let uploadError: { message: string } | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const result = await supabase.storage
-      .from('story-assets')
-      .upload(storagePath, wavBuffer, {
-        contentType: 'audio/wav',
-        upsert: true,
-      });
+      await timeNarrationStep(
+        'narration.upload_audio',
+        {
+          storyId: savedStoryId,
+          nodeId,
+        },
+        async () => {
+          let uploadError: { message: string } | null = null;
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const result = await supabase.storage
+              .from('story-assets')
+              .upload(storagePath, wavBuffer, {
+                contentType: 'audio/wav',
+                upsert: true,
+              });
 
-    if (!result.error) {
-      uploadError = null;
-      break;
+            if (!result.error) {
+              uploadError = null;
+              break;
+            }
+
+            uploadError = result.error;
+            if (attempt < 2) {
+              await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            }
+          }
+
+          if (uploadError) {
+            throw new Error(`Audio upload failed: ${uploadError.message}`);
+          }
+        }
+      );
+
+      const { data: urlData } = supabase.storage
+        .from('story-assets')
+        .getPublicUrl(storagePath);
+
+      await timeNarrationStep(
+        'narration.persist_audio_url',
+        {
+          storyId: savedStoryId,
+          nodeId,
+        },
+        async () => {
+          const { error: updateError } = await supabase
+            .from('beats')
+            .update({ audio_url: urlData.publicUrl })
+            .eq('story_id', savedStoryId)
+            .eq('node_id', nodeId)
+            .eq('generated_by', user.id);
+
+          if (updateError) {
+            console.error('Failed to update beat audio_url:', updateError.message);
+          }
+
+          const { data: check } = await supabase
+            .from('beats')
+            .select('audio_url')
+            .eq('story_id', savedStoryId)
+            .eq('node_id', nodeId)
+            .single();
+
+          if (!check?.audio_url) {
+            await new Promise(r => setTimeout(r, 2000));
+            await supabase
+              .from('beats')
+              .update({ audio_url: urlData.publicUrl })
+              .eq('story_id', savedStoryId)
+              .eq('node_id', nodeId);
+          }
+        }
+      );
+
+      const { data: signedData } = await timeNarrationStep(
+        'narration.create_signed_url',
+        {
+          storyId: savedStoryId,
+          nodeId,
+        },
+        () => supabase.storage.from('story-assets').createSignedUrl(storagePath, 3600)
+      );
+
+      return { audioUrl: signedData?.signedUrl || urlData.publicUrl };
     }
-
-    uploadError = result.error;
-    if (attempt < 2) {
-      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-    }
-  }
-
-  if (uploadError) {
-    throw new Error(`Audio upload failed: ${uploadError.message}`);
-  }
-
-  // Store the canonical public URL in the DB (gets re-signed when loading)
-  const { data: urlData } = supabase.storage
-    .from('story-assets')
-    .getPublicUrl(storagePath);
-
-  // Update beats table with the storage URL.
-  // Retry once after a delay if the beat row hasn't been created yet
-  // (race condition: narration can finish before saveBeatAction upserts the row).
-  const { error: updateError } = await supabase
-    .from('beats')
-    .update({ audio_url: urlData.publicUrl })
-    .eq('story_id', savedStoryId)
-    .eq('node_id', nodeId)
-    .eq('generated_by', user.id);
-
-  if (updateError) {
-    console.error('Failed to update beat audio_url:', updateError.message);
-  }
-
-  // Verify the update took effect; if not, the row likely didn't exist yet — retry once
-  const { data: check } = await supabase
-    .from('beats')
-    .select('audio_url')
-    .eq('story_id', savedStoryId)
-    .eq('node_id', nodeId)
-    .single();
-
-  if (!check?.audio_url) {
-    await new Promise(r => setTimeout(r, 2000));
-    await supabase
-      .from('beats')
-      .update({ audio_url: urlData.publicUrl })
-      .eq('story_id', savedStoryId)
-      .eq('node_id', nodeId);
-  }
-
-  // Return a signed URL for immediate playback (story-assets bucket is private)
-  const { data: signedData } = await supabase.storage
-    .from('story-assets')
-    .createSignedUrl(storagePath, 3600);
-
-  return { audioUrl: signedData?.signedUrl || urlData.publicUrl };
+  );
 }
 
 /**
@@ -218,9 +286,18 @@ export async function generateNarrationOnly(
   voiceName: string,
   language: string
 ): Promise<string> {
-  const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language);
-  const wavBuffer = pcmToWavBuffer(pcmBase64);
-  return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+  return timeNarrationStep(
+    'narration.generate_only',
+    {
+      language,
+      voiceName,
+    },
+    async () => {
+      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language);
+      const wavBuffer = pcmToWavBuffer(pcmBase64);
+      return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+    }
+  );
 }
 
 /**
