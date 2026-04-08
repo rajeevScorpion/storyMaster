@@ -201,21 +201,28 @@ async function processWebhookPayload(
     }
 
     if (billingOrder.order_type === 'topup_checkout' && billingOrder.topup_pack_id) {
-      const topupPack = await loadTopupPack(supabase, billingOrder.topup_pack_id);
-      const grantedCoins = await grantTopupIfMissing({
-        supabase,
-        billingOrder,
-        topupPack,
-        paymentId: payload.payload?.payment?.entity?.id ?? billingOrder.provider_payment_id ?? 'webhook',
-        rawPayload: payload as unknown as Record<string, unknown>,
-      });
+      const paymentId =
+        payload.payload?.payment?.entity?.id ?? billingOrder.provider_payment_id ?? null;
+      const nextOrderStatus = getTopupOrderStatusFromWebhookEvent(payload.event, billingOrder.status);
+      const isSuccessfulTopupEvent = isSuccessfulTopupWebhookEvent(payload.event);
+      let grantedCoins = 0;
+
+      if (isSuccessfulTopupEvent) {
+        const topupPack = await loadTopupPack(supabase, billingOrder.topup_pack_id);
+        grantedCoins = await grantTopupIfMissing({
+          supabase,
+          billingOrder,
+          topupPack,
+          paymentId: paymentId ?? 'webhook',
+          rawPayload: payload as unknown as Record<string, unknown>,
+        });
+      }
 
       const updateResult = await supabase
         .from('billing_orders')
         .update({
-          provider_payment_id:
-            payload.payload?.payment?.entity?.id ?? billingOrder.provider_payment_id,
-          status: grantedCoins > 0 ? 'paid' : billingOrder.status,
+          provider_payment_id: paymentId,
+          status: nextOrderStatus,
           raw_provider_payload_json: {
             ...(billingOrder.raw_provider_payload_json ?? {}),
             webhookEvent: payload.event,
@@ -235,6 +242,22 @@ async function processWebhookPayload(
   }
 
   return { status: 'ignored', relatedUserId: null, relatedSubscriptionId: null };
+}
+
+function isSuccessfulTopupWebhookEvent(event: string): boolean {
+  return event === 'payment.captured' || event === 'order.paid';
+}
+
+function getTopupOrderStatusFromWebhookEvent(event: string, currentStatus: string): string {
+  if (event === 'payment.failed') {
+    return currentStatus === 'paid' ? currentStatus : 'failed';
+  }
+
+  if (isSuccessfulTopupWebhookEvent(event)) {
+    return 'paid';
+  }
+
+  return currentStatus;
 }
 
 async function loadPlanVersion(

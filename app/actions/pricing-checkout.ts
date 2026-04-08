@@ -23,6 +23,13 @@ export async function prepareRazorpayCheckout(
   input: PrepareRazorpayCheckoutInput,
   options: PrepareCheckoutOptions = {}
 ): Promise<PreparedRazorpayCheckout> {
+  return prepareRazorpayCheckoutInternal(input, options);
+}
+
+export async function prepareRazorpayCheckoutInternal(
+  input: PrepareRazorpayCheckoutInput,
+  options: PrepareCheckoutOptions = {}
+): Promise<PreparedRazorpayCheckout> {
   const auth = await getAuthenticatedUser();
   const supabase = createAdminClient();
 

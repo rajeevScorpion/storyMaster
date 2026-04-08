@@ -964,3 +964,34 @@ Open risks / notes:
 
 - end-to-end payment testing still needs to be run manually by the user on `kissagoStage`
 - production should stay flag-off until that manual validation is complete
+
+## Execution Slice 11 - Razorpay Top-up Webhook Safety Fix
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- prevent failed Razorpay payment webhooks from granting free top-up coins
+
+Work completed:
+
+- updated `app/api/billing/razorpay/webhook/route.ts`
+  - top-up grants now happen only for explicitly successful webhook events
+  - failed payment webhooks update order state without touching wallet grants
+  - a late failed webhook no longer downgrades an already-paid order
+
+Verification:
+
+- pending local typecheck and targeted lint
+
+Tradeoffs / decisions:
+
+- webhook-driven top-up grants are now intentionally conservative
+  The success path is limited to the positive payment events rather than any webhook that happens to include an order id
+
+Open risks / notes:
+
+- the browser verify route remains the primary happy-path grant path
+- the webhook path now acts as a safer backup and reconciliation mechanism for top-ups

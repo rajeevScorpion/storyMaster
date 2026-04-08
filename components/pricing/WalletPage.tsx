@@ -6,7 +6,6 @@ import Script from 'next/script';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, CheckCircle2, Clock3, Coins, CreditCard, Loader2, Sparkles, Star, Wallet as WalletIcon } from 'lucide-react';
 import { motion } from 'motion/react';
-import { prepareRazorpayCheckout } from '@/app/actions/pricing-checkout';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
@@ -85,6 +84,48 @@ function getSelectedPlanPriceMinor(offer: PricingPlanOfferCard, interval: Billin
   return interval === 'annual'
     ? offer.annualPriceMinor
     : offer.monthlyPriceMinor;
+}
+
+async function requestPreparedRazorpayCheckout(
+  payload: {
+    input: {
+      kind: 'subscription';
+      planVersionId: string;
+    } | {
+      kind: 'topup';
+      topupPackId: string;
+    };
+    pricingMarketKey: 'IN' | 'ROW';
+  }
+): Promise<PreparedRazorpayCheckout> {
+  const response = await fetch('/api/billing/razorpay/prepare', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const rawText = await response.text();
+  let data: { ok?: boolean; error?: string; checkout?: PreparedRazorpayCheckout } | null = null;
+
+  if (rawText) {
+    try {
+      data = JSON.parse(rawText) as { ok?: boolean; error?: string; checkout?: PreparedRazorpayCheckout };
+    } catch {
+      data = null;
+    }
+  }
+
+  if (!response.ok || !data?.ok) {
+    const fallbackError =
+      rawText && !data
+        ? rawText.slice(0, 500)
+        : 'Failed to prepare Razorpay checkout';
+    throw new Error(data?.error || fallbackError);
+  }
+
+  return data.checkout as PreparedRazorpayCheckout;
 }
 
 export default function WalletPage() {
@@ -188,15 +229,13 @@ export default function WalletPage() {
     setCheckoutStatus(null);
 
     try {
-      const checkout = await prepareRazorpayCheckout(
-        {
+      const checkout = await requestPreparedRazorpayCheckout({
+        input: {
           kind: 'subscription',
           planVersionId,
         },
-        {
-          pricingMarketKey: pricingData.snapshot.pricingMarketKey,
-        }
-      );
+        pricingMarketKey: pricingData.snapshot.pricingMarketKey,
+      });
 
       const message = await openRazorpayCheckout(checkout);
       setCheckoutStatus(message);
@@ -223,15 +262,13 @@ export default function WalletPage() {
     setCheckoutStatus(null);
 
     try {
-      const checkout = await prepareRazorpayCheckout(
-        {
+      const checkout = await requestPreparedRazorpayCheckout({
+        input: {
           kind: 'topup',
           topupPackId,
         },
-        {
-          pricingMarketKey: pricingData.snapshot.pricingMarketKey,
-        }
-      );
+        pricingMarketKey: pricingData.snapshot.pricingMarketKey,
+      });
 
       const message = await openRazorpayCheckout(checkout);
       setCheckoutStatus(message);
@@ -451,175 +488,173 @@ export default function WalletPage() {
           </div>
         )}
 
-        <div className="mt-8 grid gap-8 xl:grid-cols-[1.15fr_0.85fr]">
-          <section className="space-y-6">
-            <div className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">
-              <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-2xl font-serif text-neutral-100">Plans</h3>
-                  <p className="mt-1 text-sm text-neutral-400">Choose the rhythm that fits how you create with Kissago.</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <div className="rounded-2xl border border-white/10 bg-neutral-900/60 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPlanInterval('monthly')}
-                      className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'monthly' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'}`}
-                    >
-                      Monthly
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPlanInterval('annual')}
-                      disabled={yearlyCheckoutDeferred}
-                      className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'annual' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'} disabled:cursor-not-allowed disabled:opacity-50`}
-                    >
-                      Yearly
-                    </button>
-                  </div>
-                  {walletLoading && <Loader2 className="h-4 w-4 animate-spin text-neutral-500" />}
-                </div>
+        <div className="mt-8 space-y-8">
+          <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-2xl font-serif text-neutral-100">Plans</h3>
+                <p className="mt-1 text-sm text-neutral-400">Choose the rhythm that fits how you create with Kissago.</p>
               </div>
-
-              {yearlyCheckoutDeferred && (
-                <div className="mb-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
-                  India checkout is monthly-only for this stage rollout. Yearly plans stay out of checkout until monthly refills for annual billing are ready.
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl border border-white/10 bg-neutral-900/60 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPlanInterval('monthly')}
+                    className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'monthly' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'}`}
+                  >
+                    Monthly
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPlanInterval('annual')}
+                    disabled={yearlyCheckoutDeferred}
+                    className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'annual' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'} disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    Yearly
+                  </button>
                 </div>
-              )}
-
-              <div className="grid gap-4 md:grid-cols-3">
-                {offers.map((offer) => {
-                  const selectedPrice = getSelectedPlanPriceMinor(offer, selectedPlanInterval);
-                  const selectedProvider = getSelectedPlanProvider(offer, selectedPlanInterval);
-                  const buttonDisabled =
-                    offer.isCurrentPlan ||
-                    !pricingData.userId ||
-                    !walletData?.checkoutEnabled ||
-                    (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') ||
-                    selectedProvider == null ||
-                    selectedProvider !== 'razorpay' ||
-                    !razorpayReady ||
-                    checkoutBusyKey !== null;
-
-                  return (
-                    <article
-                      key={offer.planKey}
-                      className={`rounded-3xl border p-5 ${offer.isCurrentPlan ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-white/10 bg-neutral-900/60'}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-lg font-serif text-neutral-100">{offer.name}</p>
-                          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{offer.monthlyCoins.toLocaleString()} coins / month</p>
-                        </div>
-                        {offer.isCurrentPlan && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Current
-                          </span>
-                        )}
-                      </div>
-
-                      <p className="mt-4 text-sm leading-relaxed text-neutral-400">
-                        {offer.description || 'Thoughtfully tuned for a different pace of storymaking.'}
-                      </p>
-
-                      <div className="mt-5 space-y-2 text-sm text-neutral-300">
-                        <p>{offer.storyLengthCap} beats per story</p>
-                        <p>{selectedPrice === 0 ? 'Free' : `${formatPrice(offer.currencyCode, selectedPrice)} ${selectedPlanInterval}`}</p>
-                        {offer.monthlyPriceMinor != null && offer.annualPriceMinor != null && (
-                          <p className="text-neutral-500">
-                            {formatPrice(offer.currencyCode, offer.monthlyPriceMinor)} monthly · {formatPrice(offer.currencyCode, offer.annualPriceMinor)} yearly
-                          </p>
-                        )}
-                        {selectedPlanInterval === 'annual' && selectedPrice == null && (
-                          <p className="text-neutral-500">Yearly pricing is not live for this plan yet.</p>
-                        )}
-                        <p>{offer.canAccessDownloads ? 'Downloads included' : 'Hosted sharing included'}</p>
-                        <p>{offer.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Kissago branding stays'}</p>
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={buttonDisabled}
-                        onClick={() => void handlePlanCheckout(offer)}
-                        className="mt-5 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {offer.isCurrentPlan
-                          ? 'Current plan'
-                          : !pricingData.userId
-                          ? 'Sign in to continue'
-                          : !walletData?.checkoutEnabled
-                          ? 'Checkout coming soon'
-                          : yearlyCheckoutDeferred && selectedPlanInterval === 'annual'
-                          ? 'Yearly comes later'
-                          : selectedProvider == null
-                          ? selectedPlanInterval === 'annual'
-                            ? 'Yearly coming soon'
-                            : 'Checkout coming soon'
-                          : selectedProvider !== 'razorpay'
-                          ? 'Stripe comes next'
-                          : !razorpayReady
-                          ? 'Loading checkout'
-                          : checkoutBusyKey === `plan:${offer.planKey}`
-                          ? 'Opening checkout...'
-                          : selectedPlanInterval === 'annual'
-                          ? 'Choose yearly plan'
-                          : 'Choose monthly plan'}
-                      </button>
-                    </article>
-                  );
-                })}
+                {walletLoading && <Loader2 className="h-4 w-4 animate-spin text-neutral-500" />}
               </div>
             </div>
 
-            <div className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">
-              <div className="mb-5 flex items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-2xl font-serif text-neutral-100">Coin packs</h3>
-                  <p className="mt-1 text-sm text-neutral-400">Top up anytime when you want to keep creating without changing plans.</p>
-                </div>
+            {yearlyCheckoutDeferred && (
+              <div className="mb-5 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                India checkout is monthly-only for this stage rollout. Yearly plans stay out of checkout until monthly refills for annual billing are ready.
               </div>
+            )}
 
-              {topups.length === 0 ? (
-                <p className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-sm text-neutral-500">
-                  Published coin packs are not ready for this market yet.
-                </p>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-3">
-                  {topups.map((pack) => (
-                    <article key={pack.packKey} className="rounded-3xl border border-white/10 bg-neutral-900/60 p-5">
-                      <p className="text-lg font-serif text-neutral-100">{pack.name}</p>
-                      <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{pack.coinAmount.toLocaleString()} coins</p>
-                      <p className="mt-5 text-2xl text-neutral-100">{formatPrice(pack.currencyCode, pack.priceMinor)}</p>
-                      <button
-                        type="button"
-                        disabled={
-                          !pricingData.userId ||
-                          !walletData?.checkoutEnabled ||
-                          pack.provider !== 'razorpay' ||
-                          !razorpayReady ||
-                          checkoutBusyKey !== null
-                        }
-                        onClick={() => void handleTopupCheckout(pack.topupPackId, pack.packKey, pack.provider)}
-                        className="mt-5 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {!pricingData.userId
-                          ? 'Sign in to continue'
-                          : !walletData?.checkoutEnabled
-                          ? 'Top-up coming soon'
-                          : pack.provider !== 'razorpay'
-                          ? 'Stripe comes next'
-                          : !razorpayReady
-                          ? 'Loading checkout'
-                          : checkoutBusyKey === `topup:${pack.packKey}`
-                          ? 'Opening checkout...'
-                          : 'Buy coins'}
-                      </button>
-                    </article>
-                  ))}
-                </div>
-              )}
+            <div className="grid gap-4 lg:grid-cols-3">
+              {offers.map((offer) => {
+                const selectedPrice = getSelectedPlanPriceMinor(offer, selectedPlanInterval);
+                const selectedProvider = getSelectedPlanProvider(offer, selectedPlanInterval);
+                const buttonDisabled =
+                  offer.isCurrentPlan ||
+                  !pricingData.userId ||
+                  !walletData?.checkoutEnabled ||
+                  (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') ||
+                  selectedProvider == null ||
+                  selectedProvider !== 'razorpay' ||
+                  !razorpayReady ||
+                  checkoutBusyKey !== null;
+
+                return (
+                  <article
+                    key={offer.planKey}
+                    className={`flex h-full flex-col rounded-3xl border p-5 ${offer.isCurrentPlan ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-white/10 bg-neutral-900/60'}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-lg font-serif text-neutral-100">{offer.name}</p>
+                        <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{offer.monthlyCoins.toLocaleString()} coins / month</p>
+                      </div>
+                      {offer.isCurrentPlan && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+                          <CheckCircle2 className="h-3 w-3" />
+                          Current
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="mt-4 text-sm leading-relaxed text-neutral-400">
+                      {offer.description || 'Thoughtfully tuned for a different pace of storymaking.'}
+                    </p>
+
+                    <div className="mt-5 space-y-2 text-sm text-neutral-300">
+                      <p>{offer.storyLengthCap} beats per story</p>
+                      <p>{selectedPrice === 0 ? 'Free' : `${formatPrice(offer.currencyCode, selectedPrice)} ${selectedPlanInterval}`}</p>
+                      {offer.monthlyPriceMinor != null && offer.annualPriceMinor != null && (
+                        <p className="text-neutral-500">
+                          {formatPrice(offer.currencyCode, offer.monthlyPriceMinor)} monthly · {formatPrice(offer.currencyCode, offer.annualPriceMinor)} yearly
+                        </p>
+                      )}
+                      {selectedPlanInterval === 'annual' && selectedPrice == null && (
+                        <p className="text-neutral-500">Yearly pricing is not live for this plan yet.</p>
+                      )}
+                      <p>{offer.canAccessDownloads ? 'Downloads included' : 'Hosted sharing included'}</p>
+                      <p>{offer.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Kissago branding stays'}</p>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={buttonDisabled}
+                      onClick={() => void handlePlanCheckout(offer)}
+                      className="mt-auto w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pt-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {offer.isCurrentPlan
+                        ? 'Current plan'
+                        : !pricingData.userId
+                        ? 'Sign in to continue'
+                        : !walletData?.checkoutEnabled
+                        ? 'Checkout coming soon'
+                        : yearlyCheckoutDeferred && selectedPlanInterval === 'annual'
+                        ? 'Yearly comes later'
+                        : selectedProvider == null
+                        ? selectedPlanInterval === 'annual'
+                          ? 'Yearly coming soon'
+                          : 'Checkout coming soon'
+                        : selectedProvider !== 'razorpay'
+                        ? 'Stripe comes next'
+                        : !razorpayReady
+                        ? 'Loading checkout'
+                        : checkoutBusyKey === `plan:${offer.planKey}`
+                        ? 'Opening checkout...'
+                        : selectedPlanInterval === 'annual'
+                        ? 'Choose yearly plan'
+                        : 'Choose monthly plan'}
+                    </button>
+                  </article>
+                );
+              })}
             </div>
+          </section>
+
+          <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">
+            <div className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-2xl font-serif text-neutral-100">Coin packs</h3>
+                <p className="mt-1 text-sm text-neutral-400">Top up anytime when you want to keep creating without changing plans.</p>
+              </div>
+            </div>
+
+            {topups.length === 0 ? (
+              <p className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-sm text-neutral-500">
+                Published coin packs are not ready for this market yet.
+              </p>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-3">
+                {topups.map((pack) => (
+                  <article key={pack.packKey} className="rounded-3xl border border-white/10 bg-neutral-900/60 p-5">
+                    <p className="text-lg font-serif text-neutral-100">{pack.name}</p>
+                    <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{pack.coinAmount.toLocaleString()} coins</p>
+                    <p className="mt-5 text-2xl text-neutral-100">{formatPrice(pack.currencyCode, pack.priceMinor)}</p>
+                    <button
+                      type="button"
+                      disabled={
+                        !pricingData.userId ||
+                        !walletData?.checkoutEnabled ||
+                        pack.provider !== 'razorpay' ||
+                        !razorpayReady ||
+                        checkoutBusyKey !== null
+                      }
+                      onClick={() => void handleTopupCheckout(pack.topupPackId, pack.packKey, pack.provider)}
+                      className="mt-5 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {!pricingData.userId
+                        ? 'Sign in to continue'
+                        : !walletData?.checkoutEnabled
+                        ? 'Top-up coming soon'
+                        : pack.provider !== 'razorpay'
+                        ? 'Stripe comes next'
+                        : !razorpayReady
+                        ? 'Loading checkout'
+                        : checkoutBusyKey === `topup:${pack.packKey}`
+                        ? 'Opening checkout...'
+                        : 'Buy coins'}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
 
           <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">

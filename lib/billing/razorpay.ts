@@ -87,9 +87,9 @@ export async function createRazorpayPlan(input: {
       interval: 1,
       item: {
         name: input.name,
-        description: input.description,
         amount: input.amountMinor,
         currency: input.currencyCode,
+        ...(input.description ? { description: input.description } : {}),
       },
       notes: input.notes ?? {},
     }),
@@ -181,17 +181,45 @@ async function razorpayRequest<T>(path: string, init: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
+    const rawBody = await response.text();
     let message = `Razorpay request failed with status ${response.status}`;
 
-    try {
-      const body = (await response.json()) as RazorpayApiErrorBody;
-      const description = body.error?.description ?? body.error?.reason;
-      if (description) {
-        message = `Razorpay request failed: ${description}`;
+    if (rawBody) {
+      try {
+        const body = JSON.parse(rawBody) as RazorpayApiErrorBody;
+        const description = body.error?.description ?? body.error?.reason;
+        if (description) {
+          message = `Razorpay request failed: ${description}`;
+        } else {
+          message = `Razorpay request failed with status ${response.status}: ${rawBody}`;
+        }
+      } catch {
+        message = `Razorpay request failed with status ${response.status}: ${rawBody}`;
       }
-    } catch {
-      // ignore response parsing failures
     }
+
+    if (
+      response.status === 400 &&
+      path === '/plans' &&
+      message.includes('The requested URL was not found on the server.')
+    ) {
+      message = 'Razorpay Subscriptions is not enabled on this account yet. Enable the Subscriptions product in the Razorpay dashboard before testing monthly plans.';
+    }
+
+    if (
+      response.status === 400 &&
+      path === '/subscriptions' &&
+      message.includes('The requested URL was not found on the server.')
+    ) {
+      message = 'Razorpay Subscriptions is not enabled on this account yet. Enable the Subscriptions product in the Razorpay dashboard before testing monthly plans.';
+    }
+
+    console.error('[razorpayRequest]', {
+      path,
+      status: response.status,
+      message,
+      body: rawBody,
+    });
 
     throw new Error(message);
   }
@@ -200,9 +228,9 @@ async function razorpayRequest<T>(path: string, init: RequestInit): Promise<T> {
 }
 
 function getRazorpayConfig(): RazorpayConfig {
-  const keyId = process.env.RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
-  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET ?? null;
+  const keyId = normalizeEnvValue(process.env.RAZORPAY_KEY_ID);
+  const keySecret = normalizeEnvValue(process.env.RAZORPAY_KEY_SECRET);
+  const webhookSecret = normalizeEnvValue(process.env.RAZORPAY_WEBHOOK_SECRET);
 
   if (!keyId || !keySecret) {
     throw new Error('Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET');
@@ -228,4 +256,25 @@ function timingSafeEquals(left: string, right: string): boolean {
   }
 
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function normalizeEnvValue(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    const unwrapped = trimmed.slice(1, -1).trim();
+    return unwrapped || null;
+  }
+
+  return trimmed;
 }
