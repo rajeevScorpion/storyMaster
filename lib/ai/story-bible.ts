@@ -41,7 +41,6 @@ interface StoryBible {
   };
   visualDirection: {
     summary: string;
-    storyboardMode: boolean;
   };
   usedCharacterNames: string[];
   castRegistry: PromptCharacterAnchor[];
@@ -234,7 +233,6 @@ function buildStoryBible(
     },
     visualDirection: {
       summary: truncateText(sessionState?.visualStyle || '', VISUAL_DIRECTION_MAX_LENGTH),
-      storyboardMode: Boolean(currentBeat?.isStoryboard),
     },
     usedCharacterNames: castRegistry.map((character) => character.name),
     castRegistry,

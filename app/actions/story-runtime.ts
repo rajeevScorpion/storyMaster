@@ -20,7 +20,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
+import { PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 
 function runtimeNowMs(): number {
@@ -66,6 +66,7 @@ export interface StoryModelOverrides {
   visualPrompt?: string;
   imagePrompt?: string;
   portraitPrompt?: string;
+  // Storyboard is now always on. Keep the field as a no-op for older payload shapes.
   enableStoryboard?: boolean;
 }
 
@@ -335,13 +336,8 @@ export async function generateImage(
         });
 
         const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
-        const isStoryboard = true;
-        const maxW = isStoryboard ? STORYBOARD_MAX_WIDTH  : IMAGE_MAX_WIDTH;
-        const maxH = isStoryboard ? STORYBOARD_MAX_HEIGHT : IMAGE_MAX_HEIGHT;
-        const qual = isStoryboard ? STORYBOARD_QUALITY    : IMAGE_QUALITY;
-
         const referenceParts = await resolveReferenceImageParts(referenceImages);
-        const imageSize = isStoryboard ? '2K' : '1K';
+        const imageSize = '2K';
 
         const result = await timeRuntimeStep(
           'story_runtime.generate_image.gemini',
@@ -365,10 +361,10 @@ export async function generateImage(
             'story_runtime.generate_image.compress',
             {
               beatNumber: beatNumber ?? null,
-              width: maxW,
-              height: maxH,
+              width: STORYBOARD_MAX_WIDTH,
+              height: STORYBOARD_MAX_HEIGHT,
             },
-            () => compressImage(result.dataUrl!, maxW, maxH, qual)
+            () => compressImage(result.dataUrl!, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY)
           );
         }
 
@@ -394,11 +390,11 @@ export async function generateImage(
               'story_runtime.generate_image.compress',
               {
                 beatNumber: beatNumber ?? null,
-                width: maxW,
-                height: maxH,
+                width: STORYBOARD_MAX_WIDTH,
+                height: STORYBOARD_MAX_HEIGHT,
                 retry: true,
               },
-              () => compressImage(retryResult.dataUrl!, maxW, maxH, qual)
+              () => compressImage(retryResult.dataUrl!, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY)
             );
           }
         }

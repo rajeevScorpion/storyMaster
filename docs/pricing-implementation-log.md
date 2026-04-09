@@ -1187,3 +1187,41 @@ Open risks / notes:
 
 - story-quality and latency impact of `0.5K sheet` versus `1K sheet` still needs measured beat-1 comparison runs
 - the visual composer still emits generic portrait task prompts; future refinement could make those prompts more layout-aware for sheet mode
+
+## 2026-04-09 - Storyboard Always-On Production Cleanup
+
+Goal:
+
+- make the code and admin surfaces truthful now that storyboard rendering is no longer an optional runtime mode
+- remove the misleading toggle that implied storyboard generation could still be disabled
+
+Work completed:
+
+- updated `app/actions/story-runtime.ts`
+  - removed the dead single-panel compression branches
+  - made storyboard image sizing and compression explicitly always-on at `2K`
+  - kept `enableStoryboard` only as a legacy no-op field for older admin payload compatibility
+- updated `app/actions/admin.ts`
+  - stopped loading the old `storyboard_mode` flag into admin/global settings
+  - returned `enableStoryboard: true` explicitly for compatibility with older prompt payload shapes
+  - removed the `setStoryboardMode` admin action
+- updated `components/admin/GlobalSettings.tsx`
+  - removed the old storyboard enable/disable toggle
+  - replaced it with plain-language always-on messaging
+  - kept the remaining storyboard-related controls for:
+    - manual panel timing
+    - storyboard vignette
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint app/actions/story-runtime.ts app/actions/admin.ts components/admin/GlobalSettings.tsx`
+
+Tradeoffs / decisions:
+
+- kept storyboard officially always-on instead of trying to restore the older single-panel path right before production
+- preserved the legacy `enableStoryboard` field in payloads so older stored admin config shapes do not break
+
+Open risks / notes:
+
+- prompt-playground storyboard sample payloads were normalized too, so no admin sample data still implies storyboard can be switched off

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import {
   getGlobalSettings,
-  setStoryboardMode,
   setCycleOverride,
   setCycleMs,
   setStoryboardVignette,
@@ -49,8 +48,6 @@ function ToggleRow({
 export default function GlobalSettings() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [storyboardEnabled, setStoryboardEnabled] = useState(false);
-  const [storyboardToggling, setStoryboardToggling] = useState(false);
   const [cycleOverride, setCycleOverrideState] = useState(false);
   const [cycleOverrideToggling, setCycleOverrideToggling] = useState(false);
   const [cycleMs, setCycleMsState] = useState(5000);
@@ -78,7 +75,6 @@ export default function GlobalSettings() {
   useEffect(() => {
     getGlobalSettings()
       .then(({
-        storyboardMode,
         cycleOverride: co,
         cycleMs: cm,
         vignetteEnabled: ve,
@@ -89,7 +85,6 @@ export default function GlobalSettings() {
         ttsTimeoutMs: at,
         cloudSaveTimeoutMs: st,
       }) => {
-        setStoryboardEnabled(storyboardMode);
         setCycleOverrideState(co);
         setCycleMsState(cm);
         setCycleMsInput(String(cm));
@@ -152,7 +147,7 @@ export default function GlobalSettings() {
 
       {loadError && (
         <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
-          Failed to load settings — {loadError}. Try refreshing the page.
+          Failed to load settings - {loadError}. Try refreshing the page.
         </div>
       )}
 
@@ -160,173 +155,160 @@ export default function GlobalSettings() {
         <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading settings...</div>
       ) : (
         <div className="space-y-6">
-        <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Storyboard</h2>
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Storyboard</h2>
 
-          <ToggleRow
-            label="Storyboard Mode"
-            description="Generate a 2×2 panel grid at 2K (16:9) per beat instead of a single 1K image. Panels cycle automatically in the story reader."
-            checked={storyboardEnabled}
-            toggling={storyboardToggling}
-            onToggle={async () => {
-              setStoryboardToggling(true);
-              const next = !storyboardEnabled;
-              try {
-                await setStoryboardMode(next);
-                setStoryboardEnabled(next);
-              } finally {
-                setStoryboardToggling(false);
-              }
-            }}
-          />
-
-          <ToggleRow
-            label="Manual Panel Timing"
-            description="Override audio-synced panel cycling with a fixed duration. When off, panels advance at narration duration ÷ 4."
-            checked={cycleOverride}
-            toggling={cycleOverrideToggling}
-            onToggle={async () => {
-              setCycleOverrideToggling(true);
-              const next = !cycleOverride;
-              try {
-                await setCycleOverride(next);
-                setCycleOverrideState(next);
-              } finally {
-                setCycleOverrideToggling(false);
-              }
-            }}
-          />
-
-          <ToggleRow
-            label="Storyboard Vignette"
-            description="Apply a soft vignette to storyboard artwork only, while keeping UI chrome above the effect."
-            checked={vignetteEnabled}
-            toggling={vignetteToggling}
-            onToggle={async () => {
-              setVignetteToggling(true);
-              const next = !vignetteEnabled;
-              try {
-                await setStoryboardVignette(next);
-                setVignetteEnabled(next);
-              } finally {
-                setVignetteToggling(false);
-              }
-            }}
-          />
-
-          {cycleOverride && (
-            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-              <p className="text-sm font-medium text-neutral-100 mb-1">Panel Duration</p>
-              <p className="text-xs text-neutral-400 mb-3">Time each panel is shown (milliseconds). Minimum 500ms.</p>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={500}
-                  step={100}
-                  value={cycleMsInput}
-                  onChange={(e) => setCycleMsInput(e.target.value)}
-                  className="w-32 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  placeholder="5000"
-                />
-                <span className="text-xs text-neutral-500">ms</span>
-                <button
-                  onClick={handleCycleMsSave}
-                  disabled={cycleMsSaving || !Number.isFinite(parsedMs) || parsedMs < 500}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
-                >
-                  {cycleMsSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
-                </button>
-                {cycleMs !== parsedMs && parsedMs >= 500 && (
-                  <span className="text-xs text-amber-400">Unsaved</span>
-                )}
-              </div>
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+              Storyboard generation is always on now. Every beat renders as a 2x2 panel grid at 2K so playback, narration timing, and visual continuity stay consistent across the app.
             </div>
-          )}
-        </div>
 
-        <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Character References</h2>
-          <p className="text-xs text-neutral-400 -mt-2">
-            Decide which plan tiers get richer character sheets instead of the default 0.5K single full-body portrait.
-          </p>
+            <ToggleRow
+              label="Manual Panel Timing"
+              description="Override audio-synced panel cycling with a fixed duration. When off, panels advance at narration duration / 4."
+              checked={cycleOverride}
+              toggling={cycleOverrideToggling}
+              onToggle={async () => {
+                setCycleOverrideToggling(true);
+                const next = !cycleOverride;
+                try {
+                  await setCycleOverride(next);
+                  setCycleOverrideState(next);
+                } finally {
+                  setCycleOverrideToggling(false);
+                }
+              }}
+            />
 
-          <ToggleRow
-            label="Enable 0.5K Character Sheets for Free and Plus"
-            description="When this is on, Free and Plus stories use a compact 0.5K character sheet with a close-up, front view, and 3/4 view. When this is off, they fall back to the faster 0.5K single portrait."
-            checked={freePlusCharacterSheetsEnabled}
-            toggling={freePlusCharacterSheetsToggling}
-            onToggle={async () => {
-              setFreePlusCharacterSheetsToggling(true);
-              const next = !freePlusCharacterSheetsEnabled;
-              try {
-                await setFreePlusCharacterSheets(next);
-                setFreePlusCharacterSheetsEnabledState(next);
-              } finally {
-                setFreePlusCharacterSheetsToggling(false);
-              }
-            }}
-          />
+            <ToggleRow
+              label="Storyboard Vignette"
+              description="Apply a soft vignette to storyboard artwork only, while keeping UI chrome above the effect."
+              checked={vignetteEnabled}
+              toggling={vignetteToggling}
+              onToggle={async () => {
+                setVignetteToggling(true);
+                const next = !vignetteEnabled;
+                try {
+                  await setStoryboardVignette(next);
+                  setVignetteEnabled(next);
+                } finally {
+                  setVignetteToggling(false);
+                }
+              }}
+            />
 
-          <ToggleRow
-            label="Enable Character Sheets for Creators"
-            description="When this is on, Studio stories default to a 0.5K character sheet and can turn on 1K sheets in Creator Settings during setup. When this is off, creators also fall back to the default 0.5K single portrait."
-            checked={creatorCharacterSheetsEnabled}
-            toggling={creatorCharacterSheetsToggling}
-            onToggle={async () => {
-              setCreatorCharacterSheetsToggling(true);
-              const next = !creatorCharacterSheetsEnabled;
-              try {
-                await setCreatorCharacterSheets(next);
-                setCreatorCharacterSheetsEnabledState(next);
-              } finally {
-                setCreatorCharacterSheetsToggling(false);
-              }
-            }}
-          />
-        </div>
-
-        <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
-          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Generation Timeouts</h2>
-          <p className="text-xs text-neutral-400 -mt-2">All values in seconds. Changes take effect on the next generation call.</p>
-
-          {([
-            { label: 'Text / Story', description: 'Max wait for a story beat (JSON) from Gemini.', value: textTimeoutMs, input: textTimeoutInput, setInput: setTextTimeoutInput, saving: textTimeoutSaving, setSaving: setTextTimeoutSaving, setter: setTextTimeout, setMs: setTextTimeoutMs, min: 5, defaultSec: 30 },
-            { label: 'Image', description: 'Max wait for image generation from Gemini.', value: imageTimeoutMs, input: imageTimeoutInput, setInput: setImageTimeoutInput, saving: imageTimeoutSaving, setSaving: setImageTimeoutSaving, setter: setImageTimeout, setMs: setImageTimeoutMs, min: 10, defaultSec: 90 },
-            { label: 'Audio / TTS', description: 'Max wait for text-to-speech narration from Gemini.', value: ttsTimeoutMs, input: ttsTimeoutInput, setInput: setTtsTimeoutInput, saving: ttsTimeoutSaving, setSaving: setTtsTimeoutSaving, setter: setTtsTimeout, setMs: setTtsTimeoutMs, min: 10, defaultSec: 120 },
-            { label: 'Cloud Save Guard', description: 'Max wait before flipping a stuck save back to unsaved for retry.', value: cloudSaveTimeoutMs, input: cloudSaveTimeoutInput, setInput: setCloudSaveTimeoutInput, saving: cloudSaveTimeoutSaving, setSaving: setCloudSaveTimeoutSaving, setter: setCloudSaveTimeout, setMs: setCloudSaveTimeoutMs, min: 5, defaultSec: 20 },
-          ] as const).map(({ label, description, value, input, setInput, saving, setSaving, setter, setMs, min, defaultSec }) => {
-            const parsed = parseInt(input, 10);
-            const currentSec = Math.round(value / 1000);
-            return (
-              <div key={label} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-                <p className="text-sm font-medium text-neutral-100 mb-1">{label}</p>
-                <p className="text-xs text-neutral-400 mb-3">{description} Default: {defaultSec}s.</p>
+            {cycleOverride && (
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <p className="text-sm font-medium text-neutral-100 mb-1">Panel Duration</p>
+                <p className="text-xs text-neutral-400 mb-3">Time each panel is shown (milliseconds). Minimum 500ms.</p>
                 <div className="flex items-center gap-3">
                   <input
                     type="number"
-                    min={min}
-                    step={5}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                    placeholder={String(defaultSec)}
+                    min={500}
+                    step={100}
+                    value={cycleMsInput}
+                    onChange={(e) => setCycleMsInput(e.target.value)}
+                    className="w-32 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    placeholder="5000"
                   />
-                  <span className="text-xs text-neutral-500">s</span>
+                  <span className="text-xs text-neutral-500">ms</span>
                   <button
-                    onClick={() => handleTimeoutSave(input, min, setter, setMs, setSaving)}
-                    disabled={saving || !Number.isFinite(parsed) || parsed < min}
+                    onClick={handleCycleMsSave}
+                    disabled={cycleMsSaving || !Number.isFinite(parsedMs) || parsedMs < 500}
                     className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
                   >
-                    {saving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                    {cycleMsSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
                   </button>
-                  {currentSec !== parsed && parsed >= min && (
+                  {cycleMs !== parsedMs && parsedMs >= 500 && (
                     <span className="text-xs text-amber-400">Unsaved</span>
                   )}
                 </div>
               </div>
-            );
-          })}
-        </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Character References</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Decide which plan tiers get richer character sheets instead of the default 0.5K single full-body portrait.
+            </p>
+
+            <ToggleRow
+              label="Enable 0.5K Character Sheets for Free and Plus"
+              description="When this is on, Free and Plus stories use a compact 0.5K character sheet with a close-up, front view, and 3/4 view. When this is off, they fall back to the faster 0.5K single portrait."
+              checked={freePlusCharacterSheetsEnabled}
+              toggling={freePlusCharacterSheetsToggling}
+              onToggle={async () => {
+                setFreePlusCharacterSheetsToggling(true);
+                const next = !freePlusCharacterSheetsEnabled;
+                try {
+                  await setFreePlusCharacterSheets(next);
+                  setFreePlusCharacterSheetsEnabledState(next);
+                } finally {
+                  setFreePlusCharacterSheetsToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Enable Character Sheets for Creators"
+              description="When this is on, Studio stories default to a 0.5K character sheet and can turn on 1K sheets in Creator Settings during setup. When this is off, creators also fall back to the default 0.5K single portrait."
+              checked={creatorCharacterSheetsEnabled}
+              toggling={creatorCharacterSheetsToggling}
+              onToggle={async () => {
+                setCreatorCharacterSheetsToggling(true);
+                const next = !creatorCharacterSheetsEnabled;
+                try {
+                  await setCreatorCharacterSheets(next);
+                  setCreatorCharacterSheetsEnabledState(next);
+                } finally {
+                  setCreatorCharacterSheetsToggling(false);
+                }
+              }}
+            />
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Generation Timeouts</h2>
+            <p className="text-xs text-neutral-400 -mt-2">All values in seconds. Changes take effect on the next generation call.</p>
+
+            {([
+              { label: 'Text / Story', description: 'Max wait for a story beat (JSON) from Gemini.', value: textTimeoutMs, input: textTimeoutInput, setInput: setTextTimeoutInput, saving: textTimeoutSaving, setSaving: setTextTimeoutSaving, setter: setTextTimeout, setMs: setTextTimeoutMs, min: 5, defaultSec: 30 },
+              { label: 'Image', description: 'Max wait for image generation from Gemini.', value: imageTimeoutMs, input: imageTimeoutInput, setInput: setImageTimeoutInput, saving: imageTimeoutSaving, setSaving: setImageTimeoutSaving, setter: setImageTimeout, setMs: setImageTimeoutMs, min: 10, defaultSec: 90 },
+              { label: 'Audio / TTS', description: 'Max wait for text-to-speech narration from Gemini.', value: ttsTimeoutMs, input: ttsTimeoutInput, setInput: setTtsTimeoutInput, saving: ttsTimeoutSaving, setSaving: setTtsTimeoutSaving, setter: setTtsTimeout, setMs: setTtsTimeoutMs, min: 10, defaultSec: 120 },
+              { label: 'Cloud Save Guard', description: 'Max wait before flipping a stuck save back to unsaved for retry.', value: cloudSaveTimeoutMs, input: cloudSaveTimeoutInput, setInput: setCloudSaveTimeoutInput, saving: cloudSaveTimeoutSaving, setSaving: setCloudSaveTimeoutSaving, setter: setCloudSaveTimeout, setMs: setCloudSaveTimeoutMs, min: 5, defaultSec: 20 },
+            ] as const).map(({ label, description, value, input, setInput, saving, setSaving, setter, setMs, min, defaultSec }) => {
+              const parsed = parseInt(input, 10);
+              const currentSec = Math.round(value / 1000);
+              return (
+                <div key={label} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <p className="text-sm font-medium text-neutral-100 mb-1">{label}</p>
+                  <p className="text-xs text-neutral-400 mb-3">{description} Default: {defaultSec}s.</p>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="number"
+                      min={min}
+                      step={5}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      placeholder={String(defaultSec)}
+                    />
+                    <span className="text-xs text-neutral-500">s</span>
+                    <button
+                      onClick={() => handleTimeoutSave(input, min, setter, setMs, setSaving)}
+                      disabled={saving || !Number.isFinite(parsed) || parsed < min}
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                    >
+                      {saving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                    </button>
+                    {currentSec !== parsed && parsed >= min && (
+                      <span className="text-xs text-amber-400">Unsaved</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

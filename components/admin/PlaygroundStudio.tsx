@@ -84,7 +84,6 @@ const DEFAULT_STORY_BIBLE = JSON.stringify({
   },
   visualDirection: {
     summary: DEFAULT_VISUAL_STYLE,
-    storyboardMode: true,
   },
   usedCharacterNames: ['Pip', 'Barnaby'],
   castRegistry: [

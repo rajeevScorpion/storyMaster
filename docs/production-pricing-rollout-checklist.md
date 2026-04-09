@@ -22,6 +22,7 @@ This production rollout includes:
 - Razorpay-first billing foundation
 - pricing enforcement plumbing
 - portrait reference modes and admin controls
+- storyboard always-on cleanup so admin no longer advertises a dead off-switch
 - gallery cover hardening for legacy/private storyline cover URLs
 
 ## Important safety note
@@ -39,7 +40,8 @@ That means:
 Before touching production:
 
 1. Confirm the current branch tip:
-   - `pricing` head should be `ed47a7b`
+   - use the intended release commit from `pricing`
+   - do not rely on an older hardcoded hash in this checklist
 2. Confirm the working tree is clean
 3. Confirm production Vercel env values are ready:
    - `NEXT_PUBLIC_SUPABASE_URL`

@@ -156,12 +156,11 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, visualPrompt, imagePrompt, portraitPrompt, enableStoryboard] = await Promise.all([
+  const [storyPrompt, visualPrompt, imagePrompt, portraitPrompt] = await Promise.all([
     getPublishedPrompt('story_generation'),
     getPublishedPrompt('visual_prompt'),
     getPublishedPrompt('image_generation'),
     getPublishedPrompt('portrait_generation'),
-    getFeatureFlag('storyboard_mode'),
   ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
@@ -174,12 +173,11 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     visualPrompt,
     imagePrompt,
     portraitPrompt,
-    enableStoryboard,
+    enableStoryboard: true,
   };
 }
 
 export async function getGlobalSettings(): Promise<{
-  storyboardMode: boolean;
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
@@ -191,8 +189,7 @@ export async function getGlobalSettings(): Promise<{
   cloudSaveTimeoutMs: number;
 }> {
   await verifyAdmin();
-  const [storyboardMode, cycleOverride, cycleMsStr, vignetteEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
-    getFeatureFlag('storyboard_mode'),
+  const [cycleOverride, cycleMsStr, vignetteEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -204,7 +201,6 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
   ]);
   return {
-    storyboardMode,
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
@@ -215,11 +211,6 @@ export async function getGlobalSettings(): Promise<{
     ttsTimeoutMs: parseInt(ttsMs ?? '120000', 10) || 120000,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
   };
-}
-
-export async function setStoryboardMode(enabled: boolean): Promise<void> {
-  await verifyAdmin();
-  await setFeatureFlag('storyboard_mode', enabled);
 }
 
 export async function setCycleOverride(enabled: boolean): Promise<void> {
