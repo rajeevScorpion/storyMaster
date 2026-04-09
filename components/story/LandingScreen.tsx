@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { getStoryboardSettings } from '@/app/actions/admin';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, StoryConfig, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
@@ -32,10 +33,33 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [visualSettings, setVisualSettings] = useState<VisualSettings>(DEFAULT_STORY_CONFIG.visualSettings);
   const [authoringMode, setAuthoringMode] = useState<StoryConfig['authoring']['mode']>(DEFAULT_STORY_CONFIG.authoring.mode);
   const [preludeText, setPreludeText] = useState(DEFAULT_STORY_CONFIG.authoring.preludeText || '');
+  const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
+  const [setupSettings, setSetupSettings] = useState({
+    freePlusCharacterSheetsEnabled: false,
+    creatorCharacterSheetsEnabled: false,
+  });
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const effectiveMaxBeats = storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
   const startStoryCoinCost = (pricing.actionCosts.start_story_initial_beat ?? 1) * 10;
+  const isCreatorPlan = pricing.snapshot.creatorControls;
+  const showCreatorSettings = isCreatorPlan && setupSettings.creatorCharacterSheetsEnabled;
+
+  useEffect(() => {
+    getStoryboardSettings()
+      .then(({ freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled }) => {
+        setSetupSettings({
+          freePlusCharacterSheetsEnabled,
+          creatorCharacterSheetsEnabled,
+        });
+      })
+      .catch(() => {
+        setSetupSettings({
+          freePlusCharacterSheetsEnabled: false,
+          creatorCharacterSheetsEnabled: false,
+        });
+      });
+  }, []);
 
   // Restore prompt after OAuth redirect — use initializer pattern to avoid setState in effect
   useEffect(() => {
@@ -58,6 +82,10 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
             setVisualSettings(config.visualSettings);
             setAuthoringMode(config.authoring.mode);
             setPreludeText(config.authoring.preludeText || '');
+            setUseCreatorOneKCharacterSheet(
+              config.portraitReferences.mode === 'character_sheet' &&
+              config.portraitReferences.quality === '1K'
+            );
           } catch { /* ignore parse errors */ }
           sessionStorage.removeItem('kissago_pending_config');
         }
@@ -68,6 +96,21 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim() && !isLoading) {
+      const portraitReferences = showCreatorSettings
+        ? {
+            mode: 'character_sheet' as const,
+            quality: useCreatorOneKCharacterSheet ? '1K' as const : '0.5K' as const,
+          }
+        : (!isCreatorPlan && setupSettings.freePlusCharacterSheetsEnabled)
+        ? {
+            mode: 'character_sheet' as const,
+            quality: '0.5K' as const,
+          }
+        : {
+            mode: 'single_portrait' as const,
+            quality: '0.5K' as const,
+          };
+
       const config: StoryConfig = {
         language,
         ageGroup,
@@ -78,6 +121,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
           mode: authoringMode,
           preludeText: preludeText.trim(),
         },
+        portraitReferences,
       };
       if (onBegin) {
         onBegin(prompt.trim(), config);
@@ -198,6 +242,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                 pricingStoryLengthUiLimitsEnabled={storyLengthUiEnabled}
                 currentPlanLabel={pricing.snapshot.planKey}
                 onViewPlans={() => router.push('/wallet')}
+                showCreatorSettings={showCreatorSettings}
+                creatorReferenceQuality={useCreatorOneKCharacterSheet ? '1K' : '0.5K'}
+                onCreatorReferenceQualityChange={(value) => setUseCreatorOneKCharacterSheet(value === '1K')}
               />
             )}
           </AnimatePresence>

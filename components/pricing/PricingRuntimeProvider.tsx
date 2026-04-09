@@ -60,6 +60,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     storyLengthCap: 4,
     canAccessDownloads: false,
     canAccessUnbrandedExports: false,
+    creatorControls: false,
     availablePromoBeats: 0,
     availableSubscriptionBeats: 0,
     availableTopupBeats: 0,

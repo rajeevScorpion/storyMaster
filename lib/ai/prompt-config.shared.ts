@@ -241,8 +241,8 @@ Frame design rules:
 
 Portrait task rules:
 - reason must be "new_character" or "visual_change"
-- prompt must describe a single-character portrait only
-- portrait prompts must be explicit enough for consistent face, clothing, silhouette, and accessories
+- prompt must describe a single-character reference only
+- portrait prompts must be explicit enough for consistent face, clothing, silhouette, accessories, and repeatable turnaround details
 - portrait prompts must match the same world and style as the storyboard
 
 Return JSON with exactly these keys:
@@ -347,24 +347,30 @@ Hard requirements:
 - No captions, speech bubbles, labels, subtitles, logos, watermarks, or any text overlays.
 - Keep the scene grounded in the supplied characters and story brief.`;
 
-export const PORTRAIT_GENERATION_PROMPT_DEFAULT = `Generate a single character portrait of {{characterName}}, a {{characterType}}.
+export const PORTRAIT_GENERATION_PROMPT_DEFAULT = `Generate a character reference image for {{characterName}}, a {{characterType}}.
 
 Appearance: {{characterAppearance}}
 
+Reference mode: {{portraitMode}}
+Reference quality: {{referenceQuality}}
+Required layout: {{sheetLayout}}
+
 Requirements:
-- Front-facing or three-quarter view, clear face and full body visible
-- Clean, simple background (soft gradient or neutral tone)
 - Match the art style: {{visualStyle}}
+- Keep the same character identity perfectly consistent across every requested view
+- If the reference mode is "single portrait", create one clean full-body reference portrait with a clear face
+- If the reference mode is "character sheet", create one square sheet that shows only this same character in every requested view from the required layout
+- Clean, simple background (soft gradient or neutral tone) behind the character or sheet
 - Single character only, no other characters or figures
 - High detail on distinguishing features (face, clothing, accessories, coloring)
-- Expressive pose that reflects personality
+- Expressive pose or poses that reflect personality without changing outfit or silhouette
 - No text, labels, or watermarks`;
 
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown.',
-  portrait_generation: 'Generate a single character portrait image. No text overlays, no multiple characters, no background clutter.',
+  portrait_generation: 'Generate a single-character reference image only. No text overlays, no other characters, and no cluttered background.',
   tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata or alternative takes.',
   voice_selection: 'Return only a single voice name from the available list. Do not add commentary or punctuation beyond the voice name.',
 };
@@ -423,6 +429,9 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'characterAppearance', label: 'Character Appearance', description: 'Detailed appearance description from the story beat.', required: true },
       { key: 'characterType', label: 'Character Type', description: 'Type/species of the character (e.g., monkey, wizard, girl).', required: true },
       { key: 'visualStyle', label: 'Visual Style', description: 'Art style for the portrait to match scene images.', required: true },
+      { key: 'portraitMode', label: 'Portrait Mode', description: 'Whether the reference is a single portrait or a multi-view character sheet.', required: true },
+      { key: 'referenceQuality', label: 'Reference Quality', description: 'Requested reference resolution such as 0.5K or 1K.', required: true },
+      { key: 'sheetLayout', label: 'Sheet Layout', description: 'Exact view layout the portrait reference should contain.', required: true },
     ],
     defaultPrompt: PORTRAIT_GENERATION_PROMPT_DEFAULT,
   },

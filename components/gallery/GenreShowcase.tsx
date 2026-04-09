@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
-import { ChevronLeft, ChevronRight, Bookmark, BookmarkCheck } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Bookmark, BookmarkCheck, BookOpen } from 'lucide-react';
 import type { GenreSection } from '@/lib/types/database';
 
 interface GenreShowcaseProps {
@@ -105,6 +105,14 @@ function GenreRow({
                 transition={{ duration: 0.2 }}
                 className="relative w-[280px] md:w-[320px] aspect-[16/9] rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 bg-neutral-900 group"
               >
+                {!item.coverImageUrl && (
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.22),transparent_42%),linear-gradient(180deg,rgba(38,38,38,0.72),rgba(10,10,10,0.98))]">
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <BookOpen className="h-14 w-14 text-white/10" />
+                    </div>
+                  </div>
+                )}
+
                 {item.coverImageUrl && (
                   <Image
                     src={item.coverImageUrl}

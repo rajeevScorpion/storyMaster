@@ -1083,3 +1083,107 @@ Open risks / notes:
 
 - the browser verify route remains the primary happy-path grant path
 - the webhook path now acts as a safer backup and reconciliation mechanism for top-ups
+
+## Execution Slice 12 - Safe Latency Optimization Pass
+
+Current working status:
+
+- complete locally on branch `pricing`
+
+Goal:
+
+- reduce pre-generation latency without changing the creative quality path
+- remove avoidable pricing-state overhead before a beat starts
+- compact the story-context payloads that were inflating Gemini text calls
+
+Work completed:
+
+- updated `lib/pricing/enforcement.ts`
+  - added a short-lived in-memory cache for pricing globals:
+    - plans
+    - plan versions
+    - runtime flags
+    - action costs
+  - removed stale-reservation expiry from the hot authorization path
+  - narrowed reservation reads to active pending holds only
+  - limited subscription reads to the latest handful of rows
+  - removed an extra free-plan `loadPricingState` pass by reusing the already-loaded state during lazy free-allowance checks
+- updated `lib/ai/story-bible.ts`
+  - switched prompt JSON serialization from pretty-printed to compact JSON
+  - trimmed cast summaries, choice history, open threads, recent beats, continuity notes, and forecast text to the most useful context
+  - reduced the story-bible window from four recent beats to three
+- updated `app/actions/story-runtime.ts`
+  - compacted storyboard-composer JSON payload fields
+  - shortened previous-storyboard context before passing it into the visual prompt
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint lib/pricing/enforcement.ts lib/ai/story-bible.ts app/actions/story-runtime.ts`
+
+Tradeoffs / decisions:
+
+- kept the same Gemini models, storyboard path, portrait path, and 2K image path
+- limited prompt compaction to context-shaping and whitespace removal instead of deleting major story memory structures
+- used a tiny server-memory cache for pricing globals so local and stage retries stay fast without introducing long-lived stale config risk
+
+Open risks / notes:
+
+- real timing gains still need one more measured beat run after this pass
+- `truncateText` in `lib/ai/story-bible.ts` still carries the pre-existing non-ASCII ellipsis character from earlier file content; it is cosmetic and did not affect verification, but it can be normalized in a later cleanup pass
+
+## 2026-04-09 - Portrait Reference Modes And Character Sheet Rollout
+
+Goal:
+
+- add tier-aware portrait reference modes without forcing every story through the heaviest path
+- make code comments match actual parallelized portrait generation behavior
+- give admins and creators explicit control over when sheet references are used
+
+Work completed:
+
+- updated `lib/types/story.ts`
+  - added `portraitReferences` to `StoryConfig`
+  - added portrait reference mode and quality types
+- updated `lib/ai/story-config.ts`
+  - added normalized defaults for portrait references
+  - locked universal fallback to `0.5K single portrait`
+- updated `lib/types/pricing.ts`, `lib/pricing/snapshot.ts`, and `components/pricing/PricingRuntimeProvider.tsx`
+  - exposed `creatorControls` on the effective pricing snapshot for setup UI decisions
+- updated `app/actions/admin.ts` and `components/admin/GlobalSettings.tsx`
+  - added global feature flags for:
+    - Free/Plus character sheets
+    - Creator character sheets
+  - surfaced those controls in `Global Settings`
+- updated `components/story/LandingScreen.tsx` and `components/story/AdvancedOptions.tsx`
+  - resolved portrait reference defaults from plan tier plus global settings
+  - added a new `Creator Settings` section below advanced options
+  - added the Studio-only `Use 1K character sheet references` toggle
+- updated `app/actions/story-runtime.ts`
+  - mapped product-facing `0.5K` to Gemini SDK `512`
+  - expanded portrait prompt inputs to support:
+    - single portrait
+    - 0.5K character sheet
+    - 1K creator sheet
+- updated `lib/store/story-store.ts`
+  - fixed the stale portrait-generation comment to say `parallelized`
+  - capped sheet generation to the first two prioritized portrait tasks per beat
+  - fell back remaining qualifying characters to the default single portrait
+- updated `lib/ai/prompt-config.shared.ts`, `app/actions/prompt-playground.ts`, and `components/admin/PlaygroundStudio.tsx`
+  - aligned the prompt editor and playground with the new portrait-reference contract
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint lib/types/story.ts lib/ai/story-config.ts lib/types/pricing.ts lib/pricing/snapshot.ts app/actions/admin.ts components/admin/GlobalSettings.tsx components/story/AdvancedOptions.tsx components/story/LandingScreen.tsx app/actions/story-runtime.ts lib/store/story-store.ts lib/ai/prompt-config.shared.ts app/actions/prompt-playground.ts components/admin/PlaygroundStudio.tsx components/pricing/PricingRuntimeProvider.tsx`
+
+Tradeoffs / decisions:
+
+- used Gemini SDK `512` as the runtime mapping for the product-facing `0.5K` option because the installed SDK does not advertise a literal `0.5K` size token
+- kept whole-sheet reuse as the later-beat reference artifact rather than introducing crop selection in this pass
+- enforced the requested cap of two sheet generations per beat and fell back additional qualifying characters to the default single portrait path
+
+Open risks / notes:
+
+- story-quality and latency impact of `0.5K sheet` versus `1K sheet` still needs measured beat-1 comparison runs
+- the visual composer still emits generic portrait task prompts; future refinement could make those prompts more layout-aware for sheet mode

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
@@ -350,21 +350,39 @@ async function generatePortraitsForStoryboardPlan(
   beat: StoryBeat,
   storyboardPlan: StoryboardPlan,
   visualStyle: string,
+  portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides
 ): Promise<ReferenceImage[]> {
   if (!storyboardPlan.portraitTasks.length) {
     return [];
   }
 
+  const orderedTasks = sortPortraitTasksForGeneration(beat.characters, storyboardPlan.portraitTasks);
+  const prioritizedSheetTaskIds = resolvePrioritizedSheetTaskIds(orderedTasks, portraitReferenceConfig);
+
   const portraits = await Promise.all(
-    storyboardPlan.portraitTasks.map(async (task) => {
+    orderedTasks.map(async (task) => {
       const character = beat.characters.find((candidate) => candidate.id === task.characterId);
       if (!character) {
         return null;
       }
 
+      const taskPortraitReferenceConfig =
+        portraitReferenceConfig.mode === 'character_sheet' && prioritizedSheetTaskIds.has(task.characterId)
+          ? portraitReferenceConfig
+          : {
+              mode: 'single_portrait' as const,
+              quality: '0.5K' as const,
+            };
+
       try {
-        const portrait = await generateCharacterPortrait(character, visualStyle, modelOverrides, task.prompt);
+        const portrait = await generateCharacterPortrait(
+          character,
+          visualStyle,
+          taskPortraitReferenceConfig,
+          modelOverrides,
+          task.prompt
+        );
         character.portraitBase64 = portrait;
         return { type: 'character' as const, dataUrl: portrait };
       } catch (error) {
@@ -375,6 +393,34 @@ async function generatePortraitsForStoryboardPlan(
   );
 
   return portraits.filter((portrait): portrait is NonNullable<typeof portrait> => Boolean(portrait));
+}
+
+function sortPortraitTasksForGeneration(
+  characters: Character[],
+  portraitTasks: PortraitTask[]
+): PortraitTask[] {
+  const characterPriority = new Map(characters.map((character, index) => [character.id, index]));
+
+  return [...portraitTasks].sort((left, right) => {
+    const leftPriority = characterPriority.get(left.characterId) ?? Number.MAX_SAFE_INTEGER;
+    const rightPriority = characterPriority.get(right.characterId) ?? Number.MAX_SAFE_INTEGER;
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority;
+    }
+
+    return left.characterName.localeCompare(right.characterName);
+  });
+}
+
+function resolvePrioritizedSheetTaskIds(
+  portraitTasks: PortraitTask[],
+  portraitReferenceConfig: PortraitReferenceConfig
+): Set<string> {
+  if (portraitReferenceConfig.mode !== 'character_sheet') {
+    return new Set<string>();
+  }
+
+  return new Set(portraitTasks.slice(0, 2).map((task) => task.characterId));
 }
 
 export const useStoryStore = create<StoryState>()(
@@ -538,10 +584,13 @@ export const useStoryStore = create<StoryState>()(
                   beat,
                   storyboardPlan,
                   initialSession.visualStyle!,
+                  storyConfig.portraitReferences,
                   modelOverrides
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
+                  portraitReferenceMode: storyConfig.portraitReferences.mode,
+                  portraitReferenceQuality: storyConfig.portraitReferences.quality,
                 }
               )
             : [];
@@ -667,7 +716,7 @@ export const useStoryStore = create<StoryState>()(
             });
           }
 
-          // Step A: Generate portraits first (sequential, not parallel) so beat 1 scene can use
+          // Step A: Generate portraits first (parallelized) so beat 1 scene can use
           // them as references — makes portrait the single source of truth from the very first image.
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
@@ -951,10 +1000,13 @@ export const useStoryStore = create<StoryState>()(
                   beat,
                   storyboardPlan,
                   session.visualStyle,
+                  session.storyConfig.portraitReferences,
                   modelOverrides
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
+                  portraitReferenceMode: session.storyConfig.portraitReferences.mode,
+                  portraitReferenceQuality: session.storyConfig.portraitReferences.quality,
                 }
               )
             : [];
@@ -1433,6 +1485,7 @@ export const useStoryStore = create<StoryState>()(
               beatForRender,
               storyboardPlan,
               session.visualStyle,
+              session.storyConfig.portraitReferences,
               modelOverrides
             );
           }

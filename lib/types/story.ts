@@ -21,6 +21,15 @@ export interface PortraitTask {
   prompt: string;
 }
 
+export type PortraitReferenceMode = 'single_portrait' | 'character_sheet';
+
+export type PortraitReferenceQuality = '0.5K' | '1K';
+
+export interface PortraitReferenceConfig {
+  mode: PortraitReferenceMode;
+  quality: PortraitReferenceQuality;
+}
+
 export interface StoryboardFramePlan {
   description: string;
   prompt: string;
@@ -113,6 +122,7 @@ export interface StoryConfig {
   language: StoryLanguage;
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
+  portraitReferences: PortraitReferenceConfig;
 }
 
 export interface StoryNode {

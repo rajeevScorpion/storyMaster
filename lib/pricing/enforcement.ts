@@ -98,6 +98,17 @@ interface ReconcileRazorpayTopupResult {
   paymentId: string;
 }
 
+interface CachedPricingGlobals {
+  loadedAtMs: number;
+  plans: DbPricingPlan[];
+  planVersions: DbPricingPlanVersion[];
+  featureFlags: RuntimeFlagRow[];
+  actionCosts: DbPricingActionCost[];
+}
+
+const PRICING_GLOBAL_CACHE_TTL_MS = 5_000;
+let cachedPricingGlobals: CachedPricingGlobals | null = null;
+
 function enforcementNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -135,10 +146,11 @@ export async function ensureFreeAllowanceForUser(
     pricingMarketKey?: PricingMarketKey | null;
     countryCode?: string | null;
     supabase?: AdminClient;
+    preloadedState?: LoadedPricingState | null;
   } = {}
 ): Promise<EnsureFreeAllowanceResult> {
   const supabase = options.supabase ?? createAdminClient();
-  const state = await loadPricingState(supabase, userId, options);
+  const state = options.preloadedState ?? await loadPricingState(supabase, userId, options);
 
   if (state.snapshot.planKey !== 'free') {
     return {
@@ -257,8 +269,6 @@ export async function authorizeBillableAction(input: {
       }
 
       const supabase = createAdminClient();
-      await expireStaleReservations({ supabase });
-
       let state = await loadPricingState(supabase, input.userId, {
         pricingMarketKey: input.pricingMarketKey,
         countryCode: input.countryCode,
@@ -277,6 +287,7 @@ export async function authorizeBillableAction(input: {
           pricingMarketKey: input.pricingMarketKey,
           countryCode: input.countryCode,
           supabase,
+          preloadedState: state,
         });
 
         if (grantResult.granted) {
@@ -583,23 +594,20 @@ async function loadPricingState(
     'pricing.load_state',
     { userId, pricingMarketKey: options.pricingMarketKey ?? null },
     async () => {
-      const [plansResult, planVersionsResult, featureFlagsResult, customersResult, subscriptionsResult, grantsResult, reservationsResult] = await Promise.all([
-        supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }),
-        supabase.from('pricing_plan_versions').select('*').order('created_at', { ascending: false }),
-        supabase
-          .from('feature_flags')
-          .select('flag_key, enabled, value')
-          .in('flag_key', PRICING_RUNTIME_SETTING_DEFINITIONS.map((definition) => definition.key)),
+      const [globalConfig, customersResult, subscriptionsResult, grantsResult, reservationsResult] = await Promise.all([
+        loadCachedPricingGlobals(supabase),
         supabase
           .from('billing_customers')
           .select('*')
           .eq('user_id', userId)
           .order('updated_at', { ascending: false }),
+        // A handful of latest subscriptions is enough to resolve the entitled one.
         supabase
           .from('billing_subscriptions')
           .select('*')
           .eq('user_id', userId)
-          .order('updated_at', { ascending: false }),
+          .order('updated_at', { ascending: false })
+          .limit(8),
         supabase
           .from('beat_grants')
           .select('*')
@@ -609,20 +617,18 @@ async function loadPricingState(
           .from('beat_spend_reservations')
           .select('*')
           .eq('user_id', userId)
+          .eq('status', 'pending')
+          .gt('expires_at', new Date().toISOString())
           .order('created_at', { ascending: false }),
       ]);
-
-      throwIfQueryFailed(plansResult.error, 'Failed to load pricing plans');
-      throwIfQueryFailed(planVersionsResult.error, 'Failed to load pricing plan versions');
-      throwIfQueryFailed(featureFlagsResult.error, 'Failed to load pricing runtime flags');
       throwIfQueryFailed(customersResult.error, 'Failed to load billing customers');
       throwIfQueryFailed(subscriptionsResult.error, 'Failed to load billing subscriptions');
       throwIfQueryFailed(grantsResult.error, 'Failed to load beat grants');
       throwIfQueryFailed(reservationsResult.error, 'Failed to load beat reservations');
 
-      const plans = (plansResult.data ?? []) as DbPricingPlan[];
-      const planVersions = (planVersionsResult.data ?? []) as DbPricingPlanVersion[];
-      const featureFlags = (featureFlagsResult.data ?? []) as RuntimeFlagRow[];
+      const plans = globalConfig.plans;
+      const planVersions = globalConfig.planVersions;
+      const featureFlags = globalConfig.featureFlags;
       const billingCustomers = (customersResult.data ?? []) as DbBillingCustomer[];
       const billingSubscriptions = (subscriptionsResult.data ?? []) as DbBillingSubscription[];
       const beatGrants = (grantsResult.data ?? []) as DbBeatGrant[];
@@ -657,22 +663,50 @@ async function loadPricingState(
 
 async function loadActionCost(actionKey: PricingActionKey): Promise<DbPricingActionCost | null> {
   const supabase = createAdminClient();
-  const result = await supabase
-    .from('pricing_action_costs')
-    .select('*')
-    .eq('action_key', actionKey)
-    .eq('is_active', true)
-    .order('effective_from', { ascending: false });
-
-  throwIfQueryFailed(result.error, `Failed to load action cost for ${actionKey}`);
-
   const now = Date.now();
-  const rows = (result.data ?? []) as DbPricingActionCost[];
+  const rows = (await loadCachedPricingGlobals(supabase)).actionCosts
+    .filter((row) => row.action_key === actionKey && row.is_active);
   return rows.find((row) => {
     const startsAt = new Date(row.effective_from).getTime();
     const endsAt = row.effective_to ? new Date(row.effective_to).getTime() : Number.POSITIVE_INFINITY;
     return startsAt <= now && now < endsAt;
   }) ?? null;
+}
+
+async function loadCachedPricingGlobals(supabase: AdminClient): Promise<CachedPricingGlobals> {
+  const now = Date.now();
+  if (cachedPricingGlobals && (now - cachedPricingGlobals.loadedAtMs) < PRICING_GLOBAL_CACHE_TTL_MS) {
+    return cachedPricingGlobals;
+  }
+
+  const [plansResult, planVersionsResult, featureFlagsResult, actionCostsResult] = await Promise.all([
+    supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }),
+    supabase.from('pricing_plan_versions').select('*').order('created_at', { ascending: false }),
+    supabase
+      .from('feature_flags')
+      .select('flag_key, enabled, value')
+      .in('flag_key', PRICING_RUNTIME_SETTING_DEFINITIONS.map((definition) => definition.key)),
+    supabase
+      .from('pricing_action_costs')
+      .select('*')
+      .eq('is_active', true)
+      .order('effective_from', { ascending: false }),
+  ]);
+
+  throwIfQueryFailed(plansResult.error, 'Failed to load pricing plans');
+  throwIfQueryFailed(planVersionsResult.error, 'Failed to load pricing plan versions');
+  throwIfQueryFailed(featureFlagsResult.error, 'Failed to load pricing runtime flags');
+  throwIfQueryFailed(actionCostsResult.error, 'Failed to load pricing action costs');
+
+  cachedPricingGlobals = {
+    loadedAtMs: now,
+    plans: (plansResult.data ?? []) as DbPricingPlan[],
+    planVersions: (planVersionsResult.data ?? []) as DbPricingPlanVersion[],
+    featureFlags: (featureFlagsResult.data ?? []) as RuntimeFlagRow[],
+    actionCosts: (actionCostsResult.data ?? []) as DbPricingActionCost[],
+  };
+
+  return cachedPricingGlobals;
 }
 
 async function logShadowMeteringAttempt(

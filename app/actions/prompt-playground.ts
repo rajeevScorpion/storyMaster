@@ -280,7 +280,11 @@ async function runPortraitGenerationTest(
     characterAppearance: inputs.characterAppearance || '',
     characterType: inputs.characterType || 'character',
     visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
+    portraitMode: inputs.portraitMode || 'single portrait',
+    referenceQuality: inputs.referenceQuality || '0.5K',
+    sheetLayout: inputs.sheetLayout || 'one clean full-body reference portrait with a clear face, either front-facing or 3/4 view',
   });
+  const imageSize = inputs.referenceQuality === '1K' ? '1K' : '512';
 
   const start = Date.now();
   const response = await ai.models.generateContent({
@@ -290,7 +294,7 @@ async function runPortraitGenerationTest(
       systemInstruction: LOCKED_PROMPT_GUARDRAILS.portrait_generation,
       imageConfig: {
         aspectRatio: '1:1',
-        imageSize: '1K',
+        imageSize,
       },
     },
   });

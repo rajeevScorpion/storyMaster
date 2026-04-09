@@ -1,4 +1,7 @@
 import type {
+  PortraitReferenceConfig,
+  PortraitReferenceQuality,
+  PortraitReferenceMode,
   StoryAuthoringConfig,
   StoryConfig,
   StoryDetailLevel,
@@ -53,6 +56,11 @@ export const DEFAULT_AUTHORING: StoryAuthoringConfig = {
   preludeText: '',
 };
 
+export const DEFAULT_PORTRAIT_REFERENCE_CONFIG: PortraitReferenceConfig = {
+  mode: 'single_portrait',
+  quality: '0.5K',
+};
+
 export const DEFAULT_STORY_CONFIG: StoryConfig = {
   language: 'english',
   ageGroup: 'all_ages',
@@ -60,6 +68,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   maxBeats: 6,
   visualSettings: DEFAULT_VISUAL_SETTINGS,
   authoring: DEFAULT_AUTHORING,
+  portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
 };
 
 const PRESET_SUMMARIES: Record<VisualStylePreset, string> = {
@@ -98,6 +107,7 @@ const DETAIL_SUMMARIES: Record<StoryDetailLevel, string> = {
 type RawStoryConfig = Partial<StoryConfig> & {
   visualSettings?: Partial<VisualSettings> | null;
   authoring?: Partial<StoryAuthoringConfig> | null;
+  portraitReferences?: Partial<PortraitReferenceConfig> | null;
 };
 
 export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig {
@@ -113,6 +123,8 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     preludeText: sanitizePrelude(input?.authoring?.preludeText ?? DEFAULT_AUTHORING.preludeText),
   };
 
+  const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
+
   return {
     language: input?.language || DEFAULT_STORY_CONFIG.language,
     ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
@@ -120,6 +132,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     maxBeats: clampMaxBeats(input?.maxBeats),
     visualSettings,
     authoring,
+    portraitReferences,
   };
 }
 
@@ -149,6 +162,23 @@ export function isSeedContinueMode(config?: Partial<StoryConfig> | null): boolea
   return normalizeStoryConfig(config).authoring.mode === 'seed_continue';
 }
 
+export function normalizePortraitReferenceConfig(
+  input?: Partial<PortraitReferenceConfig> | null
+): PortraitReferenceConfig {
+  const mode = normalizePortraitReferenceMode(input?.mode);
+  if (mode === 'single_portrait') {
+    return {
+      mode,
+      quality: '0.5K',
+    };
+  }
+
+  return {
+    mode,
+    quality: normalizePortraitReferenceQuality(input?.quality),
+  };
+}
+
 function sanitizePrelude(value?: string | null): string {
   return value?.trim() || '';
 }
@@ -156,4 +186,12 @@ function sanitizePrelude(value?: string | null): string {
 function clampMaxBeats(value?: number | null): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return DEFAULT_STORY_CONFIG.maxBeats;
   return Math.min(8, Math.max(3, Math.round(value)));
+}
+
+function normalizePortraitReferenceMode(value?: string | null): PortraitReferenceMode {
+  return value === 'character_sheet' ? 'character_sheet' : DEFAULT_PORTRAIT_REFERENCE_CONFIG.mode;
+}
+
+function normalizePortraitReferenceQuality(value?: string | null): PortraitReferenceQuality {
+  return value === '1K' ? '1K' : DEFAULT_PORTRAIT_REFERENCE_CONFIG.quality;
 }

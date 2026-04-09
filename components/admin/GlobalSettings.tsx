@@ -2,7 +2,19 @@
 
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { getGlobalSettings, setStoryboardMode, setCycleOverride, setCycleMs, setStoryboardVignette, setTextTimeout, setImageTimeout, setTtsTimeout, setCloudSaveTimeout } from '@/app/actions/admin';
+import {
+  getGlobalSettings,
+  setStoryboardMode,
+  setCycleOverride,
+  setCycleMs,
+  setStoryboardVignette,
+  setTextTimeout,
+  setImageTimeout,
+  setTtsTimeout,
+  setCloudSaveTimeout,
+  setFreePlusCharacterSheets,
+  setCreatorCharacterSheets,
+} from '@/app/actions/admin';
 
 function ToggleRow({
   label,
@@ -46,6 +58,10 @@ export default function GlobalSettings() {
   const [cycleMsSaving, setCycleMsSaving] = useState(false);
   const [vignetteEnabled, setVignetteEnabled] = useState(true);
   const [vignetteToggling, setVignetteToggling] = useState(false);
+  const [freePlusCharacterSheetsEnabled, setFreePlusCharacterSheetsEnabledState] = useState(false);
+  const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
+  const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
+  const [creatorCharacterSheetsToggling, setCreatorCharacterSheetsToggling] = useState(false);
   const [textTimeoutMs, setTextTimeoutMs] = useState(30000);
   const [textTimeoutInput, setTextTimeoutInput] = useState('30');
   const [textTimeoutSaving, setTextTimeoutSaving] = useState(false);
@@ -61,12 +77,25 @@ export default function GlobalSettings() {
 
   useEffect(() => {
     getGlobalSettings()
-      .then(({ storyboardMode, cycleOverride: co, cycleMs: cm, vignetteEnabled: ve, textTimeoutMs: tt, imageTimeoutMs: it, ttsTimeoutMs: at, cloudSaveTimeoutMs: st }) => {
+      .then(({
+        storyboardMode,
+        cycleOverride: co,
+        cycleMs: cm,
+        vignetteEnabled: ve,
+        freePlusCharacterSheetsEnabled: fpSheets,
+        creatorCharacterSheetsEnabled: creatorSheets,
+        textTimeoutMs: tt,
+        imageTimeoutMs: it,
+        ttsTimeoutMs: at,
+        cloudSaveTimeoutMs: st,
+      }) => {
         setStoryboardEnabled(storyboardMode);
         setCycleOverrideState(co);
         setCycleMsState(cm);
         setCycleMsInput(String(cm));
         setVignetteEnabled(ve);
+        setFreePlusCharacterSheetsEnabledState(fpSheets);
+        setCreatorCharacterSheetsEnabledState(creatorSheets);
         setTextTimeoutMs(tt);
         setTextTimeoutInput(String(Math.round(tt / 1000)));
         setImageTimeoutMs(it);
@@ -119,7 +148,7 @@ export default function GlobalSettings() {
   return (
     <div className="mx-auto max-w-7xl">
       <h1 className="mb-1 text-2xl text-neutral-100">Global Settings</h1>
-      <p className="mb-8 text-sm text-neutral-400">Runtime feature flags that apply globally to all story generation. Premium-user scoping can be added later.</p>
+      <p className="mb-8 text-sm text-neutral-400">Runtime feature flags that shape story generation, playback timing, and character reference behavior across the app.</p>
 
       {loadError && (
         <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
@@ -213,6 +242,47 @@ export default function GlobalSettings() {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+          <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Character References</h2>
+          <p className="text-xs text-neutral-400 -mt-2">
+            Decide which plan tiers get richer character sheets instead of the default 0.5K single full-body portrait.
+          </p>
+
+          <ToggleRow
+            label="Enable 0.5K Character Sheets for Free and Plus"
+            description="When this is on, Free and Plus stories use a compact 0.5K character sheet with a close-up, front view, and 3/4 view. When this is off, they fall back to the faster 0.5K single portrait."
+            checked={freePlusCharacterSheetsEnabled}
+            toggling={freePlusCharacterSheetsToggling}
+            onToggle={async () => {
+              setFreePlusCharacterSheetsToggling(true);
+              const next = !freePlusCharacterSheetsEnabled;
+              try {
+                await setFreePlusCharacterSheets(next);
+                setFreePlusCharacterSheetsEnabledState(next);
+              } finally {
+                setFreePlusCharacterSheetsToggling(false);
+              }
+            }}
+          />
+
+          <ToggleRow
+            label="Enable Character Sheets for Creators"
+            description="When this is on, Studio stories default to a 0.5K character sheet and can turn on 1K sheets in Creator Settings during setup. When this is off, creators also fall back to the default 0.5K single portrait."
+            checked={creatorCharacterSheetsEnabled}
+            toggling={creatorCharacterSheetsToggling}
+            onToggle={async () => {
+              setCreatorCharacterSheetsToggling(true);
+              const next = !creatorCharacterSheetsEnabled;
+              try {
+                await setCreatorCharacterSheets(next);
+                setCreatorCharacterSheetsEnabledState(next);
+              } finally {
+                setCreatorCharacterSheetsToggling(false);
+              }
+            }}
+          />
         </div>
 
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">

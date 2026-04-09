@@ -52,26 +52,39 @@ interface StoryBible {
   endingForecast: string[];
 }
 
+const CHOICE_HISTORY_LIMIT = 4;
+const OPEN_THREADS_LIMIT = 4;
+const RECENT_BEATS_LIMIT = 3;
+const CHARACTER_APPEARANCE_MAX_LENGTH = 120;
+const CHARACTER_PERSONALITY_MAX_LENGTH = 100;
+const STORY_TEXT_EXCERPT_MAX_LENGTH = 160;
+const IMAGE_PROMPT_EXCERPT_MAX_LENGTH = 140;
+const SCENE_SUMMARY_MAX_LENGTH = 140;
+const NEXT_BEAT_GOAL_MAX_LENGTH = 120;
+const CONTINUITY_NOTE_MAX_LENGTH = 100;
+const ENDING_FORECAST_MAX_LENGTH = 60;
+const VISUAL_DIRECTION_MAX_LENGTH = 120;
+
 export function sanitizeCharactersForPrompt(characters: Character[] | undefined | null): Array<Record<string, unknown>> {
   return (characters || []).map((character) => ({
     id: character.id,
     name: character.name,
     type: character.type,
-    appearanceSummary: character.appearanceSummary,
-    personalitySummary: character.personalitySummary,
+    appearanceSummary: truncateText(character.appearanceSummary || '', CHARACTER_APPEARANCE_MAX_LENGTH),
+    personalitySummary: truncateText(character.personalitySummary || '', CHARACTER_PERSONALITY_MAX_LENGTH),
     hasReferencePortrait: Boolean(character.portraitBase64 || character.portraitUrl),
   }));
 }
 
 export function buildPromptCharacterAnchors(characters: Character[] | undefined | null): string {
-  return JSON.stringify(sanitizeCharactersForPrompt(characters), null, 2);
+  return stringifyCompact(sanitizeCharactersForPrompt(characters));
 }
 
 export function formatStoryBible(
   sessionState: Partial<StorySession> | null,
   selectedOptionLabel?: string
 ): string {
-  return JSON.stringify(buildStoryBible(sessionState, selectedOptionLabel), null, 2);
+  return stringifyCompact(buildStoryBible(sessionState, selectedOptionLabel));
 }
 
 export function validateGeneratedBeat(
@@ -220,16 +233,21 @@ function buildStoryBible(
       mood: sessionState?.setting?.mood || 'unknown',
     },
     visualDirection: {
-      summary: sessionState?.visualStyle || '',
+      summary: truncateText(sessionState?.visualStyle || '', VISUAL_DIRECTION_MAX_LENGTH),
       storyboardMode: Boolean(currentBeat?.isStoryboard),
     },
     usedCharacterNames: castRegistry.map((character) => character.name),
     castRegistry,
-    choiceHistory: sessionState?.choiceHistory || [],
+    choiceHistory: (sessionState?.choiceHistory || [])
+      .filter(Boolean)
+      .map((entry) => truncateText(entry, NEXT_BEAT_GOAL_MAX_LENGTH))
+      .slice(-CHOICE_HISTORY_LIMIT),
     openThreads,
-    recentBeats: beats.slice(-4),
-    currentBeatGoal: currentBeat?.nextBeatGoal || '',
-    endingForecast: currentBeat?.endingForecast || [],
+    recentBeats: beats.slice(-RECENT_BEATS_LIMIT),
+    currentBeatGoal: truncateText(currentBeat?.nextBeatGoal || '', NEXT_BEAT_GOAL_MAX_LENGTH),
+    endingForecast: (currentBeat?.endingForecast || [])
+      .slice(0, 3)
+      .map((entry) => truncateText(entry, ENDING_FORECAST_MAX_LENGTH)),
   };
 }
 
@@ -244,8 +262,8 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
         id: character.id,
         name: character.name,
         type: character.type,
-        appearanceSummary: character.appearanceSummary,
-        personalitySummary: character.personalitySummary,
+        appearanceSummary: truncateText(character.appearanceSummary || '', CHARACTER_APPEARANCE_MAX_LENGTH),
+        personalitySummary: truncateText(character.personalitySummary || '', CHARACTER_PERSONALITY_MAX_LENGTH),
         introducedAtBeat: existing?.introducedAtBeat || beat.beatNumber || 1,
         seenInBeats: nextSeenInBeats,
         hasReferencePortrait: Boolean(
@@ -263,8 +281,8 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
         id: character.id,
         name: character.name,
         type: character.type,
-        appearanceSummary: character.appearanceSummary,
-        personalitySummary: character.personalitySummary,
+        appearanceSummary: truncateText(character.appearanceSummary || '', CHARACTER_APPEARANCE_MAX_LENGTH),
+        personalitySummary: truncateText(character.personalitySummary || '', CHARACTER_PERSONALITY_MAX_LENGTH),
         introducedAtBeat: sessionState?.currentBeat || 1,
         seenInBeats: uniqueNumbers([sessionState?.currentBeat || 1]),
         hasReferencePortrait: Boolean(character.portraitBase64 || character.portraitUrl),
@@ -278,13 +296,17 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
 function sanitizeBeatForBible(beat: StoryBeat): StoryBibleBeatSummary {
   return {
     beatNumber: beat.beatNumber,
-    title: beat.title,
-    sceneSummary: beat.sceneSummary,
-    storyTextExcerpt: truncateText(beat.storyText, 220),
-    nextBeatGoal: beat.nextBeatGoal,
-    continuityNotes: (beat.continuityNotes || []).slice(0, 3),
-    imagePromptExcerpt: truncateText(beat.imagePrompt, 220),
-    endingForecast: (beat.endingForecast || []).slice(0, 4),
+    title: truncateText(beat.title, 80),
+    sceneSummary: truncateText(beat.sceneSummary, SCENE_SUMMARY_MAX_LENGTH),
+    storyTextExcerpt: truncateText(beat.storyText, STORY_TEXT_EXCERPT_MAX_LENGTH),
+    nextBeatGoal: truncateText(beat.nextBeatGoal, NEXT_BEAT_GOAL_MAX_LENGTH),
+    continuityNotes: (beat.continuityNotes || [])
+      .slice(0, 2)
+      .map((note) => truncateText(note, CONTINUITY_NOTE_MAX_LENGTH)),
+    imagePromptExcerpt: truncateText(beat.imagePrompt, IMAGE_PROMPT_EXCERPT_MAX_LENGTH),
+    endingForecast: (beat.endingForecast || [])
+      .slice(0, 3)
+      .map((entry) => truncateText(entry, ENDING_FORECAST_MAX_LENGTH)),
     isEnding: beat.isEnding,
     isStoryboard: Boolean(beat.isStoryboard),
   };
@@ -294,9 +316,11 @@ function buildOpenThreads(
   sessionState: Partial<StorySession> | null,
   beats: StoryBibleBeatSummary[]
 ): string[] {
-  const explicitThreads = (sessionState?.openThreads || []).filter(Boolean);
+  const explicitThreads = (sessionState?.openThreads || [])
+    .filter(Boolean)
+    .map((entry) => truncateText(entry, CONTINUITY_NOTE_MAX_LENGTH));
   if (explicitThreads.length > 0) {
-    return explicitThreads.slice(0, 6);
+    return explicitThreads.slice(-OPEN_THREADS_LIMIT);
   }
 
   const derived = beats
@@ -305,7 +329,11 @@ function buildOpenThreads(
     .map((entry) => entry.trim())
     .filter(Boolean);
 
-  return uniqueStrings(derived).slice(-6);
+  return uniqueStrings(derived).slice(-OPEN_THREADS_LIMIT);
+}
+
+function stringifyCompact(value: unknown): string {
+  return JSON.stringify(value);
 }
 
 function truncateText(value: string, maxLength: number): string {

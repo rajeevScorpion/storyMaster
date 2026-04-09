@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { AgeGroup, AuthoringMode, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import { AgeGroup, AuthoringMode, PortraitReferenceQuality, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import {
   STORY_DETAIL_OPTIONS,
   STORY_PALETTE_OPTIONS,
@@ -89,6 +89,9 @@ interface AdvancedOptionsProps {
   pricingStoryLengthUiLimitsEnabled?: boolean;
   currentPlanLabel?: string;
   onViewPlans?: () => void;
+  showCreatorSettings?: boolean;
+  creatorReferenceQuality?: PortraitReferenceQuality;
+  onCreatorReferenceQualityChange?: (value: PortraitReferenceQuality) => void;
 }
 
 export default function AdvancedOptions({
@@ -112,6 +115,9 @@ export default function AdvancedOptions({
   pricingStoryLengthUiLimitsEnabled = false,
   currentPlanLabel = 'free',
   onViewPlans,
+  showCreatorSettings = false,
+  creatorReferenceQuality = '0.5K',
+  onCreatorReferenceQualityChange,
 }: AdvancedOptionsProps) {
   const [allowOverflow, setAllowOverflow] = useState(false);
   const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
@@ -321,6 +327,42 @@ export default function AdvancedOptions({
           </div>
         </div>
       </div>
+
+      {showCreatorSettings && (
+        <div className="mx-auto mt-4 w-full max-w-4xl rounded-[28px] border border-white/10 bg-neutral-900/60 p-5 text-left backdrop-blur-md md:p-6 lg:p-7">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <p className="text-xs uppercase tracking-[0.2em] text-neutral-500">Creator Settings</p>
+              <h3 className="text-lg font-serif text-neutral-100">Character reference quality</h3>
+              <p className="text-sm leading-relaxed text-neutral-400">
+                Studio stories already use character sheets here. Turn this on to ask for a larger 1K sheet with extra turnaround detail.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onCreatorReferenceQualityChange?.(creatorReferenceQuality === '1K' ? '0.5K' : '1K')}
+              className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                creatorReferenceQuality === '1K'
+                  ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                  : 'justify-start border-white/10 bg-neutral-800'
+              }`}
+              aria-pressed={creatorReferenceQuality === '1K'}
+              aria-label="Toggle 1K character sheet references"
+            >
+              <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+            </button>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
+            <p className="text-sm text-neutral-100">
+              Use 1K character sheet references
+            </p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+              Off keeps the faster 0.5K sheet with a close-up, front view, and 3/4 view. On upgrades the sheet to 1K and adds a back view for stronger consistency.
+            </p>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

@@ -1,7 +1,25 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { extractStoragePath } from '@/lib/supabase/storage';
 import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryPage, GenreSection } from '@/lib/types/database';
+
+type StorylineGalleryRow = GalleryStoryline & {
+  beats?: Array<{ imageUrl?: string | null }> | null;
+  stories?: {
+    genre?: string | null;
+    story_config?: Record<string, unknown> | null;
+  } | null;
+};
+
+function readStoryConfigString(
+  storyConfig: Record<string, unknown> | null | undefined,
+  key: string
+): string | null {
+  const value = storyConfig?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
 
 function mapStorylineRow(row: any): GalleryItem {
   return {
@@ -13,8 +31,8 @@ function mapStorylineRow(row: any): GalleryItem {
     storyId: row.story_id,
     beatCount: row.beat_count,
     genre: row.stories?.genre || null,
-    ageGroup: row.stories?.story_config?.ageGroup || null,
-    settingCountry: row.stories?.story_config?.settingCountry || null,
+    ageGroup: readStoryConfigString(row.stories?.story_config, 'ageGroup'),
+    settingCountry: readStoryConfigString(row.stories?.story_config, 'settingCountry'),
     likeCount: row.like_count ?? 0,
     viewCount: row.view_count ?? 0,
     createdAt: row.created_at,
@@ -32,11 +50,77 @@ function mapTreeRow(row: any): GalleryItem {
     beatCount: null,
     genre: row.genre || null,
     ageGroup: row.story_config?.ageGroup || null,
-    settingCountry: row.story_config?.settingCountry || null,
+    settingCountry: readStoryConfigString(row.story_config as Record<string, unknown> | null | undefined, 'settingCountry'),
     likeCount: 0,
     viewCount: 0,
     createdAt: row.created_at,
   };
+}
+
+function getLegacyCoverUrl(row: StorylineGalleryRow): string | null {
+  const beats = Array.isArray(row.beats) ? row.beats : [];
+  const coverBeat = beats[1] ?? beats[0];
+  const imageUrl = coverBeat?.imageUrl;
+
+  return typeof imageUrl === 'string' && imageUrl.trim().length > 0
+    ? imageUrl
+    : null;
+}
+
+function getPreferredStorylineCoverUrl(row: StorylineGalleryRow): string | null {
+  if (row.cover_image_url && row.cover_image_url.trim().length > 0) {
+    return row.cover_image_url;
+  }
+
+  return getLegacyCoverUrl(row);
+}
+
+async function resolveStorylineCovers<T extends StorylineGalleryRow>(rows: T[]): Promise<T[]> {
+  if (rows.length === 0) return rows;
+
+  const resolved = rows.map((row) => ({
+    ...row,
+    cover_image_url: getPreferredStorylineCoverUrl(row),
+  }));
+
+  const signTargets = resolved
+    .map((row, index) => ({
+      index,
+      path: row.cover_image_url ? extractStoragePath(row.cover_image_url, 'story-assets') : null,
+    }))
+    .filter((entry): entry is { index: number; path: string } => !!entry.path);
+
+  if (signTargets.length === 0) {
+    return resolved;
+  }
+
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.storage
+      .from('story-assets')
+      .createSignedUrls(signTargets.map((entry) => entry.path), 60 * 60 * 24);
+
+    if (error || !data) {
+      console.error('Failed to sign gallery cover URLs:', error?.message);
+      return resolved;
+    }
+
+    const nextRows = [...resolved];
+    signTargets.forEach((entry, index) => {
+      const signedUrl = data[index]?.signedUrl;
+      if (signedUrl) {
+        nextRows[entry.index] = {
+          ...nextRows[entry.index],
+          cover_image_url: signedUrl,
+        };
+      }
+    });
+
+    return nextRows;
+  } catch (error) {
+    console.error('Failed to resolve gallery cover URLs:', error);
+    return resolved;
+  }
 }
 
 /**
@@ -47,7 +131,7 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
 
   const { data, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, beats')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -57,7 +141,8 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
     return [];
   }
 
-  return data || [];
+  const rows = await resolveStorylineCovers((data || []) as StorylineGalleryRow[]);
+  return rows.map(({ beats, ...storyline }) => storyline);
 }
 
 /**
@@ -69,7 +154,7 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   // Fetch public storylines joined with their parent story for genre
   const { data: rows, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, stories!inner(genre, story_config)')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, beats, stories!inner(genre, story_config)')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(100);
@@ -79,10 +164,12 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
     return [];
   }
 
+  const resolvedRows = await resolveStorylineCovers((rows || []) as StorylineGalleryRow[]);
+
   // Group by genre, pick top 4 per genre
   const genreMap = new Map<string, GalleryItem[]>();
 
-  for (const row of rows as any[]) {
+  for (const row of resolvedRows) {
     const genre = row.stories?.genre || 'adventure';
     const genreKey = genre.toLowerCase();
 
@@ -99,11 +186,11 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
       title: row.title,
       coverImageUrl: row.cover_image_url,
       authorName: row.author_name,
-      storyId: row.story_id,
+      storyId: row.story_id ?? row.id,
       beatCount: row.beat_count,
       genre: genreKey,
-      ageGroup: row.stories?.story_config?.ageGroup || null,
-      settingCountry: row.stories?.story_config?.settingCountry || null,
+      ageGroup: readStoryConfigString(row.stories?.story_config, 'ageGroup'),
+      settingCountry: readStoryConfigString(row.stories?.story_config, 'settingCountry'),
       likeCount: row.like_count ?? 0,
       viewCount: row.view_count ?? 0,
       createdAt: row.created_at,
@@ -160,7 +247,7 @@ export async function getGalleryItems(
   if (filters.type === 'storylines') {
     let query = supabase
       .from('storylines')
-      .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, stories!inner(genre, story_config)', { count: 'exact' })
+      .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, beats, stories!inner(genre, story_config)', { count: 'exact' })
       .eq('is_public', true)
       .order('created_at', { ascending: false });
 
@@ -186,7 +273,8 @@ export async function getGalleryItems(
       throw new Error(`Failed to fetch storyline gallery items: ${error.message}`);
     }
 
-    const items = (storylines || []).map(mapStorylineRow);
+    const resolvedRows = await resolveStorylineCovers((storylines || []) as StorylineGalleryRow[]);
+    const items = resolvedRows.map(mapStorylineRow);
     const total = count ?? 0;
 
     return {

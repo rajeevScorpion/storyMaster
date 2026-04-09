@@ -10,6 +10,7 @@ import {
   validateGeneratedBeat,
 } from '@/lib/ai/story-bible';
 import {
+  normalizePortraitReferenceConfig,
   deriveVisualStyleSummary,
   getPreludeText,
   normalizeStoryConfig,
@@ -20,7 +21,7 @@ import {
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
-import type { Character } from '@/lib/types/story';
+import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 
 function runtimeNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -66,6 +67,11 @@ export interface StoryModelOverrides {
   imagePrompt?: string;
   portraitPrompt?: string;
   enableStoryboard?: boolean;
+}
+
+interface CharacterReferenceGenerationOptions {
+  mode: PortraitReferenceMode;
+  quality: PortraitReferenceConfig['quality'];
 }
 
 export async function generateStoryBeat(
@@ -219,12 +225,12 @@ export async function composeStoryboardPlan(
         sceneSummary: beat.sceneSummary,
         imageIntent: beat.imagePrompt,
         characters: buildPromptCharacterAnchors(beat.characters),
-        continuityNotes: JSON.stringify(beat.continuityNotes || [], null, 2),
+        continuityNotes: JSON.stringify((beat.continuityNotes || []).slice(0, 2)),
         visualStyle,
         beatNumber: beat.beatNumber,
         storyState: formatStoryState(sessionState),
-        newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState), null, 2),
-        changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat), null, 2),
+        newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState)),
+        changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat)),
         previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
       });
 
@@ -278,18 +284,18 @@ function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined): strin
 
   return JSON.stringify({
     beatNumber: previousBeat.beatNumber,
-    sceneSummary: previousBeat.sceneSummary,
-    continuityNotes: previousBeat.continuityNotes || [],
-    imagePrompt: previousBeat.imagePrompt,
+    sceneSummary: compactPromptText(previousBeat.sceneSummary, 140),
+    continuityNotes: (previousBeat.continuityNotes || []).slice(0, 2),
+    imagePromptExcerpt: compactPromptText(previousBeat.imagePrompt, 140),
     storyboardFrames: previousBeat.storyboardPlan
       ? {
-          topLeft: previousBeat.storyboardPlan.topLeft.description,
-          topRight: previousBeat.storyboardPlan.topRight.description,
-          bottomLeft: previousBeat.storyboardPlan.bottomLeft.description,
-          bottomRight: previousBeat.storyboardPlan.bottomRight.description,
+          topLeft: compactPromptText(previousBeat.storyboardPlan.topLeft.description, 100),
+          topRight: compactPromptText(previousBeat.storyboardPlan.topRight.description, 100),
+          bottomLeft: compactPromptText(previousBeat.storyboardPlan.bottomLeft.description, 100),
+          bottomRight: compactPromptText(previousBeat.storyboardPlan.bottomRight.description, 100),
         }
       : null,
-  }, null, 2);
+  });
 }
 
 export async function generateImage(
@@ -433,6 +439,7 @@ async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): P
 export async function generateCharacterPortrait(
   character: Character,
   visualStyle: string,
+  portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides,
   promptOverride?: string
 ): Promise<string> {
@@ -442,17 +449,24 @@ export async function generateCharacterPortrait(
       {
         characterId: character.id,
         characterName: character.name,
+        portraitMode: portraitReferenceConfig.mode,
+        portraitQuality: portraitReferenceConfig.quality,
       },
       async () => {
+        const normalizedPortraitReferenceConfig = normalizePortraitReferenceConfig(portraitReferenceConfig);
+        const referenceLayout = buildPortraitReferenceLayoutDescription(normalizedPortraitReferenceConfig);
         const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
         const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
           ? portraitTemplateCandidate
           : getDefaultPromptBody('portrait_generation');
-        const prompt = promptOverride || resolvePromptTemplate(portraitTemplate, {
+        const prompt = resolvePromptTemplate(portraitTemplate, {
           characterName: character.name,
-          characterAppearance: character.appearanceSummary,
+          characterAppearance: promptOverride || character.appearanceSummary,
           characterType: character.type,
           visualStyle,
+          portraitMode: normalizedPortraitReferenceConfig.mode === 'character_sheet' ? 'character sheet' : 'single portrait',
+          referenceQuality: normalizedPortraitReferenceConfig.quality,
+          sheetLayout: referenceLayout,
         });
 
         const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
@@ -461,7 +475,7 @@ export async function generateCharacterPortrait(
           model: portraitModel,
           prompt,
           aspectRatio: '1:1',
-          imageSize: '1K',
+          imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
         });
 
         if (result.dataUrl) {
@@ -498,6 +512,8 @@ function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
     `- Detail: ${cfg.visualSettings.detail}`,
     `- Authoring Mode: ${cfg.authoring.mode}`,
     `- Authored Prelude: ${prelude ? 'present' : 'absent'}`,
+    `- Character References: ${cfg.portraitReferences.mode === 'character_sheet' ? 'character sheet' : 'single portrait'}`,
+    `- Character Reference Quality: ${cfg.portraitReferences.quality}`,
   ].join('\n');
 }
 
@@ -530,6 +546,15 @@ function resolveChangedCharacterIds(beat: StoryBeat): string[] {
   return beat.changedCharacterIds || [];
 }
 
+function compactPromptText(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
 async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string | null> {
   const candidate = ref.dataUrl || ref.url;
   if (!candidate) return null;
@@ -542,6 +567,20 @@ async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string
 
   const blob = await response.blob();
   return blobToDataUrl(blob);
+}
+
+function buildPortraitReferenceLayoutDescription(
+  portraitReferenceConfig: CharacterReferenceGenerationOptions
+): string {
+  if (portraitReferenceConfig.mode === 'single_portrait') {
+    return 'one clean full-body reference portrait with a clear face, either front-facing or 3/4 view';
+  }
+
+  if (portraitReferenceConfig.quality === '1K') {
+    return 'a single square character sheet showing the same character in four views: close-up face, front full body, 3/4 full body, and back full body';
+  }
+
+  return 'a single square character sheet showing the same character in three views: close-up face, front full body, and 3/4 full body';
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

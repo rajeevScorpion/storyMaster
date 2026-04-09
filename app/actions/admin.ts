@@ -183,17 +183,21 @@ export async function getGlobalSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  freePlusCharacterSheetsEnabled: boolean;
+  creatorCharacterSheetsEnabled: boolean;
   textTimeoutMs: number;
   imageTimeoutMs: number;
   ttsTimeoutMs: number;
   cloudSaveTimeoutMs: number;
 }> {
   await verifyAdmin();
-  const [storyboardMode, cycleOverride, cycleMsStr, vignetteEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
+  const [storyboardMode, cycleOverride, cycleMsStr, vignetteEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
     getFeatureFlag('storyboard_mode'),
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getFeatureFlag('character_sheet_enabled_free_plus'),
+    getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlagValue('gemini_text_timeout_ms'),
     getFeatureFlagValue('gemini_image_timeout_ms'),
     getFeatureFlagValue('gemini_tts_timeout_ms'),
@@ -204,6 +208,8 @@ export async function getGlobalSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    freePlusCharacterSheetsEnabled,
+    creatorCharacterSheetsEnabled,
     textTimeoutMs: parseInt(textMs ?? '30000', 10) || 30000,
     imageTimeoutMs: parseInt(imageMs ?? '90000', 10) || 90000,
     ttsTimeoutMs: parseInt(ttsMs ?? '120000', 10) || 120000,
@@ -231,6 +237,16 @@ export async function setStoryboardVignette(enabled: boolean): Promise<void> {
   await setFeatureFlag('storyboard_vignette_enabled', enabled);
 }
 
+export async function setFreePlusCharacterSheets(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('character_sheet_enabled_free_plus', enabled);
+}
+
+export async function setCreatorCharacterSheets(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('character_sheet_enabled_creator', enabled);
+}
+
 export async function setTextTimeout(ms: number): Promise<void> {
   await verifyAdmin();
   await setFeatureFlagValue('gemini_text_timeout_ms', String(ms));
@@ -252,18 +268,29 @@ export async function setCloudSaveTimeout(ms: number): Promise<void> {
 }
 
 // Public (no admin gate) — read by StoryScreen to pace storyboard panels
-export async function getStoryboardSettings(): Promise<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, saveMs] = await Promise.all([
+export async function getStoryboardSettings(): Promise<{
+  cycleOverride: boolean;
+  cycleMs: number;
+  vignetteEnabled: boolean;
+  cloudSaveTimeoutMs: number;
+  freePlusCharacterSheetsEnabled: boolean;
+  creatorCharacterSheetsEnabled: boolean;
+}> {
+  const [cycleOverride, cycleMsStr, vignetteEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
     getFeatureFlagValue('cloud_save_timeout_ms'),
+    getFeatureFlag('character_sheet_enabled_free_plus'),
+    getFeatureFlag('character_sheet_enabled_creator'),
   ]);
   return {
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
+    freePlusCharacterSheetsEnabled,
+    creatorCharacterSheetsEnabled,
   };
 }
 

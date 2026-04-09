@@ -171,6 +171,9 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     characterAppearance: 'small golden-brown monkey with a curled tail and expressive amber eyes, wearing a tiny red vest',
     characterType: 'monkey',
     visualStyle: DEFAULT_VISUAL_STYLE,
+    portraitMode: 'character sheet',
+    referenceQuality: '0.5K',
+    sheetLayout: 'a single square character sheet showing the same character in three views: close-up face, front full body, and 3/4 full body',
   },
   voice_selection: {
     genre: 'fantasy',
@@ -494,6 +497,36 @@ export default function PlaygroundStudio() {
             </select>
             <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400" />
           </div>
+        </div>
+      );
+    }
+
+    if (selectedTask === 'portrait_generation') {
+      return (
+        <div className="grid gap-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <input value={inputs.characterName || ''} onChange={(event) => setInputs((current) => ({ ...current, characterName: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Character name" />
+            <input value={inputs.characterType || ''} onChange={(event) => setInputs((current) => ({ ...current, characterType: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Character type" />
+          </div>
+          <textarea value={inputs.characterAppearance || ''} onChange={(event) => setInputs((current) => ({ ...current, characterAppearance: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Character appearance and continuity notes" />
+          <input value={inputs.visualStyle || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyle: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style" />
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="relative">
+              <select value={inputs.portraitMode || 'single portrait'} onChange={(event) => setInputs((current) => ({ ...current, portraitMode: event.target.value }))} className="w-full appearance-none rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 pr-8 text-sm text-neutral-100">
+                <option value="single portrait">Single portrait</option>
+                <option value="character sheet">Character sheet</option>
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+            </div>
+            <div className="relative">
+              <select value={inputs.referenceQuality || '0.5K'} onChange={(event) => setInputs((current) => ({ ...current, referenceQuality: event.target.value }))} className="w-full appearance-none rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 pr-8 text-sm text-neutral-100">
+                <option value="0.5K">0.5K</option>
+                <option value="1K">1K</option>
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+            </div>
+          </div>
+          <textarea value={inputs.sheetLayout || ''} onChange={(event) => setInputs((current) => ({ ...current, sheetLayout: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Sheet layout guidance" />
         </div>
       );
     }

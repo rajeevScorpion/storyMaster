@@ -291,6 +291,7 @@ export interface EffectivePricingSnapshot {
   storyLengthCap: number;
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
+  creatorControls: boolean;
   availablePromoBeats: number;
   availableSubscriptionBeats: number;
   availableTopupBeats: number;
