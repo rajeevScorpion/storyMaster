@@ -1254,3 +1254,35 @@ Tradeoffs / decisions:
 
 - treated Razorpay `pending` and `halted` as the only grace-period payment-recovery states based on the provider status lifecycle
 - kept the broader entitlement logic intact so users can still retain access during a real grace window
+
+## 2026-04-09 - Wallet Plan Card UX Refinement
+
+Goal:
+
+- make plan cards easier to scan and easier to trust
+- improve tier comparison copy, spacing, and action labels so users understand what to do next
+
+Work completed:
+
+- updated `app/actions/pricing-runtime.ts`
+  - exposed the Free/Plus and Creator character-sheet feature flags in wallet page data
+- updated `lib/types/pricing.ts`
+  - added wallet-page booleans for plan-card feature rendering
+- updated `components/pricing/WalletPage.tsx`
+  - added check-mark feature lists for every plan
+  - made Plus and Studio explicitly carry forward the previous tier with:
+    - `Everything in Free`
+    - `Everything in Plus`
+  - added recent-feature-aware copy for:
+    - enhanced character consistency on Plus
+    - Creator Settings and optional 1K character sheets on Studio
+  - improved spacing so the CTA no longer crowds the feature copy
+  - replaced confusing CTA labels like `Checkout coming soon` on Free with clearer plan-state copy such as:
+    - `Free with every account`
+    - `Upgrade to Studio`
+    - `Downgrade support coming soon`
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint components/pricing/WalletPage.tsx app/actions/pricing-runtime.ts lib/types/pricing.ts`

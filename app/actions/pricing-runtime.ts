@@ -4,6 +4,7 @@ import { ensureFreeAllowanceForUser, expireStaleReservations } from '@/lib/prici
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -171,7 +172,7 @@ export async function getPricingWalletPageData(
   const context = await getPricingRuntimeContext(input);
   const supabase = createAdminClient();
 
-  const [plansResult, planVersionsResult, topupsResult] = await Promise.all([
+  const [plansResult, planVersionsResult, topupsResult, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
     supabase
       .from('pricing_plans')
       .select('*')
@@ -190,6 +191,8 @@ export async function getPricingWalletPageData(
       .eq('status', 'published')
       .eq('pricing_market_key', context.snapshot.pricingMarketKey)
       .order('beat_amount', { ascending: true }),
+    getFeatureFlag('character_sheet_enabled_free_plus'),
+    getFeatureFlag('character_sheet_enabled_creator'),
   ]);
 
   throwIfQueryFailed(plansResult.error, 'Failed to load wallet plan offers');
@@ -226,6 +229,8 @@ export async function getPricingWalletPageData(
   return {
     pricingMarketKey: context.snapshot.pricingMarketKey,
     checkoutEnabled: context.controls.pricingCheckoutEnabled,
+    freePlusCharacterSheetsEnabled,
+    creatorCharacterSheetsEnabled,
     planOffers: buildPlanOffers(
       (plansResult.data ?? []) as DbPricingPlan[],
       (planVersionsResult.data ?? []) as DbPricingPlanVersion[],

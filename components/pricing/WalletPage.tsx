@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -67,6 +67,140 @@ function formatActivityTime(value: string) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function buildPlanFeatures(
+  offer: PricingPlanOfferCard,
+  walletData: Pick<PricingWalletPageData, 'freePlusCharacterSheetsEnabled' | 'creatorCharacterSheetsEnabled'> | null
+): string[] {
+  if (offer.planKey === 'free') {
+    return [
+      'Ready the moment you create your account',
+      `${offer.storyLengthCap} beats per story`,
+      'Hosted sharing with Kissago branding',
+    ];
+  }
+
+  if (offer.planKey === 'plus') {
+    return [
+      'Everything in Free',
+      `${offer.storyLengthCap} beats per story`,
+      'Made for recurring family story creation',
+      walletData?.freePlusCharacterSheetsEnabled
+        ? 'Enhanced character consistency with compact character sheets'
+        : 'More room for recurring stories and returning characters',
+    ];
+  }
+
+  return [
+    'Everything in Plus',
+    `${offer.storyLengthCap} beats per story`,
+    offer.canAccessDownloads ? 'Downloads included' : 'Downloads ready as this plan expands',
+    offer.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Export-friendly creator workflow',
+    walletData?.creatorCharacterSheetsEnabled
+      ? 'Creator Settings with optional 1K character sheets'
+      : 'Creator-focused tools for a higher-control workflow',
+  ];
+}
+
+function getPlanDescription(offer: PricingPlanOfferCard): string {
+  if (offer.planKey === 'free') {
+    return 'Start creating and sharing short stories right away.';
+  }
+
+  if (offer.planKey === 'plus') {
+    return 'Keep family stories growing with more room to create.';
+  }
+
+  return 'Create with export-ready tools and richer control.';
+}
+
+function getPlanRateLabel(
+  offer: PricingPlanOfferCard,
+  selectedPrice: number | null,
+  interval: BillingInterval
+): string {
+  if (offer.planKey === 'free' || selectedPrice === 0) {
+    return 'Free';
+  }
+
+  if (selectedPrice == null) {
+    return interval === 'annual' ? 'Yearly pricing comes later' : 'Not ready for this market';
+  }
+
+  return `${formatPrice(offer.currencyCode, selectedPrice)} ${interval}`;
+}
+
+function getPlanCtaLabel(input: {
+  offer: PricingPlanOfferCard;
+  currentPlan: PricingPlanOfferCard | null;
+  selectedPlanInterval: BillingInterval;
+  selectedProvider: string | null;
+  pricingMarketKey: 'IN' | 'ROW';
+  userId: string | null;
+  checkoutEnabled: boolean;
+  yearlyCheckoutDeferred: boolean;
+  razorpayReady: boolean;
+  checkoutBusyKey: string | null;
+}): string {
+  const {
+    offer,
+    currentPlan,
+    selectedPlanInterval,
+    selectedProvider,
+    pricingMarketKey,
+    userId,
+    checkoutEnabled,
+    yearlyCheckoutDeferred,
+    razorpayReady,
+    checkoutBusyKey,
+  } = input;
+
+  if (offer.isCurrentPlan) {
+    return offer.planKey === 'free' ? 'Included with your account' : 'Current plan';
+  }
+
+  if (offer.planKey === 'free') {
+    return 'Free with every account';
+  }
+
+  const currentTierRank = currentPlan?.tierRank ?? 1;
+  const isUpgrade = offer.tierRank > currentTierRank;
+  const isDowngrade = offer.tierRank < currentTierRank;
+
+  if (!userId) {
+    return `Sign in to choose ${offer.name}`;
+  }
+
+  if (isDowngrade) {
+    return 'Downgrade support coming soon';
+  }
+
+  if (!checkoutEnabled) {
+    return isUpgrade ? `Upgrade to ${offer.name} soon` : 'Plan switching comes soon';
+  }
+
+  if (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') {
+    return 'Yearly comes later';
+  }
+
+  if (selectedProvider == null) {
+    return 'Not ready for this market';
+  }
+
+  if (selectedProvider !== 'razorpay') {
+    return pricingMarketKey === 'ROW' ? 'Outside India comes later' : 'India checkout first';
+  }
+
+  if (!razorpayReady) {
+    return 'Loading checkout';
+  }
+
+  if (checkoutBusyKey === `plan:${offer.planKey}`) {
+    return isUpgrade ? `Upgrading to ${offer.name}...` : 'Opening checkout...';
+  }
+
+  return isUpgrade ? `Upgrade to ${offer.name}` : `Choose ${offer.name}`;
 }
 
 function getSelectedPlanVersionId(offer: PricingPlanOfferCard, interval: BillingInterval) {
@@ -541,80 +675,87 @@ export default function WalletPage() {
               {offers.map((offer) => {
                 const selectedPrice = getSelectedPlanPriceMinor(offer, selectedPlanInterval);
                 const selectedProvider = getSelectedPlanProvider(offer, selectedPlanInterval);
+                const currentTierRank = currentPlan?.tierRank ?? 1;
+                const isDowngrade = offer.tierRank < currentTierRank && offer.planKey !== 'free';
                 const buttonDisabled =
                   offer.isCurrentPlan ||
+                  offer.planKey === 'free' ||
                   !pricingData.userId ||
+                  isDowngrade ||
                   !walletData?.checkoutEnabled ||
                   (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') ||
                   selectedProvider == null ||
                   selectedProvider !== 'razorpay' ||
                   !razorpayReady ||
                   checkoutBusyKey !== null;
+                const features = buildPlanFeatures(offer, walletData);
+                const description = getPlanDescription(offer);
+                const rateLabel = getPlanRateLabel(offer, selectedPrice, selectedPlanInterval);
+                const ctaLabel = getPlanCtaLabel({
+                  offer,
+                  currentPlan,
+                  selectedPlanInterval,
+                  selectedProvider,
+                  pricingMarketKey: pricingData.snapshot.pricingMarketKey,
+                  userId: pricingData.userId,
+                  checkoutEnabled: walletData?.checkoutEnabled ?? false,
+                  yearlyCheckoutDeferred,
+                  razorpayReady,
+                  checkoutBusyKey,
+                });
 
                 return (
                   <article
                     key={offer.planKey}
                     className={`flex h-full flex-col rounded-3xl border p-5 ${offer.isCurrentPlan ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-white/10 bg-neutral-900/60'}`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-lg font-serif text-neutral-100">{offer.name}</p>
-                        <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{offer.monthlyCoins.toLocaleString()} coins / month</p>
+                    <div className="flex flex-1 flex-col">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-lg font-serif text-neutral-100">{offer.name}</p>
+                          <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{offer.monthlyCoins.toLocaleString()} coins / month</p>
+                        </div>
+                        {offer.isCurrentPlan && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Current
+                          </span>
+                        )}
                       </div>
-                      {offer.isCurrentPlan && (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] text-emerald-200">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Current
-                        </span>
-                      )}
-                    </div>
 
-                    <p className="mt-4 text-sm leading-relaxed text-neutral-400">
-                      {offer.description || 'Thoughtfully tuned for a different pace of storymaking.'}
-                    </p>
+                      <div className="mt-5">
+                        <p className="text-2xl font-medium text-neutral-100">{rateLabel}</p>
+                        {offer.monthlyPriceMinor != null && offer.annualPriceMinor != null && (
+                          <p className="mt-2 text-xs text-neutral-500">
+                            {formatPrice(offer.currencyCode, offer.monthlyPriceMinor)} monthly · {formatPrice(offer.currencyCode, offer.annualPriceMinor)} yearly
+                          </p>
+                        )}
+                      </div>
 
-                    <div className="mt-5 space-y-2 text-sm text-neutral-300">
-                      <p>{offer.storyLengthCap} beats per story</p>
-                      <p>{selectedPrice === 0 ? 'Free' : `${formatPrice(offer.currencyCode, selectedPrice)} ${selectedPlanInterval}`}</p>
-                      {offer.monthlyPriceMinor != null && offer.annualPriceMinor != null && (
-                        <p className="text-neutral-500">
-                          {formatPrice(offer.currencyCode, offer.monthlyPriceMinor)} monthly · {formatPrice(offer.currencyCode, offer.annualPriceMinor)} yearly
-                        </p>
-                      )}
-                      {selectedPlanInterval === 'annual' && selectedPrice == null && (
-                        <p className="text-neutral-500">Yearly pricing is not live for this plan yet.</p>
-                      )}
-                      <p>{offer.canAccessDownloads ? 'Downloads included' : 'Hosted sharing included'}</p>
-                      <p>{offer.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Kissago branding stays'}</p>
+                      <p className="mt-4 min-h-[3.5rem] text-sm leading-relaxed text-neutral-400">
+                        {description}
+                      </p>
+
+                      <div className="mt-6 rounded-2xl border border-white/10 bg-black/15 p-4">
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-neutral-500">Included</p>
+                        <ul className="mt-3 space-y-3">
+                          {features.map((feature) => (
+                            <li key={feature} className="flex items-start gap-2.5 text-sm text-neutral-200">
+                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                              <span>{feature}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
                     </div>
 
                     <button
                       type="button"
                       disabled={buttonDisabled}
                       onClick={() => void handlePlanCheckout(offer)}
-                      className="mt-auto w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 pt-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-6 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {offer.isCurrentPlan
-                        ? 'Current plan'
-                        : !pricingData.userId
-                        ? 'Sign in to continue'
-                        : !walletData?.checkoutEnabled
-                        ? 'Checkout coming soon'
-                        : yearlyCheckoutDeferred && selectedPlanInterval === 'annual'
-                        ? 'Yearly comes later'
-                        : selectedProvider == null
-                        ? selectedPlanInterval === 'annual'
-                          ? 'Yearly coming soon'
-                          : 'Checkout coming soon'
-                        : selectedProvider !== 'razorpay'
-                        ? 'Stripe comes next'
-                        : !razorpayReady
-                        ? 'Loading checkout'
-                        : checkoutBusyKey === `plan:${offer.planKey}`
-                        ? 'Opening checkout...'
-                        : selectedPlanInterval === 'annual'
-                        ? 'Choose yearly plan'
-                        : 'Choose monthly plan'}
+                      {ctaLabel}
                     </button>
                   </article>
                 );
@@ -869,3 +1010,4 @@ async function openRazorpayCheckout(checkout: PreparedRazorpayCheckout): Promise
     instance.open();
   });
 }
+
