@@ -200,9 +200,11 @@ export async function getPricingWalletPageData(
   throwIfQueryFailed(topupsResult.error, 'Failed to load wallet top-up offers');
 
   let recentActivity: PricingWalletActivityItem[] = [];
+  let storyCount = 0;
+  let storylineCount = 0;
 
   if (context.userId) {
-    const [grantsResult, usageResult] = await Promise.all([
+    const [grantsResult, usageResult, storiesCountResult, storylinesCountResult] = await Promise.all([
       supabase
         .from('beat_grants')
         .select('*')
@@ -215,15 +217,28 @@ export async function getPricingWalletPageData(
         .eq('user_id', context.userId)
         .order('created_at', { ascending: false })
         .limit(10),
+      supabase
+        .from('stories')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', context.userId)
+        .eq('is_archived', false),
+      supabase
+        .from('storylines')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', context.userId),
     ]);
 
     throwIfQueryFailed(grantsResult.error, 'Failed to load wallet grant activity');
     throwIfQueryFailed(usageResult.error, 'Failed to load wallet spend activity');
+    throwIfQueryFailed(storiesCountResult.error, 'Failed to load wallet story count');
+    throwIfQueryFailed(storylinesCountResult.error, 'Failed to load wallet storyline count');
 
     recentActivity = buildWalletActivity(
       (grantsResult.data ?? []) as DbBeatGrant[],
       (usageResult.data ?? []) as DbBeatUsageEvent[]
     );
+    storyCount = storiesCountResult.count ?? 0;
+    storylineCount = storylinesCountResult.count ?? 0;
   }
 
   return {
@@ -231,6 +246,8 @@ export async function getPricingWalletPageData(
     checkoutEnabled: context.controls.pricingCheckoutEnabled,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
+    storyCount,
+    storylineCount,
     planOffers: buildPlanOffers(
       (plansResult.data ?? []) as DbPricingPlan[],
       (planVersionsResult.data ?? []) as DbPricingPlanVersion[],

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import Script from 'next/script';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, CheckCircle2, Clock3, Coins, CreditCard, Loader2, Sparkles, Star, Wallet as WalletIcon } from 'lucide-react';
+import { ArrowLeft, BookOpen, CheckCircle2, Coins, CreditCard, Loader2, Sparkles, Star, Wallet as WalletIcon } from 'lucide-react';
 import { motion } from 'motion/react';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
@@ -67,6 +67,10 @@ function formatActivityTime(value: string) {
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatBeatCount(value: number) {
+  return `${value.toLocaleString()} story beat${value === 1 ? '' : 's'}`;
 }
 
 function buildPlanFeatures(
@@ -466,7 +470,7 @@ export default function WalletPage() {
           <div className="space-y-3">
             <Link
               href="/"
-              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-neutral-400 hover:border-white/20 hover:text-neutral-200"
+              className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs uppercase tracking-[0.18em] text-neutral-400 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:text-neutral-200 hover:shadow-[0_12px_30px_rgba(16,185,129,0.12)]"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               Back to storymaking
@@ -534,7 +538,7 @@ export default function WalletPage() {
                       void handlePlanCheckout(nextPlan);
                     }
                   }}
-                  className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="cursor-pointer rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-400/40 hover:bg-emerald-500/15 hover:shadow-[0_14px_35px_rgba(16,185,129,0.16)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                 >
                   {!pricingData.userId
                     ? 'Sign in to continue'
@@ -558,7 +562,7 @@ export default function WalletPage() {
                       void handleTopupCheckout(primaryTopup.topupPackId, primaryTopup.packKey, primaryTopup.provider);
                     }
                   }}
-                  className="rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-2.5 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="cursor-pointer rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-2.5 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-neutral-800/80 hover:shadow-[0_14px_35px_rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                 >
                   {!pricingData.userId
                     ? 'Sign in to continue'
@@ -590,22 +594,29 @@ export default function WalletPage() {
           <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-md">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-white/5 p-3 text-emerald-300">
-                <Clock3 className="h-5 w-5" />
+                <BookOpen className="h-5 w-5" />
               </div>
-              <div className="space-y-3">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Current plan</p>
-                  <p className="mt-2 text-xl font-serif text-neutral-100">
-                    {currentPlan ? currentPlan.name : titleCase(pricingData.snapshot.planKey)}
-                  </p>
-                </div>
-                <div className="space-y-2 text-sm text-neutral-400">
-                  <p>{pricingData.snapshot.storyLengthCap} beats per story</p>
-                  <p>{pricingData.snapshot.currencyCode} market pricing</p>
-                  <p>{pricingData.snapshot.canAccessDownloads ? 'Downloads included' : 'Downloads not included yet'}</p>
-                  <p>{pricingData.snapshot.canAccessUnbrandedExports ? 'Unbranded exports included' : 'Branded sharing included'}</p>
-                  <p>{usingRazorpayMarket ? 'Razorpay checkout path is active for this market' : 'Razorpay launches for India first in this phase'}</p>
-                </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Your library</p>
+                <p className="mt-2 text-xl font-serif text-neutral-100">Stories you can return to anytime</p>
+                <p className="mt-2 text-sm text-neutral-400">
+                  {pricingData.userId
+                    ? 'A quick view of your active stories and the storylines you have already shaped.'
+                    : 'Sign in to keep an eye on your active stories and finished storylines.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-3xl border border-white/10 bg-neutral-900/60 p-5">
+                <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Stories</p>
+                <p className="mt-3 text-4xl font-serif text-neutral-100">{walletData?.storyCount?.toLocaleString() ?? '0'}</p>
+                <p className="mt-2 text-sm text-neutral-400">Private workspaces and in-progress branches.</p>
+              </div>
+              <div className="rounded-3xl border border-white/10 bg-neutral-900/60 p-5">
+                <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Storylines</p>
+                <p className="mt-3 text-4xl font-serif text-neutral-100">{walletData?.storylineCount?.toLocaleString() ?? '0'}</p>
+                <p className="mt-2 text-sm text-neutral-400">Finished paths you can revisit, save, or share.</p>
               </div>
             </div>
           </section>
@@ -648,7 +659,7 @@ export default function WalletPage() {
                   <button
                     type="button"
                     onClick={() => setSelectedPlanInterval('monthly')}
-                    className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'monthly' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'}`}
+                    className={`cursor-pointer rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition-all duration-200 ${selectedPlanInterval === 'monthly' ? 'bg-emerald-500/15 text-emerald-200 shadow-[0_10px_25px_rgba(16,185,129,0.14)]' : 'text-neutral-500 hover:-translate-y-0.5 hover:bg-white/5 hover:text-neutral-200'}`}
                   >
                     Monthly
                   </button>
@@ -656,7 +667,7 @@ export default function WalletPage() {
                     type="button"
                     onClick={() => setSelectedPlanInterval('annual')}
                     disabled={yearlyCheckoutDeferred}
-                    className={`rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${selectedPlanInterval === 'annual' ? 'bg-emerald-500/15 text-emerald-200' : 'text-neutral-500'} disabled:cursor-not-allowed disabled:opacity-50`}
+                    className={`cursor-pointer rounded-xl px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition-all duration-200 ${selectedPlanInterval === 'annual' ? 'bg-emerald-500/15 text-emerald-200 shadow-[0_10px_25px_rgba(16,185,129,0.14)]' : 'text-neutral-500 hover:-translate-y-0.5 hover:bg-white/5 hover:text-neutral-200'} disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0`}
                   >
                     Yearly
                   </button>
@@ -753,7 +764,7 @@ export default function WalletPage() {
                       type="button"
                       disabled={buttonDisabled}
                       onClick={() => void handlePlanCheckout(offer)}
-                      className="mt-6 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-6 w-full cursor-pointer rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/10 hover:shadow-[0_14px_35px_rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                     >
                       {ctaLabel}
                     </button>
@@ -778,10 +789,16 @@ export default function WalletPage() {
             ) : (
               <div className="grid gap-4 lg:grid-cols-3">
                 {topups.map((pack) => (
-                  <article key={pack.packKey} className="rounded-3xl border border-white/10 bg-neutral-900/60 p-5">
-                    <p className="text-lg font-serif text-neutral-100">{pack.name}</p>
+                  <article key={pack.packKey} className="flex flex-col items-center rounded-3xl border border-white/10 bg-neutral-900/60 p-5 text-center transition-all duration-200 hover:-translate-y-1 hover:border-emerald-300/25 hover:bg-neutral-900/80 hover:shadow-[0_18px_40px_rgba(16,185,129,0.14)]">
+                    <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-emerald-300">
+                      <Coins className="h-5 w-5" />
+                    </div>
+                    <p className="mt-4 text-lg font-serif text-neutral-100">{pack.name}</p>
                     <p className="mt-1 text-xs uppercase tracking-[0.18em] text-neutral-500">{pack.coinAmount.toLocaleString()} coins</p>
-                    <p className="mt-5 text-2xl text-neutral-100">{formatPrice(pack.currencyCode, pack.priceMinor)}</p>
+                    <p className="mt-3 text-sm text-neutral-400">
+                      Lets you create {formatBeatCount(Math.round(pack.coinAmount / COINS_PER_BEAT))}.
+                    </p>
+                    <p className="mt-5 text-3xl text-neutral-100">{formatPrice(pack.currencyCode, pack.priceMinor)}</p>
                     <button
                       type="button"
                       disabled={
@@ -792,7 +809,7 @@ export default function WalletPage() {
                         checkoutBusyKey !== null
                       }
                       onClick={() => void handleTopupCheckout(pack.topupPackId, pack.packKey, pack.provider)}
-                      className="mt-5 w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="mt-6 w-full cursor-pointer rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-neutral-200 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/30 hover:bg-white/10 hover:shadow-[0_14px_35px_rgba(16,185,129,0.14)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none"
                     >
                       {!pricingData.userId
                         ? 'Sign in to continue'
@@ -907,7 +924,7 @@ function MarketButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-xl px-3 py-2 text-sm transition-colors ${active ? 'bg-emerald-500/15 text-emerald-200' : 'bg-neutral-900/60 text-neutral-400 hover:text-neutral-200'}`}
+      className={`cursor-pointer rounded-xl px-3 py-2 text-sm transition-all duration-200 ${active ? 'bg-emerald-500/15 text-emerald-200 shadow-[0_10px_25px_rgba(16,185,129,0.14)]' : 'bg-neutral-900/60 text-neutral-400 hover:-translate-y-0.5 hover:bg-neutral-800/80 hover:text-neutral-200 hover:shadow-[0_12px_30px_rgba(255,255,255,0.06)]'}`}
     >
       {label}
     </button>

@@ -350,6 +350,8 @@ export interface PricingWalletPageData {
   checkoutEnabled: boolean;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
+  storyCount: number;
+  storylineCount: number;
   planOffers: PricingPlanOfferCard[];
   topupOffers: PricingTopupOfferCard[];
   recentActivity: PricingWalletActivityItem[];

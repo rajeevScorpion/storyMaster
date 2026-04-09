@@ -1286,3 +1286,29 @@ Verification:
 
 - `npx tsc --noEmit`
 - `npx eslint components/pricing/WalletPage.tsx app/actions/pricing-runtime.ts lib/types/pricing.ts`
+
+## 2026-04-09 - Wallet Library Snapshot
+
+Goal:
+
+- replace the redundant current-plan summary box with something that gives the user fresh value at a glance
+
+Work completed:
+
+- updated `app/actions/pricing-runtime.ts`
+  - added wallet counts for:
+    - active stories
+    - total storylines
+- updated `lib/types/pricing.ts`
+  - extended wallet-page data with story and storyline counts
+- updated `components/pricing/WalletPage.tsx`
+  - replaced the old current-plan info box with a `Your library` panel
+  - added large stat cards for:
+    - Stories
+    - Storylines
+  - clarified the supporting copy so users understand what each count represents
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint components/pricing/WalletPage.tsx app/actions/pricing-runtime.ts lib/types/pricing.ts`
