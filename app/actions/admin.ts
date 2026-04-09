@@ -181,6 +181,8 @@ export async function getGlobalSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  loadingNodeLabelsEnabled: boolean;
+  loadingHintTypewriterEnabled: boolean;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   textTimeoutMs: number;
@@ -189,10 +191,12 @@ export async function getGlobalSettings(): Promise<{
   cloudSaveTimeoutMs: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getFeatureFlag('story_loading_node_labels_enabled', true),
+    getFeatureFlag('story_loading_hint_typewriter_enabled', false),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlagValue('gemini_text_timeout_ms'),
@@ -204,6 +208,8 @@ export async function getGlobalSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    loadingNodeLabelsEnabled,
+    loadingHintTypewriterEnabled,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     textTimeoutMs: parseInt(textMs ?? '30000', 10) || 30000,
@@ -226,6 +232,16 @@ export async function setCycleMs(ms: number): Promise<void> {
 export async function setStoryboardVignette(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('storyboard_vignette_enabled', enabled);
+}
+
+export async function setStoryLoadingNodeLabels(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_loading_node_labels_enabled', enabled);
+}
+
+export async function setStoryLoadingHintTypewriter(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_loading_hint_typewriter_enabled', enabled);
 }
 
 export async function setFreePlusCharacterSheets(enabled: boolean): Promise<void> {
@@ -263,14 +279,18 @@ export async function getStoryboardSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  loadingNodeLabelsEnabled: boolean;
+  loadingHintTypewriterEnabled: boolean;
   cloudSaveTimeoutMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getFeatureFlag('story_loading_node_labels_enabled', true),
+    getFeatureFlag('story_loading_hint_typewriter_enabled', false),
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
@@ -279,6 +299,8 @@ export async function getStoryboardSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    loadingNodeLabelsEnabled,
+    loadingHintTypewriterEnabled,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,

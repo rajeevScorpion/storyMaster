@@ -7,6 +7,8 @@ import {
   setCycleOverride,
   setCycleMs,
   setStoryboardVignette,
+  setStoryLoadingNodeLabels,
+  setStoryLoadingHintTypewriter,
   setTextTimeout,
   setImageTimeout,
   setTtsTimeout,
@@ -55,6 +57,10 @@ export default function GlobalSettings() {
   const [cycleMsSaving, setCycleMsSaving] = useState(false);
   const [vignetteEnabled, setVignetteEnabled] = useState(true);
   const [vignetteToggling, setVignetteToggling] = useState(false);
+  const [loadingNodeLabelsEnabled, setLoadingNodeLabelsEnabledState] = useState(true);
+  const [loadingNodeLabelsToggling, setLoadingNodeLabelsToggling] = useState(false);
+  const [loadingHintTypewriterEnabled, setLoadingHintTypewriterEnabledState] = useState(false);
+  const [loadingHintTypewriterToggling, setLoadingHintTypewriterToggling] = useState(false);
   const [freePlusCharacterSheetsEnabled, setFreePlusCharacterSheetsEnabledState] = useState(false);
   const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
   const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
@@ -78,6 +84,8 @@ export default function GlobalSettings() {
         cycleOverride: co,
         cycleMs: cm,
         vignetteEnabled: ve,
+        loadingNodeLabelsEnabled: labelsEnabled,
+        loadingHintTypewriterEnabled: typewriterEnabled,
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
         textTimeoutMs: tt,
@@ -89,6 +97,8 @@ export default function GlobalSettings() {
         setCycleMsState(cm);
         setCycleMsInput(String(cm));
         setVignetteEnabled(ve);
+        setLoadingNodeLabelsEnabledState(labelsEnabled);
+        setLoadingHintTypewriterEnabledState(typewriterEnabled);
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
         setTextTimeoutMs(tt);
@@ -192,6 +202,40 @@ export default function GlobalSettings() {
                   setVignetteEnabled(next);
                 } finally {
                   setVignetteToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Show Loading Step Labels"
+              description="Show or hide the small labels under the loading progress nodes while a beat is being created. Turn this off if you want the cleaner node-only version."
+              checked={loadingNodeLabelsEnabled}
+              toggling={loadingNodeLabelsToggling}
+              onToggle={async () => {
+                setLoadingNodeLabelsToggling(true);
+                const next = !loadingNodeLabelsEnabled;
+                try {
+                  await setStoryLoadingNodeLabels(next);
+                  setLoadingNodeLabelsEnabledState(next);
+                } finally {
+                  setLoadingNodeLabelsToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Typewriter Loading Hints"
+              description="Animate the rotating hint text with a typewriter reveal. Turn this off for the simpler fade-only version."
+              checked={loadingHintTypewriterEnabled}
+              toggling={loadingHintTypewriterToggling}
+              onToggle={async () => {
+                setLoadingHintTypewriterToggling(true);
+                const next = !loadingHintTypewriterEnabled;
+                try {
+                  await setStoryLoadingHintTypewriter(next);
+                  setLoadingHintTypewriterEnabledState(next);
+                } finally {
+                  setLoadingHintTypewriterToggling(false);
                 }
               }}
             />

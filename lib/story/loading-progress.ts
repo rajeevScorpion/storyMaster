@@ -11,6 +11,7 @@ export interface StoryLoadingStepDefinition {
   key: StoryLoadingStepKey;
   label: string;
   description: string;
+  tooltip: string;
 }
 
 export interface StoryLoadingStage {
@@ -25,26 +26,31 @@ const SHARED_STEPS: StoryLoadingStepDefinition[] = [
     key: 'wallet',
     label: 'Checking access',
     description: 'Making sure your story can continue smoothly.',
+    tooltip: 'Checking your access',
   },
   {
     key: 'beat',
     label: 'Writing the beat',
     description: 'Shaping the next moment of the story.',
+    tooltip: 'Writing the next beat',
   },
   {
     key: 'visual',
     label: 'Planning the visuals',
     description: 'Deciding how the scene should look and feel.',
+    tooltip: 'Planning the scene look',
   },
   {
     key: 'image',
     label: 'Rendering the image',
     description: 'Painting the new scene.',
+    tooltip: 'Rendering the scene image',
   },
   {
     key: 'finish',
     label: 'Finishing touches',
     description: 'Syncing narration and wrapping everything up.',
+    tooltip: 'Adding final touches',
   },
 ];
 

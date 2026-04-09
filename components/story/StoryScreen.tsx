@@ -446,6 +446,9 @@ function StoryScreenInner({
   const headerGradientClass = isLoading
     ? 'relative z-10 p-4 md:p-6 pl-16 pr-20 md:pl-36 md:pr-24 flex justify-between items-center bg-gradient-to-b from-neutral-950/45 via-neutral-950/15 to-transparent shrink-0'
     : 'relative z-10 p-4 md:p-6 pl-16 pr-20 md:pl-36 md:pr-24 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0';
+  const chromeVisibilityClass = isLoading
+    ? 'opacity-0 pointer-events-none select-none'
+    : 'opacity-100';
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -502,7 +505,7 @@ function StoryScreenInner({
       </div>
 
       {/* Header */}
-      <header className={headerGradientClass}>
+      <header className={`${headerGradientClass} transition-opacity duration-300 ${chromeVisibilityClass}`}>
         <div className="flex items-center gap-3">
           <BookOpen className="w-6 h-6 text-emerald-400" />
           <h1 className="text-xl font-serif tracking-wide text-neutral-200">
@@ -567,7 +570,7 @@ function StoryScreenInner({
       </header>
 
       {/* Main Content */}
-      <main className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-5xl mx-auto w-full min-h-0">
+      <main className={`relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
         <div className="grid md:grid-cols-12 gap-8 items-end">
 
           {/* Story Text Card + Toggle */}

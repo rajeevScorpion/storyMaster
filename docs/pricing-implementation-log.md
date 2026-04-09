@@ -1287,6 +1287,41 @@ Verification:
 - `npx tsc --noEmit`
 - `npx eslint components/pricing/WalletPage.tsx app/actions/pricing-runtime.ts lib/types/pricing.ts`
 
+## 2026-04-09 - Loading Overlay UX Simplification
+
+Goal:
+
+- make beat-generation waiting feel calmer, clearer, and more user-centered
+- remove repeated loading signals while keeping users informed about progress
+
+Work completed:
+
+- updated `components/story/LoadingState.tsx`
+  - removed the ornamental top swirl and star icon
+  - moved the rotating anticipation hints to the top
+  - replaced the old progress bar + milestone boxes with a cleaner node-based progress rail
+  - kept one clear active stage heading and descriptive line
+  - moved the single loading spinner up beside the stage line and removed the bottom loader row
+  - added a warmer first-beat note:
+    - `The first beat usually takes a little longer while Kissago sets the scene and prepares your characters.`
+  - strengthened the glass panel readability with a darker internal scrim so text stays legible on lighter scene backgrounds without fully blocking the artwork
+  - gave the rotating hint its own elevated glass card so it feels more intentional and easier to read
+  - made the progress nodes hoverable with built-in step tooltips, which keeps the no-label mode discoverable during testing
+  - fixed the no-label layout so the progress rail pulls upward cleanly instead of leaving an empty gap
+  - slowed the hint rotation and softened the fade transition
+  - added optional typewriter-style hint reveal
+- updated `app/actions/admin.ts`
+  - added a public/admin-backed feature flag for showing or hiding loading node labels
+  - added a public/admin-backed feature flag for turning the hint typewriter effect on or off
+- updated `components/admin/GlobalSettings.tsx`
+  - added a `Show Loading Step Labels` toggle so the node labels can be tested on or off
+  - added a `Typewriter Loading Hints` toggle for testing a more playful clue reveal
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint components/story/LoadingState.tsx components/admin/GlobalSettings.tsx app/actions/admin.ts`
+
 ## 2026-04-09 - Wallet Library Snapshot
 
 Goal:
