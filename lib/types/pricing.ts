@@ -287,6 +287,7 @@ export interface EffectivePricingSnapshot {
   billingStatus: string;
   isInGracePeriod: boolean;
   currentPeriodEndsAt: string | null;
+  gracePeriodEndsAt: string | null;
   nextResetAt: string | null;
   storyLengthCap: number;
   canAccessDownloads: boolean;

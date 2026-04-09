@@ -1225,3 +1225,32 @@ Tradeoffs / decisions:
 Open risks / notes:
 
 - prompt-playground storyboard sample payloads were normalized too, so no admin sample data still implies storyboard can be switched off
+
+## 2026-04-09 - Grace Period Billing Warning Accuracy Fix
+
+Goal:
+
+- ensure the wallet and user menu only show a payment-issue warning for real failed-renewal states
+- stop healthy Razorpay subscriptions from being mislabeled as grace-period access
+
+Work completed:
+
+- updated `lib/billing/razorpay-sync.ts`
+  - now stores `grace_period_ends_at` only for Razorpay subscriptions in `pending` or `halted`
+- updated `lib/pricing/snapshot.ts`
+  - now treats grace period as active only when the subscription status is a real payment-recovery state
+  - added `gracePeriodEndsAt` to the effective pricing snapshot
+- updated `components/auth/UserMenu.tsx`
+  - changed the summary copy to the more accurate `renewal payment needs attention`
+- updated `components/pricing/WalletPage.tsx`
+  - grace-period messaging now uses the actual grace-period end date instead of the billing-period end date
+
+Verification:
+
+- `npx tsc --noEmit`
+- `npx eslint lib/billing/razorpay-sync.ts lib/pricing/snapshot.ts lib/types/pricing.ts components/auth/UserMenu.tsx components/pricing/WalletPage.tsx components/pricing/PricingRuntimeProvider.tsx`
+
+Tradeoffs / decisions:
+
+- treated Razorpay `pending` and `halted` as the only grace-period payment-recovery states based on the provider status lifecycle
+- kept the broader entitlement logic intact so users can still retain access during a real grace window

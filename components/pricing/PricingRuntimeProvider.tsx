@@ -56,6 +56,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     billingStatus: 'free',
     isInGracePeriod: false,
     currentPeriodEndsAt: null,
+    gracePeriodEndsAt: null,
     nextResetAt: null,
     storyLengthCap: 4,
     canAccessDownloads: false,

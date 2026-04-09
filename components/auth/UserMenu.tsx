@@ -112,7 +112,7 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                       : totalCoins > 0
                       ? (
                         pricing.snapshot.isInGracePeriod
-                          ? 'Payment issue detected. Access is still active for now.'
+                          ? 'A renewal payment needs attention. Access is still active for now.'
                           : refillLabel
                             ? `Refills on ${refillLabel}`
                             : 'Wallet summary for your current account'

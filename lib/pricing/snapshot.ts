@@ -45,6 +45,7 @@ interface SelectedPlanVariant {
 }
 
 const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing', 'authenticated']);
+const GRACE_PERIOD_SUBSCRIPTION_STATUSES = new Set(['pending', 'halted']);
 
 export function buildPricingRuntimeControls(
   featureFlags: RuntimeFlagRow[]
@@ -148,6 +149,7 @@ function buildEffectivePricingSnapshotWithControls(
     billingStatus: activeSubscription?.status ?? 'free',
     isInGracePeriod,
     currentPeriodEndsAt: activeSubscription?.current_period_end ?? null,
+    gracePeriodEndsAt: activeSubscription?.grace_period_ends_at ?? null,
     nextResetAt: activeSubscription?.current_period_end ?? freeAllowanceResetAt,
     storyLengthCap: selectedVersion.story_length_cap,
     canAccessDownloads: Boolean(selectedPlan.feature_flags_json?.canAccessDownloads ?? false),
@@ -181,6 +183,7 @@ function buildFallbackFreeSnapshot(
     billingStatus: 'free',
     isInGracePeriod: false,
     currentPeriodEndsAt: null,
+    gracePeriodEndsAt: null,
     nextResetAt: null,
     storyLengthCap: 4,
     canAccessDownloads: false,
@@ -342,6 +345,11 @@ function isSubscriptionInGracePeriod(
   subscription: DbBillingSubscription,
   now: Date
 ): boolean {
+  const normalizedStatus = subscription.status.trim().toLowerCase();
+  if (!GRACE_PERIOD_SUBSCRIPTION_STATUSES.has(normalizedStatus)) {
+    return false;
+  }
+
   if (!subscription.grace_period_ends_at) {
     return false;
   }

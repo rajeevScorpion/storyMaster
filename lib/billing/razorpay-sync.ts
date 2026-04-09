@@ -45,7 +45,9 @@ export async function syncRazorpaySubscriptionState(input: {
 
   const currentPeriodStart = razorpayUnixToIso(input.subscription.current_start);
   const currentPeriodEnd = razorpayUnixToIso(input.subscription.current_end);
-  const gracePeriodEndsAt = computeGracePeriodEnd(currentPeriodEnd, input.planVersion.grace_period_days);
+  const gracePeriodEndsAt = shouldApplyGracePeriod(input.subscription.status)
+    ? computeGracePeriodEnd(currentPeriodEnd, input.planVersion.grace_period_days)
+    : null;
 
   const existingResult = await input.supabase
     .from('billing_subscriptions')
@@ -229,6 +231,11 @@ function computeGracePeriodEnd(currentPeriodEnd: string | null, gracePeriodDays:
   const date = new Date(currentPeriodEnd);
   date.setUTCDate(date.getUTCDate() + gracePeriodDays);
   return date.toISOString();
+}
+
+function shouldApplyGracePeriod(status: string | null | undefined): boolean {
+  const normalizedStatus = status?.trim().toLowerCase();
+  return normalizedStatus === 'pending' || normalizedStatus === 'halted';
 }
 
 function throwIfQueryFailed(error: PostgrestError | null, context: string): void {

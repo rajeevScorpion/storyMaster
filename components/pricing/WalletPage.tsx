@@ -380,7 +380,7 @@ export default function WalletPage() {
                     ? 'This is your plan allowance preview. Once live pricing is switched on for this environment, this area will show the real coins in your wallet.'
                     : totalCoins > 0
                     ? pricingData.snapshot.isInGracePeriod
-                    ? `Payment issue detected. Your access stays active until ${formatDate(pricingData.snapshot.currentPeriodEndsAt)}.`
+                    ? `A renewal payment needs attention. Your access stays active until ${formatDate(pricingData.snapshot.gracePeriodEndsAt ?? pricingData.snapshot.currentPeriodEndsAt)}.`
                     : pricingData.snapshot.nextResetAt
                     ? `Your plan refills on ${formatDate(pricingData.snapshot.nextResetAt)}.`
                     : 'You can keep creating with your current wallet balance.'
