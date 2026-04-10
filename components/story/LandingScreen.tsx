@@ -133,6 +133,10 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
 
   return (
     <div className="bg-neutral-950 relative overflow-hidden">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-32 bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-40 md:h-48"
+      />
       {/* Hero section — full viewport height */}
       <div className="h-screen flex flex-col items-center justify-center p-4 relative">
         {/* Background decoration */}
