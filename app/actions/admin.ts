@@ -185,13 +185,15 @@ export async function getGlobalSettings(): Promise<{
   loadingHintTypewriterEnabled: boolean;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
+  videoDownloadEnabled: boolean;
+  videoDownloadAdminBypass: boolean;
   textTimeoutMs: number;
   imageTimeoutMs: number;
   ttsTimeoutMs: number;
   cloudSaveTimeoutMs: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -199,6 +201,8 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
+    getFeatureFlag('video_download_enabled'),
+    getFeatureFlag('video_download_admin_bypass'),
     getFeatureFlagValue('gemini_text_timeout_ms'),
     getFeatureFlagValue('gemini_image_timeout_ms'),
     getFeatureFlagValue('gemini_tts_timeout_ms'),
@@ -212,6 +216,8 @@ export async function getGlobalSettings(): Promise<{
     loadingHintTypewriterEnabled,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
+    videoDownloadEnabled,
+    videoDownloadAdminBypass,
     textTimeoutMs: parseInt(textMs ?? '30000', 10) || 30000,
     imageTimeoutMs: parseInt(imageMs ?? '90000', 10) || 90000,
     ttsTimeoutMs: parseInt(ttsMs ?? '120000', 10) || 120000,
@@ -254,6 +260,30 @@ export async function setCreatorCharacterSheets(enabled: boolean): Promise<void>
   await setFeatureFlag('character_sheet_enabled_creator', enabled);
 }
 
+export async function setVideoDownload(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('video_download_enabled', enabled);
+}
+
+export async function setVideoDownloadAdminBypass(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('video_download_admin_bypass', enabled);
+}
+
+// Public (no admin gate) — lightweight check used by client to gate admin-only features
+export async function checkIsAdmin(): Promise<boolean> {
+  try {
+    const { createClient } = await import('@/lib/supabase/server');
+    const supabase = await createClient();
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) return false;
+    const adminUserId = process.env.ADMIN_USER_ID;
+    return !!adminUserId && user.id === adminUserId;
+  } catch {
+    return false;
+  }
+}
+
 export async function setTextTimeout(ms: number): Promise<void> {
   await verifyAdmin();
   await setFeatureFlagValue('gemini_text_timeout_ms', String(ms));
@@ -284,8 +314,10 @@ export async function getStoryboardSettings(): Promise<{
   cloudSaveTimeoutMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
+  videoDownloadEnabled: boolean;
+  videoDownloadAdminBypass: boolean;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -294,6 +326,8 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
+    getFeatureFlag('video_download_enabled'),
+    getFeatureFlag('video_download_admin_bypass'),
   ]);
   return {
     cycleOverride,
@@ -304,6 +338,8 @@ export async function getStoryboardSettings(): Promise<{
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
+    videoDownloadEnabled,
+    videoDownloadAdminBypass,
   };
 }
 

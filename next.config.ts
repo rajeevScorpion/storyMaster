@@ -2,6 +2,20 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Required for ffmpeg.wasm — enables SharedArrayBuffer via COOP/COEP headers.
+  // Using 'credentialless' for COEP to avoid breaking external resources (fonts, images)
+  // that lack Cross-Origin-Resource-Policy headers.
+  async headers() {
+    return [
+      {
+        source: '/(.*)',
+        headers: [
+          { key: 'Cross-Origin-Embedder-Policy', value: 'credentialless' },
+          { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
+        ],
+      },
+    ];
+  },
   eslint: {
     ignoreDuringBuilds: true,
   },

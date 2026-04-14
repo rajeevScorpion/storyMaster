@@ -26,8 +26,22 @@ import {
   BookOpen,
   EyeOff,
   Share2,
+  Download,
+  Lock,
+  Loader2,
+  Check,
+  AlertTriangle,
+  X,
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
+import { useVideoExport } from '@/lib/hooks/useVideoExport';
+import {
+  authorizeCurrentUserBillableAction,
+  finalizeCurrentUserBillableAction,
+  releaseCurrentUserBillableAction,
+} from '@/app/actions/pricing-enforcement';
+import { checkIsAdmin } from '@/app/actions/admin';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
@@ -195,19 +209,39 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean }>({
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; videoDownloadEnabled: boolean; videoDownloadAdminBypass: boolean }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
+    videoDownloadEnabled: false,
+    videoDownloadAdminBypass: false,
   });
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { data: pricing } = usePricingRuntime();
+  // Video download gating:
+  // 1. Global master toggle must be ON (admin Global Settings)
+  // 2. Either: plan-level canAccessDownloads is true (via Pricing Studio)
+  //    OR: admin bypass is on AND current user is the actual admin (server-verified)
+  const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
+  const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
+  const canDownload = videoDownloadGlobalOn
+    && (adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads));
+  const { exportVideo, cancel: cancelExport, isExporting, progress: exportProgress, phase: exportPhase, error: exportError } = useVideoExport();
   const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
 
   useEffect(() => {
     getStoryboardSettings().then(setCycleSettings).catch(() => {/* use defaults */});
   }, []);
+
+  // Check if current user is admin (for bypass gating — server-verified against ADMIN_USER_ID)
+  useEffect(() => {
+    if (isLoggedIn) {
+      checkIsAdmin().then(setIsAdminUser).catch(() => setIsAdminUser(false));
+    }
+  }, [isLoggedIn]);
 
   // Sync current beat index to URL for persistence across refresh
   useEffect(() => {
@@ -291,6 +325,15 @@ export default function StorylinePlayer({
   const currentBeat = currentBeats[currentIndex];
   const isFirst = currentIndex === 0;
   const isLast = currentIndex === currentBeats.length - 1;
+  const exportPhaseLabel = exportPhase === 'loading'
+    ? 'Loading encoder'
+    : exportPhase === 'preparing'
+    ? 'Preparing scenes'
+    : exportPhase === 'encoding'
+    ? 'Rendering video'
+    : exportPhase === 'finalizing'
+    ? 'Finalizing file'
+    : 'Exporting video';
 
   // Get the choice that led to the current beat
   const currentChoice = currentIndex > 0 ? choices[currentIndex - 1] : null;
@@ -531,6 +574,77 @@ export default function StorylinePlayer({
             >
               <Share2 className="w-4 h-4" />
             </button>
+          )}
+
+          {/* Download video — hidden when global toggle is off; locked upsell for unpaid plans */}
+          {videoDownloadGlobalOn && (
+            canDownload ? (
+              <button
+                onClick={async () => {
+                  if (isExporting) return;
+                  // Admin bypass skips billing; regular users go through beat authorization
+                  if (!adminBypassed) {
+                    const auth = await authorizeCurrentUserBillableAction({
+                      actionKey: 'export_video_future',
+                      idempotencyKey: `export-${storylineId}-${Date.now()}`,
+                      relatedStorylineId: storylineId,
+                    });
+                    if (auth.status === 'denied') {
+                      window.open('/wallet', '_blank');
+                      return;
+                    }
+                    const ok = await exportVideo(currentBeats, title);
+                    if (auth.status === 'allowed' && auth.reservationId) {
+                      if (ok) {
+                        await finalizeCurrentUserBillableAction({ reservationId: auth.reservationId, storylineId });
+                      } else {
+                        await releaseCurrentUserBillableAction({ reservationId: auth.reservationId, reason: 'export_failed' });
+                      }
+                    }
+                  } else {
+                    await exportVideo(currentBeats, title);
+                  }
+                }}
+                disabled={isExporting}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-sans uppercase tracking-widest transition-all duration-300 ${
+                  isExporting
+                    ? 'bg-white/5 text-neutral-500 cursor-wait'
+                    : 'bg-white/5 hover:bg-white/10 text-neutral-300 cursor-pointer'
+                }`}
+                title={isExporting ? `Exporting… ${exportProgress}%` : 'Download storyline as video'}
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>{exportPhase === 'loading' ? 'Loading…' : `${exportProgress}%`}</span>
+                  </>
+                ) : exportProgress === 100 ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Saved</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={() => window.open('/wallet', '_blank')}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-sans uppercase tracking-widest bg-white/5 text-neutral-500 cursor-pointer hover:bg-white/10 hover:text-neutral-400 transition-all duration-300"
+                title="Video export — available on Plus and above"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>Export</span>
+              </button>
+            )
+          )}
+          {exportError && (
+            <span className="text-xs text-red-400" title={exportError}>
+              <AlertTriangle className="w-3.5 h-3.5 inline" />
+            </span>
           )}
 
           {/* Explore full story tree — logged-in only */}
@@ -998,6 +1112,82 @@ export default function StorylinePlayer({
       </AnimatePresence>
 
       {/* My Stories drawer — logged-in only */}
+      <AnimatePresence>
+        {isExporting && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center px-4 py-6"
+          >
+            <div className="absolute inset-0 bg-neutral-950/55 backdrop-blur-md" />
+            <motion.div
+              initial={{ opacity: 0, y: 18, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              className="relative z-10 w-full max-w-md overflow-hidden rounded-[28px] border border-white/15 bg-white/10 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+            >
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.14),_transparent_55%),linear-gradient(135deg,rgba(255,255,255,0.1),rgba(255,255,255,0.04))]" />
+              <div className="relative">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300/90">
+                      Video Export
+                    </p>
+                    <h3 className="mt-2 text-2xl font-serif text-white">
+                      {exportPhaseLabel}
+                    </h3>
+                  </div>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white/10 text-emerald-300">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </div>
+                </div>
+
+                <p className="mt-4 text-sm font-sans leading-6 text-neutral-200/90">
+                  Keep this tab open while your video is being rendered. Leaving, refreshing, or closing the tab can stop the export.
+                </p>
+
+                <div className="mt-5">
+                  <div className="flex items-center justify-between text-xs font-sans uppercase tracking-[0.22em] text-neutral-300/80">
+                    <span>Progress</span>
+                    <span>{exportProgress}%</span>
+                  </div>
+                  <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/10">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${exportProgress}%` }}
+                      transition={{ duration: 0.25, ease: 'easeOut' }}
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-300"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3">
+                  <p className="text-xs font-sans uppercase tracking-[0.22em] text-amber-200/80">
+                    Browser Prompt
+                  </p>
+                  <p className="mt-1 text-sm font-sans text-amber-100/90">
+                    If you still try to leave, the browser will show its native confirmation prompt.
+                  </p>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    onClick={cancelExport}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-sans text-neutral-100 transition-all hover:bg-white/15"
+                    title="Cancel video export"
+                  >
+                    <X className="h-4 w-4" />
+                    <span>Cancel Export</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <MyStoriesDrawer
         isOpen={showMyStories}
         onClose={() => setShowMyStories(false)}

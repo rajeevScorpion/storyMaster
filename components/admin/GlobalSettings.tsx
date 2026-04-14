@@ -15,6 +15,8 @@ import {
   setCloudSaveTimeout,
   setFreePlusCharacterSheets,
   setCreatorCharacterSheets,
+  setVideoDownload,
+  setVideoDownloadAdminBypass,
 } from '@/app/actions/admin';
 
 function ToggleRow({
@@ -65,6 +67,10 @@ export default function GlobalSettings() {
   const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
   const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
   const [creatorCharacterSheetsToggling, setCreatorCharacterSheetsToggling] = useState(false);
+  const [videoDownloadEnabled, setVideoDownloadEnabledState] = useState(false);
+  const [videoDownloadToggling, setVideoDownloadToggling] = useState(false);
+  const [videoDownloadAdminBypass, setVideoDownloadAdminBypassState] = useState(false);
+  const [videoDownloadAdminBypassToggling, setVideoDownloadAdminBypassToggling] = useState(false);
   const [textTimeoutMs, setTextTimeoutMs] = useState(30000);
   const [textTimeoutInput, setTextTimeoutInput] = useState('30');
   const [textTimeoutSaving, setTextTimeoutSaving] = useState(false);
@@ -88,6 +94,8 @@ export default function GlobalSettings() {
         loadingHintTypewriterEnabled: typewriterEnabled,
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
+        videoDownloadEnabled: vidDl,
+        videoDownloadAdminBypass: vidDlBypass,
         textTimeoutMs: tt,
         imageTimeoutMs: it,
         ttsTimeoutMs: at,
@@ -101,6 +109,8 @@ export default function GlobalSettings() {
         setLoadingHintTypewriterEnabledState(typewriterEnabled);
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
+        setVideoDownloadEnabledState(vidDl);
+        setVideoDownloadAdminBypassState(vidDlBypass);
         setTextTimeoutMs(tt);
         setTextTimeoutInput(String(Math.round(tt / 1000)));
         setImageTimeoutMs(it);
@@ -306,6 +316,47 @@ export default function GlobalSettings() {
                   setCreatorCharacterSheetsEnabledState(next);
                 } finally {
                   setCreatorCharacterSheetsToggling(false);
+                }
+              }}
+            />
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Video Export</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Master toggle for storyline video download. When enabled, per-plan access is controlled via the Downloads toggle in Pricing Studio.
+            </p>
+
+            <ToggleRow
+              label="Enable Video Download"
+              description="Allow users to export published storylines as MP4 video files. Which plans can download is set in Pricing → Plans → Downloads."
+              checked={videoDownloadEnabled}
+              toggling={videoDownloadToggling}
+              onToggle={async () => {
+                setVideoDownloadToggling(true);
+                const next = !videoDownloadEnabled;
+                try {
+                  await setVideoDownload(next);
+                  setVideoDownloadEnabledState(next);
+                } finally {
+                  setVideoDownloadToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Admin Bypass (your account only)"
+              description="Skip the plan-level paywall for your admin account so you can test video export without needing a Plus/Studio subscription. Other users are unaffected."
+              checked={videoDownloadAdminBypass}
+              toggling={videoDownloadAdminBypassToggling}
+              onToggle={async () => {
+                setVideoDownloadAdminBypassToggling(true);
+                const next = !videoDownloadAdminBypass;
+                try {
+                  await setVideoDownloadAdminBypass(next);
+                  setVideoDownloadAdminBypassState(next);
+                } finally {
+                  setVideoDownloadAdminBypassToggling(false);
                 }
               }}
             />
