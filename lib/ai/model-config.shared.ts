@@ -2,6 +2,8 @@
 
 export type TaskKey =
   | 'story_generation'
+  | 'seed_plan_generation'
+  | 'seeded_beat_materialization'
   | 'visual_prompt'
   | 'image_generation'
   | 'portrait_generation'
@@ -21,6 +23,8 @@ export const TASK_DEFINITIONS: {
   description: string;
 }[] = [
   { key: 'story_generation', label: 'Story Generation', description: 'Generates structured JSON story beats with characters, options, and continuity' },
+  { key: 'seed_plan_generation', label: 'Seed Plan Generation', description: 'Turns user-authored source material into a structured canonical beat plan preview' },
+  { key: 'seeded_beat_materialization', label: 'Seeded Beat Materialization', description: 'Turns one confirmed seed-plan beat into a full runtime story beat while preserving the authored path' },
   { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Builds structured 4-frame storyboard plans and portrait tasks from each story beat' },
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
   { key: 'portrait_generation', label: 'Portrait Generation', description: 'Generates character reference portraits for visual consistency across beats' },
@@ -30,6 +34,8 @@ export const TASK_DEFINITIONS: {
 
 export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: number | null }> = {
   story_generation: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
+  seed_plan_generation: { modelId: 'gemini-3.1-pro-preview', temperature: 0.3 },
+  seeded_beat_materialization: { modelId: 'gemini-3.1-pro-preview', temperature: 0.4 },
   visual_prompt: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
   image_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
   portrait_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },

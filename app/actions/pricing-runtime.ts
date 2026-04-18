@@ -399,6 +399,8 @@ function getSpendTitle(actionKey: string): string {
       return 'Started a story';
     case 'continue_story_new_beat':
       return 'Added a new beat';
+    case 'preview_seed_plan':
+      return 'Previewed a seed plan';
     case 'regenerate_image':
       return 'Regenerated an image';
     case 'regenerate_narration':

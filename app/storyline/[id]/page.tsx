@@ -103,7 +103,7 @@ export default async function StorylinePage({ params }: PageProps) {
   const likeCount = storyline.like_count ?? 0;
 
   // Load beats via junction table (falls back to JSONB) with fresh signed URLs
-  const { beats, choices, preludeText } = await loadStorylineWithBeats(id);
+  const { beats, choices } = await loadStorylineWithBeats(id);
 
   return (
     <Suspense>
@@ -119,7 +119,6 @@ export default async function StorylinePage({ params }: PageProps) {
         isLiked={isLiked}
         likeCount={likeCount}
         isLoggedIn={true}
-        preludeText={preludeText}
       />
     </Suspense>
   );

@@ -75,6 +75,45 @@ export const beatSchema = {
   ],
 };
 
+const seedPlanOptionSchema = {
+  type: Type.OBJECT,
+  properties: {
+    id: { type: Type.STRING },
+    label: { type: Type.STRING },
+    intent: { type: Type.STRING },
+    isCanonical: { type: Type.BOOLEAN },
+  },
+  required: ['id', 'label', 'intent', 'isCanonical'],
+};
+
+const seedBeatOutlineSchema = {
+  type: Type.OBJECT,
+  properties: {
+    beatIndex: { type: Type.INTEGER },
+    title: { type: Type.STRING },
+    storyText: { type: Type.STRING },
+    sceneSummary: { type: Type.STRING },
+    isEnding: { type: Type.BOOLEAN },
+    options: {
+      type: Type.ARRAY,
+      items: seedPlanOptionSchema,
+    },
+  },
+  required: ['beatIndex', 'title', 'storyText', 'sceneSummary', 'isEnding', 'options'],
+};
+
+export const seedPlanSchema = {
+  type: Type.OBJECT,
+  properties: {
+    beatCount: { type: Type.INTEGER },
+    beats: {
+      type: Type.ARRAY,
+      items: seedBeatOutlineSchema,
+    },
+  },
+  required: ['beatCount', 'beats'],
+};
+
 const storyboardFrameSchema = {
   type: Type.OBJECT,
   properties: {

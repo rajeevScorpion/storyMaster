@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { AgeGroup, AuthoringMode, PortraitReferenceQuality, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import {
+  SOURCE_FIDELITY_OPTIONS,
   STORY_DETAIL_OPTIONS,
   STORY_PALETTE_OPTIONS,
   STORY_THEME_OPTIONS,
@@ -68,6 +69,11 @@ const DETAIL_OPTIONS: FilterDropdownOption[] = STORY_DETAIL_OPTIONS.map((option)
   label: option.label,
 }));
 
+const SOURCE_FIDELITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = SOURCE_FIDELITY_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.label,
+}));
+
 interface AdvancedOptionsProps {
   language: StoryLanguage;
   onLanguageChange: (v: StoryLanguage) => void;
@@ -81,10 +87,10 @@ interface AdvancedOptionsProps {
   onMaxBeatsChange: (v: number) => void;
   visualSettings: VisualSettings;
   onVisualSettingsChange: (v: VisualSettings) => void;
-  authoringMode: AuthoringMode;
-  onAuthoringModeChange: (v: AuthoringMode) => void;
-  preludeText: string;
-  onPreludeTextChange: (v: string) => void;
+  isSeedMode?: boolean;
+  sourceFidelity?: SourceFidelity;
+  onSourceFidelityChange?: (value: SourceFidelity) => void;
+  authoringWordCap?: number;
   pricingStoryLengthCap?: number;
   pricingStoryLengthUiLimitsEnabled?: boolean;
   currentPlanLabel?: string;
@@ -107,10 +113,10 @@ export default function AdvancedOptions({
   onMaxBeatsChange,
   visualSettings,
   onVisualSettingsChange,
-  authoringMode,
-  onAuthoringModeChange,
-  preludeText,
-  onPreludeTextChange,
+  isSeedMode = false,
+  sourceFidelity = 'balanced_adaptation',
+  onSourceFidelityChange,
+  authoringWordCap = 500,
   pricingStoryLengthCap = 8,
   pricingStoryLengthUiLimitsEnabled = false,
   currentPlanLabel = 'free',
@@ -291,39 +297,34 @@ export default function AdvancedOptions({
               />
             </div>
 
-            <div className="space-y-4 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
-              <div className="flex items-start justify-between gap-4">
+            {isSeedMode && (
+              <div className="space-y-3 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
                 <div className="space-y-1">
-                  <h4 className="text-sm font-sans text-neutral-200">Start from my own writing</h4>
+                  <h4 className="text-sm font-sans text-neutral-200">Seed preservation</h4>
                   <p className="text-xs leading-relaxed text-neutral-500">
-                    Keep your opening text visible as canon and let Kissago continue from it.
+                    Choose how closely Kissago should preserve the user&apos;s source material while shaping it into beats.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onAuthoringModeChange(authoringMode === 'seed_continue' ? 'prompt' : 'seed_continue')}
-                  className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
-                    authoringMode === 'seed_continue'
-                      ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
-                      : 'justify-start border-white/10 bg-neutral-800'
-                  }`}
-                  aria-pressed={authoringMode === 'seed_continue'}
-                  aria-label="Toggle authored prelude mode"
-                >
-                  <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
-                </button>
-              </div>
-
-              {authoringMode === 'seed_continue' && (
-                <textarea
-                  value={preludeText}
-                  onChange={(e) => onPreludeTextChange(e.target.value)}
-                  rows={6}
-                  placeholder="Paste the opening scene, a partial draft, or a complete setup that Kissago should continue from..."
-                  className="min-h-36 w-full rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
+                <FilterDropdown
+                  value={sourceFidelity}
+                  options={SOURCE_FIDELITY_DROPDOWN_OPTIONS}
+                  onChange={(value) => onSourceFidelityChange?.(value as SourceFidelity)}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Seed source fidelity"
                 />
-              )}
-            </div>
+                <p className="text-xs leading-relaxed text-neutral-500">
+                  {SOURCE_FIDELITY_OPTIONS.find((option) => option.value === sourceFidelity)?.description}
+                </p>
+                <div className="rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-3">
+                  <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Shared cap</p>
+                  <p className="mt-1 text-sm text-neutral-300">
+                    Prompt text, seeded source text, and extra guidance share a {authoringWordCap}-word limit.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

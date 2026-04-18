@@ -87,6 +87,9 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     clues: node.data.clues || null,
     next_beat_goal: node.data.nextBeatGoal || null,
     ending_forecast: node.data.endingForecast || null,
+    origin_kind: node.data.originKind || null,
+    seed_plan_beat_index: node.data.seedPlanBeatIndex || null,
+    canonical_option_id: node.data.canonicalOptionId || null,
   };
 
   // Only include asset URLs when they have values — prevents UPSERT from
@@ -133,6 +136,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       imageUrl: beat.image_url || undefined,
       audioUrl: beat.audio_url || undefined,
       isStoryboard: beat.is_storyboard || undefined,
+      originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
+      seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
+      canonicalOptionId: beat.canonical_option_id || undefined,
     },
     children: childNodeIds,
   };
@@ -311,6 +317,9 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+            ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
+            ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
+            ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
           },
         };
       }
@@ -539,6 +548,9 @@ export async function autoPublishStoryline(
     endingForecast: b.ending_forecast,
     imageUrl: b.image_url,
     audioUrl: b.audio_url,
+    originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
+    seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
+    canonicalOptionId: b.canonical_option_id || undefined,
   }));
 
   const { data: storyline, error: slError } = await supabase

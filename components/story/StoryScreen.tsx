@@ -300,7 +300,10 @@ function StoryScreenInner({
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
-  const preludeText = currentBeat.beatNumber === 1 ? session.storyConfig.authoring.preludeText?.trim() : '';
+  const preludeText =
+    currentBeat.beatNumber === 1 && !session.storyConfig.authoring.seedPlan
+      ? session.storyConfig.authoring.preludeText?.trim()
+      : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
   const [showPublishDialog, setShowPublishDialog] = useState(false);
@@ -345,6 +348,12 @@ function StoryScreenInner({
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
+  const orderedOptions = currentBeat.canonicalOptionId
+    ? [
+        ...currentBeat.options.filter((option) => option.id === currentBeat.canonicalOptionId),
+        ...currentBeat.options.filter((option) => option.id !== currentBeat.canonicalOptionId),
+      ]
+    : currentBeat.options;
 
   // Autoplay narration in story mode when navigating to a node with audio
   useEffect(() => {
@@ -374,7 +383,7 @@ function StoryScreenInner({
 
   const { focusedOptionIndex, focusMode } = useKeyboardNavigation({
     storyMap: session.storyMap,
-    options: currentBeat.options,
+    options: orderedOptions,
     onNavigateNode: navigateToNode,
     onSelectOption: continueStory,
     onToggleMinimized: () => setIsMinimized(prev => !prev),
@@ -839,9 +848,10 @@ function StoryScreenInner({
                         WebkitMaskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
                       }}
                     >
-                      {currentBeat.options.map((option, index) => {
+                      {orderedOptions.map((option, index) => {
                         const explored = hasExistingBranch(option.id);
                         const isFocused = focusMode === 'options' && focusedOptionIndex === index;
+                        const isCanonical = option.id === currentBeat.canonicalOptionId;
                         return (
                           <motion.button
                             key={option.id}
@@ -858,9 +868,16 @@ function StoryScreenInner({
                             } ${isFocused ? 'ring-2 ring-emerald-400/50 border-emerald-500/40' : ''}`}
                           >
                             <div>
-                              <p className="text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
-                                {option.label}
-                              </p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
+                                  {option.label}
+                                </p>
+                                {isCanonical && (
+                                  <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-300">
+                                    Original path
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider">
                                 {option.intent}
                               </p>

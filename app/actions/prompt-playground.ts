@@ -14,7 +14,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import {
   getPromptPlaygroundState,
   getPublishedPrompt,
@@ -151,6 +151,10 @@ async function executeTaskTest(
   switch (taskKey) {
     case 'story_generation':
       return runStoryGenerationTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
+    case 'seed_plan_generation':
+      return runSeedPlanGenerationTest(ai, modelId, temperature ?? 0.3, inputs, promptBody!);
+    case 'seeded_beat_materialization':
+      return runSeededBeatMaterializationTest(ai, modelId, temperature ?? 0.4, inputs, promptBody!);
     case 'visual_prompt':
       return runVisualPromptTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'image_generation':
@@ -164,6 +168,69 @@ async function executeTaskTest(
     default:
       throw new Error('Unknown task');
   }
+}
+
+async function runSeedPlanGenerationTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  temperature: number,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const prompt = resolvePromptTemplate(promptBody, {
+    language: inputs.language || 'english',
+    storyConfig: inputs.storyConfig || '{}',
+    workingTitle: inputs.workingTitle || '',
+    sourceFidelity: inputs.sourceFidelity || 'balanced_adaptation',
+    guidanceText: inputs.guidanceText || '',
+    sourceText: inputs.sourceText || '',
+    beatCount: inputs.beatCount || '6',
+  });
+
+  const start = Date.now();
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: prompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.seed_plan_generation,
+      responseMimeType: 'application/json',
+      responseSchema: seedPlanSchema,
+      temperature,
+    },
+  });
+  const latencyMs = Date.now() - start;
+  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
+}
+
+async function runSeededBeatMaterializationTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  temperature: number,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const prompt = resolvePromptTemplate(promptBody, {
+    language: inputs.language || 'english',
+    storyConfig: inputs.storyConfig || '{}',
+    storyState: inputs.storyState || '{}',
+    sourceText: inputs.sourceText || '',
+    guidanceText: inputs.guidanceText || '',
+    seedBeat: inputs.seedBeat || '{}',
+  });
+
+  const start = Date.now();
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: prompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.seeded_beat_materialization,
+      responseMimeType: 'application/json',
+      responseSchema: beatSchema,
+      temperature,
+    },
+  });
+  const latencyMs = Date.now() - start;
+  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
 async function runStoryGenerationTest(

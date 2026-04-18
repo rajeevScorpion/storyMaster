@@ -1,6 +1,6 @@
 'use client';
 
-import { StorySession, StoryBeat, StoryboardPlan } from '@/lib/types/story';
+import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig } from '@/lib/types/story';
 import { compressImage } from '@/lib/utils/image';
 import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
 import {
@@ -13,6 +13,8 @@ import {
   normalizePortraitReferenceConfig,
   deriveVisualStyleSummary,
   getPreludeText,
+  getSeedPlan,
+  getSeedSourceText,
   normalizeStoryConfig,
 } from '@/lib/ai/story-config';
 import {
@@ -57,17 +59,134 @@ async function timeRuntimeStep<T>(
 export interface StoryModelOverrides {
   storyModel?: string;
   storyTemperature?: number;
+  seedPlanModel?: string;
+  seedPlanTemperature?: number;
+  seededBeatModel?: string;
+  seededBeatTemperature?: number;
   // Legacy fields kept for compatibility with admin config payloads.
   composerModel?: string;
   composerTemperature?: number;
   imageModel?: string;
   portraitModel?: string;
   storyPrompt?: string;
+  seedPlanPrompt?: string;
+  seededBeatPrompt?: string;
   visualPrompt?: string;
   imagePrompt?: string;
   portraitPrompt?: string;
   // Storyboard is now always on. Keep the field as a no-op for older payload shapes.
   enableStoryboard?: boolean;
+}
+
+export interface SeedPlanPreviewInput {
+  storyConfig: StoryConfig;
+  sourceText: string;
+  beatCount: number;
+  workingTitle?: string;
+  guidanceText?: string;
+  sourceFidelity?: SourceFidelity;
+  modelOverrides?: StoryModelOverrides;
+}
+
+export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Promise<SeedPlan> {
+  const storyConfig = normalizeStoryConfig({
+    ...input.storyConfig,
+    authoring: {
+      mode: 'seeded',
+      workingTitle: input.workingTitle,
+      sourceText: input.sourceText,
+      guidanceText: input.guidanceText,
+      sourceFidelity: input.sourceFidelity,
+    },
+  });
+  const seedPlanTemplateCandidate = input.modelOverrides?.seedPlanPrompt || getDefaultPromptBody('seed_plan_generation');
+  const seedPlanTemplate = validatePromptTemplate('seed_plan_generation', seedPlanTemplateCandidate).isValid
+    ? seedPlanTemplateCandidate
+    : getDefaultPromptBody('seed_plan_generation');
+  const prompt = resolvePromptTemplate(seedPlanTemplate, {
+    language: storyConfig.language,
+    storyConfig: formatStoryConfig({ storyConfig, currentBeat: 0 }),
+    workingTitle: storyConfig.authoring.workingTitle || '',
+    sourceFidelity: storyConfig.authoring.sourceFidelity || 'balanced_adaptation',
+    guidanceText: storyConfig.authoring.guidanceText || '',
+    sourceText: storyConfig.authoring.sourceText || '',
+    beatCount: input.beatCount,
+  });
+
+  const text = await callGeminiText({
+    task: 'seed_plan_generation',
+    model: input.modelOverrides?.seedPlanModel || 'gemini-3.1-pro-preview',
+    prompt,
+    temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
+  });
+
+  let parsed: SeedPlan;
+  try {
+    parsed = JSON.parse(text) as SeedPlan;
+  } catch {
+    throw new Error(`Failed to parse seed plan JSON: ${text.slice(0, 200)}`);
+  }
+
+  const normalizedPlan = normalizeSeedPlanResult(parsed, storyConfig);
+  if (normalizedPlan.beats.length !== input.beatCount) {
+    throw new Error(`Seed plan returned ${normalizedPlan.beats.length} beats, expected ${input.beatCount}.`);
+  }
+
+  return normalizedPlan;
+}
+
+export async function materializeSeededBeat(
+  seedBeat: SeedBeatOutline,
+  sessionState: Partial<StorySession> | null,
+  modelOverrides?: StoryModelOverrides
+): Promise<StoryBeat> {
+  const normalizedSessionState = sessionState
+    ? {
+        ...sessionState,
+        storyConfig: normalizeStoryConfig(sessionState.storyConfig),
+        visualStyle: sessionState.visualStyle || deriveVisualStyleSummary(sessionState.storyConfig?.visualSettings),
+      }
+    : null;
+  const storyConfig = normalizeStoryConfig(normalizedSessionState?.storyConfig);
+  const materializationTemplateCandidate = modelOverrides?.seededBeatPrompt || getDefaultPromptBody('seeded_beat_materialization');
+  const materializationTemplate = validatePromptTemplate('seeded_beat_materialization', materializationTemplateCandidate).isValid
+    ? materializationTemplateCandidate
+    : getDefaultPromptBody('seeded_beat_materialization');
+  const basePrompt = resolvePromptTemplate(materializationTemplate, {
+    language: storyConfig.language,
+    storyConfig: formatStoryConfig(normalizedSessionState),
+    storyState: formatStoryState(normalizedSessionState),
+    sourceText: getSeedSourceText(storyConfig),
+    guidanceText: storyConfig.authoring.guidanceText || '',
+    seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
+  });
+
+  const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
+    const text = await callGeminiText({
+      task: 'seeded_beat_materialization',
+      model: modelOverrides?.seededBeatModel || 'gemini-3.1-pro-preview',
+      prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
+      temperature: modelOverrides?.seededBeatTemperature ?? 0.4,
+    });
+
+    try {
+      return mergeSeededBeatWithGeneratedFields(seedBeat, JSON.parse(text) as StoryBeat);
+    } catch {
+      throw new Error(`Failed to parse seeded beat JSON: ${text.slice(0, 200)}`);
+    }
+  };
+
+  let beat = await generateAttempt();
+  const issues = validateGeneratedBeat(beat, normalizedSessionState);
+  if (issues.length > 0) {
+    beat = await generateAttempt(buildValidationRepairNote(issues));
+    const retryIssues = validateGeneratedBeat(beat, normalizedSessionState);
+    if (retryIssues.length > 0) {
+      throw new Error(`Seeded beat validation failed after retry: ${retryIssues.join('; ')}`);
+    }
+  }
+
+  return beat;
 }
 
 interface CharacterReferenceGenerationOptions {
@@ -249,6 +368,85 @@ export async function composeStoryboardPlan(
       }
     }
   );
+}
+
+function mergeSeededBeatWithGeneratedFields(seedBeat: SeedBeatOutline, generatedBeat: StoryBeat): StoryBeat {
+  const normalizedSeedBeat = reorderCanonicalOptions(seedBeat);
+  const canonicalOptionId = normalizedSeedBeat.isEnding
+    ? undefined
+    : normalizedSeedBeat.options.find((option) => option.isCanonical)?.id ?? normalizedSeedBeat.options[0]?.id;
+
+  return {
+    ...generatedBeat,
+    title: normalizedSeedBeat.title,
+    beatNumber: normalizedSeedBeat.beatIndex,
+    isEnding: normalizedSeedBeat.isEnding,
+    storyText: normalizedSeedBeat.storyText,
+    sceneSummary: normalizedSeedBeat.sceneSummary,
+    options: normalizedSeedBeat.isEnding
+      ? []
+      : normalizedSeedBeat.options.map((option) => ({
+          id: option.id,
+          label: option.label,
+          intent: option.intent,
+        })),
+    originKind: 'seeded_canonical',
+    seedPlanBeatIndex: normalizedSeedBeat.beatIndex,
+    canonicalOptionId,
+  };
+}
+
+function normalizeSeedPlanResult(plan: SeedPlan, storyConfig: StoryConfig): SeedPlan {
+  const normalizedConfig = normalizeStoryConfig({
+    ...storyConfig,
+    authoring: {
+      ...storyConfig.authoring,
+      mode: 'seeded',
+      seedPlan: plan,
+    },
+  });
+  const normalizedPlan = getSeedPlan(normalizedConfig);
+  if (!normalizedPlan) {
+    throw new Error('Seed plan generation returned an invalid plan.');
+  }
+
+  const beats = normalizedPlan.beats.map(reorderCanonicalOptions);
+  if (beats.some((beat) => !beat.isEnding && beat.options.length !== 3)) {
+    throw new Error('Seed plan generation must return exactly 3 options for each non-ending beat.');
+  }
+  if (beats.some((beat, index) => beat.beatIndex !== index + 1)) {
+    throw new Error('Seed plan beat indexes must be sequential starting from 1.');
+  }
+  if (!beats[beats.length - 1]?.isEnding) {
+    throw new Error('The final seed-plan beat must be marked as an ending.');
+  }
+
+  return {
+    beatCount: beats.length,
+    beats,
+  };
+}
+
+function reorderCanonicalOptions(seedBeat: SeedBeatOutline): SeedBeatOutline {
+  if (seedBeat.isEnding) {
+    return {
+      ...seedBeat,
+      options: [],
+    };
+  }
+
+  const canonicalIndex = seedBeat.options.findIndex((option) => option.isCanonical);
+  const resolvedCanonicalIndex = canonicalIndex === -1 ? 0 : canonicalIndex;
+  const canonical = seedBeat.options[resolvedCanonicalIndex];
+  const alternates = seedBeat.options.filter((_, index) => index !== resolvedCanonicalIndex);
+
+  return {
+    ...seedBeat,
+    options: [canonical, ...alternates].slice(0, 3).map((option, index) => ({
+      ...option,
+      isCanonical: index === 0,
+    })),
+  };
 }
 
 export function renderStoryboardPlan(plan: StoryboardPlan): string {
@@ -496,6 +694,8 @@ export async function generateCharacterPortrait(
 function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
   const cfg = normalizeStoryConfig(sessionState?.storyConfig);
   const prelude = getPreludeText(cfg);
+  const seedSourceText = getSeedSourceText(cfg);
+  const seedPlan = getSeedPlan(cfg);
   return [
     `- Language: ${cfg.language || 'english'}`,
     `- Age Group: ${cfg.ageGroup}`,
@@ -507,6 +707,10 @@ function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
     `- Palette: ${cfg.visualSettings.palette}`,
     `- Detail: ${cfg.visualSettings.detail}`,
     `- Authoring Mode: ${cfg.authoring.mode}`,
+    `- Source Text: ${seedSourceText ? 'present' : 'absent'}`,
+    `- Source Guidance: ${cfg.authoring.guidanceText?.trim() ? 'present' : 'absent'}`,
+    `- Source Fidelity: ${cfg.authoring.sourceFidelity || 'balanced_adaptation'}`,
+    `- Canonical Seed Plan: ${seedPlan ? 'present' : 'absent'}`,
     `- Authored Prelude: ${prelude ? 'present' : 'absent'}`,
     `- Character References: ${cfg.portraitReferences.mode === 'character_sheet' ? 'character sheet' : 'single portrait'}`,
     `- Character Reference Quality: ${cfg.portraitReferences.quality}`,

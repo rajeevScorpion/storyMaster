@@ -38,6 +38,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
   actionCosts: {
     start_story_initial_beat: 1,
     continue_story_new_beat: 1,
+    preview_seed_plan: 0,
     regenerate_image: 1,
     regenerate_narration: 1,
     export_video_future: 5,

@@ -2,10 +2,13 @@ import type {
   PortraitReferenceConfig,
   PortraitReferenceQuality,
   PortraitReferenceMode,
+  SeedBeatOutline,
+  SeedPlan,
   StoryAuthoringConfig,
   StoryConfig,
   StoryDetailLevel,
   StoryPalette,
+  SourceFidelity,
   StoryTheme,
   VisualSettings,
   VisualStylePreset,
@@ -44,6 +47,28 @@ export const STORY_DETAIL_OPTIONS: Array<{ value: StoryDetailLevel; label: strin
   { value: 'lush', label: 'Lush' },
 ];
 
+export const SOURCE_FIDELITY_OPTIONS: Array<{
+  value: SourceFidelity;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: 'preserve_closely',
+    label: 'Preserve Closely',
+    description: 'Stay as close as possible to the source wording and scene intent while structuring it into beats.',
+  },
+  {
+    value: 'balanced_adaptation',
+    label: 'Balanced Adaptation',
+    description: 'Smooth pacing and clarity while keeping the original story arc and character intent intact.',
+  },
+  {
+    value: 'creative_expansion',
+    label: 'Creative Expansion',
+    description: 'Allow a little more dramatic shaping and scene expansion while staying faithful to the core story.',
+  },
+];
+
 export const DEFAULT_VISUAL_SETTINGS: VisualSettings = {
   preset: 'storybook_illustration',
   theme: 'whimsical',
@@ -54,6 +79,11 @@ export const DEFAULT_VISUAL_SETTINGS: VisualSettings = {
 export const DEFAULT_AUTHORING: StoryAuthoringConfig = {
   mode: 'prompt',
   preludeText: '',
+  workingTitle: '',
+  sourceText: '',
+  guidanceText: '',
+  sourceFidelity: 'balanced_adaptation',
+  seedPlan: undefined,
 };
 
 export const DEFAULT_PORTRAIT_REFERENCE_CONFIG: PortraitReferenceConfig = {
@@ -106,7 +136,10 @@ const DETAIL_SUMMARIES: Record<StoryDetailLevel, string> = {
 
 type RawStoryConfig = Partial<StoryConfig> & {
   visualSettings?: Partial<VisualSettings> | null;
-  authoring?: Partial<StoryAuthoringConfig> | null;
+  authoring?: (Partial<StoryAuthoringConfig> & {
+    mode?: string | null;
+    preludeText?: string | null;
+  }) | null;
   portraitReferences?: Partial<PortraitReferenceConfig> | null;
 };
 
@@ -118,9 +151,23 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     detail: input?.visualSettings?.detail || DEFAULT_VISUAL_SETTINGS.detail,
   };
 
+  const rawAuthoring = input?.authoring;
+  const legacyPreludeText = sanitizeText(rawAuthoring?.preludeText ?? DEFAULT_AUTHORING.preludeText);
+  const authoringMode = normalizeAuthoringMode(rawAuthoring?.mode);
   const authoring: StoryAuthoringConfig = {
-    mode: input?.authoring?.mode || DEFAULT_AUTHORING.mode,
-    preludeText: sanitizePrelude(input?.authoring?.preludeText ?? DEFAULT_AUTHORING.preludeText),
+    mode: authoringMode,
+    preludeText: legacyPreludeText,
+    workingTitle: sanitizeText(rawAuthoring?.workingTitle),
+    sourceText: authoringMode === 'seeded'
+      ? sanitizeText(rawAuthoring?.sourceText ?? legacyPreludeText)
+      : '',
+    guidanceText: authoringMode === 'seeded'
+      ? sanitizeText(rawAuthoring?.guidanceText)
+      : '',
+    sourceFidelity: normalizeSourceFidelity(rawAuthoring?.sourceFidelity),
+    seedPlan: authoringMode === 'seeded'
+      ? normalizeSeedPlan(rawAuthoring?.seedPlan)
+      : undefined,
   };
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
@@ -151,7 +198,7 @@ export function deriveVisualStyleSummary(visualSettings?: Partial<VisualSettings
 }
 
 export function getPreludeText(config?: Partial<StoryConfig> | null): string {
-  return sanitizePrelude(config?.authoring?.preludeText);
+  return sanitizeText(config?.authoring?.preludeText);
 }
 
 export function hasPreludeText(config?: Partial<StoryConfig> | null): boolean {
@@ -159,7 +206,19 @@ export function hasPreludeText(config?: Partial<StoryConfig> | null): boolean {
 }
 
 export function isSeedContinueMode(config?: Partial<StoryConfig> | null): boolean {
-  return normalizeStoryConfig(config).authoring.mode === 'seed_continue';
+  return normalizeStoryConfig(config).authoring.mode === 'seeded';
+}
+
+export function isSeededMode(config?: Partial<StoryConfig> | null): boolean {
+  return normalizeStoryConfig(config).authoring.mode === 'seeded';
+}
+
+export function getSeedSourceText(config?: Partial<StoryConfig> | null): string {
+  return sanitizeText(config?.authoring?.sourceText);
+}
+
+export function getSeedPlan(config?: Partial<StoryConfig> | null): SeedPlan | undefined {
+  return normalizeSeedPlan(config?.authoring?.seedPlan);
 }
 
 export function normalizePortraitReferenceConfig(
@@ -179,8 +238,108 @@ export function normalizePortraitReferenceConfig(
   };
 }
 
-function sanitizePrelude(value?: string | null): string {
+function sanitizeText(value?: string | null): string {
   return value?.trim() || '';
+}
+
+function normalizeAuthoringMode(value?: string | null): StoryAuthoringConfig['mode'] {
+  return value === 'seeded' || value === 'seed_continue' ? 'seeded' : DEFAULT_AUTHORING.mode;
+}
+
+function normalizeSourceFidelity(value?: string | null): SourceFidelity {
+  switch (value) {
+    case 'preserve_closely':
+    case 'creative_expansion':
+      return value;
+    case 'balanced_adaptation':
+    default:
+      return DEFAULT_AUTHORING.sourceFidelity ?? 'balanced_adaptation';
+  }
+}
+
+function normalizeSeedPlan(value?: SeedPlan | null): SeedPlan | undefined {
+  if (!value || !Array.isArray(value.beats)) {
+    return undefined;
+  }
+
+  const beats = value.beats
+    .map(normalizeSeedBeatOutline)
+    .filter((beat): beat is SeedBeatOutline => beat !== null);
+
+  if (beats.length === 0) {
+    return undefined;
+  }
+
+  return {
+    beatCount: clampSeedBeatCount(value.beatCount, beats.length),
+    beats,
+  };
+}
+
+function normalizeSeedBeatOutline(value: SeedPlan['beats'][number] | null | undefined): SeedBeatOutline | null {
+  if (!value) {
+    return null;
+  }
+
+  const options = Array.isArray(value.options)
+    ? value.options
+        .map((option, index) => ({
+          id: sanitizeText(option?.id) || `seed-option-${value.beatIndex || 1}-${index + 1}`,
+          label: sanitizeText(option?.label),
+          intent: sanitizeText(option?.intent),
+          isCanonical: Boolean(option?.isCanonical),
+        }))
+        .filter((option) => option.label && option.intent)
+    : [];
+
+  const beatIndex = typeof value.beatIndex === 'number' && Number.isFinite(value.beatIndex)
+    ? Math.max(1, Math.round(value.beatIndex))
+    : 1;
+
+  const isEnding = Boolean(value.isEnding);
+  const normalizedOptions = isEnding ? [] : normalizeSeedOptions(options, beatIndex);
+
+  return {
+    beatIndex,
+    title: sanitizeText(value.title) || `Beat ${beatIndex}`,
+    storyText: sanitizeText(value.storyText),
+    sceneSummary: sanitizeText(value.sceneSummary),
+    isEnding,
+    options: normalizedOptions,
+  };
+}
+
+function normalizeSeedOptions(
+  options: SeedBeatOutline['options'],
+  beatIndex: number
+): SeedBeatOutline['options'] {
+  const normalized = options.slice(0, 3);
+  while (normalized.length < 3) {
+    const optionNumber = normalized.length + 1;
+    normalized.push({
+      id: `seed-option-${beatIndex}-${optionNumber}`,
+      label: optionNumber === 1 ? 'Follow the original story path' : `Alternate path ${optionNumber - 1}`,
+      intent: optionNumber === 1 ? 'Continue along the original seeded story.' : 'Explore a different outcome from this beat.',
+      isCanonical: optionNumber === 1,
+    });
+  }
+
+  const canonicalIndex = normalized.findIndex((option) => option.isCanonical);
+  const resolvedCanonicalIndex = canonicalIndex === -1 ? 0 : canonicalIndex;
+
+  return normalized.map((option, index) => ({
+    ...option,
+    id: option.id || `seed-option-${beatIndex}-${index + 1}`,
+    isCanonical: index === resolvedCanonicalIndex,
+  }));
+}
+
+function clampSeedBeatCount(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.round(value));
 }
 
 function clampMaxBeats(value?: number | null): number {

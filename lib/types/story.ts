@@ -14,6 +14,27 @@ export interface Option {
   intent: string;
 }
 
+export interface SeedPlanOption {
+  id: string;
+  label: string;
+  intent: string;
+  isCanonical: boolean;
+}
+
+export interface SeedBeatOutline {
+  beatIndex: number;
+  title: string;
+  storyText: string;
+  sceneSummary: string;
+  isEnding: boolean;
+  options: SeedPlanOption[];
+}
+
+export interface SeedPlan {
+  beatCount: number;
+  beats: SeedBeatOutline[];
+}
+
 export interface PortraitTask {
   characterId: string;
   characterName: string;
@@ -69,6 +90,9 @@ export interface StoryBeat {
   isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;
+  originKind?: 'generated' | 'seeded_canonical';
+  seedPlanBeatIndex?: number;
+  canonicalOptionId?: string;
 }
 
 export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
@@ -100,6 +124,7 @@ export type StoryPalette =
   | 'neon';
 
 export type StoryDetailLevel = 'simple' | 'balanced' | 'lush';
+export type SourceFidelity = 'preserve_closely' | 'balanced_adaptation' | 'creative_expansion';
 
 export interface VisualSettings {
   preset: VisualStylePreset;
@@ -108,11 +133,16 @@ export interface VisualSettings {
   detail: StoryDetailLevel;
 }
 
-export type AuthoringMode = 'prompt' | 'seed_continue';
+export type AuthoringMode = 'prompt' | 'seeded';
 
 export interface StoryAuthoringConfig {
   mode: AuthoringMode;
   preludeText?: string;
+  workingTitle?: string;
+  sourceText?: string;
+  guidanceText?: string;
+  sourceFidelity?: SourceFidelity;
+  seedPlan?: SeedPlan;
 }
 
 export interface StoryConfig {

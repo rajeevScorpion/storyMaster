@@ -131,9 +131,37 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
   story_generation: {
     userPrompt: 'Continue this whimsical orchard mystery and steer it toward a warm discovery ending.',
     language: 'english',
-    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Current Beat: 3 of 6\n- Style Preset: storybook_illustration\n- Theme: whimsical\n- Palette: warm\n- Detail: balanced\n- Authoring Mode: seed_continue\n- Authored Prelude: present',
+    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Current Beat: 3 of 6\n- Style Preset: storybook_illustration\n- Theme: whimsical\n- Palette: warm\n- Detail: balanced\n- Authoring Mode: seeded\n- Canonical Seed Plan: present',
     storyState: DEFAULT_STORY_BIBLE,
     selectedOptionLabel: 'Pip follows the lantern trail into the orchard',
+  },
+  seed_plan_generation: {
+    language: 'english',
+    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Visual Style: storybook illustration\n- Seed Fidelity: balanced adaptation',
+    workingTitle: 'Lanterns in the Orchard',
+    sourceFidelity: 'balanced_adaptation',
+    guidanceText: 'Keep the mood warm and discovery-driven, and make the canonical path feel visually clear for illustration.',
+    sourceText: 'Pip follows a trail of floating lanterns into the orchard after dark. Barnaby catches up and warns that the lanterns only appear when the old map case wakes. They discover a brass map hidden in an apple tree, but the case opens only when Pip chooses to trust Barnaby. Together they unlock it and find a path to the orchard keeper, who reveals the lanterns were guiding them toward a forgotten friendship promise between their families.',
+    beatCount: '6',
+  },
+  seeded_beat_materialization: {
+    language: 'english',
+    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Visual Style: storybook illustration\n- Authoring Mode: seeded',
+    storyState: DEFAULT_STORY_BIBLE,
+    sourceText: 'Pip follows a trail of floating lanterns into the orchard after dark. Barnaby catches up and warns that the lanterns only appear when the old map case wakes. They discover a brass map hidden in an apple tree, but the case opens only when Pip chooses to trust Barnaby. Together they unlock it and find a path to the orchard keeper, who reveals the lanterns were guiding them toward a forgotten friendship promise between their families.',
+    guidanceText: 'Preserve the gentle mystery and make the visuals easy to storyboard.',
+    seedBeat: JSON.stringify({
+      beatIndex: 2,
+      title: 'The Hidden Map Case',
+      storyText: 'Pip and Barnaby discover a brass map case tucked inside an old apple tree. The lanterns brighten when Pip reaches for it, but the lock only stirs when Barnaby offers his hand and asks her to trust him.',
+      sceneSummary: 'Pip finds the hidden map case and must decide whether to trust Barnaby to open it.',
+      isEnding: false,
+      options: [
+        { id: 'seed-option-2-1', label: 'Trust Barnaby and open the case together', intent: 'Stay on the original seeded path by unlocking the map case with Barnaby.', isCanonical: true },
+        { id: 'seed-option-2-2', label: 'Ask the lanterns for another clue first', intent: 'Delay opening the case and follow the lights deeper into the orchard.', isCanonical: false },
+        { id: 'seed-option-2-3', label: 'Hide the case until morning', intent: 'Protect the discovery and leave before anyone else notices.', isCanonical: false },
+      ],
+    }, null, 2),
   },
   visual_prompt: {
     storyText: 'Pip steps into Mr. Huckle\'s antique shop to escape the rain, discovers a strange indigo umbrella between a grandfather clock and dusty globe, turns the brass sun dial, and watches golden light flood the room.',
@@ -444,6 +472,35 @@ export default function PlaygroundStudio() {
           </div>
           <textarea value={inputs.storyConfig || ''} onChange={(event) => setInputs((current) => ({ ...current, storyConfig: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Formatted story config" />
           <textarea value={inputs.storyState || ''} onChange={(event) => setInputs((current) => ({ ...current, storyState: event.target.value }))} rows={8} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Current story state JSON" />
+        </div>
+      );
+    }
+
+    if (selectedTask === 'seed_plan_generation') {
+      return (
+        <div className="grid gap-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <input value={inputs.language || ''} onChange={(event) => setInputs((current) => ({ ...current, language: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Language" />
+            <input value={inputs.beatCount || ''} onChange={(event) => setInputs((current) => ({ ...current, beatCount: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat count" />
+          </div>
+          <input value={inputs.workingTitle || ''} onChange={(event) => setInputs((current) => ({ ...current, workingTitle: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Working title" />
+          <input value={inputs.sourceFidelity || ''} onChange={(event) => setInputs((current) => ({ ...current, sourceFidelity: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Source fidelity" />
+          <textarea value={inputs.storyConfig || ''} onChange={(event) => setInputs((current) => ({ ...current, storyConfig: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Formatted story config" />
+          <textarea value={inputs.guidanceText || ''} onChange={(event) => setInputs((current) => ({ ...current, guidanceText: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Extra guidance" />
+          <textarea value={inputs.sourceText || ''} onChange={(event) => setInputs((current) => ({ ...current, sourceText: event.target.value }))} rows={8} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Source story / script / beat notes" />
+        </div>
+      );
+    }
+
+    if (selectedTask === 'seeded_beat_materialization') {
+      return (
+        <div className="grid gap-3">
+          <input value={inputs.language || ''} onChange={(event) => setInputs((current) => ({ ...current, language: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Language" />
+          <textarea value={inputs.storyConfig || ''} onChange={(event) => setInputs((current) => ({ ...current, storyConfig: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Formatted story config" />
+          <textarea value={inputs.storyState || ''} onChange={(event) => setInputs((current) => ({ ...current, storyState: event.target.value }))} rows={7} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Current story state JSON" />
+          <textarea value={inputs.guidanceText || ''} onChange={(event) => setInputs((current) => ({ ...current, guidanceText: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Extra guidance" />
+          <textarea value={inputs.sourceText || ''} onChange={(event) => setInputs((current) => ({ ...current, sourceText: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Source story / script / beat notes" />
+          <textarea value={inputs.seedBeat || ''} onChange={(event) => setInputs((current) => ({ ...current, seedBeat: event.target.value }))} rows={10} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Confirmed seed beat JSON" />
         </div>
       );
     }

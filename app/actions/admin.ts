@@ -4,6 +4,8 @@ import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue, setFeatureFlagValue, type ModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
+import { savePricingActionCost } from '@/app/actions/pricing-admin';
+import { COINS_PER_BEAT } from '@/lib/types/pricing';
 
 // ============================================================
 // Search
@@ -156,8 +158,10 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, visualPrompt, imagePrompt, portraitPrompt] = await Promise.all([
+  const [storyPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, imagePrompt, portraitPrompt] = await Promise.all([
     getPublishedPrompt('story_generation'),
+    getPublishedPrompt('seed_plan_generation'),
+    getPublishedPrompt('seeded_beat_materialization'),
     getPublishedPrompt('visual_prompt'),
     getPublishedPrompt('image_generation'),
     getPublishedPrompt('portrait_generation'),
@@ -165,11 +169,17 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   return {
     storyModel: map.get('story_generation')?.modelId,
     storyTemperature: map.get('story_generation')?.temperature ?? undefined,
+    seedPlanModel: map.get('seed_plan_generation')?.modelId,
+    seedPlanTemperature: map.get('seed_plan_generation')?.temperature ?? undefined,
+    seededBeatModel: map.get('seeded_beat_materialization')?.modelId,
+    seededBeatTemperature: map.get('seeded_beat_materialization')?.temperature ?? undefined,
     composerModel: map.get('visual_prompt')?.modelId,
     composerTemperature: map.get('visual_prompt')?.temperature ?? undefined,
     imageModel: map.get('image_generation')?.modelId,
     portraitModel: map.get('portrait_generation')?.modelId,
     storyPrompt,
+    seedPlanPrompt,
+    seededBeatPrompt,
     visualPrompt,
     imagePrompt,
     portraitPrompt,
@@ -191,9 +201,11 @@ export async function getGlobalSettings(): Promise<{
   imageTimeoutMs: number;
   ttsTimeoutMs: number;
   cloudSaveTimeoutMs: number;
+  authoringWordCap: number;
+  previewSeedPlanPriceCoins: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -207,6 +219,8 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('gemini_image_timeout_ms'),
     getFeatureFlagValue('gemini_tts_timeout_ms'),
     getFeatureFlagValue('cloud_save_timeout_ms'),
+    getFeatureFlagValue('story_authoring_word_cap'),
+    getPreviewSeedPlanPriceCoins(),
   ]);
   return {
     cycleOverride,
@@ -222,6 +236,8 @@ export async function getGlobalSettings(): Promise<{
     imageTimeoutMs: parseInt(imageMs ?? '90000', 10) || 90000,
     ttsTimeoutMs: parseInt(ttsMs ?? '120000', 10) || 120000,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
+    authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
+    previewSeedPlanPriceCoins,
   };
 }
 
@@ -304,6 +320,30 @@ export async function setCloudSaveTimeout(ms: number): Promise<void> {
   await setFeatureFlagValue('cloud_save_timeout_ms', String(ms));
 }
 
+export async function setAuthoringWordCap(words: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(words) || words < 50) {
+    throw new Error('Authoring word cap must be at least 50 words.');
+  }
+  await setFeatureFlagValue('story_authoring_word_cap', String(Math.round(words)));
+}
+
+export async function setPreviewSeedPlanPriceCoins(coins: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(coins) || coins < 0) {
+    throw new Error('Preview price must be 0 or more.');
+  }
+  if (coins % COINS_PER_BEAT !== 0) {
+    throw new Error(`Preview price must be set in multiples of ${COINS_PER_BEAT} coins.`);
+  }
+
+  await savePricingActionCost({
+    actionKey: 'preview_seed_plan',
+    beatCost: Math.round(coins / COINS_PER_BEAT),
+    isActive: true,
+  });
+}
+
 // Public (no admin gate) — read by StoryScreen to pace storyboard panels
 export async function getStoryboardSettings(): Promise<{
   cycleOverride: boolean;
@@ -316,8 +356,9 @@ export async function getStoryboardSettings(): Promise<{
   creatorCharacterSheetsEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
+  authoringWordCap: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -328,6 +369,7 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
+    getFeatureFlagValue('story_authoring_word_cap'),
   ]);
   return {
     cycleOverride,
@@ -340,7 +382,26 @@ export async function getStoryboardSettings(): Promise<{
     creatorCharacterSheetsEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,
+    authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
   };
+}
+
+async function getPreviewSeedPlanPriceCoins(): Promise<number> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('pricing_action_costs')
+    .select('beat_cost')
+    .eq('action_key', 'preview_seed_plan')
+    .order('effective_from', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    console.error('Failed to load preview seed-plan price:', error.message);
+    return 0;
+  }
+
+  const beatCost = (data?.[0] as { beat_cost?: number } | undefined)?.beat_cost ?? 0;
+  return beatCost * COINS_PER_BEAT;
 }
 
 export async function adminDeleteStory(storyId: string): Promise<void> {

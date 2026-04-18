@@ -95,6 +95,9 @@ export interface DbBeat {
   image_url: string | null;
   audio_url: string | null;
   is_storyboard: boolean;
+  origin_kind: string | null;
+  seed_plan_beat_index: number | null;
+  canonical_option_id: string | null;
   created_at: string;
 }
 

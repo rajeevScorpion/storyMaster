@@ -173,6 +173,121 @@ User Selected Option:
 
 Generate the next story beat.`;
 
+export const SEED_PLAN_GENERATION_PROMPT_DEFAULT = `You are Kissago's source-to-story planner.
+
+Your job is to transform user-authored source material into a structured canonical beat plan for a branching visual story.
+
+Core rules:
+1. Preserve the user's story intent, emotional arc, and major events.
+2. This is a structuring step, not a creative rewrite.
+3. Return exactly {{beatCount}} beats.
+4. If the source contains more scenes than beats, merge scenes cleanly without losing causal clarity.
+5. If the source contains fewer scenes than beats, subdivide for pacing without inventing major new plot points.
+6. Respect the requested fidelity mode: {{sourceFidelity}}.
+7. Honor optional guidance when present, but never contradict the source text.
+8. Accept prose, scene lists, rough notes, or script/dialogue formatting without requiring cleanup from the user.
+9. Write every user-facing field in {{language}}.
+10. Keep each beat preview-ready: concise, readable, image-friendly, and narration-friendly.
+11. Each non-ending beat must include exactly 3 options.
+12. Exactly one option per non-ending beat must have isCanonical = true.
+13. The canonical option must advance to the next beat in the seeded source path.
+14. The two non-canonical options must be plausible alternate directions, not replacements for the seeded path.
+15. The final beat must set isEnding = true and return options as [].
+16. Keep titles short and useful. Keep sceneSummary compact.
+17. Do not add random lore, surprise characters, or off-tone twists that are not grounded in the source.
+18. Keep the output safe for the requested story configuration.
+
+Return JSON with exactly these keys:
+- beatCount
+- beats
+
+Each beat object must contain:
+- beatIndex
+- title
+- storyText
+- sceneSummary
+- isEnding
+- options
+
+Each option object must contain:
+- id
+- label
+- intent
+- isCanonical
+
+Story Configuration:
+{{storyConfig}}
+
+Working Title:
+{{workingTitle}}
+
+Source Fidelity:
+{{sourceFidelity}}
+
+Extra Guidance:
+{{guidanceText}}
+
+Source Text:
+{{sourceText}}
+
+Create the canonical beat plan now.`;
+
+export const SEEDED_BEAT_MATERIALIZATION_PROMPT_DEFAULT = `You are Kissago's seeded beat materializer.
+
+Your job is to turn one confirmed seed-plan beat into a full runtime story beat for Kissago.
+
+Core rules:
+1. Preserve the seeded beat's title, storyText, sceneSummary, and options as the source of truth.
+2. Do not rewrite the canonical story arc.
+3. Keep the provided option ids, labels, intents, and canonical ordering intact.
+4. Fill in the remaining runtime fields needed by Kissago: characters, continuityNotes, imagePrompt, clues, nextBeatGoal, endingForecast, newCharacterIds, changedCharacterIds.
+5. Treat {{storyState}} as the highest continuity authority.
+6. Use the source text and optional guidance to preserve character intent and story meaning.
+7. Write story-facing text in {{language}}.
+8. Keep continuityNotes in English.
+9. Keep imagePrompt in English.
+10. imagePrompt should be cinematic, continuity-aware, and suitable for storyboard decomposition.
+11. If the seeded beat is an ending, options must remain [] and the beat should feel conclusive.
+12. Do not invent major new plot points beyond what is necessary to make the beat playable in Kissago.
+13. Keep the cast compact unless the seeded beat clearly requires otherwise.
+14. Flag newly introduced recurring named characters in newCharacterIds.
+15. Flag only meaningful visible character changes in changedCharacterIds.
+16. beatNumber must match the seeded beat index.
+17. The returned options must remain compatible with future branching.
+
+Return a JSON object with these keys:
+- title
+- beatNumber
+- isEnding
+- storyText
+- sceneSummary
+- options
+- characters
+- continuityNotes
+- imagePrompt
+- clues
+- nextBeatGoal
+- endingForecast
+- newCharacterIds
+- changedCharacterIds
+
+Story Configuration:
+{{storyConfig}}
+
+Current Story State:
+{{storyState}}
+
+Source Text:
+{{sourceText}}
+
+Extra Guidance:
+{{guidanceText}}
+
+Seed Beat Outline:
+{{seedBeat}}
+
+Materialize the beat now.`;
+
 export const VISUAL_PROMPT_DEFAULT = `You are Visual Prompt Composer.
 
 Your job is to convert the latest story beat and the story bible into a high-quality image prompt that preserves continuity.
@@ -368,6 +483,8 @@ Requirements:
 
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience.',
+  seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
+  seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown.',
   portrait_generation: 'Generate a single-character reference image only. No text overlays, no other characters, and no cluttered background.',
@@ -388,6 +505,35 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label, or blank on the first beat.', required: true },
     ],
     defaultPrompt: STORY_GENERATION_PROMPT_DEFAULT,
+  },
+  seed_plan_generation: {
+    key: 'seed_plan_generation',
+    label: 'Seed Plan Generation Prompt',
+    description: 'Controls how user-authored source material is segmented into a canonical beat plan preview.',
+    placeholders: [
+      { key: 'language', label: 'Language', description: 'Requested output language.', required: true },
+      { key: 'storyConfig', label: 'Story Config', description: 'Formatted story configuration and pacing context.', required: true },
+      { key: 'workingTitle', label: 'Working Title', description: 'Optional author-supplied title for the source story.', required: false },
+      { key: 'sourceFidelity', label: 'Source Fidelity', description: 'Requested preservation mode for the source material.', required: true },
+      { key: 'guidanceText', label: 'Extra Guidance', description: 'Optional extra author guidance for adaptation.', required: false },
+      { key: 'sourceText', label: 'Source Text', description: 'User-authored source story, script, or beat notes.', required: true },
+      { key: 'beatCount', label: 'Beat Count', description: 'Target number of beats in the canonical plan.', required: true },
+    ],
+    defaultPrompt: SEED_PLAN_GENERATION_PROMPT_DEFAULT,
+  },
+  seeded_beat_materialization: {
+    key: 'seeded_beat_materialization',
+    label: 'Seeded Beat Materialization Prompt',
+    description: 'Controls how one confirmed seed-plan beat is turned into a full runtime story beat.',
+    placeholders: [
+      { key: 'language', label: 'Language', description: 'Requested output language.', required: true },
+      { key: 'storyConfig', label: 'Story Config', description: 'Formatted story configuration and pacing context.', required: true },
+      { key: 'storyState', label: 'Story State', description: 'Compact story bible snapshot used for continuity.', required: true },
+      { key: 'sourceText', label: 'Source Text', description: 'User-authored source story, script, or beat notes.', required: true },
+      { key: 'guidanceText', label: 'Extra Guidance', description: 'Optional extra author guidance for adaptation.', required: false },
+      { key: 'seedBeat', label: 'Seed Beat Outline', description: 'Confirmed canonical seed beat outline as JSON.', required: true },
+    ],
+    defaultPrompt: SEEDED_BEAT_MATERIALIZATION_PROMPT_DEFAULT,
   },
   visual_prompt: {
     key: 'visual_prompt',

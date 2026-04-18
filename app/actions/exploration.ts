@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/supabase/storage';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
-import { deriveVisualStyleSummary, getPreludeText, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -30,6 +30,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       endingForecast: (beat.ending_forecast || []) as string[],
       imageUrl: beat.image_url || undefined,
       audioUrl: beat.audio_url || undefined,
+      originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
+      seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
+      canonicalOptionId: beat.canonical_option_id || undefined,
     },
     children: childNodeIds,
   };
@@ -135,6 +138,9 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+            ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
+            ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
+            ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
           },
         };
       }
@@ -288,7 +294,6 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   };
   beats: StoryBeat[];
   choices: { fromBeat: number; optionLabel: string }[];
-  preludeText?: string;
 }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -297,13 +302,11 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices, stories(story_config)')
+    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices')
     .eq('id', storylineId)
     .single();
 
   if (slError || !storyline) throw new Error('Storyline not found');
-
-  const preludeText = getPreludeText((storyline as any).stories?.story_config);
 
   // Try normalized junction first
   const { data: junctionBeats } = await supabase
@@ -335,6 +338,9 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         imageUrl: b.image_url || undefined,
         audioUrl: b.audio_url || undefined,
         isStoryboard: b.is_storyboard || undefined,
+        originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
+        seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
+        canonicalOptionId: b.canonical_option_id || undefined,
       };
     });
 
@@ -361,7 +367,6 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       },
       beats: signedBeats,
       choices,
-      ...(preludeText ? { preludeText } : {}),
     };
   }
 
@@ -382,7 +387,6 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     },
     beats: signedLegacyBeats,
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
-    ...(preludeText ? { preludeText } : {}),
   };
 }
 
@@ -457,6 +461,9 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         imageUrl: b.image_url || undefined,
         audioUrl: b.audio_url || undefined,
         isStoryboard: b.is_storyboard || undefined,
+        originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
+        seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
+        canonicalOptionId: b.canonical_option_id || undefined,
       };
     });
   } else {

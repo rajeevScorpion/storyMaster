@@ -13,6 +13,8 @@ import {
   setImageTimeout,
   setTtsTimeout,
   setCloudSaveTimeout,
+  setAuthoringWordCap,
+  setPreviewSeedPlanPriceCoins,
   setFreePlusCharacterSheets,
   setCreatorCharacterSheets,
   setVideoDownload,
@@ -83,6 +85,12 @@ export default function GlobalSettings() {
   const [cloudSaveTimeoutMs, setCloudSaveTimeoutMs] = useState(20000);
   const [cloudSaveTimeoutInput, setCloudSaveTimeoutInput] = useState('20');
   const [cloudSaveTimeoutSaving, setCloudSaveTimeoutSaving] = useState(false);
+  const [authoringWordCap, setAuthoringWordCapState] = useState(500);
+  const [authoringWordCapInput, setAuthoringWordCapInput] = useState('500');
+  const [authoringWordCapSaving, setAuthoringWordCapSaving] = useState(false);
+  const [previewSeedPlanPriceCoins, setPreviewSeedPlanPriceCoinsState] = useState(0);
+  const [previewSeedPlanPriceCoinsInput, setPreviewSeedPlanPriceCoinsInput] = useState('0');
+  const [previewSeedPlanPriceCoinsSaving, setPreviewSeedPlanPriceCoinsSaving] = useState(false);
 
   useEffect(() => {
     getGlobalSettings()
@@ -100,6 +108,8 @@ export default function GlobalSettings() {
         imageTimeoutMs: it,
         ttsTimeoutMs: at,
         cloudSaveTimeoutMs: st,
+        authoringWordCap: awc,
+        previewSeedPlanPriceCoins: previewPriceCoins,
       }) => {
         setCycleOverrideState(co);
         setCycleMsState(cm);
@@ -119,6 +129,10 @@ export default function GlobalSettings() {
         setTtsTimeoutInput(String(Math.round(at / 1000)));
         setCloudSaveTimeoutMs(st);
         setCloudSaveTimeoutInput(String(Math.round(st / 1000)));
+        setAuthoringWordCapState(awc);
+        setAuthoringWordCapInput(String(awc));
+        setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
+        setPreviewSeedPlanPriceCoinsInput(String(previewPriceCoins));
         setLoading(false);
       })
       .catch((err) => {
@@ -158,7 +172,33 @@ export default function GlobalSettings() {
     }
   }
 
+  async function handleAuthoringWordCapSave() {
+    const words = parseInt(authoringWordCapInput, 10);
+    if (!Number.isFinite(words) || words < 50) return;
+    setAuthoringWordCapSaving(true);
+    try {
+      await setAuthoringWordCap(words);
+      setAuthoringWordCapState(words);
+    } finally {
+      setAuthoringWordCapSaving(false);
+    }
+  }
+
+  async function handlePreviewSeedPlanPriceSave() {
+    const coins = parseInt(previewSeedPlanPriceCoinsInput, 10);
+    if (!Number.isFinite(coins) || coins < 0 || coins % 10 !== 0) return;
+    setPreviewSeedPlanPriceCoinsSaving(true);
+    try {
+      await setPreviewSeedPlanPriceCoins(coins);
+      setPreviewSeedPlanPriceCoinsState(coins);
+    } finally {
+      setPreviewSeedPlanPriceCoinsSaving(false);
+    }
+  }
+
   const parsedMs = parseInt(cycleMsInput, 10);
+  const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
+  const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -319,6 +359,79 @@ export default function GlobalSettings() {
                 }
               }}
             />
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Authoring</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Shared limits and preview pricing for prompt-based and seeded story setup.
+            </p>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Shared authoring word cap</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Applies to prompt mode prompts and seeded mode source text plus extra guidance. Titles are excluded.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={50}
+                  step={25}
+                  value={authoringWordCapInput}
+                  onChange={(e) => setAuthoringWordCapInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="500"
+                />
+                <span className="text-xs text-neutral-500">words</span>
+                <button
+                  onClick={handleAuthoringWordCapSave}
+                  disabled={authoringWordCapSaving || !Number.isFinite(parsedAuthoringWordCap) || parsedAuthoringWordCap < 50}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {authoringWordCapSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {authoringWordCap !== parsedAuthoringWordCap && parsedAuthoringWordCap >= 50 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Seed preview price</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Preview is text-only. Set 0 to keep it free, or charge in multiples of 10 coins so it stays aligned with beat-based wallet billing.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0}
+                  step={10}
+                  value={previewSeedPlanPriceCoinsInput}
+                  onChange={(e) => setPreviewSeedPlanPriceCoinsInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="0"
+                />
+                <span className="text-xs text-neutral-500">coins</span>
+                <button
+                  onClick={handlePreviewSeedPlanPriceSave}
+                  disabled={
+                    previewSeedPlanPriceCoinsSaving ||
+                    !Number.isFinite(parsedPreviewSeedPlanPriceCoins) ||
+                    parsedPreviewSeedPlanPriceCoins < 0 ||
+                    parsedPreviewSeedPlanPriceCoins % 10 !== 0
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {previewSeedPlanPriceCoinsSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {previewSeedPlanPriceCoins !== parsedPreviewSeedPlanPriceCoins && parsedPreviewSeedPlanPriceCoins >= 0 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+              {Number.isFinite(parsedPreviewSeedPlanPriceCoins) && parsedPreviewSeedPlanPriceCoins % 10 !== 0 && (
+                <p className="mt-3 text-xs text-amber-400">Use multiples of 10 coins.</p>
+              )}
+            </div>
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">

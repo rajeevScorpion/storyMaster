@@ -1,7 +1,7 @@
 'use server';
 
 import { GoogleGenAI } from '@google/genai';
-import { beatSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
@@ -57,7 +57,7 @@ function getAI(): GoogleGenAI {
 }
 
 export interface TextCallParams {
-  task: Extract<TaskKey, 'story_generation' | 'visual_prompt'>;
+  task: Extract<TaskKey, 'story_generation' | 'seed_plan_generation' | 'seeded_beat_materialization' | 'visual_prompt'>;
   model: string;
   prompt: string;
   temperature?: number;
@@ -69,6 +69,8 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
 
   const schemaMap = {
     story_generation: beatSchema,
+    seed_plan_generation: seedPlanSchema,
+    seeded_beat_materialization: beatSchema,
     visual_prompt: storyboardPlanSchema,
   } as const;
 

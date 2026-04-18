@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
+import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, materializeSeededBeat, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
 import {
   authorizeCurrentUserBillableAction,
@@ -9,7 +9,7 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
-import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
@@ -423,6 +423,34 @@ function resolvePrioritizedSheetTaskIds(
   return new Set(portraitTasks.slice(0, 2).map((task) => task.characterId));
 }
 
+function isSeededStoryConfig(storyConfig: StoryConfig): boolean {
+  return storyConfig.authoring.mode === 'seeded' && Boolean(storyConfig.authoring.seedPlan?.beats.length);
+}
+
+function getSeedBeatByIndex(storyConfig: StoryConfig, beatIndex: number): SeedBeatOutline | undefined {
+  const seedPlan = getSeedPlan(storyConfig);
+  return seedPlan?.beats.find((beat) => beat.beatIndex === beatIndex);
+}
+
+function isCanonicalSeedOption(beat: StoryBeat, optionId: string): boolean {
+  if (!beat.canonicalOptionId) {
+    return false;
+  }
+
+  return beat.canonicalOptionId === optionId;
+}
+
+function withGeneratedOrigin(beat: StoryBeat): StoryBeat {
+  if (beat.originKind) {
+    return beat;
+  }
+
+  return {
+    ...beat,
+    originKind: 'generated',
+  };
+}
+
 export const useStoryStore = create<StoryState>()(
     (set, get) => ({
       session: null,
@@ -442,6 +470,11 @@ export const useStoryStore = create<StoryState>()(
 
       startStory: async (prompt: string, config?: StoryConfig) => {
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
+        const seededStory = isSeededStoryConfig(storyConfig);
+        const storyPrompt = seededStory
+          ? storyConfig.authoring.sourceText?.trim() || prompt
+          : prompt;
+        const openingSeedBeat = seededStory ? getSeedBeatByIndex(storyConfig, 1) : undefined;
         const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
         const initialSessionId = uuidv4();
         const generationStartedAt = nowMs();
@@ -467,6 +500,7 @@ export const useStoryStore = create<StoryState>()(
                 ageGroup: storyConfig.ageGroup,
                 maxBeats: storyConfig.maxBeats,
                 settingCountry: storyConfig.settingCountry,
+                authoringMode: storyConfig.authoring.mode,
               },
             }),
             {
@@ -526,7 +560,7 @@ export const useStoryStore = create<StoryState>()(
         try {
           const initialSession: Partial<StorySession> = {
             storySessionId: initialSessionId,
-            userPrompt: prompt,
+            userPrompt: storyPrompt,
             genre: 'adventure',
             tone: 'playful',
             targetAge: storyConfig.ageGroup,
@@ -552,9 +586,21 @@ export const useStoryStore = create<StoryState>()(
           setLoadingStage(set, 'start_story', 'beat');
           const beat = await measureAsyncStep(
             timingSteps,
-            'story_generation',
-            'Generate opening beat',
-            () => generateStoryBeat(prompt, initialSession, undefined, modelOverrides)
+            seededStory ? 'seeded_beat_materialization' : 'story_generation',
+            seededStory ? 'Materialize seeded opening beat' : 'Generate opening beat',
+            async () => {
+              if (seededStory) {
+                if (!openingSeedBeat) {
+                  throw new Error('Seeded story is missing its opening beat plan.');
+                }
+
+                return materializeSeededBeat(openingSeedBeat, initialSession, modelOverrides);
+              }
+
+              return withGeneratedOrigin(
+                await generateStoryBeat(storyPrompt, initialSession, undefined, modelOverrides)
+              );
+            }
           );
 
           set({ loadingClues: beat.clues });
@@ -604,6 +650,7 @@ export const useStoryStore = create<StoryState>()(
           // Track resolved audio URL for merging after image resolves
           let resolvedAudioUrl: string | undefined;
           let earlySavedStoryId: string | undefined;
+          const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
 
           // Start voice selection (fast ~1s)
           const voicePromise = measureAsyncStep(
@@ -625,7 +672,7 @@ export const useStoryStore = create<StoryState>()(
             'early_save',
             'Create initial story record',
             () => saveStoryAction(
-              { ...initialSession, title: beat.title } as StorySession,
+              { ...initialSession, title: resolvedTitle } as StorySession,
               storyMap
             ).then(({ storyId }) => {
               earlySavedStoryId = storyId;
@@ -760,7 +807,7 @@ export const useStoryStore = create<StoryState>()(
                 metadata: {
                   action: 'start_story_initial_beat',
                   storySessionId: initialSessionId,
-                  title: beat.title,
+                  title: resolvedTitle,
                 },
               })
             );
@@ -780,7 +827,7 @@ export const useStoryStore = create<StoryState>()(
           const fullSession = deriveSessionFields(
             {
               ...initialSession,
-              title: beat.title,
+              title: resolvedTitle,
               narratorVoice,
               ...(earlySavedStoryId ? { savedStoryId: earlySavedStoryId } : {}),
             } as StorySession,
@@ -855,6 +902,10 @@ export const useStoryStore = create<StoryState>()(
         const currentNode = getCurrentNode(session.storyMap);
         const selectedOption = currentNode.data.options.find((o) => o.id === optionId);
         if (!selectedOption) return;
+        const nextCanonicalSeedBeat =
+          isSeededStoryConfig(session.storyConfig) && isCanonicalSeedOption(currentNode.data, optionId)
+            ? getSeedBeatByIndex(session.storyConfig, currentNode.data.beatNumber + 1)
+            : undefined;
         const generationStartedAt = nowMs();
         const timingSteps: GenerationTimingStep[] = [];
 
@@ -966,12 +1017,21 @@ export const useStoryStore = create<StoryState>()(
           setLoadingStage(set, 'continue_story', 'beat');
           const beat = await measureAsyncStep(
             timingSteps,
-            'story_generation',
-            'Generate continued beat',
-            () => generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label, modelOverrides),
+            nextCanonicalSeedBeat ? 'seeded_beat_materialization' : 'story_generation',
+            nextCanonicalSeedBeat ? 'Materialize seeded canonical beat' : 'Generate continued beat',
+            async () => {
+              if (nextCanonicalSeedBeat) {
+                return materializeSeededBeat(nextCanonicalSeedBeat, sessionForPrompt, modelOverrides);
+              }
+
+              return withGeneratedOrigin(
+                await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label, modelOverrides)
+              );
+            },
             {
               selectedOptionId: optionId,
               selectedOptionLabel: selectedOption.label,
+              isCanonicalSeedPath: Boolean(nextCanonicalSeedBeat),
             }
           );
 
