@@ -14,6 +14,19 @@ const HOLD_PREVIEW_DELAY_MS = 350;
 const STORYBOARD_THUMBNAIL_CYCLE_MS = 900;
 const TOUCH_MOVE_CANCEL_PX = 10;
 
+// Storyboard mode renders the image inside a 200%×200% wrapper so only one
+// quadrant of a 2×2 grid is visible. Next/image's optimizer uses `sizes` to
+// pick a source from srcset — passing the card-slot size leaves it half a
+// resolution short and the result pixelates. Double the length values so the
+// optimizer fetches a source sized for the actual 2× render box.
+const SIZE_LENGTH_REGEX = /(\d*\.?\d+)(vw|vh|px|rem|em)/g;
+
+function doubleSizesForCrop(sizes: string): string {
+  return sizes.replace(SIZE_LENGTH_REGEX, (_match, num: string, unit: string) => {
+    return `${parseFloat(num) * 2}${unit}`;
+  });
+}
+
 interface StoryboardThumbnailProps {
   src: string;
   alt: string;
@@ -234,7 +247,7 @@ export default function StoryboardThumbnail({
             fill
             className="object-cover"
             referrerPolicy="no-referrer"
-            sizes={sizes}
+            sizes={doubleSizesForCrop(sizes)}
             priority={priority}
             draggable={false}
           />
