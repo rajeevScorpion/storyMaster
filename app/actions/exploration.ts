@@ -72,6 +72,36 @@ function reconstructStoryMap(beats: DbBeat[], currentNodeId?: string | null): St
   };
 }
 
+function getStoryMapFromStorylineRow(row: any): StoryMap | null {
+  const story = Array.isArray(row?.stories) ? row.stories[0] : row?.stories;
+  const rawMap = story?.story_map;
+  if (!rawMap || typeof rawMap !== 'object' || !('nodes' in rawMap)) {
+    return null;
+  }
+
+  return rawMap as unknown as StoryMap;
+}
+
+function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): StoryBeat {
+  if (!fallback) return beat;
+
+  return {
+    ...beat,
+    imageUrl: beat.imageUrl || fallback.imageUrl,
+    audioUrl: beat.audioUrl || fallback.audioUrl,
+    characters: fallback.characters
+      ? mergeCharactersWithFallback(beat.characters, fallback.characters)
+      : beat.characters,
+    isStoryboard: beat.isStoryboard || fallback.isStoryboard || fallback.storyboardPlan ? true : undefined,
+    newCharacterIds: beat.newCharacterIds || fallback.newCharacterIds,
+    changedCharacterIds: beat.changedCharacterIds || fallback.changedCharacterIds,
+    storyboardPlan: beat.storyboardPlan || fallback.storyboardPlan,
+    originKind: beat.originKind || fallback.originKind,
+    seedPlanBeatIndex: beat.seedPlanBeatIndex ?? fallback.seedPlanBeatIndex,
+    canonicalOptionId: beat.canonicalOptionId || fallback.canonicalOptionId,
+  };
+}
+
 // ============================================================
 // Story Tree Exploration
 // ============================================================
@@ -302,11 +332,12 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, beats, choices')
+    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, node_path, beats, choices, stories(story_map)')
     .eq('id', storylineId)
     .single();
 
   if (slError || !storyline) throw new Error('Storyline not found');
+  const fallbackStoryMap = getStoryMapFromStorylineRow(storyline);
 
   // Try normalized junction first
   const { data: junctionBeats } = await supabase
@@ -322,7 +353,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   if (junctionBeats && junctionBeats.length > 0) {
     const beats: StoryBeat[] = junctionBeats.map((jb: any) => {
       const b = jb.beats as DbBeat;
-      return {
+      const normalizedBeat: StoryBeat = {
         title: b.title,
         beatNumber: b.beat_number,
         isEnding: b.is_ending,
@@ -342,6 +373,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,
       };
+      return mergeStoryMapBeatFallback(normalizedBeat, fallbackStoryMap?.nodes?.[b.node_id]?.data);
     });
 
     const choices = junctionBeats
@@ -371,7 +403,14 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   }
 
   // Fallback to legacy JSONB beats
-  const legacyBeats = (storyline.beats as any[]).map(b => b as unknown as StoryBeat);
+  const nodePath = Array.isArray(storyline.node_path) ? storyline.node_path : [];
+  const legacyBeats = (storyline.beats as any[]).map((b, index) => {
+    const nodeId = nodePath[index];
+    return mergeStoryMapBeatFallback(
+      b as unknown as StoryBeat,
+      nodeId ? fallbackStoryMap?.nodes?.[nodeId]?.data : undefined
+    );
+  });
   const signedLegacyBeats = await signStorylineBeatsUrls(supabase, legacyBeats);
 
   return {
@@ -428,11 +467,12 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
 
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('beats')
+    .select('node_path, beats, stories(story_map)')
     .eq('id', storylineId)
     .single();
 
   if (slError || !storyline) throw new Error('Storyline not found');
+  const fallbackStoryMap = getStoryMapFromStorylineRow(storyline);
 
   // Try normalized junction beats first
   const { data: junctionBeats } = await supabase
@@ -445,7 +485,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
   if (junctionBeats && junctionBeats.length > 0) {
     beats = junctionBeats.map((jb: any) => {
       const b = jb.beats as DbBeat;
-      return {
+      const normalizedBeat: StoryBeat = {
         title: b.title,
         beatNumber: b.beat_number,
         isEnding: b.is_ending,
@@ -465,9 +505,17 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,
       };
+      return mergeStoryMapBeatFallback(normalizedBeat, fallbackStoryMap?.nodes?.[b.node_id]?.data);
     });
   } else {
-    beats = (storyline.beats as any[]).map(b => b as unknown as StoryBeat);
+    const nodePath = Array.isArray(storyline.node_path) ? storyline.node_path : [];
+    beats = (storyline.beats as any[]).map((b, index) => {
+      const nodeId = nodePath[index];
+      return mergeStoryMapBeatFallback(
+        b as unknown as StoryBeat,
+        nodeId ? fallbackStoryMap?.nodes?.[nodeId]?.data : undefined
+      );
+    });
   }
 
   return signStorylineBeatsUrls(supabase, beats);

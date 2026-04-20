@@ -18,10 +18,12 @@ type LegacyGalleryBeat = {
 
 type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard'> & {
   cover_is_storyboard?: boolean;
+  node_path?: string[] | null;
   beats?: LegacyGalleryBeat[] | null;
   stories?: {
     genre?: string | null;
     story_config?: Record<string, unknown> | null;
+    story_map?: Record<string, unknown> | null;
   } | null;
 };
 
@@ -34,6 +36,11 @@ type StorylineCoverBeatRow = {
 type StoryboardFlagBeatRow = {
   id: string;
   is_storyboard: boolean | null;
+};
+
+type StoryMapFlagStoryRow = {
+  id: string;
+  story_map: Record<string, unknown> | null;
 };
 
 function readStoryConfigString(
@@ -190,6 +197,76 @@ async function resolveNormalizedCoverStoryboardFlags<T extends StorylineGalleryR
   }
 }
 
+function readStoryMapCoverIsStoryboard(row: StorylineGalleryRow, storyMap: Record<string, unknown> | null | undefined): boolean {
+  if (!storyMap || typeof storyMap !== 'object') return false;
+
+  const nodes = (storyMap as { nodes?: Record<string, { data?: Record<string, unknown> }> }).nodes;
+  if (!nodes) return false;
+
+  const nodePath = Array.isArray(row.node_path) ? row.node_path : [];
+  const coverNodeId = nodePath[1] ?? nodePath[0];
+  const coverNodeData = coverNodeId ? nodes[coverNodeId]?.data : undefined;
+  if (!coverNodeData) return false;
+
+  return coverNodeData.isStoryboard === true
+    || coverNodeData.is_storyboard === true
+    || !!coverNodeData.storyboardPlan
+    || !!coverNodeData.storyboard_plan;
+}
+
+async function resolveStoryMapCoverStoryboardFlags<T extends StorylineGalleryRow & { cover_is_storyboard: boolean }>(
+  rows: T[]
+): Promise<T[]> {
+  if (rows.length === 0) return rows;
+
+  const rowsNeedingStoryMap = rows.filter((row) => !row.cover_is_storyboard);
+  if (rowsNeedingStoryMap.length === 0) return rows;
+
+  const embeddedFlags = new Map<string, boolean>();
+  for (const row of rowsNeedingStoryMap) {
+    if (readStoryMapCoverIsStoryboard(row, row.stories?.story_map)) {
+      embeddedFlags.set(row.id, true);
+    }
+  }
+
+  const storyIdsToFetch = Array.from(new Set(
+    rowsNeedingStoryMap
+      .filter((row) => !embeddedFlags.has(row.id))
+      .map((row) => row.story_id)
+      .filter((storyId): storyId is string => typeof storyId === 'string' && storyId.length > 0)
+  ));
+
+  let storyMapByStoryId = new Map<string, Record<string, unknown> | null>();
+
+  if (storyIdsToFetch.length > 0) {
+    try {
+      const admin = createAdminClient();
+      const { data, error } = await admin
+        .from('stories')
+        .select('id, story_map')
+        .in('id', storyIdsToFetch);
+
+      if (error || !data) {
+        console.error('Failed to fetch gallery story-map storyboard flags:', error?.message);
+      } else {
+        storyMapByStoryId = new Map(
+          (data as StoryMapFlagStoryRow[]).map((story) => [story.id, story.story_map])
+        );
+      }
+    } catch (error) {
+      console.error('Failed to resolve gallery story-map storyboard flags:', error);
+    }
+  }
+
+  return rows.map((row) => {
+    const isStoryboard = row.cover_is_storyboard
+      || embeddedFlags.get(row.id) === true
+      || readStoryMapCoverIsStoryboard(row, row.story_id ? storyMapByStoryId.get(row.story_id) : null);
+
+    return isStoryboard ? { ...row, cover_is_storyboard: true } : row;
+  });
+}
+
 async function resolveStorylineCovers<T extends StorylineGalleryRow>(
   rows: T[]
 ): Promise<Array<T & { cover_is_storyboard: boolean }>> {
@@ -200,7 +277,8 @@ async function resolveStorylineCovers<T extends StorylineGalleryRow>(
     cover_image_url: getPreferredStorylineCoverUrl(row),
     cover_is_storyboard: getLegacyCoverIsStoryboard(row),
   }));
-  const resolved = await resolveNormalizedCoverStoryboardFlags(resolvedWithFallbackFlags);
+  const normalizedResolved = await resolveNormalizedCoverStoryboardFlags(resolvedWithFallbackFlags);
+  const resolved = await resolveStoryMapCoverStoryboardFlags(normalizedResolved);
 
   const signTargets = resolved
     .map((row, index) => ({
@@ -250,7 +328,7 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
 
   const { data, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, beats')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, node_path, like_count, view_count, created_at, beats')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(limit);
@@ -261,7 +339,7 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
   }
 
   const rows = await resolveStorylineCovers((data || []) as StorylineGalleryRow[]);
-  return rows.map(({ beats, ...storyline }) => storyline);
+  return rows.map(({ beats, node_path, stories, ...storyline }) => storyline);
 }
 
 /**
@@ -273,7 +351,7 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   // Fetch public storylines joined with their parent story for genre
   const { data: rows, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, beats, stories!inner(genre, story_config)')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
     .eq('is_public', true)
     .order('created_at', { ascending: false })
     .limit(100);
@@ -367,7 +445,7 @@ export async function getGalleryItems(
   if (filters.type === 'storylines') {
     let query = supabase
       .from('storylines')
-      .select('id, title, cover_image_url, beat_count, author_name, story_id, like_count, view_count, created_at, beats, stories!inner(genre, story_config)', { count: 'exact' })
+      .select('id, title, cover_image_url, beat_count, author_name, story_id, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
       .eq('is_public', true)
       .order('created_at', { ascending: false });
 
