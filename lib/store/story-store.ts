@@ -1617,7 +1617,7 @@ export const useStoryStore = create<StoryState>()(
         const { session } = get();
         if (!session) return;
 
-        set({ isSaving: true, saveStatus: 'saving', error: null });
+        set({ isSaving: true, saveStatus: 'saving', saveWarning: null, error: null });
 
         try {
           // Persist story to DB first to get a stable storyId for asset paths.
@@ -1626,7 +1626,7 @@ export const useStoryStore = create<StoryState>()(
             session,
             stripBase64FromStoryMap(session.storyMap)
           );
-          const { storyId, beatsWarning: w1 } = await saveStoryAction(strippedForId, strippedForId.storyMap);
+          const { storyId } = await saveStoryAction(strippedForId, strippedForId.storyMap);
 
           // Upload assets using the stable storyId so images + audio always share the same folder
           const nodeIds = Object.keys(session.storyMap.nodes);
@@ -1652,7 +1652,7 @@ export const useStoryStore = create<StoryState>()(
             { ...(latestSession || session), savedStoryId: storyId, savedByUserId: userId },
             latestMap
           );
-          set({ session: updatedSession, isSaving: false, saveStatus: 'saved', saveWarning: w1 ?? w2 ?? null });
+          set({ session: updatedSession, isSaving: false, saveStatus: 'saved', saveWarning: w2 ?? null });
         } catch (error: any) {
           set({ isSaving: false, saveStatus: 'unsaved', error: error.message || 'Failed to save story' });
         }

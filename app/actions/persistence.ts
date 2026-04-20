@@ -65,6 +65,33 @@ function mergeCharactersWithFallback(
   return Array.from(merged.values());
 }
 
+const ADDITIVE_BEAT_COLUMNS = [
+  'is_storyboard',
+  'origin_kind',
+  'seed_plan_beat_index',
+  'canonical_option_id',
+] as const;
+
+function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error?.message) return false;
+  return (
+    error.code === 'PGRST204'
+    || (/schema cache/i.test(error.message) && /column/i.test(error.message) && /beats/i.test(error.message))
+  );
+}
+
+function withoutAdditiveBeatColumns(row: Record<string, unknown>): Record<string, unknown> {
+  const fallbackRow = { ...row };
+  for (const column of ADDITIVE_BEAT_COLUMNS) {
+    delete fallbackRow[column];
+  }
+  return fallbackRow;
+}
+
+function withoutAdditiveBeatColumnsBatch(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  return rows.map(withoutAdditiveBeatColumns);
+}
+
 /**
  * Convert a StoryNode + beat data into a beats table row object.
  */
@@ -251,8 +278,22 @@ export async function saveStory(
       .upsert(beatRows, { onConflict: 'story_id,node_id' });
 
     if (beatsError) {
+      if (isMissingBeatColumnError(beatsError)) {
+        const { error: fallbackError } = await supabase
+          .from('beats')
+          .upsert(withoutAdditiveBeatColumnsBatch(beatRows), { onConflict: 'story_id,node_id' });
+
+        if (!fallbackError) {
+          console.warn('Saved beats without additive beat metadata because the database schema is missing newer beat columns.');
+          return { storyId };
+        }
+
+        console.error('Failed to upsert beats after schema fallback:', fallbackError.message);
+        return { storyId, beatsWarning: 'Beat data failed to sync - publishing may be unavailable until next save' };
+      }
+
       console.error('Failed to upsert beats:', beatsError.message);
-      return { storyId, beatsWarning: 'Beat data failed to sync — publishing may be unavailable until next save' };
+      return { storyId, beatsWarning: 'Beat data failed to sync - publishing may be unavailable until next save' };
     }
   }
 
@@ -384,7 +425,24 @@ export async function saveBeat(
     .select('id')
     .single();
 
-  if (error) throw new Error(`Failed to save beat: ${error.message}`);
+  if (error) {
+    if (isMissingBeatColumnError(error)) {
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('beats')
+        .upsert(withoutAdditiveBeatColumns(beatRow), { onConflict: 'story_id,node_id' })
+        .select('id')
+        .single();
+
+      if (!fallbackError && fallbackData) {
+        console.warn('Saved beat without additive beat metadata because the database schema is missing newer beat columns.');
+        return { beatId: fallbackData.id };
+      }
+
+      throw new Error(`Failed to save beat: ${fallbackError?.message || error.message}`);
+    }
+
+    throw new Error(`Failed to save beat: ${error.message}`);
+  }
   return { beatId: data.id };
 }
 
