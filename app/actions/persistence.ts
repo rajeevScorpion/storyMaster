@@ -606,6 +606,7 @@ export async function autoPublishStoryline(
     endingForecast: b.ending_forecast,
     imageUrl: b.image_url,
     audioUrl: b.audio_url,
+    isStoryboard: b.is_storyboard || undefined,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
     canonicalOptionId: b.canonical_option_id || undefined,

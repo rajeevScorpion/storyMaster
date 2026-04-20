@@ -1,14 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import Image from 'next/image';
 import { motion } from 'motion/react';
 import { BookOpen, Eye, Heart, Share2 } from 'lucide-react';
+import StoryboardThumbnail, { useStoryboardThumbnailPreview } from './StoryboardThumbnail';
 
 interface GalleryCardProps {
   id: string;
   title: string;
   coverImageUrl: string | null;
+  coverIsStoryboard?: boolean;
   beatCount: number;
   authorName: string | null;
   likeCount?: number;
@@ -19,12 +20,19 @@ export default function GalleryCard({
   id,
   title,
   coverImageUrl,
+  coverIsStoryboard = false,
   beatCount,
   authorName,
   likeCount = 0,
   viewCount = 0,
 }: GalleryCardProps) {
-  const handleClick = () => {
+  const storyboardPreview = useStoryboardThumbnailPreview(!!coverImageUrl);
+
+  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (storyboardPreview.consumeSuppressedClick(event)) {
+      return;
+    }
+
     try {
       sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
         title,
@@ -38,6 +46,7 @@ export default function GalleryCard({
   return (
     <Link href={`/storyline/${id}`} onClick={handleClick}>
       <motion.div
+        {...storyboardPreview.previewHandlers}
         whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.2 }}
         className="relative group rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 aspect-[16/10] bg-neutral-900"
@@ -51,16 +60,17 @@ export default function GalleryCard({
         )}
 
         {/* Cover Image */}
-        {coverImageUrl && (
-          <Image
+        {coverImageUrl ? (
+          <StoryboardThumbnail
             src={coverImageUrl}
             alt={title}
-            fill
-            className="object-cover transition-transform duration-500 group-hover:scale-105"
-            referrerPolicy="no-referrer"
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            isPreviewing={storyboardPreview.isPreviewing}
+            previewSessionId={storyboardPreview.previewSessionId}
+            isStoryboard={coverIsStoryboard}
+            allowAutoDetect
           />
-        )}
+        ) : null}
 
         {/* Gradient overlay */}
         <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent" />

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
 import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Share2 } from 'lucide-react';
+import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
 import type { GalleryItem } from '@/lib/types/database';
 
 interface GalleryItemCardProps {
@@ -24,11 +25,17 @@ export default function GalleryItemCard({
   onAuthRequired,
 }: GalleryItemCardProps) {
   const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
+  const canPreviewStoryboard = item.type === 'storyline' && !!item.coverImageUrl;
+  const storyboardPreview = useStoryboardThumbnailPreview(canPreviewStoryboard);
 
   // For tree items, unauthenticated users need to sign in first
   const needsAuth = item.type === 'tree' && !isLoggedIn;
 
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (storyboardPreview.consumeSuppressedClick(e)) {
+      return;
+    }
+
     if (needsAuth && onAuthRequired) {
       e.preventDefault();
       onAuthRequired(href);
@@ -49,6 +56,7 @@ export default function GalleryItemCard({
   return (
     <Link href={href} onClick={handleClick}>
       <motion.div
+        {...storyboardPreview.previewHandlers}
         whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.2 }}
         className="relative group rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 bg-neutral-900 h-full"
@@ -62,7 +70,17 @@ export default function GalleryItemCard({
         )}
 
         {/* Cover Image */}
-        {item.coverImageUrl && (
+        {item.coverImageUrl && item.type === 'storyline' ? (
+          <StoryboardThumbnail
+            src={item.coverImageUrl}
+            alt={item.title}
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+            isPreviewing={storyboardPreview.isPreviewing}
+            previewSessionId={storyboardPreview.previewSessionId}
+            isStoryboard={item.coverIsStoryboard}
+            allowAutoDetect
+          />
+        ) : item.coverImageUrl && (
           <Image
             src={item.coverImageUrl}
             alt={item.title}

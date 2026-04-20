@@ -5,7 +5,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Bookmark, BookmarkCheck, BookOpen } from 'lucide-react';
-import type { GenreSection } from '@/lib/types/database';
+import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
+import type { GalleryItem, GenreSection } from '@/lib/types/database';
 
 interface GenreShowcaseProps {
   sections: GenreSection[];
@@ -14,6 +15,126 @@ interface GenreShowcaseProps {
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
   onAuthRequired?: (returnTo: string) => void;
+}
+
+function GenreItemCard({
+  item,
+  savedIds,
+  isLoggedIn,
+  onToggleSave,
+  onAuthRequired,
+}: {
+  item: GalleryItem;
+  savedIds: Set<string>;
+  isLoggedIn: boolean;
+  onToggleSave: (storylineId: string, saved: boolean) => void;
+  onAuthRequired?: (returnTo: string) => void;
+}) {
+  const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
+  const isSaved = savedIds.has(item.id);
+  const needsAuth = item.type === 'tree' && !isLoggedIn;
+  const canPreviewStoryboard = item.type === 'storyline' && !!item.coverImageUrl;
+  const storyboardPreview = useStoryboardThumbnailPreview(canPreviewStoryboard);
+
+  const handleClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (storyboardPreview.consumeSuppressedClick(e)) {
+      return;
+    }
+
+    if (needsAuth && onAuthRequired) {
+      e.preventDefault();
+      onAuthRequired(href);
+    }
+  };
+
+  return (
+    <Link
+      href={href}
+      onClick={handleClick}
+      className="flex-shrink-0 snap-start"
+    >
+      <motion.div
+        {...storyboardPreview.previewHandlers}
+        whileHover={{ scale: 1.03 }}
+        transition={{ duration: 0.2 }}
+        className="relative w-[280px] md:w-[320px] aspect-[16/9] rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 bg-neutral-900 group"
+      >
+        {!item.coverImageUrl && (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.22),transparent_42%),linear-gradient(180deg,rgba(38,38,38,0.72),rgba(10,10,10,0.98))]">
+            <div className="absolute inset-0 flex items-center justify-center">
+              <BookOpen className="h-14 w-14 text-white/10" />
+            </div>
+          </div>
+        )}
+
+        {item.coverImageUrl && item.type === 'storyline' ? (
+          <StoryboardThumbnail
+            src={item.coverImageUrl}
+            alt={item.title}
+            sizes="320px"
+            isPreviewing={storyboardPreview.isPreviewing}
+            previewSessionId={storyboardPreview.previewSessionId}
+            isStoryboard={item.coverIsStoryboard}
+            allowAutoDetect
+          />
+        ) : item.coverImageUrl && (
+          <Image
+            src={item.coverImageUrl}
+            alt={item.title}
+            fill
+            className="object-cover transition-transform duration-500 group-hover:scale-105"
+            referrerPolicy="no-referrer"
+            sizes="320px"
+          />
+        )}
+
+        <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/50 to-transparent" />
+
+        {/* Type pill */}
+        <div className="absolute top-3 right-3">
+          <span
+            className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
+              item.type === 'tree'
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+            }`}
+          >
+            {item.type === 'tree' ? 'Explore' : 'Experience'}
+          </span>
+        </div>
+
+        {/* Bookmark */}
+        {isLoggedIn && item.type === 'storyline' && (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleSave(item.id, isSaved);
+            }}
+            className="absolute top-3 left-3 p-1.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 text-neutral-300 hover:text-emerald-400 transition-colors"
+          >
+            {isSaved ? (
+              <BookmarkCheck className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <Bookmark className="w-4 h-4" />
+            )}
+          </button>
+        )}
+
+        {/* Content */}
+        <div className="absolute inset-x-0 bottom-0 p-4">
+          <h3 className="text-sm font-serif text-neutral-100 line-clamp-2 group-hover:text-white transition-colors">
+            {item.title}
+          </h3>
+          {item.authorName && (
+            <p className="text-[11px] text-neutral-500 mt-1 truncate">
+              by {item.authorName}
+            </p>
+          )}
+        </div>
+      </motion.div>
+    </Link>
+  );
 }
 
 function GenreRow({
@@ -81,97 +202,16 @@ function GenreRow({
         className="flex gap-4 overflow-x-auto scrollbar-hide snap-x snap-mandatory pb-2"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
-        {section.items.map((item) => {
-          const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
-          const isSaved = savedIds.has(item.id);
-          const needsAuth = item.type === 'tree' && !isLoggedIn;
-
-          const handleClick = (e: React.MouseEvent) => {
-            if (needsAuth && onAuthRequired) {
-              e.preventDefault();
-              onAuthRequired(href);
-            }
-          };
-
-          return (
-            <Link
-              key={item.id}
-              href={href}
-              onClick={handleClick}
-              className="flex-shrink-0 snap-start"
-            >
-              <motion.div
-                whileHover={{ scale: 1.03 }}
-                transition={{ duration: 0.2 }}
-                className="relative w-[280px] md:w-[320px] aspect-[16/9] rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 bg-neutral-900 group"
-              >
-                {!item.coverImageUrl && (
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.22),transparent_42%),linear-gradient(180deg,rgba(38,38,38,0.72),rgba(10,10,10,0.98))]">
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <BookOpen className="h-14 w-14 text-white/10" />
-                    </div>
-                  </div>
-                )}
-
-                {item.coverImageUrl && (
-                  <Image
-                    src={item.coverImageUrl}
-                    alt={item.title}
-                    fill
-                    className="object-cover transition-transform duration-500 group-hover:scale-105"
-                    referrerPolicy="no-referrer"
-                    sizes="320px"
-                  />
-                )}
-
-                <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/50 to-transparent" />
-
-                {/* Type pill */}
-                <div className="absolute top-3 right-3">
-                  <span
-                    className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
-                      item.type === 'tree'
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                        : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                    }`}
-                  >
-                    {item.type === 'tree' ? 'Explore' : 'Experience'}
-                  </span>
-                </div>
-
-                {/* Bookmark */}
-                {isLoggedIn && item.type === 'storyline' && (
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onToggleSave(item.id, isSaved);
-                    }}
-                    className="absolute top-3 left-3 p-1.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 text-neutral-300 hover:text-emerald-400 transition-colors"
-                  >
-                    {isSaved ? (
-                      <BookmarkCheck className="w-4 h-4 text-emerald-400" />
-                    ) : (
-                      <Bookmark className="w-4 h-4" />
-                    )}
-                  </button>
-                )}
-
-                {/* Content */}
-                <div className="absolute inset-x-0 bottom-0 p-4">
-                  <h3 className="text-sm font-serif text-neutral-100 line-clamp-2 group-hover:text-white transition-colors">
-                    {item.title}
-                  </h3>
-                  {item.authorName && (
-                    <p className="text-[11px] text-neutral-500 mt-1 truncate">
-                      by {item.authorName}
-                    </p>
-                  )}
-                </div>
-              </motion.div>
-            </Link>
-          );
-        })}
+        {section.items.map((item) => (
+          <GenreItemCard
+            key={item.id}
+            item={item}
+            savedIds={savedIds}
+            isLoggedIn={isLoggedIn}
+            onToggleSave={onToggleSave}
+            onAuthRequired={onAuthRequired}
+          />
+        ))}
       </div>
     </div>
   );

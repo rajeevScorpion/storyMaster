@@ -65,6 +65,7 @@ export interface GalleryStoryline {
   id: string;
   title: string;
   cover_image_url: string | null;
+  cover_is_storyboard: boolean;
   beat_count: number;
   author_name: string | null;
   story_id: string | null;
@@ -132,6 +133,7 @@ export interface GalleryItem {
   type: 'tree' | 'storyline';
   title: string;
   coverImageUrl: string | null;
+  coverIsStoryboard: boolean;
   authorName: string | null;
   storyId: string;
   beatCount: number | null;

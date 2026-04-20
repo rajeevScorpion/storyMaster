@@ -60,6 +60,7 @@ export default function Gallery() {
                 id={storyline.id}
                 title={storyline.title}
                 coverImageUrl={storyline.cover_image_url}
+                coverIsStoryboard={storyline.cover_is_storyboard}
                 beatCount={storyline.beat_count}
                 authorName={storyline.author_name}
                 likeCount={storyline.like_count}
