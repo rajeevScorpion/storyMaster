@@ -3,6 +3,7 @@ import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPl
 import { v4 as uuidv4 } from 'uuid';
 import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, materializeSeededBeat, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
+import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import {
   authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
@@ -22,6 +23,7 @@ import {
   type StoryLoadingStage,
 } from '@/lib/story/loading-progress';
 import { dispatchPricingRuntimeRefresh } from '@/lib/pricing/runtime-events';
+import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
@@ -284,6 +286,21 @@ function setLoadingStage(
   });
 }
 
+function costPhase(
+  context: CostTelemetryContext,
+  phase: string,
+  metadata?: Record<string, unknown>
+): CostTelemetryContext {
+  return {
+    ...context,
+    phase,
+    metadata: {
+      ...(context.metadata || {}),
+      ...(metadata || {}),
+    },
+  };
+}
+
 async function resolveNarratorVoice(session: StorySession): Promise<string> {
   if (session.narratorVoice) {
     return session.narratorVoice;
@@ -351,7 +368,8 @@ async function generatePortraitsForStoryboardPlan(
   storyboardPlan: StoryboardPlan,
   visualStyle: string,
   portraitReferenceConfig: PortraitReferenceConfig,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  costTelemetry?: CostTelemetryContext
 ): Promise<ReferenceImage[]> {
   if (!storyboardPlan.portraitTasks.length) {
     return [];
@@ -381,7 +399,8 @@ async function generatePortraitsForStoryboardPlan(
           visualStyle,
           taskPortraitReferenceConfig,
           modelOverrides,
-          task.prompt
+          task.prompt,
+          costTelemetry
         );
         character.portraitBase64 = portrait;
         return { type: 'character' as const, dataUrl: portrait };
@@ -477,6 +496,18 @@ export const useStoryStore = create<StoryState>()(
         const openingSeedBeat = seededStory ? getSeedBeatByIndex(storyConfig, 1) : undefined;
         const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
         const initialSessionId = uuidv4();
+        const rootNodeId = uuidv4();
+        const baseCostTelemetry: CostTelemetryContext = {
+          activityKey: 'start_story_initial_beat',
+          storySessionId: initialSessionId,
+          nodeId: rootNodeId,
+          beatNumber: 1,
+          metadata: {
+            authoringMode: storyConfig.authoring.mode,
+            language: storyConfig.language,
+            maxBeats: storyConfig.maxBeats,
+          },
+        };
         const generationStartedAt = nowMs();
         const timingSteps: GenerationTimingStep[] = [];
         let billingAuthorization: PricingBillableActionAuthorization;
@@ -594,11 +625,22 @@ export const useStoryStore = create<StoryState>()(
                   throw new Error('Seeded story is missing its opening beat plan.');
                 }
 
-                return materializeSeededBeat(openingSeedBeat, initialSession, modelOverrides);
+                return materializeSeededBeat(
+                  openingSeedBeat,
+                  initialSession,
+                  modelOverrides,
+                  costPhase(baseCostTelemetry, 'beat_materialization')
+                );
               }
 
               return withGeneratedOrigin(
-                await generateStoryBeat(storyPrompt, initialSession, undefined, modelOverrides)
+                await generateStoryBeat(
+                  storyPrompt,
+                  initialSession,
+                  undefined,
+                  modelOverrides,
+                  costPhase(baseCostTelemetry, 'story_generation')
+                )
               );
             }
           );
@@ -615,7 +657,8 @@ export const useStoryStore = create<StoryState>()(
               beat,
               initialSession,
               initialSession.visualStyle!,
-              modelOverrides
+              modelOverrides,
+              costPhase(baseCostTelemetry, 'storyboard_plan')
             )
           );
           beat.storyboardPlan = storyboardPlan;
@@ -631,7 +674,8 @@ export const useStoryStore = create<StoryState>()(
                   storyboardPlan,
                   initialSession.visualStyle!,
                   storyConfig.portraitReferences,
-                  modelOverrides
+                  modelOverrides,
+                  costPhase(baseCostTelemetry, 'portrait_generation')
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -644,8 +688,7 @@ export const useStoryStore = create<StoryState>()(
 
           // Create storyMap once the canonical visual plan is ready so beat 1 persists
           // portraits, storyboard metadata, and later image continuity anchors together.
-          const storyMap = createStoryMap(beat);
-          const rootNodeId = storyMap.rootNodeId;
+          const storyMap = createStoryMap(beat, rootNodeId);
 
           // Track resolved audio URL for merging after image resolves
           let resolvedAudioUrl: string | undefined;
@@ -661,7 +704,8 @@ export const useStoryStore = create<StoryState>()(
               initialSession.genre!,
               initialSession.tone!,
               initialSession.targetAge!,
-              lang
+              lang,
+              costPhase(baseCostTelemetry, 'voice_selection')
             ),
             { background: true }
           );
@@ -714,11 +758,13 @@ export const useStoryStore = create<StoryState>()(
               const narrationFn = storyId
                 ? generateAndPersistNarration(
                     beat.storyText, initialSession.tone!, initialSession.genre!,
-                    voice, lang, storyId, rootNodeId
+                    voice, lang, storyId, rootNodeId,
+                    costPhase({ ...baseCostTelemetry, storyId }, 'tts')
                   ).then(({ audioUrl }) => audioUrl)
                 : generateNarrationOnly(
                     beat.storyText, initialSession.tone!, initialSession.genre!,
-                    voice, lang
+                    voice, lang,
+                    costPhase(baseCostTelemetry, 'tts')
                   );
 
               narrationFn.then((audioUrl) => {
@@ -779,7 +825,10 @@ export const useStoryStore = create<StoryState>()(
                 initialSession.visualStyle!,
                 modelOverrides,
                 portraitRefs.length > 0 ? portraitRefs : undefined,
-                beat.beatNumber
+                beat.beatNumber,
+                costPhase(baseCostTelemetry, 'image_generation', {
+                  referenceCount: portraitRefs.length,
+                })
               ),
               {
                 referenceCount: portraitRefs.length,
@@ -793,6 +842,13 @@ export const useStoryStore = create<StoryState>()(
 
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
+          if (earlySavedStoryId) {
+            linkCostEventsToBeat({
+              storySessionId: initialSessionId,
+              storyId: earlySavedStoryId,
+              nodeId: rootNodeId,
+            }).catch((error) => console.error('Failed to link opening beat cost events:', error));
+          }
 
           if (reservationId) {
             setLoadingStage(set, 'start_story', 'finish');
@@ -917,6 +973,22 @@ export const useStoryStore = create<StoryState>()(
           return;
         }
 
+        const parentId = session.storyMap.currentNodeId;
+        const newNodeId = uuidv4();
+        const baseCostTelemetry: CostTelemetryContext = {
+          activityKey: 'continue_story_new_beat',
+          storySessionId: session.storySessionId,
+          storyId: session.savedStoryId ?? null,
+          nodeId: newNodeId,
+          beatNumber: currentNode.data.beatNumber + 1,
+          metadata: {
+            parentNodeId: parentId,
+            selectedOptionId: optionId,
+            authoringMode: session.storyConfig.authoring.mode,
+            language: session.storyConfig.language,
+          },
+        };
+
         let billingAuthorization: PricingBillableActionAuthorization;
         try {
           billingAuthorization = await measureAsyncStep(
@@ -1021,11 +1093,22 @@ export const useStoryStore = create<StoryState>()(
             nextCanonicalSeedBeat ? 'Materialize seeded canonical beat' : 'Generate continued beat',
             async () => {
               if (nextCanonicalSeedBeat) {
-                return materializeSeededBeat(nextCanonicalSeedBeat, sessionForPrompt, modelOverrides);
+                return materializeSeededBeat(
+                  nextCanonicalSeedBeat,
+                  sessionForPrompt,
+                  modelOverrides,
+                  costPhase(baseCostTelemetry, 'beat_materialization')
+                );
               }
 
               return withGeneratedOrigin(
-                await generateStoryBeat(session.userPrompt, sessionForPrompt, selectedOption.label, modelOverrides)
+                await generateStoryBeat(
+                  session.userPrompt,
+                  sessionForPrompt,
+                  selectedOption.label,
+                  modelOverrides,
+                  costPhase(baseCostTelemetry, 'story_generation')
+                )
               );
             },
             {
@@ -1046,7 +1129,8 @@ export const useStoryStore = create<StoryState>()(
               beat,
               sessionForPrompt,
               session.visualStyle,
-              modelOverrides
+              modelOverrides,
+              costPhase(baseCostTelemetry, 'storyboard_plan')
             )
           );
           beat.storyboardPlan = storyboardPlan;
@@ -1061,7 +1145,8 @@ export const useStoryStore = create<StoryState>()(
                   storyboardPlan,
                   session.visualStyle,
                   session.storyConfig.portraitReferences,
-                  modelOverrides
+                  modelOverrides,
+                  costPhase(baseCostTelemetry, 'portrait_generation')
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -1073,8 +1158,6 @@ export const useStoryStore = create<StoryState>()(
           const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
 
           const lang = session.storyConfig?.language || 'english';
-          const newNodeId = crypto.randomUUID();
-          const parentId = session.storyMap.currentNodeId;
 
           // Track resolved audio URL — if narration finishes before image,
           // the .then() can't update the store (node doesn't exist yet),
@@ -1147,14 +1230,16 @@ export const useStoryStore = create<StoryState>()(
               narrationPromise = generateAndPersistNarration(
                 beat.storyText, session.tone, session.genre,
                 voiceForBeat, lang,
-                session.savedStoryId, newNodeId
+                session.savedStoryId, newNodeId,
+                costPhase(baseCostTelemetry, 'tts')
               ).then(({ audioUrl }) => handleNarrationResolved(audioUrl))
                 .catch(handleNarrationError);
             } else {
               // Fallback: generate only (no persistence yet)
               narrationPromise = generateNarrationOnly(
                 beat.storyText, session.tone, session.genre,
-                voiceForBeat, lang
+                voiceForBeat, lang,
+                costPhase(baseCostTelemetry, 'tts')
               ).then(handleNarrationResolved)
                 .catch(handleNarrationError);
             }
@@ -1178,7 +1263,10 @@ export const useStoryStore = create<StoryState>()(
               session.visualStyle,
               modelOverrides,
               referenceImages.length > 0 ? referenceImages : undefined,
-              beat.beatNumber
+              beat.beatNumber,
+              costPhase(baseCostTelemetry, 'image_generation', {
+                referenceCount: referenceImages.length,
+              })
             ),
             {
               beatNumber: beat.beatNumber,
@@ -1287,9 +1375,14 @@ export const useStoryStore = create<StoryState>()(
                 })),
               },
             };
-            saveBeatAction(session.savedStoryId, mergedMap.currentNodeId, cleanNode).catch(
-              (err) => console.error('Incremental beat save failed:', err)
-            );
+            saveBeatAction(session.savedStoryId, mergedMap.currentNodeId, cleanNode)
+              .then(({ beatId }) => linkCostEventsToBeat({
+                storySessionId: session.storySessionId,
+                storyId: session.savedStoryId!,
+                nodeId: mergedMap.currentNodeId,
+                beatId,
+              }))
+              .catch((err) => console.error('Incremental beat save failed:', err));
 
             // Auto-publish if this is an ending beat
             if (beat.isEnding) {
@@ -1440,6 +1533,16 @@ export const useStoryStore = create<StoryState>()(
 
         const node = session.storyMap.nodes[nodeId];
         if (!node || node.data.audioUrl) return;
+        const baseCostTelemetry: CostTelemetryContext = {
+          activityKey: 'regenerate_narration',
+          storySessionId: session.storySessionId,
+          storyId: session.savedStoryId ?? null,
+          nodeId,
+          beatNumber: node.data.beatNumber,
+          metadata: {
+            language: session.storyConfig.language,
+          },
+        };
 
         // Skip for mock stories
         if (session.userPrompt.toLowerCase() === 'mock') return;
@@ -1466,14 +1569,16 @@ export const useStoryStore = create<StoryState>()(
             // Server-side: generate + upload to Supabase in one round trip
             const result = await generateAndPersistNarration(
               node.data.storyText, session.tone, session.genre,
-              voiceName, lang, session.savedStoryId, nodeId
+              voiceName, lang, session.savedStoryId, nodeId,
+              costPhase(baseCostTelemetry, 'tts')
             );
             audioUrl = result.audioUrl;
           } else {
             // No cloud save yet — generate only, returns base64
             audioUrl = await generateNarrationOnly(
               node.data.storyText, session.tone, session.genre,
-              voiceName, lang
+              voiceName, lang,
+              costPhase(baseCostTelemetry, 'tts')
             );
           }
 
@@ -1506,6 +1611,16 @@ export const useStoryStore = create<StoryState>()(
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;
+        const baseCostTelemetry: CostTelemetryContext = {
+          activityKey: 'regenerate_image',
+          storySessionId: session.storySessionId,
+          storyId: session.savedStoryId ?? null,
+          nodeId,
+          beatNumber: node.data.beatNumber,
+          metadata: {
+            language: session.storyConfig.language,
+          },
+        };
 
         set({ isRegeneratingImage: true });
 
@@ -1530,7 +1645,8 @@ export const useStoryStore = create<StoryState>()(
               beatForRender,
               composerSession,
               session.visualStyle,
-              modelOverrides
+              modelOverrides,
+              costPhase(baseCostTelemetry, 'storyboard_plan')
             );
           }
           beatForRender.storyboardPlan = storyboardPlan;
@@ -1546,7 +1662,8 @@ export const useStoryStore = create<StoryState>()(
               storyboardPlan,
               session.visualStyle,
               session.storyConfig.portraitReferences,
-              modelOverrides
+              modelOverrides,
+              costPhase(baseCostTelemetry, 'portrait_generation')
             );
           }
 
@@ -1563,7 +1680,10 @@ export const useStoryStore = create<StoryState>()(
             session.visualStyle,
             modelOverrides,
             referenceImages.length > 0 ? referenceImages : undefined,
-            beatForRender.beatNumber
+            beatForRender.beatNumber,
+            costPhase(baseCostTelemetry, 'image_generation', {
+              referenceCount: referenceImages.length,
+            })
           );
 
           // Update the node with the new image

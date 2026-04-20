@@ -9,6 +9,8 @@ import {
 } from '@/lib/ai/prompt-config.shared';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
+import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
 
@@ -103,7 +105,8 @@ async function callGeminiTTS(
   tone: string,
   genre: string,
   voiceName: string,
-  language: string
+  language: string,
+  costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   return timeNarrationStep(
     'narration.call_gemini_tts',
@@ -127,6 +130,7 @@ async function callGeminiTTS(
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
       const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
 
+      const startedAt = narrationNowMs();
       const response = await withTimeout(
         ai.models.generateContent({
           model: ttsConfig.model,
@@ -152,6 +156,27 @@ async function callGeminiTTS(
         throw new Error('No audio generated');
       }
 
+      if (costTelemetry) {
+        const pcmBytes = Buffer.from(audioPart.inlineData.data, 'base64');
+        const audioSeconds = pcmBytes.length / (24000 * 2);
+        const fallbackAudioOutputTokens = Math.ceil(audioSeconds * 25);
+        await recordModelCostEvent({
+          context: costTelemetry,
+          taskKey: 'tts',
+          modelId: ttsConfig.model,
+          inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+          outputTokens: response.usageMetadata?.candidatesTokenCount || fallbackAudioOutputTokens,
+          audioSeconds,
+          latencyMs: narrationNowMs() - startedAt,
+          metadata: {
+            storyLength: storyText.length,
+            language,
+            voiceName,
+            outputTokenFallback: !response.usageMetadata?.candidatesTokenCount,
+          },
+        });
+      }
+
       return audioPart.inlineData.data;
     }
   );
@@ -168,7 +193,8 @@ export async function generateAndPersistNarration(
   voiceName: string,
   language: string,
   savedStoryId: string,
-  nodeId: string
+  nodeId: string,
+  costTelemetry?: CostTelemetryContext
 ): Promise<{ audioUrl: string }> {
   return timeNarrationStep(
     'narration.generate_and_persist',
@@ -179,7 +205,7 @@ export async function generateAndPersistNarration(
       voiceName,
     },
     async () => {
-      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language);
+      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry);
       const wavBuffer = pcmToWavBuffer(pcmBase64);
 
       const supabase = await createClient();
@@ -284,7 +310,8 @@ export async function generateNarrationOnly(
   tone: string,
   genre: string,
   voiceName: string,
-  language: string
+  language: string,
+  costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   return timeNarrationStep(
     'narration.generate_only',
@@ -293,7 +320,7 @@ export async function generateNarrationOnly(
       voiceName,
     },
     async () => {
-      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language);
+      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry);
       const wavBuffer = pcmToWavBuffer(pcmBase64);
       return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
     }
@@ -369,7 +396,8 @@ export async function selectNarratorVoiceServer(
   genre: string,
   tone: string,
   targetAge: string,
-  language: string = 'english'
+  language: string = 'english',
+  costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   try {
     const ai = new GoogleGenAI({ apiKey: getApiKey() });
@@ -384,6 +412,7 @@ export async function selectNarratorVoiceServer(
         availableVoices: AVAILABLE_VOICES.join(', '),
       }
     );
+    const startedAt = narrationNowMs();
     const response = await ai.models.generateContent({
       model: voiceConfig.model,
       contents: voicePrompt,
@@ -392,6 +421,23 @@ export async function selectNarratorVoiceServer(
         temperature: voiceConfig.temperature ?? 0.3,
       },
     });
+
+    if (costTelemetry) {
+      await recordModelCostEvent({
+        context: costTelemetry,
+        taskKey: 'voice_selection',
+        modelId: voiceConfig.model,
+        inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+        outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+        latencyMs: narrationNowMs() - startedAt,
+        metadata: {
+          genre,
+          tone,
+          targetAge,
+          language,
+        },
+      });
+    }
 
     const voiceName = response.text?.trim() || '';
     if (AVAILABLE_VOICES.includes(voiceName as any)) {

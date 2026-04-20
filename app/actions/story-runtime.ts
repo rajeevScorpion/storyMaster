@@ -24,6 +24,7 @@ import {
 } from '@/lib/ai/prompt-config.shared';
 import { PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
+import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 
 function runtimeNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -86,6 +87,7 @@ export interface SeedPlanPreviewInput {
   guidanceText?: string;
   sourceFidelity?: SourceFidelity;
   modelOverrides?: StoryModelOverrides;
+  costTelemetry?: CostTelemetryContext;
 }
 
 export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Promise<SeedPlan> {
@@ -118,6 +120,7 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
     model: input.modelOverrides?.seedPlanModel || 'gemini-3.1-pro-preview',
     prompt,
     temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
+    telemetry: input.costTelemetry,
   });
 
   let parsed: SeedPlan;
@@ -138,7 +141,8 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
 export async function materializeSeededBeat(
   seedBeat: SeedBeatOutline,
   sessionState: Partial<StorySession> | null,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  costTelemetry?: CostTelemetryContext
 ): Promise<StoryBeat> {
   const normalizedSessionState = sessionState
     ? {
@@ -167,6 +171,7 @@ export async function materializeSeededBeat(
       model: modelOverrides?.seededBeatModel || 'gemini-3.1-pro-preview',
       prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
       temperature: modelOverrides?.seededBeatTemperature ?? 0.4,
+      telemetry: costTelemetry,
     });
 
     try {
@@ -198,7 +203,8 @@ export async function generateStoryBeat(
   userPrompt: string,
   sessionState: Partial<StorySession> | null,
   selectedOptionLabel?: string,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  costTelemetry?: CostTelemetryContext
 ): Promise<StoryBeat> {
   const beatNumber = (sessionState?.currentBeat || 0) + 1;
   const normalizedSessionState = sessionState
@@ -284,6 +290,7 @@ export async function generateStoryBeat(
           model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
           prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
           temperature: modelOverrides?.storyTemperature ?? 0.7,
+          telemetry: costTelemetry,
         });
         try {
           return JSON.parse(text) as StoryBeat;
@@ -326,7 +333,8 @@ export async function composeStoryboardPlan(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null,
   visualStyle: string,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  costTelemetry?: CostTelemetryContext
 ): Promise<StoryboardPlan> {
   return timeRuntimeStep(
     'story_runtime.compose_storyboard_plan',
@@ -359,6 +367,7 @@ export async function composeStoryboardPlan(
         model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
         prompt,
         temperature: modelOverrides?.composerTemperature ?? 0.5,
+        telemetry: costTelemetry,
       });
 
       try {
@@ -503,7 +512,8 @@ export async function generateImage(
   visualStyle: string,
   modelOverrides?: StoryModelOverrides,
   referenceImages?: ReferenceImage[],
-  beatNumber?: number
+  beatNumber?: number,
+  costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   if (
     prompt.includes("Cinematic children's storybook illustration") ||
@@ -551,6 +561,7 @@ export async function generateImage(
             referenceParts,
             aspectRatio: '16:9',
             imageSize,
+            telemetry: costTelemetry,
           })
         );
 
@@ -581,6 +592,7 @@ export async function generateImage(
               referenceParts,
               aspectRatio: '16:9',
               imageSize,
+              telemetry: costTelemetry,
             })
           );
           if (retryResult.dataUrl) {
@@ -635,7 +647,8 @@ export async function generateCharacterPortrait(
   visualStyle: string,
   portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides,
-  promptOverride?: string
+  promptOverride?: string,
+  costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   try {
     return await timeRuntimeStep(
@@ -670,6 +683,7 @@ export async function generateCharacterPortrait(
           prompt,
           aspectRatio: '1:1',
           imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
+          telemetry: costTelemetry,
         });
 
         if (result.dataUrl) {

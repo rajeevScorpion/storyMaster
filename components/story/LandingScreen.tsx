@@ -239,6 +239,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
       shouldReleaseReservation = Boolean(reservationId);
 
       const modelOverrides = await getStoryModelOverrides().catch(() => undefined);
+      const previewSessionId = crypto.randomUUID();
       const nextPreview = await generateSeedPlanPreview({
         storyConfig: buildStoryConfig(),
         sourceText: sourceText.trim(),
@@ -247,6 +248,15 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         guidanceText: guidanceText.trim(),
         sourceFidelity,
         modelOverrides,
+        costTelemetry: {
+          activityKey: 'preview_seed_plan',
+          storySessionId: previewSessionId,
+          metadata: {
+            beatCount: effectiveMaxBeats,
+            language,
+            sourceFidelity,
+          },
+        },
       });
 
       setSeedPreview(nextPreview);

@@ -126,6 +126,30 @@ export interface DbExploredStory {
   updated_at: string;
 }
 
+export interface DbAiCostEvent {
+  id: string;
+  user_id: string | null;
+  story_id: string | null;
+  beat_id: string | null;
+  storyline_id: string | null;
+  node_id: string | null;
+  story_session_id: string | null;
+  activity_key: string;
+  task_key: string;
+  provider: string;
+  model_id: string;
+  status: 'success' | 'failed';
+  input_tokens: number;
+  output_tokens: number;
+  image_count: number;
+  image_size: string | null;
+  audio_seconds: number | null;
+  estimated_cost_usd: number;
+  latency_ms: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 // Gallery types
 
 export interface GalleryItem {

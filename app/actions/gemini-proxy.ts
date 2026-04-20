@@ -5,6 +5,9 @@ import { beatSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/gener
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
+import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import type { GeminiImageSize } from '@/lib/ai/pricing';
 
 const GEMINI_TEXT_TIMEOUT_MS = 30_000;
 const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
@@ -61,10 +64,11 @@ export interface TextCallParams {
   model: string;
   prompt: string;
   temperature?: number;
+  telemetry?: CostTelemetryContext;
 }
 
 export async function callGeminiText(params: TextCallParams): Promise<string> {
-  const { task, model, prompt, temperature } = params;
+  const { task, model, prompt, temperature, telemetry } = params;
   const ai = getAI();
 
   const schemaMap = {
@@ -77,6 +81,7 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
   const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
   const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
 
+  const startedAt = geminiNowMs();
   const response = await timeGeminiStep(
     `gemini_proxy.${task}`,
     {
@@ -100,6 +105,21 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
     )
   );
 
+  if (telemetry) {
+    await recordModelCostEvent({
+      context: telemetry,
+      taskKey: task,
+      modelId: model,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs: geminiNowMs() - startedAt,
+      metadata: {
+        promptChars: prompt.length,
+        temperature: temperature ?? 0.7,
+      },
+    });
+  }
+
   const text = response.text;
   if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
   return text;
@@ -117,6 +137,7 @@ export interface ImageCallParams {
   referenceParts?: InlineImagePart[];
   aspectRatio?: string;
   imageSize?: string;
+  telemetry?: CostTelemetryContext;
 }
 
 export interface ImageCallResult {
@@ -125,7 +146,7 @@ export interface ImageCallResult {
 }
 
 export async function callGeminiImage(params: ImageCallParams): Promise<ImageCallResult> {
-  const { task, model, prompt, referenceParts, aspectRatio, imageSize } = params;
+  const { task, model, prompt, referenceParts, aspectRatio, imageSize, telemetry } = params;
   const ai = getAI();
 
   const hasRefs = referenceParts && referenceParts.length > 0;
@@ -145,6 +166,8 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
   const imgFlagVal = await getFeatureFlagValue('gemini_image_timeout_ms');
   const imgTimeoutMs = (imgFlagVal ? parseInt(imgFlagVal, 10) : 0) || GEMINI_IMAGE_TIMEOUT_MS;
 
+  const resolvedImageSize = (imageSize ?? '1K') as GeminiImageSize;
+  const startedAt = geminiNowMs();
   const response = await timeGeminiStep(
     `gemini_proxy.${task}`,
     {
@@ -153,7 +176,7 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
       hasReferences: Boolean(hasRefs),
       referenceCount: referenceParts?.length ?? 0,
       aspectRatio: aspectRatio ?? '16:9',
-      imageSize: imageSize ?? '1K',
+      imageSize: resolvedImageSize,
       promptChars: prompt.length,
     },
     () => withTimeout(
@@ -164,7 +187,7 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
           ...(systemInstruction ? { systemInstruction } : {}),
           imageConfig: {
             aspectRatio: aspectRatio ?? '16:9',
-            imageSize: imageSize ?? '1K',
+            imageSize: resolvedImageSize,
           },
         },
       }),
@@ -173,13 +196,53 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
     )
   );
 
+  let generatedImageCount = 0;
   for (const part of response.candidates?.[0]?.content?.parts ?? []) {
     if (part.inlineData) {
+      generatedImageCount = 1;
+      if (telemetry) {
+        await recordModelCostEvent({
+          context: telemetry,
+          taskKey: task,
+          modelId: model,
+          inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+          outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+          imageCount: generatedImageCount,
+          imageSize: resolvedImageSize,
+          latencyMs: geminiNowMs() - startedAt,
+          metadata: {
+            promptChars: prompt.length,
+            aspectRatio: aspectRatio ?? '16:9',
+            hasReferences: Boolean(hasRefs),
+            referenceCount: referenceParts?.length ?? 0,
+          },
+        });
+      }
       return {
         dataUrl: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`,
         fallbackText: null,
       };
     }
+  }
+
+  if (telemetry) {
+    await recordModelCostEvent({
+      context: telemetry,
+      taskKey: task,
+      modelId: model,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      imageCount: generatedImageCount,
+      imageSize: resolvedImageSize,
+      latencyMs: geminiNowMs() - startedAt,
+      metadata: {
+        promptChars: prompt.length,
+        aspectRatio: aspectRatio ?? '16:9',
+        hasReferences: Boolean(hasRefs),
+        referenceCount: referenceParts?.length ?? 0,
+        returnedFallbackText: Boolean((response.text ?? '').trim()),
+      },
+    });
   }
 
   return {

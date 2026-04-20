@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { StoryBeat, StoryMap, StoryNode } from '../types/story';
 
-export function createStoryMap(rootBeat: StoryBeat): StoryMap {
-  const id = uuidv4();
+export function createStoryMap(rootBeat: StoryBeat, preGeneratedId?: string): StoryMap {
+  const id = preGeneratedId || uuidv4();
   const rootNode: StoryNode = {
     id,
     beatNumber: rootBeat.beatNumber,
