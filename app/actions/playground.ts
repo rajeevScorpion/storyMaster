@@ -181,7 +181,7 @@ export async function testImageGeneration(
         outputType: 'image',
         latencyMs,
         tokenCounts: { input: inputTokens, output: outputTokens },
-        estimatedCostUsd: estimateCost(model, inputTokens, outputTokens, 1),
+        estimatedCostUsd: estimateCost(model, inputTokens, outputTokens, 1, '1K'),
         model,
       };
     }

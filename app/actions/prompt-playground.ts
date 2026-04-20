@@ -368,7 +368,7 @@ async function runPortraitGenerationTest(
 
   const image = extractInlineImage(response);
   if (image) {
-    return buildImageTestResult(image, Date.now() - start, modelId, response.usageMetadata);
+    return buildImageTestResult(image, Date.now() - start, modelId, response.usageMetadata, imageSize);
   }
 
   throw new Error('No portrait generated');
@@ -411,7 +411,8 @@ function buildImageTestResult(
   output: string,
   latencyMs: number,
   modelId: string,
-  usage: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined
+  usage: { promptTokenCount?: number; candidatesTokenCount?: number } | undefined,
+  imageSize: '512' | '0.5K' | '1K' | '2K' | '4K' = '1K'
 ): TestResult {
   const inputTokens = usage?.promptTokenCount || 0;
   const outputTokens = usage?.candidatesTokenCount || 0;
@@ -420,7 +421,7 @@ function buildImageTestResult(
     outputType: 'image',
     latencyMs,
     tokenCounts: { input: inputTokens, output: outputTokens },
-    estimatedCostUsd: estimateCost(modelId, inputTokens, outputTokens, 1),
+    estimatedCostUsd: estimateCost(modelId, inputTokens, outputTokens, 1, imageSize),
     model: modelId,
   };
 }
