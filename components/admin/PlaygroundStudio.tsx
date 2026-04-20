@@ -301,9 +301,16 @@ export default function PlaygroundStudio() {
   const supportsPrompt = isPromptTaskKey(selectedTask);
   const promptTaskKey: PromptTaskKey | null = supportsPrompt ? selectedTask : null;
   const currentConfig = configs.find((config) => config.taskKey === selectedTask);
+  const defaultConfig = DEFAULT_MODELS[selectedTask];
+  const productionConfig: ModelConfig = currentConfig ?? {
+    taskKey: selectedTask,
+    modelId: defaultConfig.modelId,
+    temperature: defaultConfig.temperature,
+    updatedAt: '',
+  };
   const taskDef = TASK_DEFINITIONS.find((task) => task.key === selectedTask)!;
   const validation = promptTaskKey ? validatePromptTemplate(promptTaskKey, draftPrompt) : null;
-  const isModelChanged = currentConfig ? selectedModel !== currentConfig.modelId || (taskHasTemperature(selectedTask) && temperature !== (currentConfig.temperature ?? 0.7)) : false;
+  const isModelChanged = selectedModel !== productionConfig.modelId || (taskHasTemperature(selectedTask) && temperature !== (productionConfig.temperature ?? 0.7));
   const isDraftDirty = supportsPrompt && promptState ? draftPrompt !== promptState.draft.promptBody : false;
   const isDraftDifferentFromPublished = supportsPrompt && promptState ? draftPrompt !== promptState.published.promptBody : false;
   const placeholderDefinitions = useMemo(() => promptTaskKey ? PROMPT_TASK_DEFINITIONS[promptTaskKey].placeholders : [], [promptTaskKey]);
@@ -364,8 +371,8 @@ export default function PlaygroundStudio() {
   };
 
   const productionConfigLabel = formatProductionConfig(
-    currentConfig?.modelId,
-    currentConfig?.temperature,
+    productionConfig.modelId,
+    productionConfig.temperature,
     taskHasTemperature(selectedTask)
   );
   const selectedConfigLabel = formatProductionConfig(
@@ -637,7 +644,7 @@ export default function PlaygroundStudio() {
                   {supportsPrompt ? 'Prompt editing enabled' : 'Model-only task in v1'}
               </div>
               </div>
-              {currentConfig && <p className="mt-3 text-xs text-neutral-500">Production model: <span className="font-mono text-neutral-300">{productionConfigLabel}</span></p>}
+              <p className="mt-3 text-xs text-neutral-500">Production model: <span className="font-mono text-neutral-300">{productionConfigLabel}</span></p>
               {supportsPrompt && promptState && <p className="mt-1 text-xs text-neutral-500">Published prompt: <span className="text-neutral-300">{promptState.published.source === 'database' ? 'Database' : 'Code default'}</span> | Last updated: <span className="text-neutral-300">{formatTimestamp(promptState.published.updatedAt)}</span></p>}
             </div>
 

@@ -65,7 +65,19 @@ export interface PricingAdminState {
   actionCosts: DbPricingActionCost[];
   promotions: DbPricingPromotion[];
   runtimeSettings: PricingAdminRuntimeSetting[];
-  recentAudit: DbPricingPublishAudit[];
+}
+
+export interface PricingAuditPageInput {
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PricingAuditPageResult {
+  entries: DbPricingPublishAudit[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
 }
 
 export interface SavePricingPlanDraftInput {
@@ -174,6 +186,49 @@ export async function getPricingAdminState(): Promise<PricingAdminState> {
   await verifyAdmin();
   const supabase = createAdminClient();
   return getPricingAdminStateInternal(supabase);
+}
+
+export async function getPricingAuditPage(input: PricingAuditPageInput = {}): Promise<PricingAuditPageResult> {
+  await verifyAdmin();
+  const supabase = createAdminClient();
+  const pageSize = normalizeAuditPageSize(input.pageSize);
+  let page = normalizeAuditPage(input.page);
+  let from = (page - 1) * pageSize;
+  let to = from + pageSize - 1;
+
+  let { data, error, count } = await supabase
+    .from('pricing_publish_audit')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(from, to);
+
+  throwIfQueryFailed(error, 'Failed to load pricing audit log');
+
+  const totalCount = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+
+  if (totalCount > 0 && page > totalPages) {
+    page = totalPages;
+    from = (page - 1) * pageSize;
+    to = from + pageSize - 1;
+
+    const retry = await supabase
+      .from('pricing_publish_audit')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    throwIfQueryFailed(retry.error, 'Failed to load pricing audit log');
+    data = retry.data;
+  }
+
+  return {
+    entries: (data ?? []) as DbPricingPublishAudit[],
+    page,
+    pageSize,
+    totalCount,
+    totalPages,
+  };
 }
 
 export async function savePricingPlanDraft(input: SavePricingPlanDraftInput): Promise<PricingAdminState> {
@@ -812,13 +867,12 @@ export async function expirePricingReservations(): Promise<ExpirePricingReservat
 }
 
 async function getPricingAdminStateInternal(supabase: AdminClient): Promise<PricingAdminState> {
-  const [plansResult, versionsResult, topupsResult, actionCostsResult, promotionsResult, auditResult, runtimeSettings] = await Promise.all([
+  const [plansResult, versionsResult, topupsResult, actionCostsResult, promotionsResult, runtimeSettings] = await Promise.all([
     supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }).order('name', { ascending: true }),
     supabase.from('pricing_plan_versions').select('*').order('plan_id', { ascending: true }).order('pricing_market_key', { ascending: true }).order('billing_interval', { ascending: true }).order('status', { ascending: true }),
     supabase.from('pricing_topup_packs').select('*').order('pricing_market_key', { ascending: true }).order('beat_amount', { ascending: true }).order('status', { ascending: true }),
     supabase.from('pricing_action_costs').select('*').order('action_key', { ascending: true }),
     supabase.from('pricing_promotions').select('*').order('created_at', { ascending: false }),
-    supabase.from('pricing_publish_audit').select('*').order('created_at', { ascending: false }).limit(50),
     getPricingRuntimeSettingsInternal(supabase),
   ]);
 
@@ -827,7 +881,6 @@ async function getPricingAdminStateInternal(supabase: AdminClient): Promise<Pric
   throwIfQueryFailed(topupsResult.error, 'Failed to load pricing top-up packs');
   throwIfQueryFailed(actionCostsResult.error, 'Failed to load pricing action costs');
   throwIfQueryFailed(promotionsResult.error, 'Failed to load pricing promotions');
-  throwIfQueryFailed(auditResult.error, 'Failed to load pricing audit log');
 
   const versionsByPlanId = new Map<string, DbPricingPlanVersion[]>();
   for (const row of (versionsResult.data ?? []) as DbPricingPlanVersion[]) {
@@ -847,8 +900,17 @@ async function getPricingAdminStateInternal(supabase: AdminClient): Promise<Pric
     actionCosts: (actionCostsResult.data ?? []) as DbPricingActionCost[],
     promotions: (promotionsResult.data ?? []) as DbPricingPromotion[],
     runtimeSettings,
-    recentAudit: (auditResult.data ?? []) as DbPricingPublishAudit[],
   };
+}
+
+function normalizeAuditPage(value: number | null | undefined): number {
+  if (!value || !Number.isFinite(value)) return 1;
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeAuditPageSize(value: number | null | undefined): number {
+  if (!value || !Number.isFinite(value)) return 25;
+  return Math.min(100, Math.max(1, Math.floor(value)));
 }
 
 async function getPricingRuntimeSettingsInternal(supabase: AdminClient): Promise<PricingAdminRuntimeSetting[]> {

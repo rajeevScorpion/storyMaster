@@ -8,9 +8,27 @@ const navItems = [
   { label: 'Content', href: '/admin/content', icon: BookOpen },
   { label: 'Backfill', href: '/admin/backfill', icon: Database },
   { label: 'Prompts Playground', href: '/admin/playground', icon: FlaskConical },
-  { label: 'Pricing and offers', href: '/admin/pricing', icon: Coins },
+  {
+    label: 'Pricing and offers',
+    href: '/admin/pricing',
+    icon: Coins,
+    children: [
+      { label: 'Pricing workshop', href: '/admin/pricing' },
+      { label: 'Plans', href: '/admin/pricing/plans' },
+      { label: 'Top-up packs', href: '/admin/pricing/top-up-packs' },
+      { label: 'Promotions', href: '/admin/pricing/promotions' },
+      { label: 'Action costs', href: '/admin/pricing/action-costs' },
+      { label: 'Runtime controls', href: '/admin/pricing/runtime-controls' },
+      { label: 'Recovery tools', href: '/admin/pricing/recovery-tools' },
+      { label: 'Recent audit', href: '/admin/pricing/audit' },
+    ],
+  },
   { label: 'Global Settings', href: '/admin/settings', icon: Settings },
 ];
+
+function isActivePath(pathname: string, href: string) {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export function AdminSidebar() {
   const pathname = usePathname();
@@ -23,21 +41,42 @@ export function AdminSidebar() {
         </Link>
       </div>
       <nav className="flex-1 p-3 space-y-1">
-        {navItems.map(({ label, href, icon: Icon }) => {
-          const active = pathname.startsWith(href);
+        {navItems.map(({ label, href, icon: Icon, children }) => {
+          const active = isActivePath(pathname, href);
           return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                active
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : 'text-neutral-400 hover:text-neutral-200 hover:bg-white/5'
-              }`}
-            >
-              <Icon size={18} />
-              {label}
-            </Link>
+            <div key={href}>
+              <Link
+                href={href}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${
+                  active
+                    ? 'border border-emerald-500/30 bg-emerald-500/20 text-emerald-300'
+                    : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'
+                }`}
+              >
+                <Icon size={18} />
+                {label}
+              </Link>
+              {children && active && (
+                <div className="mt-1 space-y-1 border-l border-white/10 pl-4">
+                  {children.map((child) => {
+                    const childActive = pathname === child.href;
+                    return (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className={`block rounded-lg px-3 py-2 text-xs transition-colors ${
+                          childActive
+                            ? 'bg-emerald-500/10 text-emerald-200'
+                            : 'text-neutral-500 hover:bg-white/5 hover:text-neutral-300'
+                        }`}
+                      >
+                        {child.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           );
         })}
       </nav>

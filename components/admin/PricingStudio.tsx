@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
@@ -103,9 +104,83 @@ type RuntimeDraft = {
   value: string;
 };
 
+export type PricingStudioSection =
+  | 'workshop'
+  | 'plans'
+  | 'top-up-packs'
+  | 'promotions'
+  | 'action-costs'
+  | 'runtime-controls'
+  | 'recovery-tools';
+
 const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100';
 const TOPUP_PACK_KEYS = ['beats_25', 'beats_80', 'beats_200'] as const;
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
+
+const PRICING_WORKSPACE_LINKS: Array<{
+  section: PricingStudioSection | 'audit';
+  label: string;
+  href: string;
+  description: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+}> = [
+  {
+    section: 'workshop',
+    label: 'Pricing workshop',
+    href: '/admin/pricing',
+    description: 'Review pricing catalog health and jump into focused tools.',
+    icon: Coins,
+  },
+  {
+    section: 'plans',
+    label: 'Plans',
+    href: '/admin/pricing/plans',
+    description: 'Draft and publish plan variants by market and interval.',
+    icon: CreditCard,
+  },
+  {
+    section: 'top-up-packs',
+    label: 'Top-up packs',
+    href: '/admin/pricing/top-up-packs',
+    description: 'Manage one-time coin packs by market.',
+    icon: Coins,
+  },
+  {
+    section: 'promotions',
+    label: 'Promotions',
+    href: '/admin/pricing/promotions',
+    description: 'Create and archive campaign bonus offers.',
+    icon: Megaphone,
+  },
+  {
+    section: 'action-costs',
+    label: 'Action costs',
+    href: '/admin/pricing/action-costs',
+    description: 'Set immediate-save coin costs for billable actions.',
+    icon: Sparkles,
+  },
+  {
+    section: 'runtime-controls',
+    label: 'Runtime controls',
+    href: '/admin/pricing/runtime-controls',
+    description: 'Control visibility, rollout behavior, and live settings.',
+    icon: Settings2,
+  },
+  {
+    section: 'recovery-tools',
+    label: 'Recovery tools',
+    href: '/admin/pricing/recovery-tools',
+    description: 'Repair test wallet, checkout, and reservation issues.',
+    icon: Wrench,
+  },
+  {
+    section: 'audit',
+    label: 'Recent audit',
+    href: '/admin/pricing/audit',
+    description: 'Review pricing changes with paginated history.',
+    icon: ShieldAlert,
+  },
+];
 
 function SectionCard({
   title,
@@ -132,13 +207,6 @@ function SectionCard({
       {children}
     </section>
   );
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return 'Never';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return 'Unknown';
-  return date.toLocaleString();
 }
 
 function beatsToCoins(value: number) {
@@ -282,7 +350,7 @@ function defaultPromotionEditor(): PromotionEditorState {
   };
 }
 
-export default function PricingStudio() {
+export default function PricingStudio({ section = 'workshop' }: { section?: PricingStudioSection }) {
   const [state, setState] = useState<PricingAdminState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -422,13 +490,16 @@ export default function PricingStudio() {
     return <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error || 'Failed to load pricing data.'}</div>;
   }
 
+  const sectionMeta = PRICING_WORKSPACE_LINKS.find((item) => item.section === section) ?? PRICING_WORKSPACE_LINKS[0];
+  const isWorkshop = section === 'workshop';
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl text-neutral-100">Pricing Workspace</h1>
-            <p className="mt-1 text-sm text-neutral-400">Admin controls for plans, top-ups, promotions, wallet rules, and rollout settings.</p>
+            <h1 className="text-2xl text-neutral-100">{sectionMeta.label}</h1>
+            <p className="mt-1 text-sm text-neutral-400">{sectionMeta.description}</p>
             <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">Display mode: 10 coins = 1 internal beat</p>
           </div>
           <button
@@ -441,17 +512,40 @@ export default function PricingStudio() {
           </button>
         </div>
 
-        <div className="mt-6 grid gap-3 md:grid-cols-4">
-          <MetricCard label="Plans" value={String(state.plans.length)} hint="Plan families" />
-          <MetricCard label="Versions" value={String(state.plans.reduce((sum, item) => sum + item.versions.length, 0))} hint="Draft + live variants" />
-          <MetricCard label="Top-ups" value={String(state.topupPacks.length)} hint="Market variants" />
-          <MetricCard label="Promotions" value={String(state.promotions.length)} hint="Immediate-save promos" />
-        </div>
+        {isWorkshop && (
+          <>
+            <div className="mt-6 grid gap-3 md:grid-cols-4">
+              <MetricCard label="Plans" value={String(state.plans.length)} hint="Plan families" />
+              <MetricCard label="Versions" value={String(state.plans.reduce((sum, item) => sum + item.versions.length, 0))} hint="Draft + live variants" />
+              <MetricCard label="Top-ups" value={String(state.topupPacks.length)} hint="Market variants" />
+              <MetricCard label="Promotions" value={String(state.promotions.length)} hint="Immediate-save promos" />
+            </div>
+
+            <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {PRICING_WORKSPACE_LINKS.filter((item) => item.section !== 'workshop').map(({ href, label, description, icon: Icon }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className="group rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="rounded-lg bg-emerald-500/10 p-2 text-emerald-300">
+                      <Icon size={16} />
+                    </span>
+                    <span className="text-sm font-medium text-neutral-100 group-hover:text-emerald-200">{label}</span>
+                  </div>
+                  <p className="mt-3 text-xs leading-relaxed text-neutral-400">{description}</p>
+                </Link>
+              ))}
+            </div>
+          </>
+        )}
 
         {error && <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
         {message && <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
       </div>
 
+      {section === 'runtime-controls' && (
       <SectionCard title="Runtime Controls" description="Use these switches to decide what people can see, buy, and experience. Each card explains what changes when it is on or off." icon={Settings2}>
         <div className="grid gap-4 lg:grid-cols-2">
           {state.runtimeSettings.map((setting) => {
@@ -523,7 +617,9 @@ export default function PricingStudio() {
           })}
         </div>
       </SectionCard>
+      )}
 
+      {section === 'plans' && (
       <SectionCard title="Plans" description="Draft and publish plan variants by market and billing interval." icon={CreditCard}>
         <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
           <div className="space-y-4 rounded-xl border border-white/10 bg-neutral-900/50 p-4">
@@ -646,7 +742,9 @@ export default function PricingStudio() {
           </div>
         </div>
       </SectionCard>
+      )}
 
+      {section === 'top-up-packs' && (
       <SectionCard title="Top-up Packs" description="Manage one-time coin packs by market." icon={Coins}>
         <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
           <div className="space-y-4 rounded-xl border border-white/10 bg-neutral-900/50 p-4">
@@ -734,7 +832,9 @@ export default function PricingStudio() {
           </div>
         </div>
       </SectionCard>
+      )}
 
+      {section === 'action-costs' && (
       <SectionCard title="Action Costs" description="Immediate-save coin costs for billable actions." icon={Sparkles}>
         <div className="grid gap-4 md:grid-cols-2">
           {state.actionCosts.map((action) => {
@@ -789,7 +889,9 @@ export default function PricingStudio() {
           })}
         </div>
       </SectionCard>
+      )}
 
+      {section === 'promotions' && (
       <SectionCard title="Promotions" description="Immediate-save promotions for campaign and event windows." icon={Megaphone}>
         <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
           Promotions are immediate-save in v1. Plans and top-ups keep draft/publish safety, but promos update the live row directly.
@@ -889,7 +991,9 @@ export default function PricingStudio() {
           </div>
         </div>
       </SectionCard>
+      )}
 
+      {section === 'recovery-tools' && (
       <SectionCard
         title="Recovery Tools"
         description="Use these only during internal testing when a payment or wallet event needs a manual nudge."
@@ -1056,27 +1160,8 @@ export default function PricingStudio() {
           </div>
         </div>
       </SectionCard>
+      )}
 
-      <SectionCard title="Recent Audit" description="Latest pricing changes recorded for traceability." icon={ShieldAlert}>
-        <div className="space-y-3">
-          {state.recentAudit.length === 0 ? (
-            <p className="text-sm text-neutral-500">No pricing audit entries yet.</p>
-          ) : (
-            state.recentAudit.map((entry) => (
-              <div key={entry.id} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-neutral-100">{entry.entity_type} · {entry.action_type}</p>
-                    <p className="mt-1 text-xs text-neutral-500">Performed at {formatDate(entry.created_at)}</p>
-                  </div>
-                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">{entry.entity_id ?? 'runtime'}</span>
-                </div>
-                {entry.reason && <p className="mt-2 text-xs text-neutral-400">Reason: {entry.reason}</p>}
-              </div>
-            ))
-          )}
-        </div>
-      </SectionCard>
     </div>
   );
 }
