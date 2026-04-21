@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
@@ -12,9 +12,11 @@ import PublishDialog from './PublishDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
 import NarrationButton from './NarrationButton';
+import AutoScrollButton from './AutoScrollButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
@@ -29,6 +31,8 @@ function StoryboardCycler({
   playbackState,
   onImageError,
   onImageLoad,
+  imageClassName,
+  showIndicators = true,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -39,6 +43,8 @@ function StoryboardCycler({
   playbackState: 'idle' | 'playing' | 'paused';
   onImageError?: () => void;
   onImageLoad?: () => void;
+  imageClassName?: string;
+  showIndicators?: boolean;
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
@@ -103,43 +109,46 @@ function StoryboardCycler({
 
   return (
     <div className="absolute inset-0 overflow-hidden">
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={activePanel}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.6, ease: 'easeInOut' }}
-          className="absolute inset-0 overflow-hidden"
-        >
-          {/* Overscanned grid container, positioned to crop to the active quadrant. */}
-          <div
-            className="absolute"
-            style={getStoryboardPanelCropStyle(activePanel)}
+      <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activePanel}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6, ease: 'easeInOut' }}
+            className="absolute inset-0 overflow-hidden"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={gridUrl}
-              alt=""
-              className="w-full h-full object-cover"
-              onLoad={onImageLoad}
-              onError={onImageError}
-            />
-          </div>
-        </motion.div>
-      </AnimatePresence>
-      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      {/* Indicator dots */}
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-        {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
-          <div
-            key={i}
-            className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
-              i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'
-            }`}
-          />
-        ))}
+            {/* Overscanned grid container, positioned to crop to the active quadrant. */}
+            <div
+              className="absolute"
+              style={getStoryboardPanelCropStyle(activePanel)}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={gridUrl}
+                alt=""
+                className="w-full h-full object-cover"
+                onLoad={onImageLoad}
+                onError={onImageError}
+              />
+            </div>
+          </motion.div>
+        </AnimatePresence>
       </div>
+      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
+      {showIndicators && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
+          {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
+            <div
+              key={i}
+              className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
+                i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'
+              }`}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -147,6 +156,19 @@ function StoryboardCycler({
 function isFallbackImageUrl(url: string | undefined): boolean {
   if (!url) return false;
   return url.startsWith('https://picsum.photos/seed/');
+}
+
+type StoryReaderPanel = 'story' | 'branches';
+
+interface StoryRuntimeSettings {
+  cycleOverride: boolean;
+  cycleMs: number;
+  vignetteEnabled: boolean;
+  vignetteAmountPercent: number;
+  cloudSaveTimeoutMs: number;
+  loadingReaderScrollSpeedPxPerSecond: number;
+  storyUiTextLineCount: number;
+  storyUiAutoScrollEnabled: boolean;
 }
 
 export default function StoryScreen() {
@@ -174,12 +196,15 @@ export default function StoryScreen() {
   const { data: pricing } = usePricingRuntime();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; vignetteAmountPercent: number; cloudSaveTimeoutMs: number }>({
+  const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
     vignetteAmountPercent: 100,
     cloudSaveTimeoutMs: 20000,
+    loadingReaderScrollSpeedPxPerSecond: 24,
+    storyUiTextLineCount: 7,
+    storyUiAutoScrollEnabled: true,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -289,24 +314,32 @@ function StoryScreenInner({
   saveWarning: string | null;
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
-  cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; vignetteAmountPercent: number; cloudSaveTimeoutMs: number };
+  cycleSettings: StoryRuntimeSettings;
   continueCoinCost: number;
   showCoinHint: boolean;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
+  const currentNodeId = session.storyMap.currentNodeId;
   const preludeText =
     currentBeat.beatNumber === 1 && !session.storyConfig.authoring.seedPlan
       ? session.storyConfig.authoring.preludeText?.trim()
       : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
+  const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [isCardHovered, setIsCardHovered] = useState(false);
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const visibleReaderPanel: StoryReaderPanel = isEnding ? 'story' : activeReaderPanel;
+  const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
+    enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
+    resetKey: currentNodeId,
+    pxPerSecond: cycleSettings.loadingReaderScrollSpeedPxPerSecond,
+  });
   const thumbRef = useRef<HTMLDivElement>(null);
+  const autoMinimizedForLoadingRef = useRef(false);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -331,10 +364,9 @@ function StoryScreenInner({
       thumb.style.top = `${thumbTop}%`;
       thumb.style.height = `${thumbH}%`;
     }
-  }, []);
+  }, [scrollRef]);
 
   // Audio player
-  const currentNodeId = session.storyMap.currentNodeId;
   const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
   const imageKey = currentBeat.imageUrl || displayImageUrl;
@@ -393,16 +425,37 @@ function StoryScreenInner({
     isEnding,
   });
 
-  // Auto-minimize panel when loading starts so background image is visible
+  // Auto-hide while a beat is generating, then restore the reader when that loading completes.
   useEffect(() => {
-    if (!isLoading) return;
-
     const frame = requestAnimationFrame(() => {
-      setIsMinimized(true);
+      if (isLoading) {
+        setIsMinimized((current) => {
+          autoMinimizedForLoadingRef.current = !current;
+          return true;
+        });
+        return;
+      }
+
+      if (autoMinimizedForLoadingRef.current) {
+        autoMinimizedForLoadingRef.current = false;
+        setIsMinimized(false);
+        setActiveReaderPanel('story');
+      }
     });
 
     return () => cancelAnimationFrame(frame);
   }, [isLoading]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(handleScroll);
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentNodeId, cycleSettings.storyUiTextLineCount, handleScroll]);
+
+  useEffect(() => {
+    if (isMinimized) {
+      stopAutoScroll();
+    }
+  }, [isMinimized, stopAutoScroll]);
 
   // Auto-save when a new beat is generated
   useEffect(() => {
@@ -448,11 +501,14 @@ function StoryScreenInner({
     ? 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950/60 via-neutral-950/35 to-transparent'
     : 'absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent';
   const headerGradientClass = isLoading
-    ? 'relative z-10 p-4 md:p-6 pl-16 pr-20 md:pl-36 md:pr-24 flex justify-between items-center bg-gradient-to-b from-neutral-950/45 via-neutral-950/15 to-transparent shrink-0'
-    : 'relative z-10 p-4 md:p-6 pl-16 pr-20 md:pl-36 md:pr-24 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0';
+    ? 'relative z-10 flex shrink-0 flex-col gap-5 px-4 pb-2 pt-4 md:flex-row md:items-center md:justify-between md:gap-0 md:p-6 md:pl-36 md:pr-24 bg-gradient-to-b from-neutral-950/45 via-neutral-950/15 to-transparent'
+    : 'relative z-10 flex shrink-0 flex-col gap-5 px-4 pb-2 pt-4 md:flex-row md:items-center md:justify-between md:gap-0 md:p-6 md:pl-36 md:pr-24 bg-gradient-to-b from-neutral-950/80 to-transparent';
   const chromeVisibilityClass = isLoading
     ? 'opacity-0 pointer-events-none select-none'
     : 'opacity-100';
+  const storyTextViewportStyle = {
+    height: `min(46vh, calc(${cycleSettings.storyUiTextLineCount} * 1lh))`,
+  } satisfies CSSProperties;
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -468,7 +524,7 @@ function StoryScreenInner({
               opacity: { duration: 1.5, ease: "easeOut" },
               scale: { duration: 20, ease: "easeInOut", repeat: Infinity, repeatType: "reverse" },
             }}
-            className="absolute inset-0"
+            className="absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none"
           >
             {isStoryboard ? (
               <StoryboardCycler
@@ -511,14 +567,16 @@ function StoryScreenInner({
 
       {/* Header */}
       <header className={`${headerGradientClass} transition-opacity duration-300 ${chromeVisibilityClass}`}>
-        <div className="flex items-center gap-3">
-          <BookOpen className="w-6 h-6 text-emerald-400" />
-          <h1 className="text-xl font-serif tracking-wide text-neutral-200">
+        <div className="order-2 flex min-w-0 items-start gap-2 self-stretch md:order-1 md:items-center md:gap-3 md:self-auto">
+          <BookOpen className="hidden h-6 w-6 shrink-0 text-emerald-400 md:block" />
+          <h1 className="min-w-0 max-w-[calc(100vw-2rem)] text-lg font-serif leading-snug tracking-wide text-neutral-200 md:text-xl">
             {session.title || "Kissago"}
           </h1>
         </div>
-        <div className="flex items-center gap-4 text-sm font-sans uppercase tracking-widest text-neutral-400">
-          <span>Beat {currentBeat.beatNumber} / {session.maxBeats}</span>
+        <div className="order-1 flex h-11 items-center justify-end gap-3 pl-32 pr-12 text-sm font-sans uppercase tracking-widest text-neutral-400 md:order-2 md:h-auto md:self-auto md:gap-4 md:p-0">
+          <span className="text-xs md:text-sm">
+            <span className="hidden md:inline">Beat </span>{currentBeat.beatNumber} / {session.maxBeats}
+          </span>
           {onSave && (
             <button
               onClick={onSave}
@@ -575,19 +633,93 @@ function StoryScreenInner({
       </header>
 
       {/* Main Content */}
-      <main className={`relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
-        <div className="grid md:grid-cols-12 gap-8 items-end">
+      <main className={`relative z-10 flex-1 flex flex-col px-4 pb-4 pt-1 md:justify-end md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
+        <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
+          {displayImageUrl && (
+            <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
+              {isStoryboard ? (
+                <StoryboardCycler
+                  key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                  gridUrl={currentBeat.imageUrl!}
+                  audioUrl={currentBeat.audioUrl}
+                  cycleOverride={cycleSettings.cycleOverride}
+                  cycleMs={cycleSettings.cycleMs}
+                  vignetteEnabled={cycleSettings.vignetteEnabled}
+                  vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+                  playbackState={playbackState}
+                  imageClassName="mobile-scene-shuttle"
+                  onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
+                  onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}
+                />
+              ) : (
+                <div className="mobile-scene-shuttle absolute inset-0">
+                  <Image
+                    src={displayImageUrl}
+                    alt={currentBeat.sceneSummary}
+                    fill
+                    className="object-cover"
+                    referrerPolicy="no-referrer"
+                    priority
+                    unoptimized
+                    onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
+                    onError={() => setFailedImageUrl(displayImageUrl)}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="mb-3 flex items-center gap-2 md:hidden">
+          {!isMinimized && (
+            <>
+              <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
+                <Timeline
+                  storyMap={session.storyMap}
+                  onNodeClick={navigateToNode}
+                  focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+                  compact
+                />
+              </div>
+              {!isEnding && (
+                <div className="grid shrink-0 grid-cols-2 rounded-full border border-white/10 bg-neutral-950/65 p-0.5 backdrop-blur-md">
+                  {([
+                    ['story', 'Story'],
+                    ['branches', 'Branches'],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setActiveReaderPanel(value)}
+                      className={`rounded-full px-3 py-1 text-[10px] font-sans uppercase tracking-wider transition-colors ${
+                        activeReaderPanel === value
+                          ? 'bg-emerald-500 text-neutral-950'
+                          : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="grid shrink-0 md:grid-cols-12 gap-4 md:gap-8 items-end">
 
           {/* Story Text Card + Toggle */}
           <div
-            className="md:col-span-7 flex flex-col items-center relative"
+            className={`md:col-span-7 flex-col items-center relative ${
+              !isMinimized && visibleReaderPanel === 'story' ? 'flex' : 'hidden md:flex'
+            }`}
             onMouseEnter={() => setIsCardHovered(true)}
             onMouseLeave={() => setIsCardHovered(false)}
           >
             {/* Minimize/maximize toggle — attached above card */}
             <button
               onClick={() => setIsMinimized(!isMinimized)}
-              className="mb-2 p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
+              className="mb-2 hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
               title={isMinimized ? 'Expand' : 'Minimize'}
             >
               {isMinimized ? (
@@ -598,10 +730,10 @@ function StoryScreenInner({
             </button>
 
           {/* Card + Narration button row */}
-          <div className="flex items-end gap-5 w-full">
+          <div className="flex items-end gap-3 w-full md:gap-5">
             {/* Narration + Regenerate image buttons — outside card, left side */}
             {!isMinimized && (
-              <div className="shrink-0 pb-4 flex flex-col items-center gap-2">
+              <div className="shrink-0 pb-3 flex flex-col items-center gap-2 md:pb-4">
                 {/* Regenerate image button — only when image is missing */}
                 {canRegenerateImage && (
                   <button
@@ -620,6 +752,13 @@ function StoryScreenInner({
                       <ImageIcon className="w-5 h-5 text-amber-400 hover:text-amber-300 transition-colors" />
                     )}
                   </button>
+                )}
+                {cycleSettings.storyUiAutoScrollEnabled && (
+                  <AutoScrollButton
+                    active={isAutoScrolling}
+                    onClick={toggleAutoScroll}
+                    disabled={scrollState.atBottom}
+                  />
                 )}
                 <NarrationButton
                   isGeneratingAudio={isGeneratingAudio}
@@ -641,7 +780,7 @@ function StoryScreenInner({
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
             style={{ opacity: isCardHovered ? 1 : 0.1 }}
             className={`touch-visible relative w-full border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-500 ${
-              isMinimized ? 'bg-neutral-950/40' : 'max-h-[50vh] bg-neutral-900/80'
+              isMinimized ? 'bg-neutral-950/40' : 'bg-neutral-900/80'
             }`}
           >
             {/* Top scroll fade gradient */}
@@ -653,12 +792,14 @@ function StoryScreenInner({
             )}
 
             {/* Scrollable content area */}
-            <div
-              ref={scrollRef}
-              onScroll={handleScroll}
-              className={`p-5 md:p-12 ${isMinimized ? '' : 'flex-1 overflow-y-auto scrollbar-none'}`}
-            >
-              <AnimatePresence mode="wait">
+            <div className="p-5 md:p-8">
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                style={!isMinimized ? storyTextViewportStyle : undefined}
+                className={`text-xl md:text-2xl font-serif leading-relaxed ${isMinimized ? '' : 'overflow-y-auto scrollbar-none'}`}
+              >
+                <AnimatePresence mode="wait">
                 <motion.div
                   key={session.storyMap.currentNodeId}
                   initial={{ opacity: 0 }}
@@ -677,7 +818,7 @@ function StoryScreenInner({
                     </div>
                   )}
 
-                  <p className={`text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 ${
+                  <p className={`transition-colors duration-500 ${
                     isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
                   }`}>
                     {currentBeat.storyText}
@@ -759,7 +900,8 @@ function StoryScreenInner({
                     </div>
                   )}
                 </motion.div>
-              </AnimatePresence>
+                </AnimatePresence>
+              </div>
             </div>
 
             {/* Bottom scroll fade gradient */}
@@ -790,10 +932,12 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className="md:col-span-5 flex flex-col justify-end"
+              className={`md:col-span-5 flex-col justify-end ${
+                !isMinimized && activeReaderPanel === 'branches' ? 'flex' : 'hidden md:flex'
+              }`}
             >
               {/* Timeline — positioned above choices */}
-              <div className="shrink-0">
+              <div className="hidden shrink-0 md:block">
                 <Timeline
                   storyMap={session.storyMap}
                   onNodeClick={navigateToNode}
@@ -815,7 +959,7 @@ function StoryScreenInner({
                 </div>
                 <button
                   onClick={() => setIsMinimized(!isMinimized)}
-                  className="p-1.5 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
+                  className="hidden p-1.5 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
                   title={isMinimized ? 'Show options' : 'Hide options'}
                 >
                   {isMinimized ? (
@@ -834,14 +978,14 @@ function StoryScreenInner({
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
                     transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                    className="relative shrink-0 overflow-hidden"
+                    className="relative shrink-0 overflow-hidden md:max-h-none"
                   >
                     <div
                       ref={optionsContainerRef}
-                      className="h-full overflow-y-auto scrollbar-none space-y-4 px-1 pt-1"
+                      className="max-h-[min(42dvh,24rem)] overflow-y-auto scrollbar-none space-y-4 px-1 pt-3 md:max-h-none md:pt-1"
                       style={{
-                        maskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
-                        WebkitMaskImage: 'linear-gradient(to bottom, black 82%, transparent 100%)',
+                        maskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 82%, transparent 100%)',
+                        WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 82%, transparent 100%)',
                       }}
                     >
                       {orderedOptions.map((option, index) => {
@@ -865,7 +1009,7 @@ function StoryScreenInner({
                           >
                             <div>
                               <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
+                                <p className="text-base md:text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
                                   {option.label}
                                 </p>
                                 {isCanonical && (
@@ -874,7 +1018,7 @@ function StoryScreenInner({
                                   </span>
                                 )}
                               </div>
-                              <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider">
+                              <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider line-clamp-2">
                                 {option.intent}
                               </p>
                             </div>

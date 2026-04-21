@@ -8,10 +8,13 @@ import { savePricingActionCost } from '@/app/actions/pricing-admin';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import {
   DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS,
+  MAX_STORY_UI_TEXT_LINE_COUNT,
+  MIN_STORY_UI_TEXT_LINE_COUNT,
   normalizeStoryboardImageSize,
   normalizeStoryboardLayoutMode,
   normalizeStoryboardVignetteAmountPercent,
   normalizeStoryboardWebpQualityPercent,
+  normalizeStoryUiTextLineCount,
   type StoryboardImageQualitySettings,
   type StoryboardImageSize,
 } from '@/lib/types/storyboard-settings';
@@ -238,6 +241,8 @@ export async function getGlobalSettings(): Promise<{
   loadingReaderStoryTextEnabled: boolean;
   loadingReaderOptionsEnabled: boolean;
   loadingReaderScrollSpeedPxPerSecond: number;
+  storyUiTextLineCount: number;
+  storyUiAutoScrollEnabled: boolean;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   videoDownloadEnabled: boolean;
@@ -250,7 +255,7 @@ export async function getGlobalSettings(): Promise<{
   previewSeedPlanPriceCoins: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -262,6 +267,8 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('story_loading_reader_story_text_enabled', true),
     getFeatureFlag('story_loading_reader_options_enabled', true),
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
+    getFeatureFlagValue('story_ui_text_line_count'),
+    getFeatureFlag('story_ui_auto_scroll_enabled', true),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('video_download_enabled'),
@@ -296,6 +303,8 @@ export async function getGlobalSettings(): Promise<{
     loadingReaderScrollSpeedPxPerSecond: Number.isFinite(parsedLoadingReaderScrollSpeed)
       ? Math.max(1, parsedLoadingReaderScrollSpeed)
       : 24,
+    storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
+    storyUiAutoScrollEnabled,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     videoDownloadEnabled,
@@ -389,6 +398,19 @@ export async function setStoryLoadingReaderScrollSpeed(pxPerSecond: number): Pro
     throw new Error('Loader story scrolling speed must be at least 1 pixel per second.');
   }
   await setFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second', String(Math.round(pxPerSecond)));
+}
+
+export async function setStoryUiTextLineCount(lines: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(lines) || lines < MIN_STORY_UI_TEXT_LINE_COUNT || lines > MAX_STORY_UI_TEXT_LINE_COUNT) {
+    throw new Error(`Story text lines must be between ${MIN_STORY_UI_TEXT_LINE_COUNT} and ${MAX_STORY_UI_TEXT_LINE_COUNT}.`);
+  }
+  await setFeatureFlagValue('story_ui_text_line_count', String(normalizeStoryUiTextLineCount(lines)));
+}
+
+export async function setStoryUiAutoScroll(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_ui_auto_scroll_enabled', enabled);
 }
 
 export async function setFreePlusCharacterSheets(enabled: boolean): Promise<void> {
@@ -486,6 +508,8 @@ export async function getStoryboardSettings(): Promise<{
   loadingReaderStoryTextEnabled: boolean;
   loadingReaderOptionsEnabled: boolean;
   loadingReaderScrollSpeedPxPerSecond: number;
+  storyUiTextLineCount: number;
+  storyUiAutoScrollEnabled: boolean;
   cloudSaveTimeoutMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
@@ -493,7 +517,7 @@ export async function getStoryboardSettings(): Promise<{
   videoDownloadAdminBypass: boolean;
   authoringWordCap: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -505,6 +529,8 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('story_loading_reader_story_text_enabled', true),
     getFeatureFlag('story_loading_reader_options_enabled', true),
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
+    getFeatureFlagValue('story_ui_text_line_count'),
+    getFeatureFlag('story_ui_auto_scroll_enabled', true),
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
@@ -535,6 +561,8 @@ export async function getStoryboardSettings(): Promise<{
     loadingReaderScrollSpeedPxPerSecond: Number.isFinite(parsedLoadingReaderScrollSpeed)
       ? Math.max(1, parsedLoadingReaderScrollSpeed)
       : 24,
+    storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
+    storyUiAutoScrollEnabled,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,

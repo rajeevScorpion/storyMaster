@@ -8,22 +8,27 @@ interface TimelineProps {
   storyMap: StoryMap;
   onNodeClick: (nodeId: string) => void;
   focusedNodeId?: string;
+  compact?: boolean;
 }
 
-export default function Timeline({ storyMap, onNodeClick, focusedNodeId }: TimelineProps) {
+export default function Timeline({ storyMap, onNodeClick, focusedNodeId, compact = false }: TimelineProps) {
   const path = getPathToNode(storyMap, storyMap.currentNodeId);
 
   if (path.length <= 1) return null;
 
   return (
-    <div className="flex items-center gap-1 justify-start py-3 px-4 flex-wrap">
+    <div
+      className={`flex items-center justify-start ${
+        compact ? 'gap-0 px-0 py-0 flex-nowrap' : 'gap-1 py-3 px-4 flex-wrap'
+      }`}
+    >
       {path.map((node, index) => {
         const isCurrent = node.id === storyMap.currentNodeId;
         const isFocused = node.id === focusedNodeId;
         const isLast = index === path.length - 1;
 
         return (
-          <div key={node.id} className="flex items-center">
+          <div key={node.id} className={`flex items-center ${compact ? 'shrink-0' : ''}`}>
             <button
               onClick={() => onNodeClick(node.id)}
               className="relative group"
@@ -36,8 +41,8 @@ export default function Timeline({ storyMap, onNodeClick, focusedNodeId }: Timel
                 className={`
                   rounded-full flex items-center justify-center text-xs font-bold transition-all duration-200
                   ${isCurrent
-                    ? 'w-8 h-8 bg-emerald-500 text-white shadow-lg shadow-emerald-500/30'
-                    : 'w-7 h-7 bg-neutral-800 border border-neutral-600 text-neutral-400 hover:border-neutral-400 cursor-pointer'
+                    ? `${compact ? 'w-7 h-7' : 'w-8 h-8'} bg-emerald-500 text-white shadow-lg shadow-emerald-500/30`
+                    : `${compact ? 'w-6 h-6' : 'w-7 h-7'} bg-neutral-800 border border-neutral-600 text-neutral-400 hover:border-neutral-400 cursor-pointer`
                   }
                   ${isFocused ? 'ring-2 ring-white/50' : ''}
                 `}
@@ -57,7 +62,7 @@ export default function Timeline({ storyMap, onNodeClick, focusedNodeId }: Timel
 
             {/* Connector line */}
             {!isLast && (
-              <div className="w-4 h-px bg-neutral-700 mx-0.5" />
+              <div className={`${compact ? 'w-3' : 'w-4'} h-px bg-neutral-700 mx-0.5`} />
             )}
           </div>
         );
