@@ -334,6 +334,94 @@ export interface ReferenceImage {
   url?: string;
 }
 
+function buildFallbackStoryboardPlan(
+  beat: StoryBeat,
+  sessionState: Partial<StorySession> | null,
+  visualStyle: string
+): StoryboardPlan {
+  const scene = compactPromptText(beat.sceneSummary || beat.imagePrompt || beat.storyText, 220);
+  const imageIntent = compactPromptText(beat.imagePrompt || beat.sceneSummary || beat.storyText, 260);
+  const characterAnchors = compactPromptText(buildPromptCharacterAnchors(beat.characters), 700);
+  const sharedPrompt = [
+    imageIntent,
+    `Scene: ${scene}`,
+    `Characters: ${characterAnchors}`,
+    `Visual style: ${visualStyle}`,
+    'No text, captions, speech bubbles, logos, or watermarks.',
+  ].join('\n');
+
+  const makeFrame = (
+    description: string,
+    cameraAngle: string,
+    emotion: string,
+    focus: string[]
+  ) => ({
+    description,
+    prompt: `${sharedPrompt}\nPanel moment: ${description}\nCamera: ${cameraAngle}.`,
+    cameraAngle,
+    visualFocus: focus,
+    emotion,
+    continuityAnchor: scene,
+  });
+
+  const newCharacterIds = new Set(resolveNewCharacterIds(beat, sessionState));
+  const changedCharacterIds = new Set(resolveChangedCharacterIds(beat));
+
+  return {
+    sharedVisualInvariants: [
+      scene,
+      'Maintain the same character identities, clothing, proportions, colors, and visual style across all four panels.',
+      'Use a four-panel 2x2 storyboard composition in reading order.',
+    ],
+    portraitTasks: beat.characters
+      .filter((character) => newCharacterIds.has(character.id) || changedCharacterIds.has(character.id))
+      .map((character) => ({
+        characterId: character.id,
+        characterName: character.name,
+        reason: changedCharacterIds.has(character.id) ? 'visual_change' as const : 'new_character' as const,
+        prompt: [
+          `${character.name}, ${character.type}.`,
+          character.appearanceSummary,
+          `Personality: ${character.personalitySummary}.`,
+          `Reference style: ${visualStyle}.`,
+          'Single-character reference, clean background, no text.',
+        ].join(' '),
+      })),
+    topLeft: makeFrame(
+      `Opening establishing moment for the beat: ${scene}`,
+      'wide establishing shot',
+      'anticipation',
+      ['setting', 'main characters', 'opening action']
+    ),
+    topRight: makeFrame(
+      `The characters notice or react to the central situation: ${scene}`,
+      'medium character shot',
+      'discovery',
+      ['character reaction', 'relationship', 'story tension']
+    ),
+    bottomLeft: makeFrame(
+      `The main action or choice in the beat becomes clear: ${scene}`,
+      'dynamic close-up',
+      'focus',
+      ['key action', 'hands or faces', 'turning point']
+    ),
+    bottomRight: makeFrame(
+      `The emotional result or reveal of the beat lands: ${scene}`,
+      'cinematic payoff shot',
+      'resolution',
+      ['emotional payoff', 'consequence', 'next-story hook']
+    ),
+    negativeConstraints: [
+      'no captions',
+      'no text overlays',
+      'no speech bubbles',
+      'no logos',
+      'no watermarks',
+      'no character redesign',
+    ],
+  };
+}
+
 async function maybeProcessStoryboardImage(
   dataUrl: string,
   settings: StoryboardImageQualitySettings,
@@ -398,18 +486,22 @@ export async function composeStoryboardPlan(
         previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
       });
 
-      const text = await callGeminiText({
-        task: 'visual_prompt',
-        model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
-        prompt,
-        temperature: modelOverrides?.composerTemperature ?? 0.5,
-        telemetry: costTelemetry,
-      });
-
+      let text = '';
       try {
+        text = await callGeminiText({
+          task: 'visual_prompt',
+          model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
+          prompt,
+          temperature: modelOverrides?.composerTemperature ?? 0.5,
+          telemetry: costTelemetry,
+        });
         return JSON.parse(text) as StoryboardPlan;
-      } catch {
-        throw new Error(`Failed to parse storyboard plan JSON: ${text.slice(0, 200)}`);
+      } catch (error) {
+        console.error('Storyboard plan composition failed; using fallback storyboard plan:', {
+          message: error instanceof Error ? error.message : 'Unknown storyboard plan error',
+          responsePreview: text ? text.slice(0, 200) : null,
+        });
+        return buildFallbackStoryboardPlan(beat, sessionState, visualStyle);
       }
     }
   );
