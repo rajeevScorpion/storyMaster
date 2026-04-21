@@ -7,6 +7,10 @@ import {
   setCycleOverride,
   setCycleMs,
   setStoryboardVignette,
+  setStoryboardImageSize,
+  setStoryboardWebpCompression,
+  setStoryboardWebpQualityPercent,
+  setStoryboardClientProcessing,
   setStoryLoadingNodeLabels,
   setStoryLoadingHintTypewriter,
   setStoryLoadingReaderAnticipationMs,
@@ -24,6 +28,7 @@ import {
   setVideoDownload,
   setVideoDownloadAdminBypass,
 } from '@/app/actions/admin';
+import type { StoryboardImageSize } from '@/lib/types/storyboard-settings';
 
 function ToggleRow({
   label,
@@ -65,6 +70,16 @@ export default function GlobalSettings() {
   const [cycleMsSaving, setCycleMsSaving] = useState(false);
   const [vignetteEnabled, setVignetteEnabled] = useState(true);
   const [vignetteToggling, setVignetteToggling] = useState(false);
+  const [storyboardImageSize, setStoryboardImageSizeState] = useState<StoryboardImageSize>('1K');
+  const [storyboardImageSizeSaving, setStoryboardImageSizeSaving] = useState(false);
+  const [storyboardWebpCompressionEnabled, setStoryboardWebpCompressionEnabledState] = useState(false);
+  const [storyboardWebpCompressionToggling, setStoryboardWebpCompressionToggling] = useState(false);
+  const [storyboardWebpQualityPercent, setStoryboardWebpQualityPercentState] = useState(85);
+  const [storyboardWebpQualityInput, setStoryboardWebpQualityInput] = useState('85');
+  const [storyboardWebpQualitySaving, setStoryboardWebpQualitySaving] = useState(false);
+  const [storyboardClientProcessingEnabled, setStoryboardClientProcessingEnabledState] = useState(false);
+  const [storyboardClientProcessingToggling, setStoryboardClientProcessingToggling] = useState(false);
+  const [storyboardLayoutMode, setStoryboardLayoutModeState] = useState<'2x2'>('2x2');
   const [loadingNodeLabelsEnabled, setLoadingNodeLabelsEnabledState] = useState(true);
   const [loadingNodeLabelsToggling, setLoadingNodeLabelsToggling] = useState(false);
   const [loadingHintTypewriterEnabled, setLoadingHintTypewriterEnabledState] = useState(false);
@@ -112,6 +127,11 @@ export default function GlobalSettings() {
         cycleOverride: co,
         cycleMs: cm,
         vignetteEnabled: ve,
+        storyboardImageSize: imageSize,
+        storyboardWebpCompressionEnabled: webpCompressionEnabled,
+        storyboardWebpQualityPercent: webpQualityPercent,
+        storyboardClientProcessingEnabled: clientProcessingEnabled,
+        storyboardLayoutMode: layoutMode,
         loadingNodeLabelsEnabled: labelsEnabled,
         loadingHintTypewriterEnabled: typewriterEnabled,
         loadingReaderAnticipationMs: readerAnticipationMs,
@@ -133,6 +153,12 @@ export default function GlobalSettings() {
         setCycleMsState(cm);
         setCycleMsInput(String(cm));
         setVignetteEnabled(ve);
+        setStoryboardImageSizeState(imageSize);
+        setStoryboardWebpCompressionEnabledState(webpCompressionEnabled);
+        setStoryboardWebpQualityPercentState(webpQualityPercent);
+        setStoryboardWebpQualityInput(String(webpQualityPercent));
+        setStoryboardClientProcessingEnabledState(clientProcessingEnabled);
+        setStoryboardLayoutModeState(layoutMode);
         setLoadingNodeLabelsEnabledState(labelsEnabled);
         setLoadingHintTypewriterEnabledState(typewriterEnabled);
         setLoadingReaderAnticipationMsState(readerAnticipationMs);
@@ -175,6 +201,29 @@ export default function GlobalSettings() {
       setCycleMsState(ms);
     } finally {
       setCycleMsSaving(false);
+    }
+  }
+
+  async function handleStoryboardImageSizeSave(size: StoryboardImageSize) {
+    if (size === storyboardImageSize) return;
+    setStoryboardImageSizeSaving(true);
+    try {
+      await setStoryboardImageSize(size);
+      setStoryboardImageSizeState(size);
+    } finally {
+      setStoryboardImageSizeSaving(false);
+    }
+  }
+
+  async function handleStoryboardWebpQualitySave() {
+    const percent = parseInt(storyboardWebpQualityInput, 10);
+    if (!Number.isFinite(percent) || percent < 1 || percent > 100) return;
+    setStoryboardWebpQualitySaving(true);
+    try {
+      await setStoryboardWebpQualityPercent(percent);
+      setStoryboardWebpQualityPercentState(percent);
+    } finally {
+      setStoryboardWebpQualitySaving(false);
     }
   }
 
@@ -246,6 +295,8 @@ export default function GlobalSettings() {
   }
 
   const parsedMs = parseInt(cycleMsInput, 10);
+  const parsedStoryboardWebpQualityPercent = parseInt(storyboardWebpQualityInput, 10);
+  const storyboardCompressionControlsEnabled = storyboardClientProcessingEnabled && storyboardWebpCompressionEnabled;
   const parsedLoadingReaderAnticipationSec = parseInt(loadingReaderAnticipationInput, 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedInput, 10);
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
@@ -270,7 +321,114 @@ export default function GlobalSettings() {
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Storyboard</h2>
 
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
-              Storyboard generation is always on now. Every beat renders as a 2x2 panel grid at 2K so playback, narration timing, and visual continuity stay consistent across the app.
+              Storyboard generation is always on. Every beat renders as a 2x2 panel grid; image size and browser-side WebP processing apply to new beat images only.
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Storyboard Image Size</p>
+              <p className="text-xs text-neutral-400 mb-3">Gemini output size for new per-beat storyboard images.</p>
+              <div className="inline-flex rounded-lg border border-white/10 bg-neutral-950/60 p-1">
+                {(['1K', '2K'] as const).map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => handleStoryboardImageSizeSave(size)}
+                    disabled={storyboardImageSizeSaving}
+                    className={`rounded-md px-4 py-2 text-xs font-medium transition-colors disabled:opacity-50 ${
+                      storyboardImageSize === size
+                        ? 'bg-emerald-500 text-neutral-950'
+                        : 'text-neutral-300 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+              {storyboardImageSizeSaving && (
+                <span className="ml-3 inline-flex items-center gap-1 text-xs text-neutral-400">
+                  <Loader2 size={12} className="animate-spin" />Saving
+                </span>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Storyboard Layout</p>
+              <p className="text-xs text-neutral-400 mb-3">Layout mode is stored for future formats. The active runtime mode remains the four-panel storyboard.</p>
+              <div className="inline-flex rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-300">
+                {storyboardLayoutMode} grid
+              </div>
+            </div>
+
+            <ToggleRow
+              label="Client-Side Image Processing"
+              description="Allow the browser to process storyboard images after Gemini returns them. Turn off for direct 1K output testing."
+              checked={storyboardClientProcessingEnabled}
+              toggling={storyboardClientProcessingToggling}
+              onToggle={async () => {
+                setStoryboardClientProcessingToggling(true);
+                const next = !storyboardClientProcessingEnabled;
+                try {
+                  await setStoryboardClientProcessing(next);
+                  setStoryboardClientProcessingEnabledState(next);
+                } finally {
+                  setStoryboardClientProcessingToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="WebP Compression"
+              description="Encode storyboard images as WebP in the browser when client-side processing is also enabled."
+              checked={storyboardWebpCompressionEnabled}
+              toggling={storyboardWebpCompressionToggling}
+              onToggle={async () => {
+                setStoryboardWebpCompressionToggling(true);
+                const next = !storyboardWebpCompressionEnabled;
+                try {
+                  await setStoryboardWebpCompression(next);
+                  setStoryboardWebpCompressionEnabledState(next);
+                } finally {
+                  setStoryboardWebpCompressionToggling(false);
+                }
+              }}
+            />
+
+            <div className={`rounded-xl border border-white/10 bg-neutral-900/60 p-4 ${storyboardCompressionControlsEnabled ? '' : 'opacity-60'}`}>
+              <p className="text-sm font-medium text-neutral-100 mb-1">WebP Quality</p>
+              <p className="text-xs text-neutral-400 mb-3">Compression quality from 1 to 100. Active only when both processing and WebP compression are on.</p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  step={1}
+                  value={storyboardWebpQualityInput}
+                  disabled={!storyboardCompressionControlsEnabled}
+                  onChange={(e) => setStoryboardWebpQualityInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed"
+                  placeholder="85"
+                />
+                <span className="text-xs text-neutral-500">%</span>
+                <button
+                  onClick={handleStoryboardWebpQualitySave}
+                  disabled={
+                    !storyboardCompressionControlsEnabled ||
+                    storyboardWebpQualitySaving ||
+                    !Number.isFinite(parsedStoryboardWebpQualityPercent) ||
+                    parsedStoryboardWebpQualityPercent < 1 ||
+                    parsedStoryboardWebpQualityPercent > 100
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {storyboardWebpQualitySaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {storyboardWebpQualityPercent !== parsedStoryboardWebpQualityPercent && parsedStoryboardWebpQualityPercent >= 1 && parsedStoryboardWebpQualityPercent <= 100 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+              {Number.isFinite(parsedStoryboardWebpQualityPercent) && (parsedStoryboardWebpQualityPercent < 1 || parsedStoryboardWebpQualityPercent > 100) && (
+                <p className="mt-3 text-xs text-amber-400">Use a value from 1 to 100.</p>
+              )}
             </div>
 
             <ToggleRow

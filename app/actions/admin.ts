@@ -6,6 +6,14 @@ import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 import { savePricingActionCost } from '@/app/actions/pricing-admin';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
+import {
+  DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS,
+  normalizeStoryboardImageSize,
+  normalizeStoryboardLayoutMode,
+  normalizeStoryboardWebpQualityPercent,
+  type StoryboardImageQualitySettings,
+  type StoryboardImageSize,
+} from '@/lib/types/storyboard-settings';
 
 // ============================================================
 // Search
@@ -158,13 +166,14 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, imagePrompt, portraitPrompt] = await Promise.all([
+  const [storyPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, imagePrompt, portraitPrompt, storyboardImageSettings] = await Promise.all([
     getPublishedPrompt('story_generation'),
     getPublishedPrompt('seed_plan_generation'),
     getPublishedPrompt('seeded_beat_materialization'),
     getPublishedPrompt('visual_prompt'),
     getPublishedPrompt('image_generation'),
     getPublishedPrompt('portrait_generation'),
+    getStoryboardImageQualitySettings(),
   ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
@@ -183,7 +192,32 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     visualPrompt,
     imagePrompt,
     portraitPrompt,
+    storyboardImageSettings,
     enableStoryboard: true,
+  };
+}
+
+export async function getStoryboardImageQualitySettings(): Promise<StoryboardImageQualitySettings> {
+  const [
+    imageSizeValue,
+    webpCompressionEnabled,
+    webpQualityValue,
+    clientProcessingEnabled,
+    layoutModeValue,
+  ] = await Promise.all([
+    getFeatureFlagValue('storyboard_image_size'),
+    getFeatureFlag('storyboard_webp_compression_enabled', DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS.webpCompressionEnabled),
+    getFeatureFlagValue('storyboard_webp_quality_percent'),
+    getFeatureFlag('storyboard_client_processing_enabled', DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS.clientProcessingEnabled),
+    getFeatureFlagValue('storyboard_layout_mode'),
+  ]);
+
+  return {
+    imageSize: normalizeStoryboardImageSize(imageSizeValue),
+    webpCompressionEnabled,
+    webpQualityPercent: normalizeStoryboardWebpQualityPercent(webpQualityValue),
+    clientProcessingEnabled,
+    layoutMode: normalizeStoryboardLayoutMode(layoutModeValue),
   };
 }
 
@@ -191,6 +225,11 @@ export async function getGlobalSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  storyboardImageSize: StoryboardImageSize;
+  storyboardWebpCompressionEnabled: boolean;
+  storyboardWebpQualityPercent: number;
+  storyboardClientProcessingEnabled: boolean;
+  storyboardLayoutMode: '2x2';
   loadingNodeLabelsEnabled: boolean;
   loadingHintTypewriterEnabled: boolean;
   loadingReaderAnticipationMs: number;
@@ -209,10 +248,11 @@ export async function getGlobalSettings(): Promise<{
   previewSeedPlanPriceCoins: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getStoryboardImageQualitySettings(),
     getFeatureFlag('story_loading_node_labels_enabled', true),
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
     getFeatureFlagValue('story_loading_reader_anticipation_ms'),
@@ -237,6 +277,11 @@ export async function getGlobalSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    storyboardImageSize: storyboardImageSettings.imageSize,
+    storyboardWebpCompressionEnabled: storyboardImageSettings.webpCompressionEnabled,
+    storyboardWebpQualityPercent: storyboardImageSettings.webpQualityPercent,
+    storyboardClientProcessingEnabled: storyboardImageSettings.clientProcessingEnabled,
+    storyboardLayoutMode: storyboardImageSettings.layoutMode,
     loadingNodeLabelsEnabled,
     loadingHintTypewriterEnabled,
     loadingReaderAnticipationMs: Number.isFinite(parsedLoadingReaderAnticipationMs)
@@ -273,6 +318,29 @@ export async function setCycleMs(ms: number): Promise<void> {
 export async function setStoryboardVignette(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('storyboard_vignette_enabled', enabled);
+}
+
+export async function setStoryboardImageSize(size: StoryboardImageSize): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlagValue('storyboard_image_size', normalizeStoryboardImageSize(size));
+}
+
+export async function setStoryboardWebpCompression(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('storyboard_webp_compression_enabled', enabled);
+}
+
+export async function setStoryboardWebpQualityPercent(percent: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(percent) || percent < 1 || percent > 100) {
+    throw new Error('WebP quality must be between 1 and 100.');
+  }
+  await setFeatureFlagValue('storyboard_webp_quality_percent', String(normalizeStoryboardWebpQualityPercent(percent)));
+}
+
+export async function setStoryboardClientProcessing(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('storyboard_client_processing_enabled', enabled);
 }
 
 export async function setStoryLoadingNodeLabels(enabled: boolean): Promise<void> {
@@ -394,6 +462,11 @@ export async function getStoryboardSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  storyboardImageSize: StoryboardImageSize;
+  storyboardWebpCompressionEnabled: boolean;
+  storyboardWebpQualityPercent: number;
+  storyboardClientProcessingEnabled: boolean;
+  storyboardLayoutMode: '2x2';
   loadingNodeLabelsEnabled: boolean;
   loadingHintTypewriterEnabled: boolean;
   loadingReaderAnticipationMs: number;
@@ -407,10 +480,11 @@ export async function getStoryboardSettings(): Promise<{
   videoDownloadAdminBypass: boolean;
   authoringWordCap: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getStoryboardImageQualitySettings(),
     getFeatureFlag('story_loading_node_labels_enabled', true),
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
     getFeatureFlagValue('story_loading_reader_anticipation_ms'),
@@ -431,6 +505,11 @@ export async function getStoryboardSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    storyboardImageSize: storyboardImageSettings.imageSize,
+    storyboardWebpCompressionEnabled: storyboardImageSettings.webpCompressionEnabled,
+    storyboardWebpQualityPercent: storyboardImageSettings.webpQualityPercent,
+    storyboardClientProcessingEnabled: storyboardImageSettings.clientProcessingEnabled,
+    storyboardLayoutMode: storyboardImageSettings.layoutMode,
     loadingNodeLabelsEnabled,
     loadingHintTypewriterEnabled,
     loadingReaderAnticipationMs: Number.isFinite(parsedLoadingReaderAnticipationMs)

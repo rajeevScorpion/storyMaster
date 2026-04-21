@@ -22,9 +22,13 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY } from '@/lib/constants/media';
+import { PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import {
+  normalizeStoryboardImageQualitySettings,
+  type StoryboardImageQualitySettings,
+} from '@/lib/types/storyboard-settings';
 
 function runtimeNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -75,6 +79,7 @@ export interface StoryModelOverrides {
   visualPrompt?: string;
   imagePrompt?: string;
   portraitPrompt?: string;
+  storyboardImageSettings?: StoryboardImageQualitySettings;
   // Storyboard is now always on. Keep the field as a no-op for older payload shapes.
   enableStoryboard?: boolean;
 }
@@ -329,6 +334,37 @@ export interface ReferenceImage {
   url?: string;
 }
 
+async function maybeProcessStoryboardImage(
+  dataUrl: string,
+  settings: StoryboardImageQualitySettings,
+  meta: Record<string, unknown>
+): Promise<string> {
+  if (!settings.clientProcessingEnabled || !settings.webpCompressionEnabled) {
+    console.info('[timing:story_runtime.generate_image.process]', {
+      ...meta,
+      skipped: true,
+      reason: !settings.clientProcessingEnabled ? 'client_processing_disabled' : 'webp_compression_disabled',
+    });
+    return dataUrl;
+  }
+
+  return timeRuntimeStep(
+    'story_runtime.generate_image.compress',
+    {
+      ...meta,
+      width: STORYBOARD_MAX_WIDTH,
+      height: STORYBOARD_MAX_HEIGHT,
+      webpQualityPercent: settings.webpQualityPercent,
+    },
+    () => compressImage(
+      dataUrl,
+      STORYBOARD_MAX_WIDTH,
+      STORYBOARD_MAX_HEIGHT,
+      settings.webpQualityPercent / 100
+    )
+  );
+}
+
 export async function composeStoryboardPlan(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null,
@@ -545,7 +581,8 @@ export async function generateImage(
 
         const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
         const referenceParts = await resolveReferenceImageParts(referenceImages);
-        const imageSize = '2K';
+        const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
+        const imageSize = storyboardImageSettings.imageSize;
 
         const result = await timeRuntimeStep(
           'story_runtime.generate_image.gemini',
@@ -566,14 +603,13 @@ export async function generateImage(
         );
 
         if (result.dataUrl) {
-          return await timeRuntimeStep(
-            'story_runtime.generate_image.compress',
+          return await maybeProcessStoryboardImage(
+            result.dataUrl,
+            storyboardImageSettings,
             {
               beatNumber: beatNumber ?? null,
-              width: STORYBOARD_MAX_WIDTH,
-              height: STORYBOARD_MAX_HEIGHT,
-            },
-            () => compressImage(result.dataUrl!, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY)
+              imageSize,
+            }
           );
         }
 
@@ -596,15 +632,14 @@ export async function generateImage(
             })
           );
           if (retryResult.dataUrl) {
-            return await timeRuntimeStep(
-              'story_runtime.generate_image.compress',
+            return await maybeProcessStoryboardImage(
+              retryResult.dataUrl,
+              storyboardImageSettings,
               {
                 beatNumber: beatNumber ?? null,
-                width: STORYBOARD_MAX_WIDTH,
-                height: STORYBOARD_MAX_HEIGHT,
+                imageSize,
                 retry: true,
-              },
-              () => compressImage(retryResult.dataUrl!, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT, STORYBOARD_QUALITY)
+              }
             );
           }
         }
