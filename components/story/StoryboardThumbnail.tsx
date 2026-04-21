@@ -2,13 +2,11 @@
 
 import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
-
-const PANEL_TRANSFORMS = [
-  'translate(0%, 0%)',
-  'translate(-50%, 0%)',
-  'translate(0%, -50%)',
-  'translate(-50%, -50%)',
-] as const;
+import {
+  getStoryboardPanelCropStyle,
+  STORYBOARD_PANEL_OVERSCAN_SCALE,
+  STORYBOARD_PANEL_SEQUENCE,
+} from '@/lib/storyboard/layout';
 
 const HOLD_PREVIEW_DELAY_MS = 350;
 const STORYBOARD_THUMBNAIL_CYCLE_MS = 900;
@@ -21,9 +19,10 @@ const TOUCH_MOVE_CANCEL_PX = 10;
 // optimizer fetches a source sized for the actual 2× render box.
 const SIZE_LENGTH_REGEX = /(\d*\.?\d+)(vw|vh|px|rem|em)/g;
 
-function doubleSizesForCrop(sizes: string): string {
+function scaleSizesForCrop(sizes: string): string {
+  const cropFactor = 2 * STORYBOARD_PANEL_OVERSCAN_SCALE;
   return sizes.replace(SIZE_LENGTH_REGEX, (_match, num: string, unit: string) => {
-    return `${parseFloat(num) * 2}${unit}`;
+    return `${parseFloat(num) * cropFactor}${unit}`;
   });
 }
 
@@ -201,7 +200,7 @@ export default function StoryboardThumbnail({
       setPanelState((state) => ({
         previewSessionId,
         panel: state.previewSessionId === previewSessionId
-          ? (state.panel + 1) % PANEL_TRANSFORMS.length
+          ? (state.panel + 1) % STORYBOARD_PANEL_SEQUENCE.length
           : 1,
       }));
     }, STORYBOARD_THUMBNAIL_CYCLE_MS);
@@ -238,8 +237,8 @@ export default function StoryboardThumbnail({
     <div className={`absolute inset-0 overflow-hidden ${className}`}>
       <div className="absolute inset-0 transition-transform duration-500 group-hover:scale-105">
         <div
-          className="absolute h-[200%] w-[200%] transition-transform duration-300 ease-in-out"
-          style={{ transform: PANEL_TRANSFORMS[displayPanel] }}
+          className="absolute transition-all duration-300 ease-in-out"
+          style={getStoryboardPanelCropStyle(displayPanel)}
         >
           <Image
             src={src}
@@ -247,7 +246,7 @@ export default function StoryboardThumbnail({
             fill
             className="object-cover"
             referrerPolicy="no-referrer"
-            sizes={doubleSizesForCrop(sizes)}
+            sizes={scaleSizesForCrop(sizes)}
             priority={priority}
             draggable={false}
           />

@@ -55,15 +55,9 @@ import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import StoryboardVignette from './StoryboardVignette';
+import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
-
-const PANEL_TRANSFORMS = [
-  'translate(0%, 0%)',      // TL — panel 1
-  'translate(-50%, 0%)',    // TR — panel 2
-  'translate(0%, -50%)',    // BL — panel 3
-  'translate(-50%, -50%)',  // BR — panel 4
-] as const;
 
 function StoryboardCycler({
   gridUrl,
@@ -71,6 +65,7 @@ function StoryboardCycler({
   cycleOverride,
   cycleMs,
   vignetteEnabled,
+  vignetteAmountPercent,
   playbackState,
 }: {
   gridUrl: string;
@@ -78,6 +73,7 @@ function StoryboardCycler({
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  vignetteAmountPercent: number;
   playbackState: 'idle' | 'playing' | 'paused';
 }) {
   const [activePanel, setActivePanel] = useState(0);
@@ -135,17 +131,17 @@ function StoryboardCycler({
           className="absolute inset-0 overflow-hidden"
         >
           <div
-            className="absolute w-[200%] h-[200%]"
-            style={{ transform: PANEL_TRANSFORMS[activePanel] }}
+            className="absolute"
+            style={getStoryboardPanelCropStyle(activePanel)}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={gridUrl} alt="" className="w-full h-full object-cover" />
           </div>
         </motion.div>
       </AnimatePresence>
-      <StoryboardVignette enabled={vignetteEnabled} />
+      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-        {PANEL_TRANSFORMS.map((_, i) => (
+        {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
           <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'}`} />
         ))}
       </div>
@@ -207,10 +203,11 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; videoDownloadEnabled: boolean; videoDownloadAdminBypass: boolean }>({
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; vignetteAmountPercent: number; videoDownloadEnabled: boolean; videoDownloadAdminBypass: boolean }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
+    vignetteAmountPercent: 100,
     videoDownloadEnabled: false,
     videoDownloadAdminBypass: false,
   });
@@ -448,12 +445,13 @@ export default function StorylinePlayer({
           <>
             <div className={`absolute inset-0 transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}>
               <StoryboardCycler
-                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}`}
+                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                 gridUrl={currentBeat.imageUrl}
                 audioUrl={currentBeat.audioUrl || undefined}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
                 vignetteEnabled={cycleSettings.vignetteEnabled}
+                vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
               />
             </div>

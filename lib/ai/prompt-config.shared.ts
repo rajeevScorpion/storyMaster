@@ -347,12 +347,14 @@ Core rules:
 13. If a new character is clearly minor, unnamed, or a crowd extra, do not create a portraitTask.
 14. Use {{visualStyle}} as the controlling style direction. Interpret it faithfully instead of replacing it.
 15. Use {{previousStoryboardContext}} to keep continuity with the prior storyboard when this is not beat 1.
+16. The final storyboard image must be full-bleed: no white or cream gutters, no empty gaps, no outer padding, and no page-like margins.
 
 Frame design rules:
 - topLeft should establish the beat or its opening emotional note
 - topRight should deepen discovery, interaction, or tension
 - bottomLeft should focus on the key action, decision, or turning point
 - bottomRight should land the reveal, transformation, consequence, or emotional payoff
+- all four panels should fill their quadrants edge-to-edge and touch only thin black or near-black divider lines
 
 Portrait task rules:
 - reason must be "new_character" or "visual_change"
@@ -454,11 +456,13 @@ Beat number:
 {{beatNumber}}
 
 Hard requirements:
-- Compose as a 2x2 storyboard grid of four equal cinematic panels separated by thin dark dividing lines.
+- Compose as a full-bleed 2x2 storyboard grid of four equal cinematic panels separated by thin dark dividing lines.
 - Each panel must show a distinct sequential moment in reading order: top-left, top-right, bottom-left, bottom-right.
 - Respect the shared visual invariants and each panel-specific prompt exactly.
 - Preserve character identity exactly across all four panels: same face, clothing, body proportions, colors, and distinguishing features.
 - Keep staging readable, emotionally expressive, and visually rich.
+- Panels must snap tightly to each other and to the outer image bounds; no white gutters, cream gutters, empty gaps, padding, matting, page borders, or outer margins.
+- If panel dividers are present, they must be thin black or near-black lines only.
 - No captions, speech bubbles, labels, subtitles, logos, watermarks, or any text overlays.
 - Keep the scene grounded in the supplied characters and story brief.`;
 

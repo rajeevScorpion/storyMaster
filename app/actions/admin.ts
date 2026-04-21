@@ -10,6 +10,7 @@ import {
   DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS,
   normalizeStoryboardImageSize,
   normalizeStoryboardLayoutMode,
+  normalizeStoryboardVignetteAmountPercent,
   normalizeStoryboardWebpQualityPercent,
   type StoryboardImageQualitySettings,
   type StoryboardImageSize,
@@ -225,6 +226,7 @@ export async function getGlobalSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  vignetteAmountPercent: number;
   storyboardImageSize: StoryboardImageSize;
   storyboardWebpCompressionEnabled: boolean;
   storyboardWebpQualityPercent: number;
@@ -248,10 +250,11 @@ export async function getGlobalSettings(): Promise<{
   previewSeedPlanPriceCoins: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getFeatureFlagValue('storyboard_vignette_amount_percent'),
     getStoryboardImageQualitySettings(),
     getFeatureFlag('story_loading_node_labels_enabled', true),
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
@@ -277,6 +280,7 @@ export async function getGlobalSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    vignetteAmountPercent: normalizeStoryboardVignetteAmountPercent(vignetteAmountValue),
     storyboardImageSize: storyboardImageSettings.imageSize,
     storyboardWebpCompressionEnabled: storyboardImageSettings.webpCompressionEnabled,
     storyboardWebpQualityPercent: storyboardImageSettings.webpQualityPercent,
@@ -318,6 +322,14 @@ export async function setCycleMs(ms: number): Promise<void> {
 export async function setStoryboardVignette(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('storyboard_vignette_enabled', enabled);
+}
+
+export async function setStoryboardVignetteAmountPercent(percent: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+    throw new Error('Vignette amount must be between 0 and 100.');
+  }
+  await setFeatureFlagValue('storyboard_vignette_amount_percent', String(normalizeStoryboardVignetteAmountPercent(percent)));
 }
 
 export async function setStoryboardImageSize(size: StoryboardImageSize): Promise<void> {
@@ -462,6 +474,7 @@ export async function getStoryboardSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  vignetteAmountPercent: number;
   storyboardImageSize: StoryboardImageSize;
   storyboardWebpCompressionEnabled: boolean;
   storyboardWebpQualityPercent: number;
@@ -480,10 +493,11 @@ export async function getStoryboardSettings(): Promise<{
   videoDownloadAdminBypass: boolean;
   authoringWordCap: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
+    getFeatureFlagValue('storyboard_vignette_amount_percent'),
     getStoryboardImageQualitySettings(),
     getFeatureFlag('story_loading_node_labels_enabled', true),
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
@@ -505,6 +519,7 @@ export async function getStoryboardSettings(): Promise<{
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
+    vignetteAmountPercent: normalizeStoryboardVignetteAmountPercent(vignetteAmountValue),
     storyboardImageSize: storyboardImageSettings.imageSize,
     storyboardWebpCompressionEnabled: storyboardImageSettings.webpCompressionEnabled,
     storyboardWebpQualityPercent: storyboardImageSettings.webpQualityPercent,

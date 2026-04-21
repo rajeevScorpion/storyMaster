@@ -5,6 +5,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import type { StoryBeat } from '@/lib/types/story';
+import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
 
 // ---------------------------------------------------------------------------
 // FFmpeg singleton — loaded once per page lifetime.
@@ -70,6 +71,14 @@ const AUDIO_BITRATE = '96k';
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function storyboardPanelCropFilter(label: string, col: 0 | 1, row: 0 | 1): string {
+  const cropScale = 0.5 - STORYBOARD_PANEL_CROP_INSET_RATIO;
+  const xFactor = col * 0.5 + STORYBOARD_PANEL_CROP_INSET_RATIO / 2;
+  const yFactor = row * 0.5 + STORYBOARD_PANEL_CROP_INSET_RATIO / 2;
+
+  return `[${label}]crop=iw*${cropScale}:ih*${cropScale}:iw*${xFactor}:ih*${yFactor},scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,10 +270,10 @@ export function useVideoExport() {
             const pd = seg.panelDuration;
             const filterComplex = [
               `[0:v]split=4[s0][s1][s2][s3]`,
-              `${withFade(`[s0]crop=iw/2:ih/2:0:0,scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`, pd)}[v0]`,
-              `${withFade(`[s1]crop=iw/2:ih/2:iw/2:0,scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`, pd)}[v1]`,
-              `${withFade(`[s2]crop=iw/2:ih/2:0:ih/2,scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`, pd)}[v2]`,
-              `${withFade(`[s3]crop=iw/2:ih/2:iw/2:ih/2,scale=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT},setsar=1`, pd)}[v3]`,
+              `${withFade(storyboardPanelCropFilter('s0', 0, 0), pd)}[v0]`,
+              `${withFade(storyboardPanelCropFilter('s1', 1, 0), pd)}[v1]`,
+              `${withFade(storyboardPanelCropFilter('s2', 0, 1), pd)}[v2]`,
+              `${withFade(storyboardPanelCropFilter('s3', 1, 1), pd)}[v3]`,
               `[v0][v1][v2][v3]concat=n=4:v=1:a=0[vout]`,
               `[1:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${seg.totalDuration.toFixed(3)},atrim=duration=${seg.totalDuration.toFixed(3)},asetpts=PTS-STARTPTS[aout]`,
             ].join(';');
