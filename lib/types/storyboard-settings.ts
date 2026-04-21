@@ -3,6 +3,7 @@ export type StoryboardImageSize = (typeof STORYBOARD_IMAGE_SIZES)[number];
 
 export const STORYBOARD_LAYOUT_MODES = ['2x2'] as const;
 export type StoryboardLayoutMode = (typeof STORYBOARD_LAYOUT_MODES)[number];
+export const DEFAULT_STORYBOARD_VIGNETTE_AMOUNT_PERCENT = 100;
 
 export interface StoryboardImageQualitySettings {
   imageSize: StoryboardImageSize;
@@ -40,6 +41,20 @@ export function normalizeStoryboardWebpQualityPercent(value: unknown): number {
   }
 
   return Math.min(100, Math.max(1, Math.round(numeric)));
+}
+
+export function normalizeStoryboardVignetteAmountPercent(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? parseInt(value, 10)
+      : NaN;
+
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_STORYBOARD_VIGNETTE_AMOUNT_PERCENT;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(numeric)));
 }
 
 export function normalizeStoryboardImageQualitySettings(

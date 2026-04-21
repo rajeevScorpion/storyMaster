@@ -17,15 +17,7 @@ import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
-
-// translate(x%, y%) shifts by % of the element's own dimensions (200% of viewport)
-// so translate(-50%, 0%) = shift left by 50% of 200vw = 100vw → shows right half
-const PANEL_TRANSFORMS = [
-  'translate(0%, 0%)',       // TL — panel 1
-  'translate(-50%, 0%)',     // TR — panel 2
-  'translate(0%, -50%)',     // BL — panel 3
-  'translate(-50%, -50%)',   // BR — panel 4
-] as const;
+import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 
 function StoryboardCycler({
   gridUrl,
@@ -33,6 +25,7 @@ function StoryboardCycler({
   cycleOverride,
   cycleMs,
   vignetteEnabled,
+  vignetteAmountPercent,
   playbackState,
   onImageError,
   onImageLoad,
@@ -42,6 +35,7 @@ function StoryboardCycler({
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
+  vignetteAmountPercent: number;
   playbackState: 'idle' | 'playing' | 'paused';
   onImageError?: () => void;
   onImageLoad?: () => void;
@@ -118,10 +112,10 @@ function StoryboardCycler({
           transition={{ duration: 0.6, ease: 'easeInOut' }}
           className="absolute inset-0 overflow-hidden"
         >
-          {/* 200% container, translated to crop to the correct quadrant */}
+          {/* Overscanned grid container, positioned to crop to the active quadrant. */}
           <div
-            className="absolute w-[200%] h-[200%]"
-            style={{ transform: PANEL_TRANSFORMS[activePanel] }}
+            className="absolute"
+            style={getStoryboardPanelCropStyle(activePanel)}
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -134,10 +128,10 @@ function StoryboardCycler({
           </div>
         </motion.div>
       </AnimatePresence>
-      <StoryboardVignette enabled={vignetteEnabled} />
+      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {/* Indicator dots */}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-        {PANEL_TRANSFORMS.map((_, i) => (
+        {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
           <div
             key={i}
             className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
@@ -180,10 +174,11 @@ export default function StoryScreen() {
   const { data: pricing } = usePricingRuntime();
 
   const optionsContainerRef = useRef<HTMLDivElement>(null);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number }>({
+  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; vignetteAmountPercent: number; cloudSaveTimeoutMs: number }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
+    vignetteAmountPercent: 100,
     cloudSaveTimeoutMs: 20000,
   });
 
@@ -294,7 +289,7 @@ function StoryScreenInner({
   saveWarning: string | null;
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
-  cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; cloudSaveTimeoutMs: number };
+  cycleSettings: { cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; vignetteAmountPercent: number; cloudSaveTimeoutMs: number };
   continueCoinCost: number;
   showCoinHint: boolean;
 }) {
@@ -466,8 +461,8 @@ function StoryScreenInner({
         <AnimatePresence mode="wait">
           <motion.div
             key={displayImageUrl}
-            initial={{ opacity: 0, scale: 1.05 }}
-            animate={{ opacity: 1, scale: [1, 1.08] }}
+            initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
+            animate={isStoryboard ? { opacity: 1 } : { opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
             transition={{
               opacity: { duration: 1.5, ease: "easeOut" },
@@ -477,12 +472,13 @@ function StoryScreenInner({
           >
             {isStoryboard ? (
               <StoryboardCycler
-                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}`}
+                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                 gridUrl={currentBeat.imageUrl!}
                 audioUrl={currentBeat.audioUrl}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
                 vignetteEnabled={cycleSettings.vignetteEnabled}
+                vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}

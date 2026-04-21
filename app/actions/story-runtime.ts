@@ -1,7 +1,7 @@
 'use client';
 
 import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig } from '@/lib/types/story';
-import { compressImage } from '@/lib/utils/image';
+import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
 import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
 import {
   buildPromptCharacterAnchors,
@@ -29,6 +29,15 @@ import {
   normalizeStoryboardImageQualitySettings,
   type StoryboardImageQualitySettings,
 } from '@/lib/types/storyboard-settings';
+
+const STORYBOARD_LAYOUT_HARD_REQUIREMENTS = [
+  'Storyboard layout hard requirements:',
+  '- Output a full-bleed 16:9 image containing exactly four equal panels in a 2x2 grid.',
+  '- Panels must touch the thin dark dividers directly; no white, cream, transparent, or empty gutters.',
+  '- Do not add outer padding, matting, margins, rounded frames, poster borders, page borders, or whitespace around the grid.',
+  '- Use only thin dark divider lines between panels; if dividers are visible, they must be black or near-black.',
+  '- Each panel artwork must fill its full quadrant edge-to-edge.',
+].join('\n');
 
 function runtimeNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -371,7 +380,7 @@ function buildFallbackStoryboardPlan(
     sharedVisualInvariants: [
       scene,
       'Maintain the same character identities, clothing, proportions, colors, and visual style across all four panels.',
-      'Use a four-panel 2x2 storyboard composition in reading order.',
+      'Use a full-bleed four-panel 2x2 storyboard composition in reading order with no outer padding or white gutters.',
     ],
     portraitTasks: beat.characters
       .filter((character) => newCharacterIds.has(character.id) || changedCharacterIds.has(character.id))
@@ -418,6 +427,7 @@ function buildFallbackStoryboardPlan(
       'no logos',
       'no watermarks',
       'no character redesign',
+      'no white gutters, cream gutters, empty gaps, outer margins, matting, or page-like borders between or around panels',
     ],
   };
 }
@@ -427,13 +437,22 @@ async function maybeProcessStoryboardImage(
   settings: StoryboardImageQualitySettings,
   meta: Record<string, unknown>
 ): Promise<string> {
+  const sanitizedDataUrl = await timeRuntimeStep(
+    'story_runtime.generate_image.sanitize_storyboard_grid',
+    meta,
+    () => sanitizeStoryboardGridImage(dataUrl)
+  ).catch((error) => {
+    console.warn('Storyboard grid cleanup failed; using original image:', error);
+    return dataUrl;
+  });
+
   if (!settings.clientProcessingEnabled || !settings.webpCompressionEnabled) {
     console.info('[timing:story_runtime.generate_image.process]', {
       ...meta,
       skipped: true,
       reason: !settings.clientProcessingEnabled ? 'client_processing_disabled' : 'webp_compression_disabled',
     });
-    return dataUrl;
+    return sanitizedDataUrl;
   }
 
   return timeRuntimeStep(
@@ -445,7 +464,7 @@ async function maybeProcessStoryboardImage(
       webpQualityPercent: settings.webpQualityPercent,
     },
     () => compressImage(
-      dataUrl,
+      sanitizedDataUrl,
       STORYBOARD_MAX_WIDTH,
       STORYBOARD_MAX_HEIGHT,
       settings.webpQualityPercent / 100
@@ -664,12 +683,15 @@ export async function generateImage(
         const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
           ? imageTemplateCandidate
           : getDefaultPromptBody('image_generation');
-        const finalImagePrompt = resolvePromptTemplate(imageTemplate, {
-          prompt,
-          characters: buildPromptCharacterAnchors(characters),
-          visualStyle,
-          beatNumber,
-        });
+        const finalImagePrompt = [
+          resolvePromptTemplate(imageTemplate, {
+            prompt,
+            characters: buildPromptCharacterAnchors(characters),
+            visualStyle,
+            beatNumber,
+          }),
+          STORYBOARD_LAYOUT_HARD_REQUIREMENTS,
+        ].join('\n\n');
 
         const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
         const referenceParts = await resolveReferenceImageParts(referenceImages);
@@ -716,7 +738,7 @@ export async function generateImage(
             () => callGeminiImage({
               task: 'image_generation',
               model: imageModel,
-              prompt: result.fallbackText!,
+              prompt: [result.fallbackText!, STORYBOARD_LAYOUT_HARD_REQUIREMENTS].join('\n\n'),
               referenceParts,
               aspectRatio: '16:9',
               imageSize,

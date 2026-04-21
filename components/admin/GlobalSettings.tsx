@@ -7,6 +7,7 @@ import {
   setCycleOverride,
   setCycleMs,
   setStoryboardVignette,
+  setStoryboardVignetteAmountPercent,
   setStoryboardImageSize,
   setStoryboardWebpCompression,
   setStoryboardWebpQualityPercent,
@@ -70,6 +71,9 @@ export default function GlobalSettings() {
   const [cycleMsSaving, setCycleMsSaving] = useState(false);
   const [vignetteEnabled, setVignetteEnabled] = useState(true);
   const [vignetteToggling, setVignetteToggling] = useState(false);
+  const [vignetteAmountPercent, setVignetteAmountPercent] = useState(100);
+  const [vignetteAmountInput, setVignetteAmountInput] = useState('100');
+  const [vignetteAmountSaving, setVignetteAmountSaving] = useState(false);
   const [storyboardImageSize, setStoryboardImageSizeState] = useState<StoryboardImageSize>('1K');
   const [storyboardImageSizeSaving, setStoryboardImageSizeSaving] = useState(false);
   const [storyboardWebpCompressionEnabled, setStoryboardWebpCompressionEnabledState] = useState(false);
@@ -127,6 +131,7 @@ export default function GlobalSettings() {
         cycleOverride: co,
         cycleMs: cm,
         vignetteEnabled: ve,
+        vignetteAmountPercent: vap,
         storyboardImageSize: imageSize,
         storyboardWebpCompressionEnabled: webpCompressionEnabled,
         storyboardWebpQualityPercent: webpQualityPercent,
@@ -153,6 +158,8 @@ export default function GlobalSettings() {
         setCycleMsState(cm);
         setCycleMsInput(String(cm));
         setVignetteEnabled(ve);
+        setVignetteAmountPercent(vap);
+        setVignetteAmountInput(String(vap));
         setStoryboardImageSizeState(imageSize);
         setStoryboardWebpCompressionEnabledState(webpCompressionEnabled);
         setStoryboardWebpQualityPercentState(webpQualityPercent);
@@ -201,6 +208,18 @@ export default function GlobalSettings() {
       setCycleMsState(ms);
     } finally {
       setCycleMsSaving(false);
+    }
+  }
+
+  async function handleVignetteAmountSave() {
+    const percent = parseInt(vignetteAmountInput, 10);
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) return;
+    setVignetteAmountSaving(true);
+    try {
+      await setStoryboardVignetteAmountPercent(percent);
+      setVignetteAmountPercent(percent);
+    } finally {
+      setVignetteAmountSaving(false);
     }
   }
 
@@ -295,6 +314,7 @@ export default function GlobalSettings() {
   }
 
   const parsedMs = parseInt(cycleMsInput, 10);
+  const parsedVignetteAmountPercent = parseInt(vignetteAmountInput, 10);
   const parsedStoryboardWebpQualityPercent = parseInt(storyboardWebpQualityInput, 10);
   const storyboardCompressionControlsEnabled = storyboardClientProcessingEnabled && storyboardWebpCompressionEnabled;
   const parsedLoadingReaderAnticipationSec = parseInt(loadingReaderAnticipationInput, 10);
@@ -464,6 +484,53 @@ export default function GlobalSettings() {
                 }
               }}
             />
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Vignette Amount</p>
+              <p className="text-xs text-neutral-400 mb-3">Intensity from 0 to 100. A value of 100 matches the current vignette strength.</p>
+              <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Number.isFinite(parsedVignetteAmountPercent) ? Math.min(100, Math.max(0, parsedVignetteAmountPercent)) : vignetteAmountPercent}
+                  onChange={(e) => setVignetteAmountInput(e.target.value)}
+                  className="w-full max-w-sm accent-emerald-400"
+                />
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={vignetteAmountInput}
+                    onChange={(e) => setVignetteAmountInput(e.target.value)}
+                    className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    placeholder="100"
+                  />
+                  <span className="text-xs text-neutral-500">%</span>
+                  <button
+                    onClick={handleVignetteAmountSave}
+                    disabled={
+                      vignetteAmountSaving ||
+                      !Number.isFinite(parsedVignetteAmountPercent) ||
+                      parsedVignetteAmountPercent < 0 ||
+                      parsedVignetteAmountPercent > 100
+                    }
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                  >
+                    {vignetteAmountSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                  </button>
+                  {vignetteAmountPercent !== parsedVignetteAmountPercent && parsedVignetteAmountPercent >= 0 && parsedVignetteAmountPercent <= 100 && (
+                    <span className="text-xs text-amber-400">Unsaved</span>
+                  )}
+                </div>
+              </div>
+              {Number.isFinite(parsedVignetteAmountPercent) && (parsedVignetteAmountPercent < 0 || parsedVignetteAmountPercent > 100) && (
+                <p className="mt-3 text-xs text-amber-400">Use a value from 0 to 100.</p>
+              )}
+            </div>
 
             {cycleOverride && (
               <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
