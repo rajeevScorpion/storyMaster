@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -34,6 +34,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { useVideoExport } from '@/lib/hooks/useVideoExport';
 import {
@@ -50,6 +51,7 @@ import { toggleLike, recordView } from '@/app/actions/engagement';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
+import AutoScrollButton from './AutoScrollButton';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
@@ -203,11 +205,24 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
-  const [cycleSettings, setCycleSettings] = useState<{ cycleOverride: boolean; cycleMs: number; vignetteEnabled: boolean; vignetteAmountPercent: number; videoDownloadEnabled: boolean; videoDownloadAdminBypass: boolean }>({
+  const [cycleSettings, setCycleSettings] = useState<{
+    cycleOverride: boolean;
+    cycleMs: number;
+    vignetteEnabled: boolean;
+    vignetteAmountPercent: number;
+    loadingReaderScrollSpeedPxPerSecond: number;
+    storyUiTextLineCount: number;
+    storyUiAutoScrollEnabled: boolean;
+    videoDownloadEnabled: boolean;
+    videoDownloadAdminBypass: boolean;
+  }>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
     vignetteAmountPercent: 100,
+    loadingReaderScrollSpeedPxPerSecond: 24,
+    storyUiTextLineCount: 7,
+    storyUiAutoScrollEnabled: true,
     videoDownloadEnabled: false,
     videoDownloadAdminBypass: false,
   });
@@ -318,6 +333,19 @@ export default function StorylinePlayer({
   }, [storylineId, isLoggedIn]);
 
   const currentBeat = currentBeats[currentIndex];
+  const {
+    scrollRef: storyScrollRef,
+    isAutoScrolling,
+    toggleAutoScroll,
+    stopAutoScroll,
+  } = useStoryAutoScroll<HTMLDivElement>({
+    enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && !showChoice,
+    resetKey: currentIndex,
+    pxPerSecond: cycleSettings.loadingReaderScrollSpeedPxPerSecond,
+  });
+  const storyTextViewportStyle = {
+    height: `min(46vh, calc(${cycleSettings.storyUiTextLineCount} * 1lh))`,
+  } satisfies CSSProperties;
   const isFirst = currentIndex === 0;
   const isLast = currentIndex === currentBeats.length - 1;
   const exportPhaseLabel = exportPhase === 'loading'
@@ -403,6 +431,12 @@ export default function StorylinePlayer({
       return () => clearTimeout(timer);
     }
   }, [isLast, currentBeat.isEnding, currentBeat.audioUrl]);
+
+  useEffect(() => {
+    if (isMinimized || showChoice) {
+      stopAutoScroll();
+    }
+  }, [isMinimized, showChoice, stopAutoScroll]);
 
   // Keyboard navigation
   const volumeRef = useRef(volume);
@@ -692,24 +726,30 @@ export default function StorylinePlayer({
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                className="w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 bg-neutral-900/80 max-h-[50vh]"
+                className="w-full border border-white/10 rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-500 bg-neutral-900/80"
               >
-                <div className="p-5 md:p-10 flex-1 overflow-y-auto scrollbar-none">
-                  <p className="text-xl md:text-2xl font-serif leading-relaxed transition-colors duration-500 text-neutral-300">
-                    {currentBeat.storyText}
-                  </p>
+                <div className="p-5 md:p-8">
+                  <div
+                    ref={storyScrollRef}
+                    style={storyTextViewportStyle}
+                    className="overflow-y-auto scrollbar-none text-xl md:text-2xl font-serif leading-relaxed"
+                  >
+                    <p className="transition-colors duration-500 text-neutral-300">
+                      {currentBeat.storyText}
+                    </p>
 
-                  {/* Ending state */}
-                  {currentBeat.isEnding && (
-                    <div className="mt-8 pt-8 border-t border-white/10">
-                      <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
-                        The End
-                      </h3>
-                      <p className="text-neutral-400 font-sans italic">
-                        {currentBeat.nextBeatGoal}
-                      </p>
-                    </div>
-                  )}
+                    {/* Ending state */}
+                    {currentBeat.isEnding && (
+                      <div className="mt-8 pt-8 border-t border-white/10">
+                        <h3 className="text-sm font-sans uppercase tracking-widest text-emerald-400 mb-4">
+                          The End
+                        </h3>
+                        <p className="text-neutral-400 font-sans italic">
+                          {currentBeat.nextBeatGoal}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -737,9 +777,9 @@ export default function StorylinePlayer({
           </div>
 
           {/* Mobile Row 2: Playback controls + beat dots */}
-          <div className="flex items-center justify-between gap-1.5 md:hidden">
+          <div className="flex min-w-0 items-center justify-between gap-1.5 md:hidden">
             {/* Controls cluster */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto scrollbar-none pr-1">
               <button
                 onClick={replay}
                 className={`${MOBILE_CONTROL_BUTTON_CLASS} bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200`}
@@ -747,6 +787,13 @@ export default function StorylinePlayer({
               >
                 <RotateCcw className={MOBILE_CONTROL_ICON_CLASS} />
               </button>
+
+              {cycleSettings.storyUiAutoScrollEnabled && !isMinimized && (
+                <AutoScrollButton
+                  active={isAutoScrolling}
+                  onClick={toggleAutoScroll}
+                />
+              )}
 
               {currentBeat.audioUrl && (
                 <button
@@ -876,6 +923,14 @@ export default function StorylinePlayer({
               >
                 <RotateCcw className={DESKTOP_CONTROL_ICON_CLASS} />
               </button>
+
+              {cycleSettings.storyUiAutoScrollEnabled && !isMinimized && (
+                <AutoScrollButton
+                  active={isAutoScrolling}
+                  onClick={toggleAutoScroll}
+                  className="p-3"
+                />
+              )}
 
               {currentBeat.audioUrl && (
                 <button

@@ -18,6 +18,8 @@ import {
   setStoryLoadingReaderStoryText,
   setStoryLoadingReaderOptions,
   setStoryLoadingReaderScrollSpeed,
+  setStoryUiTextLineCount,
+  setStoryUiAutoScroll,
   setTextTimeout,
   setImageTimeout,
   setTtsTimeout,
@@ -29,7 +31,11 @@ import {
   setVideoDownload,
   setVideoDownloadAdminBypass,
 } from '@/app/actions/admin';
-import type { StoryboardImageSize } from '@/lib/types/storyboard-settings';
+import {
+  MAX_STORY_UI_TEXT_LINE_COUNT,
+  MIN_STORY_UI_TEXT_LINE_COUNT,
+  type StoryboardImageSize,
+} from '@/lib/types/storyboard-settings';
 
 function ToggleRow({
   label,
@@ -98,6 +104,11 @@ export default function GlobalSettings() {
   const [loadingReaderScrollSpeedPxPerSecond, setLoadingReaderScrollSpeedPxPerSecondState] = useState(24);
   const [loadingReaderScrollSpeedInput, setLoadingReaderScrollSpeedInput] = useState('24');
   const [loadingReaderScrollSpeedSaving, setLoadingReaderScrollSpeedSaving] = useState(false);
+  const [storyUiTextLineCount, setStoryUiTextLineCountState] = useState(7);
+  const [storyUiTextLineCountInput, setStoryUiTextLineCountInput] = useState('7');
+  const [storyUiTextLineCountSaving, setStoryUiTextLineCountSaving] = useState(false);
+  const [storyUiAutoScrollEnabled, setStoryUiAutoScrollEnabledState] = useState(true);
+  const [storyUiAutoScrollToggling, setStoryUiAutoScrollToggling] = useState(false);
   const [freePlusCharacterSheetsEnabled, setFreePlusCharacterSheetsEnabledState] = useState(false);
   const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
   const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
@@ -143,6 +154,8 @@ export default function GlobalSettings() {
         loadingReaderStoryTextEnabled: readerStoryTextEnabled,
         loadingReaderOptionsEnabled: readerOptionsEnabled,
         loadingReaderScrollSpeedPxPerSecond: readerScrollSpeed,
+        storyUiTextLineCount: uiTextLineCount,
+        storyUiAutoScrollEnabled: uiAutoScrollEnabled,
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
         videoDownloadEnabled: vidDl,
@@ -174,6 +187,9 @@ export default function GlobalSettings() {
         setLoadingReaderOptionsEnabledState(readerOptionsEnabled);
         setLoadingReaderScrollSpeedPxPerSecondState(readerScrollSpeed);
         setLoadingReaderScrollSpeedInput(String(readerScrollSpeed));
+        setStoryUiTextLineCountState(uiTextLineCount);
+        setStoryUiTextLineCountInput(String(uiTextLineCount));
+        setStoryUiAutoScrollEnabledState(uiAutoScrollEnabled);
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
         setVideoDownloadEnabledState(vidDl);
@@ -271,6 +287,18 @@ export default function GlobalSettings() {
     }
   }
 
+  async function handleStoryUiTextLineCountSave() {
+    const lines = parseInt(storyUiTextLineCountInput, 10);
+    if (!Number.isFinite(lines) || lines < MIN_STORY_UI_TEXT_LINE_COUNT || lines > MAX_STORY_UI_TEXT_LINE_COUNT) return;
+    setStoryUiTextLineCountSaving(true);
+    try {
+      await setStoryUiTextLineCount(lines);
+      setStoryUiTextLineCountState(lines);
+    } finally {
+      setStoryUiTextLineCountSaving(false);
+    }
+  }
+
   async function handleTimeoutSave(
     inputVal: string,
     minSec: number,
@@ -319,6 +347,7 @@ export default function GlobalSettings() {
   const storyboardCompressionControlsEnabled = storyboardClientProcessingEnabled && storyboardWebpCompressionEnabled;
   const parsedLoadingReaderAnticipationSec = parseInt(loadingReaderAnticipationInput, 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedInput, 10);
+  const parsedStoryUiTextLineCount = parseInt(storyUiTextLineCountInput, 10);
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
   const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
 
@@ -560,6 +589,70 @@ export default function GlobalSettings() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">UI</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Shared reader controls for live stories and published playback.
+            </p>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Story Text Lines</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Visible story text height before scrolling. Default: 7 lines.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={MIN_STORY_UI_TEXT_LINE_COUNT}
+                  max={MAX_STORY_UI_TEXT_LINE_COUNT}
+                  step={1}
+                  value={storyUiTextLineCountInput}
+                  onChange={(e) => setStoryUiTextLineCountInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="7"
+                />
+                <span className="text-xs text-neutral-500">lines</span>
+                <button
+                  onClick={handleStoryUiTextLineCountSave}
+                  disabled={
+                    storyUiTextLineCountSaving ||
+                    !Number.isFinite(parsedStoryUiTextLineCount) ||
+                    parsedStoryUiTextLineCount < MIN_STORY_UI_TEXT_LINE_COUNT ||
+                    parsedStoryUiTextLineCount > MAX_STORY_UI_TEXT_LINE_COUNT
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {storyUiTextLineCountSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {storyUiTextLineCount !== parsedStoryUiTextLineCount && parsedStoryUiTextLineCount >= MIN_STORY_UI_TEXT_LINE_COUNT && parsedStoryUiTextLineCount <= MAX_STORY_UI_TEXT_LINE_COUNT && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+              {Number.isFinite(parsedStoryUiTextLineCount) && (parsedStoryUiTextLineCount < MIN_STORY_UI_TEXT_LINE_COUNT || parsedStoryUiTextLineCount > MAX_STORY_UI_TEXT_LINE_COUNT) && (
+                <p className="mt-3 text-xs text-amber-400">
+                  Use a value from {MIN_STORY_UI_TEXT_LINE_COUNT} to {MAX_STORY_UI_TEXT_LINE_COUNT}.
+                </p>
+              )}
+            </div>
+
+            <ToggleRow
+              label="Auto-scroll Story Button"
+              description="Show the reader control that automatically scrolls long story text."
+              checked={storyUiAutoScrollEnabled}
+              toggling={storyUiAutoScrollToggling}
+              onToggle={async () => {
+                setStoryUiAutoScrollToggling(true);
+                const next = !storyUiAutoScrollEnabled;
+                try {
+                  await setStoryUiAutoScroll(next);
+                  setStoryUiAutoScrollEnabledState(next);
+                } finally {
+                  setStoryUiAutoScrollToggling(false);
+                }
+              }}
+            />
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">

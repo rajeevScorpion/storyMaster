@@ -62,6 +62,32 @@
   display: none;
 }
 
+/* Subtle mobile scene movement for the foreground story image. */
+.mobile-scene-shuttle {
+  transform-origin: center;
+  animation: mobile-scene-shuttle 18s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+@keyframes mobile-scene-shuttle {
+  0% {
+    transform: scale(1.08) translate3d(-1.6%, 1.1%, 0);
+  }
+  55% {
+    transform: scale(1.03) translate3d(1.2%, -0.8%, 0);
+  }
+  100% {
+    transform: scale(1.06) translate3d(-0.5%, -1.2%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-scene-shuttle {
+    animation: none;
+    transform: none;
+  }
+}
+
 /* Marquee animations for prompt carousel */
 @keyframes marquee-left {
   0% { transform: translateX(0); }

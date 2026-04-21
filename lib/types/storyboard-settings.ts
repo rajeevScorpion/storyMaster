@@ -4,6 +4,9 @@ export type StoryboardImageSize = (typeof STORYBOARD_IMAGE_SIZES)[number];
 export const STORYBOARD_LAYOUT_MODES = ['2x2'] as const;
 export type StoryboardLayoutMode = (typeof STORYBOARD_LAYOUT_MODES)[number];
 export const DEFAULT_STORYBOARD_VIGNETTE_AMOUNT_PERCENT = 100;
+export const DEFAULT_STORY_UI_TEXT_LINE_COUNT = 7;
+export const MIN_STORY_UI_TEXT_LINE_COUNT = 3;
+export const MAX_STORY_UI_TEXT_LINE_COUNT = 14;
 
 export interface StoryboardImageQualitySettings {
   imageSize: StoryboardImageSize;
@@ -55,6 +58,23 @@ export function normalizeStoryboardVignetteAmountPercent(value: unknown): number
   }
 
   return Math.min(100, Math.max(0, Math.round(numeric)));
+}
+
+export function normalizeStoryUiTextLineCount(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? parseInt(value, 10)
+      : NaN;
+
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_STORY_UI_TEXT_LINE_COUNT;
+  }
+
+  return Math.min(
+    MAX_STORY_UI_TEXT_LINE_COUNT,
+    Math.max(MIN_STORY_UI_TEXT_LINE_COUNT, Math.round(numeric))
+  );
 }
 
 export function normalizeStoryboardImageQualitySettings(
