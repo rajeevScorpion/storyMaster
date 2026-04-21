@@ -193,6 +193,10 @@ export async function getGlobalSettings(): Promise<{
   vignetteEnabled: boolean;
   loadingNodeLabelsEnabled: boolean;
   loadingHintTypewriterEnabled: boolean;
+  loadingReaderAnticipationMs: number;
+  loadingReaderStoryTextEnabled: boolean;
+  loadingReaderOptionsEnabled: boolean;
+  loadingReaderScrollSpeedPxPerSecond: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   videoDownloadEnabled: boolean;
@@ -205,12 +209,16 @@ export async function getGlobalSettings(): Promise<{
   previewSeedPlanPriceCoins: number;
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
     getFeatureFlag('story_loading_node_labels_enabled', true),
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
+    getFeatureFlagValue('story_loading_reader_anticipation_ms'),
+    getFeatureFlag('story_loading_reader_story_text_enabled', true),
+    getFeatureFlag('story_loading_reader_options_enabled', true),
+    getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('video_download_enabled'),
@@ -222,12 +230,23 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('story_authoring_word_cap'),
     getPreviewSeedPlanPriceCoins(),
   ]);
+  const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
+  const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
+
   return {
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
     loadingNodeLabelsEnabled,
     loadingHintTypewriterEnabled,
+    loadingReaderAnticipationMs: Number.isFinite(parsedLoadingReaderAnticipationMs)
+      ? Math.max(0, parsedLoadingReaderAnticipationMs)
+      : 10000,
+    loadingReaderStoryTextEnabled,
+    loadingReaderOptionsEnabled,
+    loadingReaderScrollSpeedPxPerSecond: Number.isFinite(parsedLoadingReaderScrollSpeed)
+      ? Math.max(1, parsedLoadingReaderScrollSpeed)
+      : 24,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     videoDownloadEnabled,
@@ -264,6 +283,32 @@ export async function setStoryLoadingNodeLabels(enabled: boolean): Promise<void>
 export async function setStoryLoadingHintTypewriter(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('story_loading_hint_typewriter_enabled', enabled);
+}
+
+export async function setStoryLoadingReaderAnticipationMs(ms: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(ms) || ms < 0) {
+    throw new Error('Loader anticipation time must be 0 seconds or more.');
+  }
+  await setFeatureFlagValue('story_loading_reader_anticipation_ms', String(Math.round(ms)));
+}
+
+export async function setStoryLoadingReaderStoryText(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_loading_reader_story_text_enabled', enabled);
+}
+
+export async function setStoryLoadingReaderOptions(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_loading_reader_options_enabled', enabled);
+}
+
+export async function setStoryLoadingReaderScrollSpeed(pxPerSecond: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(pxPerSecond) || pxPerSecond < 1) {
+    throw new Error('Loader story scrolling speed must be at least 1 pixel per second.');
+  }
+  await setFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second', String(Math.round(pxPerSecond)));
 }
 
 export async function setFreePlusCharacterSheets(enabled: boolean): Promise<void> {
@@ -351,6 +396,10 @@ export async function getStoryboardSettings(): Promise<{
   vignetteEnabled: boolean;
   loadingNodeLabelsEnabled: boolean;
   loadingHintTypewriterEnabled: boolean;
+  loadingReaderAnticipationMs: number;
+  loadingReaderStoryTextEnabled: boolean;
+  loadingReaderOptionsEnabled: boolean;
+  loadingReaderScrollSpeedPxPerSecond: number;
   cloudSaveTimeoutMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
@@ -358,12 +407,16 @@ export async function getStoryboardSettings(): Promise<{
   videoDownloadAdminBypass: boolean;
   authoringWordCap: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
     getFeatureFlag('story_loading_node_labels_enabled', true),
     getFeatureFlag('story_loading_hint_typewriter_enabled', false),
+    getFeatureFlagValue('story_loading_reader_anticipation_ms'),
+    getFeatureFlag('story_loading_reader_story_text_enabled', true),
+    getFeatureFlag('story_loading_reader_options_enabled', true),
+    getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
@@ -371,12 +424,23 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('video_download_admin_bypass'),
     getFeatureFlagValue('story_authoring_word_cap'),
   ]);
+  const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
+  const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
+
   return {
     cycleOverride,
     cycleMs: parseInt(cycleMsStr ?? '2500', 10) || 2500,
     vignetteEnabled,
     loadingNodeLabelsEnabled,
     loadingHintTypewriterEnabled,
+    loadingReaderAnticipationMs: Number.isFinite(parsedLoadingReaderAnticipationMs)
+      ? Math.max(0, parsedLoadingReaderAnticipationMs)
+      : 10000,
+    loadingReaderStoryTextEnabled,
+    loadingReaderOptionsEnabled,
+    loadingReaderScrollSpeedPxPerSecond: Number.isFinite(parsedLoadingReaderScrollSpeed)
+      ? Math.max(1, parsedLoadingReaderScrollSpeed)
+      : 24,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,

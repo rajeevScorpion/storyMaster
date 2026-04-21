@@ -1,7 +1,7 @@
-﻿'use client';
+'use client';
 
-import { useState, useEffect } from 'react';
-import { useStoryStore } from '@/lib/store/story-store';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useStoryStore, type LoadingReaderState } from '@/lib/store/story-store';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import { motion, AnimatePresence } from 'motion/react';
 import { Loader2 } from 'lucide-react';
@@ -14,7 +14,44 @@ interface LoadingStateProps {
 type LoadingUiSettingsCache = {
   loadingNodeLabelsEnabled: boolean;
   loadingHintTypewriterEnabled: boolean;
+  loadingReaderAnticipationMs: number;
+  loadingReaderStoryTextEnabled: boolean;
+  loadingReaderOptionsEnabled: boolean;
+  loadingReaderScrollSpeedPxPerSecond: number;
 };
+
+type ReaderMode = 'anticipation' | 'story' | 'fallback';
+
+const AUTO_SCROLL_INTERVAL_MS = 50;
+const MANUAL_SCROLL_PAUSE_MS = 5000;
+const DEFAULT_LOADING_MESSAGE = 'kissago is weaving the story';
+
+const defaultLoadingUiSettings: LoadingUiSettingsCache = {
+  loadingNodeLabelsEnabled: true,
+  loadingHintTypewriterEnabled: false,
+  loadingReaderAnticipationMs: 10000,
+  loadingReaderStoryTextEnabled: true,
+  loadingReaderOptionsEnabled: true,
+  loadingReaderScrollSpeedPxPerSecond: 24,
+};
+
+const defaultClues = [
+  'Kissago is weaving the next moment...',
+  'The story is deciding how it wants to unfold...',
+  'A fresh choice can open surprising paths ahead...',
+  'Small decisions now can echo through the rest of the story...',
+  'The next scene is finding its rhythm...',
+  'The first beat is doing extra work behind the curtain...',
+  'New branches often begin with tiny, unexpected turns...',
+  'Your story is gathering scene, mood, and momentum...',
+];
+
+const anticipationLines = [
+  'A path has opened.',
+  'The choice is settling into the world.',
+  'Characters are listening for what changes next.',
+  'The scene is gathering color, sound, and consequence.',
+];
 
 let loadingUiSettingsCache: LoadingUiSettingsCache | null = null;
 
@@ -27,11 +64,15 @@ async function loadLoadingUiSettings(): Promise<LoadingUiSettingsCache> {
   loadingUiSettingsCache = {
     loadingNodeLabelsEnabled: settings.loadingNodeLabelsEnabled,
     loadingHintTypewriterEnabled: settings.loadingHintTypewriterEnabled,
+    loadingReaderAnticipationMs: settings.loadingReaderAnticipationMs,
+    loadingReaderStoryTextEnabled: settings.loadingReaderStoryTextEnabled,
+    loadingReaderOptionsEnabled: settings.loadingReaderOptionsEnabled,
+    loadingReaderScrollSpeedPxPerSecond: settings.loadingReaderScrollSpeedPxPerSecond,
   };
   return loadingUiSettingsCache;
 }
 
-function AnimatedClueText({
+function AnimatedText({
   text,
   typewriterEnabled,
 }: {
@@ -46,60 +87,295 @@ function AnimatedClueText({
     }
 
     let index = 0;
-    const interval = setInterval(() => {
+    const interval = window.setInterval(() => {
       index += 1;
       setTypedText(text.slice(0, index));
       if (index >= text.length) {
-        clearInterval(interval);
+        window.clearInterval(interval);
       }
     }, 28);
 
-    return () => clearInterval(interval);
+    return () => window.clearInterval(interval);
   }, [text, typewriterEnabled]);
 
-  return <>&quot;{typewriterEnabled ? typedText : text}&quot;</>;
+  return <>{typewriterEnabled ? typedText : text}</>;
 }
 
-function RotatingClue({ clues, clueKey }: { clues: string[]; clueKey: string }) {
-  const [currentClueIndex, setCurrentClueIndex] = useState(0);
-  const [typewriterEnabled, setTypewriterEnabled] = useState(
-    loadingUiSettingsCache?.loadingHintTypewriterEnabled ?? false
-  );
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
   useEffect(() => {
-    loadLoadingUiSettings()
-      .then((settings) => setTypewriterEnabled(settings.loadingHintTypewriterEnabled))
-      .catch(() => setTypewriterEnabled(false));
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    updatePreference();
+
+    mediaQuery.addEventListener('change', updatePreference);
+    return () => mediaQuery.removeEventListener('change', updatePreference);
   }, []);
 
+  return prefersReducedMotion;
+}
+
+function buildReaderFallback(reader: LoadingReaderState | null): LoadingReaderState {
+  return reader || {
+    flow: 'start_story',
+    startedAt: Date.now(),
+    storyTextReadyAt: null,
+    message: DEFAULT_LOADING_MESSAGE,
+    selectedOptionLabel: null,
+    fallbackTitle: null,
+    fallbackText: null,
+    generatedStoryText: null,
+    generatedOptions: [],
+  };
+}
+
+function dedupeLines(lines: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const key = trimmed.toLowerCase();
+    if (!trimmed || seen.has(key)) continue;
+    seen.add(key);
+    result.push(trimmed);
+  }
+
+  return result;
+}
+
+function LoadingReaderPanel({
+  reader,
+  clues,
+  settings,
+}: {
+  reader: LoadingReaderState | null;
+  clues: string[];
+  settings: LoadingUiSettingsCache;
+}) {
+  const resolvedReader = useMemo(() => buildReaderFallback(reader), [reader]);
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const storyEndRef = useRef<HTMLDivElement>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [manualPauseUntil, setManualPauseUntil] = useState(0);
+  const [storyHasReachedEnd, setStoryHasReachedEnd] = useState(false);
+  const [currentAnticipationIndex, setCurrentAnticipationIndex] = useState(0);
+
   useEffect(() => {
-    if (!clues || clues.length === 0) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(interval);
+  }, []);
 
-    const interval = setInterval(() => {
-      setCurrentClueIndex((prev) => (prev + 1) % clues.length);
-    }, 6500);
+  const elapsedMs = Math.max(0, now - resolvedReader.startedAt);
+  const storyTextAllowed = settings.loadingReaderStoryTextEnabled;
+  const mode: ReaderMode = storyTextAllowed && resolvedReader.generatedStoryText
+    ? 'story'
+    : storyTextAllowed && elapsedMs >= settings.loadingReaderAnticipationMs
+    ? 'fallback'
+    : 'anticipation';
+  const generatedOptions = resolvedReader.generatedOptions || [];
+  const showOptionsPreview = settings.loadingReaderOptionsEnabled && mode === 'story' && storyHasReachedEnd && generatedOptions.length > 0;
+  const anticipationItems = useMemo(
+    () => dedupeLines([
+      resolvedReader.message || DEFAULT_LOADING_MESSAGE,
+      ...anticipationLines,
+      ...clues.slice(0, 4),
+    ]),
+    [clues, resolvedReader.message]
+  );
+  const contentKey = [
+    mode,
+    resolvedReader.startedAt,
+    resolvedReader.storyTextReadyAt,
+    generatedOptions.length,
+  ].join(':');
 
-    return () => clearInterval(interval);
-  }, [clues]);
+  const pauseAutoScroll = () => {
+    setManualPauseUntil(Date.now() + MANUAL_SCROLL_PAUSE_MS);
+  };
+  const activeAnticipationLine = anticipationItems.length > 1
+    ? anticipationItems[(currentAnticipationIndex % (anticipationItems.length - 1)) + 1] ?? 'The next beat is taking shape.'
+    : 'The next beat is taking shape.';
+
+  const updateStoryEndState = useCallback(() => {
+    const scrollEl = scrollRef.current;
+    const markerEl = storyEndRef.current;
+    if (!scrollEl || !markerEl || mode !== 'story') {
+      return;
+    }
+
+    const markerReached = markerEl.offsetTop <= scrollEl.scrollTop + scrollEl.clientHeight - 16;
+    const contentFits = scrollEl.scrollHeight <= scrollEl.clientHeight + 4;
+    setStoryHasReachedEnd(markerReached || contentFits);
+  }, [mode]);
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    scrollEl.scrollTop = 0;
+
+    const frame = window.requestAnimationFrame(() => {
+      setStoryHasReachedEnd(false);
+      updateStoryEndState();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mode, resolvedReader.storyTextReadyAt, resolvedReader.generatedStoryText, updateStoryEndState]);
+
+  useEffect(() => {
+    if (prefersReducedMotion || mode === 'anticipation' || now < manualPauseUntil) {
+      return;
+    }
+
+    const scrollStepPx = Math.max(
+      0.25,
+      (settings.loadingReaderScrollSpeedPxPerSecond * AUTO_SCROLL_INTERVAL_MS) / 1000
+    );
+
+    const interval = window.setInterval(() => {
+      const scrollEl = scrollRef.current;
+      if (!scrollEl) return;
+
+      const maxScroll = scrollEl.scrollHeight - scrollEl.clientHeight;
+      if (maxScroll <= 0 || scrollEl.scrollTop >= maxScroll - 1) {
+        updateStoryEndState();
+        return;
+      }
+
+      scrollEl.scrollTop = Math.min(maxScroll, scrollEl.scrollTop + scrollStepPx);
+      updateStoryEndState();
+    }, AUTO_SCROLL_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [manualPauseUntil, mode, now, prefersReducedMotion, settings.loadingReaderScrollSpeedPxPerSecond, updateStoryEndState]);
+
+  useEffect(() => {
+    if (mode !== 'anticipation' || anticipationItems.length <= 2) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setCurrentAnticipationIndex((current) => current + 1);
+    }, settings.loadingHintTypewriterEnabled ? 5200 : 3600);
+
+    return () => window.clearInterval(interval);
+  }, [anticipationItems.length, mode, settings.loadingHintTypewriterEnabled]);
 
   return (
-    <div className="flex h-[8.75rem] items-center justify-center rounded-2xl border border-white/10 bg-black/20 px-6 py-5 shadow-[0_16px_40px_rgba(0,0,0,0.16)]">
-      <AnimatePresence mode="wait">
-        <motion.p
-          key={`${clueKey}-${currentClueIndex}`}
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -4 }}
-          transition={{ duration: 0.85, ease: 'easeInOut' }}
-          className="mx-auto max-w-xl text-center text-lg font-serif italic leading-relaxed text-neutral-100 md:text-xl"
-        >
-          <AnimatedClueText
-            key={`${clueKey}-${currentClueIndex}-${typewriterEnabled ? 'typewriter' : 'static'}`}
-            text={clues[currentClueIndex]}
-            typewriterEnabled={typewriterEnabled}
-          />
-        </motion.p>
-      </AnimatePresence>
+    <div className="relative h-[min(18rem,34dvh)] min-h-[12rem] overflow-hidden rounded-2xl border border-white/10 bg-black/20 shadow-[0_16px_40px_rgba(0,0,0,0.16)]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-12 bg-gradient-to-b from-neutral-950/88 to-transparent" />
+      <div
+        ref={scrollRef}
+        onScroll={updateStoryEndState}
+        onWheel={pauseAutoScroll}
+        onTouchStart={pauseAutoScroll}
+        onPointerDown={pauseAutoScroll}
+        className="h-full overflow-y-auto scrollbar-none px-5 py-5 md:px-7 md:py-6"
+      >
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={contentKey}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.45, ease: 'easeOut' }}
+            className="min-h-full"
+          >
+            {mode === 'anticipation' && (
+              <div className="flex min-h-full flex-col justify-center gap-3 text-center">
+                <p className="text-xl font-serif italic leading-relaxed text-neutral-50 md:text-2xl">
+                  {resolvedReader.message || DEFAULT_LOADING_MESSAGE}
+                </p>
+                <AnimatePresence mode="wait">
+                  <motion.p
+                    key={`${activeAnticipationLine}-${settings.loadingHintTypewriterEnabled ? 'typed' : 'plain'}`}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.45, ease: 'easeOut' }}
+                    className="mx-auto max-w-xl text-sm leading-relaxed text-neutral-300 md:text-base"
+                  >
+                    <AnimatedText
+                      key={`${activeAnticipationLine}-${settings.loadingHintTypewriterEnabled ? 'typed' : 'plain'}`}
+                      text={activeAnticipationLine}
+                      typewriterEnabled={settings.loadingHintTypewriterEnabled}
+                    />
+                  </motion.p>
+                </AnimatePresence>
+              </div>
+            )}
+
+            {mode === 'fallback' && (
+              <div className="mx-auto max-w-xl space-y-5 text-left">
+                <div>
+                  <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300/80">
+                    {resolvedReader.selectedOptionLabel ? 'Chosen path' : 'Story seed'}
+                  </p>
+                  {resolvedReader.selectedOptionLabel && (
+                    <p className="mt-2 text-lg font-serif italic leading-relaxed text-neutral-100 md:text-xl">
+                      {resolvedReader.selectedOptionLabel}
+                    </p>
+                  )}
+                </div>
+                {resolvedReader.fallbackTitle && (
+                  <h3 className="text-xl font-serif leading-snug text-neutral-50 md:text-2xl">
+                    {resolvedReader.fallbackTitle}
+                  </h3>
+                )}
+                <p className="text-base font-serif leading-relaxed text-neutral-300 md:text-lg">
+                  {resolvedReader.fallbackText || 'The next beat is still taking shape.'}
+                </p>
+              </div>
+            )}
+
+            {mode === 'story' && (
+              <div className="mx-auto max-w-xl space-y-6 text-left">
+                <div>
+                  <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300/80">
+                    New beat
+                  </p>
+                  {resolvedReader.selectedOptionLabel && (
+                    <p className="mt-2 text-sm font-sans leading-relaxed text-neutral-400">
+                      {resolvedReader.selectedOptionLabel}
+                    </p>
+                  )}
+                </div>
+                <p className="text-lg font-serif leading-relaxed text-neutral-100 md:text-xl">
+                  {resolvedReader.generatedStoryText}
+                </p>
+                <div ref={storyEndRef} className="h-px" />
+                {showOptionsPreview && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, ease: 'easeOut' }}
+                    className="space-y-3 border-t border-white/10 pt-5"
+                  >
+                    <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-neutral-500">
+                      What may open next
+                    </p>
+                    {generatedOptions.map((option) => (
+                      <div key={option.id} className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                        <p className="font-serif text-base leading-snug text-neutral-100">
+                          {option.label}
+                        </p>
+                        <p className="mt-1 text-xs uppercase tracking-[0.16em] text-neutral-500">
+                          {option.intent}
+                        </p>
+                      </div>
+                    ))}
+                  </motion.div>
+                )}
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
+      </div>
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-14 bg-gradient-to-t from-neutral-950/90 to-transparent" />
     </div>
   );
 }
@@ -110,21 +386,11 @@ export default function LoadingState({
 }: LoadingStateProps) {
   const loadingClues = useStoryStore((state) => state.loadingClues);
   const loadingStage = useStoryStore((state) => state.loadingStage);
-  const [showNodeLabels, setShowNodeLabels] = useState(
-    loadingUiSettingsCache?.loadingNodeLabelsEnabled ?? false
+  const loadingReader = useStoryStore((state) => state.loadingReader);
+  const [loadingUiSettings, setLoadingUiSettings] = useState(
+    loadingUiSettingsCache ?? defaultLoadingUiSettings
   );
   const [hoveredStepKey, setHoveredStepKey] = useState<string | null>(null);
-
-  const defaultClues = [
-    'Kissago is weaving the next moment...',
-    'The story is deciding how it wants to unfold...',
-    'A fresh choice can open surprising paths ahead...',
-    'Small decisions now can echo through the rest of the story...',
-    'The next scene is finding its rhythm...',
-    'The first beat is doing extra work behind the curtain...',
-    'New branches often begin with tiny, unexpected turns...',
-    'Your story is gathering scene, mood, and momentum...',
-  ];
 
   const cluesToUse = loadingClues?.length > 0 ? loadingClues : defaultClues;
   const backdropStyle = backdropMode === 'blocking'
@@ -136,9 +402,11 @@ export default function LoadingState({
 
   useEffect(() => {
     loadLoadingUiSettings()
-      .then((settings) => setShowNodeLabels(settings.loadingNodeLabelsEnabled))
-      .catch(() => setShowNodeLabels(false));
+      .then((settings) => setLoadingUiSettings(settings))
+      .catch(() => setLoadingUiSettings(defaultLoadingUiSettings));
   }, []);
+
+  const showNodeLabels = loadingUiSettings.loadingNodeLabelsEnabled;
 
   const currentStep = loadingStage?.steps[activeStepIndex] || null;
   const hoveredStep = loadingStage?.steps.find((step) => step.key === hoveredStepKey) || null;
@@ -158,17 +426,18 @@ export default function LoadingState({
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center px-4 ${className}`}
+      className={`fixed inset-0 z-50 flex items-center justify-center px-4 py-4 ${className}`}
       style={{ background: backdropStyle }}
     >
-      <div className="relative w-full max-w-2xl overflow-hidden rounded-[2rem] border border-white/12 bg-neutral-950/42 shadow-[0_28px_90px_rgba(0,0,0,0.42)] backdrop-blur-2xl">
+      <div className="relative max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-[2rem] border border-white/12 bg-neutral-950/42 shadow-[0_28px_90px_rgba(0,0,0,0.42)] backdrop-blur-2xl">
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-neutral-950/62 via-neutral-950/38 to-neutral-950/62" />
-        <div className="relative p-7 md:p-8">
-          <div className="space-y-6">
-            <RotatingClue
-              key={`${loadingStage?.currentStepKey || 'idle'}:${cluesToUse.length}`}
+        <div className="relative p-5 md:p-8">
+          <div className="space-y-5 md:space-y-6">
+            <LoadingReaderPanel
+              key={loadingReader?.startedAt || 'fallback'}
+              reader={loadingReader}
               clues={cluesToUse}
-              clueKey={loadingStage?.currentStepKey || 'clue'}
+              settings={loadingUiSettings}
             />
 
             {loadingStage && (

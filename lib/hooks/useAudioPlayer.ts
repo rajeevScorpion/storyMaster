@@ -33,6 +33,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlay
         audioRef.current.currentTime = 0;
         audioRef.current = null;
       }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting playback UI when the upstream node (external system) changes
       setPlaybackState('idle');
       prevNodeIdRef.current = nodeId;
     }
@@ -42,6 +43,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlay
   useEffect(() => {
     if (!audioUrl) {
       audioRef.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting playback UI when the audio URL (external resource) is cleared
       setPlaybackState('idle');
       return;
     }

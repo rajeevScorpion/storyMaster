@@ -27,6 +27,7 @@ export default function PromptCarousel({ onSelect }: PromptCarouselProps) {
   useEffect(() => {
     const shuffled = shuffle(STORY_PROMPTS);
     const mid = Math.ceil(shuffled.length / 2);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- shuffle must run client-only to avoid SSR hydration mismatch from Math.random
     setRows([shuffled.slice(0, mid), shuffled.slice(mid)]);
   }, []);
 

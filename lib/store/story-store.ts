@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, materializeSeededBeat, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
@@ -59,11 +59,24 @@ interface GenerationTimingSummary {
   meta?: Record<string, unknown>;
 }
 
+export interface LoadingReaderState {
+  flow: StoryLoadingFlow;
+  startedAt: number;
+  storyTextReadyAt: number | null;
+  message: string;
+  selectedOptionLabel: string | null;
+  fallbackTitle: string | null;
+  fallbackText: string | null;
+  generatedStoryText: string | null;
+  generatedOptions: Pick<Option, 'id' | 'label' | 'intent'>[];
+}
+
 interface StoryState {
   session: StorySession | null;
   isLoading: boolean;
   loadingClues: string[];
   loadingStage: StoryLoadingStage | null;
+  loadingReader: LoadingReaderState | null;
   error: string | null;
   errorAction: StoryErrorAction | null;
   isGeneratingAudio: boolean;
@@ -470,12 +483,59 @@ function withGeneratedOrigin(beat: StoryBeat): StoryBeat {
   };
 }
 
+const LOADING_READER_MESSAGE = 'kissago is weaving the story';
+
+function createInitialLoadingReader({
+  flow,
+  selectedOptionLabel = null,
+  fallbackTitle = null,
+  fallbackText = null,
+}: {
+  flow: StoryLoadingFlow;
+  selectedOptionLabel?: string | null;
+  fallbackTitle?: string | null;
+  fallbackText?: string | null;
+}): LoadingReaderState {
+  return {
+    flow,
+    startedAt: Date.now(),
+    storyTextReadyAt: null,
+    message: LOADING_READER_MESSAGE,
+    selectedOptionLabel,
+    fallbackTitle,
+    fallbackText,
+    generatedStoryText: null,
+    generatedOptions: [],
+  };
+}
+
+function updateLoadingReaderWithBeat(
+  reader: LoadingReaderState | null,
+  flow: StoryLoadingFlow,
+  beat: StoryBeat
+): LoadingReaderState {
+  const base = reader || createInitialLoadingReader({ flow });
+
+  return {
+    ...base,
+    flow,
+    storyTextReadyAt: Date.now(),
+    generatedStoryText: beat.storyText,
+    generatedOptions: beat.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+      intent: option.intent,
+    })),
+  };
+}
+
 export const useStoryStore = create<StoryState>()(
     (set, get) => ({
       session: null,
       isLoading: false,
       loadingClues: [],
       loadingStage: null,
+      loadingReader: null,
       error: null,
       errorAction: null,
       isGeneratingAudio: false,
@@ -515,8 +575,13 @@ export const useStoryStore = create<StoryState>()(
           isLoading: true,
           error: null,
           errorAction: null,
-          loadingClues: ['Kissago is weaving the next moment...'],
+          loadingClues: [LOADING_READER_MESSAGE],
           loadingStage: createStoryLoadingStage('start_story', 'wallet'),
+          loadingReader: createInitialLoadingReader({
+            flow: 'start_story',
+            fallbackTitle: storyConfig.authoring.workingTitle?.trim() || 'Your story is beginning',
+            fallbackText: storyConfig.authoring.preludeText?.trim() || prompt,
+          }),
         });
         try {
           billingAuthorization = await measureAsyncStep(
@@ -554,6 +619,7 @@ export const useStoryStore = create<StoryState>()(
             isLoading: false,
             loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: error?.message || 'Unable to check your wallet right now.',
             errorAction: null,
           });
@@ -566,6 +632,7 @@ export const useStoryStore = create<StoryState>()(
             isLoading: false,
             loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: pricingErrorState.error,
             errorAction: pricingErrorState.errorAction,
           });
@@ -645,7 +712,10 @@ export const useStoryStore = create<StoryState>()(
             }
           );
 
-          set({ loadingClues: beat.clues });
+          set((state) => ({
+            loadingClues: beat.clues,
+            loadingReader: updateLoadingReaderWithBeat(state.loadingReader, 'start_story', beat),
+          }));
 
           const lang = initialSession.storyConfig?.language || 'english';
           setLoadingStage(set, 'start_story', 'visual');
@@ -899,7 +969,9 @@ export const useStoryStore = create<StoryState>()(
             session: fullSession,
             isLoading: false,
             saveStatus: 'unsaved',
+            loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: null,
             errorAction: null,
             ...audioExtra,
@@ -944,7 +1016,9 @@ export const useStoryStore = create<StoryState>()(
           });
           set({
             isLoading: false,
+            loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: error.message || 'Failed to start story',
             errorAction: null,
           });
@@ -989,6 +1063,23 @@ export const useStoryStore = create<StoryState>()(
           },
         };
 
+        // No existing branch - show the reader immediately while access is checked.
+        set({
+          isLoading: true,
+          error: null,
+          errorAction: null,
+          loadingClues: currentNode.data.clues.length > 0
+            ? currentNode.data.clues
+            : [LOADING_READER_MESSAGE],
+          loadingStage: createStoryLoadingStage('continue_story', 'wallet'),
+          loadingReader: createInitialLoadingReader({
+            flow: 'continue_story',
+            selectedOptionLabel: selectedOption.label,
+            fallbackTitle: currentNode.data.title,
+            fallbackText: currentNode.data.storyText,
+          }),
+        });
+
         let billingAuthorization: PricingBillableActionAuthorization;
         try {
           billingAuthorization = await measureAsyncStep(
@@ -1027,6 +1118,7 @@ export const useStoryStore = create<StoryState>()(
             isLoading: false,
             loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: error?.message || 'Unable to check your wallet right now.',
             errorAction: null,
           });
@@ -1039,6 +1131,7 @@ export const useStoryStore = create<StoryState>()(
             isLoading: false,
             loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: pricingErrorState.error,
             errorAction: pricingErrorState.errorAction,
           });
@@ -1046,16 +1139,6 @@ export const useStoryStore = create<StoryState>()(
         }
 
         // No existing branch — generate new beat
-        set({
-          isLoading: true,
-          error: null,
-          errorAction: null,
-          loadingClues: currentNode.data.clues.length > 0
-            ? currentNode.data.clues
-            : ['Kissago is weaving the next moment...'],
-          loadingStage: createStoryLoadingStage('continue_story', 'wallet'),
-        });
-
         const reservationId = getHardReservationId(billingAuthorization);
         let shouldReleaseReservation = Boolean(reservationId);
 
@@ -1118,7 +1201,10 @@ export const useStoryStore = create<StoryState>()(
             }
           );
 
-          set({ loadingClues: beat.clues });
+          set((state) => ({
+            loadingClues: beat.clues,
+            loadingReader: updateLoadingReaderWithBeat(state.loadingReader, 'continue_story', beat),
+          }));
 
           setLoadingStage(set, 'continue_story', 'visual');
           const storyboardPlan = await measureAsyncStep(
@@ -1339,7 +1425,9 @@ export const useStoryStore = create<StoryState>()(
             session: deriveSessionFields(latestSession, mergedMap),
             isLoading: false,
             saveStatus: 'unsaved',
+            loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: null,
             errorAction: null,
             ...audioExtra,
@@ -1491,7 +1579,9 @@ export const useStoryStore = create<StoryState>()(
           });
           set({
             isLoading: false,
+            loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             error: error.message || 'Failed to continue story',
             errorAction: null,
           });
@@ -1512,7 +1602,7 @@ export const useStoryStore = create<StoryState>()(
       },
 
       resetStory: () => {
-        set({ session: null, error: null, errorAction: null, isLoading: false, loadingClues: [], loadingStage: null });
+        set({ session: null, error: null, errorAction: null, isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null });
       },
 
       restartExploration: () => {
@@ -1779,7 +1869,7 @@ export const useStoryStore = create<StoryState>()(
       },
 
       loadStoryFromCloud: async (storyId: string) => {
-        set({ isLoading: true, error: null, loadingStage: null });
+        set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null });
 
         try {
           const session = await loadStoryAction(storyId);
@@ -1795,18 +1885,20 @@ export const useStoryStore = create<StoryState>()(
           set({
             session: fullSession,
             isLoading: false,
+            loadingClues: [],
             loadingStage: null,
+            loadingReader: null,
             isSaving: false,
             saveStatus: 'saved',
             saveWarning: null,
           });
         } catch (error: any) {
-          set({ isLoading: false, loadingStage: null, error: error.message || 'Failed to load story' });
+          set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story' });
         }
       },
 
       exploreStoryTree: async (storyId: string) => {
-        set({ isLoading: true, error: null, loadingStage: null, lastPublishResult: null });
+        set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null, lastPublishResult: null });
 
         try {
           const session = await loadStoryTreeAction(storyId);
@@ -1817,9 +1909,9 @@ export const useStoryStore = create<StoryState>()(
             console.log(`[exploreStory] Loaded ${nodeCount} nodes, exploration=${fullSession.explorationMode}`);
           }
 
-          set({ session: fullSession, isLoading: false, loadingStage: null, saveStatus: 'saved' });
+          set({ session: fullSession, isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, saveStatus: 'saved' });
         } catch (error: any) {
-          set({ isLoading: false, loadingStage: null, error: error.message || 'Failed to load story for exploration' });
+          set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story for exploration' });
         }
       },
 

@@ -83,6 +83,7 @@ export default function NarrationButton({
 
   useEffect(() => {
     if (isAudioReady) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing transient glow UI to an external async signal (audio generation completing)
       setShowGlow(true);
       const timer = setTimeout(() => {
         setShowGlow(false);

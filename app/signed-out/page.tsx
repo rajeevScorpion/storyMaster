@@ -10,7 +10,8 @@ export default async function SignedOutPage() {
   const withCovers = storylines.filter((s) => s.cover_image_url);
   const randomCover =
     withCovers.length > 0
-      ? withCovers[Math.floor(Math.random() * withCovers.length)].cover_image_url
+      ? // eslint-disable-next-line react-hooks/purity -- per-request randomization is intentional for variety on the signed-out landing
+        withCovers[Math.floor(Math.random() * withCovers.length)].cover_image_url
       : null;
 
   return <SignedOutScreen coverImageUrl={randomCover} />;

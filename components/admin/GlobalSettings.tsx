@@ -9,6 +9,10 @@ import {
   setStoryboardVignette,
   setStoryLoadingNodeLabels,
   setStoryLoadingHintTypewriter,
+  setStoryLoadingReaderAnticipationMs,
+  setStoryLoadingReaderStoryText,
+  setStoryLoadingReaderOptions,
+  setStoryLoadingReaderScrollSpeed,
   setTextTimeout,
   setImageTimeout,
   setTtsTimeout,
@@ -65,6 +69,16 @@ export default function GlobalSettings() {
   const [loadingNodeLabelsToggling, setLoadingNodeLabelsToggling] = useState(false);
   const [loadingHintTypewriterEnabled, setLoadingHintTypewriterEnabledState] = useState(false);
   const [loadingHintTypewriterToggling, setLoadingHintTypewriterToggling] = useState(false);
+  const [loadingReaderAnticipationMs, setLoadingReaderAnticipationMsState] = useState(10000);
+  const [loadingReaderAnticipationInput, setLoadingReaderAnticipationInput] = useState('10');
+  const [loadingReaderAnticipationSaving, setLoadingReaderAnticipationSaving] = useState(false);
+  const [loadingReaderStoryTextEnabled, setLoadingReaderStoryTextEnabledState] = useState(true);
+  const [loadingReaderStoryTextToggling, setLoadingReaderStoryTextToggling] = useState(false);
+  const [loadingReaderOptionsEnabled, setLoadingReaderOptionsEnabledState] = useState(true);
+  const [loadingReaderOptionsToggling, setLoadingReaderOptionsToggling] = useState(false);
+  const [loadingReaderScrollSpeedPxPerSecond, setLoadingReaderScrollSpeedPxPerSecondState] = useState(24);
+  const [loadingReaderScrollSpeedInput, setLoadingReaderScrollSpeedInput] = useState('24');
+  const [loadingReaderScrollSpeedSaving, setLoadingReaderScrollSpeedSaving] = useState(false);
   const [freePlusCharacterSheetsEnabled, setFreePlusCharacterSheetsEnabledState] = useState(false);
   const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
   const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
@@ -100,6 +114,10 @@ export default function GlobalSettings() {
         vignetteEnabled: ve,
         loadingNodeLabelsEnabled: labelsEnabled,
         loadingHintTypewriterEnabled: typewriterEnabled,
+        loadingReaderAnticipationMs: readerAnticipationMs,
+        loadingReaderStoryTextEnabled: readerStoryTextEnabled,
+        loadingReaderOptionsEnabled: readerOptionsEnabled,
+        loadingReaderScrollSpeedPxPerSecond: readerScrollSpeed,
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
         videoDownloadEnabled: vidDl,
@@ -117,6 +135,12 @@ export default function GlobalSettings() {
         setVignetteEnabled(ve);
         setLoadingNodeLabelsEnabledState(labelsEnabled);
         setLoadingHintTypewriterEnabledState(typewriterEnabled);
+        setLoadingReaderAnticipationMsState(readerAnticipationMs);
+        setLoadingReaderAnticipationInput(String(Math.round(readerAnticipationMs / 1000)));
+        setLoadingReaderStoryTextEnabledState(readerStoryTextEnabled);
+        setLoadingReaderOptionsEnabledState(readerOptionsEnabled);
+        setLoadingReaderScrollSpeedPxPerSecondState(readerScrollSpeed);
+        setLoadingReaderScrollSpeedInput(String(readerScrollSpeed));
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
         setVideoDownloadEnabledState(vidDl);
@@ -151,6 +175,31 @@ export default function GlobalSettings() {
       setCycleMsState(ms);
     } finally {
       setCycleMsSaving(false);
+    }
+  }
+
+  async function handleLoadingReaderAnticipationSave() {
+    const sec = parseInt(loadingReaderAnticipationInput, 10);
+    if (!Number.isFinite(sec) || sec < 0) return;
+    setLoadingReaderAnticipationSaving(true);
+    try {
+      const ms = sec * 1000;
+      await setStoryLoadingReaderAnticipationMs(ms);
+      setLoadingReaderAnticipationMsState(ms);
+    } finally {
+      setLoadingReaderAnticipationSaving(false);
+    }
+  }
+
+  async function handleLoadingReaderScrollSpeedSave() {
+    const pxPerSecond = parseInt(loadingReaderScrollSpeedInput, 10);
+    if (!Number.isFinite(pxPerSecond) || pxPerSecond < 1) return;
+    setLoadingReaderScrollSpeedSaving(true);
+    try {
+      await setStoryLoadingReaderScrollSpeed(pxPerSecond);
+      setLoadingReaderScrollSpeedPxPerSecondState(pxPerSecond);
+    } finally {
+      setLoadingReaderScrollSpeedSaving(false);
     }
   }
 
@@ -197,6 +246,8 @@ export default function GlobalSettings() {
   }
 
   const parsedMs = parseInt(cycleMsInput, 10);
+  const parsedLoadingReaderAnticipationSec = parseInt(loadingReaderAnticipationInput, 10);
+  const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedInput, 10);
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
   const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
 
@@ -256,40 +307,6 @@ export default function GlobalSettings() {
               }}
             />
 
-            <ToggleRow
-              label="Show Loading Step Labels"
-              description="Show or hide the small labels under the loading progress nodes while a beat is being created. Turn this off if you want the cleaner node-only version."
-              checked={loadingNodeLabelsEnabled}
-              toggling={loadingNodeLabelsToggling}
-              onToggle={async () => {
-                setLoadingNodeLabelsToggling(true);
-                const next = !loadingNodeLabelsEnabled;
-                try {
-                  await setStoryLoadingNodeLabels(next);
-                  setLoadingNodeLabelsEnabledState(next);
-                } finally {
-                  setLoadingNodeLabelsToggling(false);
-                }
-              }}
-            />
-
-            <ToggleRow
-              label="Typewriter Loading Hints"
-              description="Animate the rotating hint text with a typewriter reveal. Turn this off for the simpler fade-only version."
-              checked={loadingHintTypewriterEnabled}
-              toggling={loadingHintTypewriterToggling}
-              onToggle={async () => {
-                setLoadingHintTypewriterToggling(true);
-                const next = !loadingHintTypewriterEnabled;
-                try {
-                  await setStoryLoadingHintTypewriter(next);
-                  setLoadingHintTypewriterEnabledState(next);
-                } finally {
-                  setLoadingHintTypewriterToggling(false);
-                }
-              }}
-            />
-
             {cycleOverride && (
               <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
                 <p className="text-sm font-medium text-neutral-100 mb-1">Panel Duration</p>
@@ -318,6 +335,137 @@ export default function GlobalSettings() {
                 </div>
               </div>
             )}
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Loader Screen</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Controls the modal shown while new story beats are being generated.
+            </p>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Anticipation Time</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Minimum time to hold the anticipation copy before falling back to previous story text. Generated story text still appears immediately when it is ready. Default: 10s.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={loadingReaderAnticipationInput}
+                  onChange={(e) => setLoadingReaderAnticipationInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="10"
+                />
+                <span className="text-xs text-neutral-500">s</span>
+                <button
+                  onClick={handleLoadingReaderAnticipationSave}
+                  disabled={loadingReaderAnticipationSaving || !Number.isFinite(parsedLoadingReaderAnticipationSec) || parsedLoadingReaderAnticipationSec < 0}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {loadingReaderAnticipationSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {Math.round(loadingReaderAnticipationMs / 1000) !== parsedLoadingReaderAnticipationSec && parsedLoadingReaderAnticipationSec >= 0 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+            </div>
+
+            <ToggleRow
+              label="Show Story Text"
+              description="Reveal the generated beat text in the loader as soon as it is ready. When off, the anticipation copy loops until the beat is ready."
+              checked={loadingReaderStoryTextEnabled}
+              toggling={loadingReaderStoryTextToggling}
+              onToggle={async () => {
+                setLoadingReaderStoryTextToggling(true);
+                const next = !loadingReaderStoryTextEnabled;
+                try {
+                  await setStoryLoadingReaderStoryText(next);
+                  setLoadingReaderStoryTextEnabledState(next);
+                } finally {
+                  setLoadingReaderStoryTextToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Show Branching Options"
+              description="Show non-clickable generated branch previews after the story text has finished scrolling."
+              checked={loadingReaderOptionsEnabled}
+              toggling={loadingReaderOptionsToggling}
+              onToggle={async () => {
+                setLoadingReaderOptionsToggling(true);
+                const next = !loadingReaderOptionsEnabled;
+                try {
+                  await setStoryLoadingReaderOptions(next);
+                  setLoadingReaderOptionsEnabledState(next);
+                } finally {
+                  setLoadingReaderOptionsToggling(false);
+                }
+              }}
+            />
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Story Text Scrolling Speed</p>
+              <p className="text-xs text-neutral-400 mb-3">Auto-scroll speed for generated story text. Default: 24 px/s.</p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={loadingReaderScrollSpeedInput}
+                  onChange={(e) => setLoadingReaderScrollSpeedInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="24"
+                />
+                <span className="text-xs text-neutral-500">px/s</span>
+                <button
+                  onClick={handleLoadingReaderScrollSpeedSave}
+                  disabled={loadingReaderScrollSpeedSaving || !Number.isFinite(parsedLoadingReaderScrollSpeed) || parsedLoadingReaderScrollSpeed < 1}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {loadingReaderScrollSpeedSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {loadingReaderScrollSpeedPxPerSecond !== parsedLoadingReaderScrollSpeed && parsedLoadingReaderScrollSpeed >= 1 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+            </div>
+
+            <ToggleRow
+              label="Show Loading Step Labels"
+              description="Show or hide the small labels under the loading progress nodes while a beat is being created."
+              checked={loadingNodeLabelsEnabled}
+              toggling={loadingNodeLabelsToggling}
+              onToggle={async () => {
+                setLoadingNodeLabelsToggling(true);
+                const next = !loadingNodeLabelsEnabled;
+                try {
+                  await setStoryLoadingNodeLabels(next);
+                  setLoadingNodeLabelsEnabledState(next);
+                } finally {
+                  setLoadingNodeLabelsToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Typewriter Loading Text"
+              description="Animate the anticipation line with a typewriter reveal."
+              checked={loadingHintTypewriterEnabled}
+              toggling={loadingHintTypewriterToggling}
+              onToggle={async () => {
+                setLoadingHintTypewriterToggling(true);
+                const next = !loadingHintTypewriterEnabled;
+                try {
+                  await setStoryLoadingHintTypewriter(next);
+                  setLoadingHintTypewriterEnabledState(next);
+                } finally {
+                  setLoadingHintTypewriterToggling(false);
+                }
+              }}
+            />
           </div>
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
