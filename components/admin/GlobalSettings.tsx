@@ -1,7 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Loader2, RefreshCcw } from 'lucide-react';
+import Link from 'next/link';
+import { type ComponentType, useEffect, useState } from 'react';
+import {
+  BookOpenText,
+  Brush,
+  Clock3,
+  FileText,
+  Loader2,
+  Mic2,
+  RefreshCcw,
+  UserRound,
+  Video,
+  WandSparkles,
+} from 'lucide-react';
 import {
   getGlobalSettings,
   saveAdminNarrationVoiceSettings,
@@ -45,6 +57,89 @@ import {
   type StoryboardImageSize,
 } from '@/lib/types/storyboard-settings';
 
+export type GlobalSettingsSection =
+  | 'overview'
+  | 'storyboard'
+  | 'reader'
+  | 'narration'
+  | 'authoring'
+  | 'characters'
+  | 'video-export'
+  | 'generation';
+
+type GlobalSettingsSubsection = Exclude<GlobalSettingsSection, 'overview'>;
+
+type GlobalSettingsLink = {
+  section: GlobalSettingsSection;
+  label: string;
+  href: string;
+  description: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
+};
+
+const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
+  {
+    section: 'overview',
+    label: 'Settings overview',
+    href: '/admin/settings',
+    description: 'Review the global runtime controls and jump into focused settings pages.',
+    icon: WandSparkles,
+  },
+  {
+    section: 'storyboard',
+    label: 'Storyboard',
+    href: '/admin/settings/storyboard',
+    description: 'Image output, panel timing, WebP processing, layout, and vignette controls.',
+    icon: Brush,
+  },
+  {
+    section: 'reader',
+    label: 'Reader and loader',
+    href: '/admin/settings/reader',
+    description: 'Story text display, auto-scroll, loading labels, and generated text reveal behavior.',
+    icon: BookOpenText,
+  },
+  {
+    section: 'narration',
+    label: 'Narration voices',
+    href: '/admin/settings/narration',
+    description: 'User-led voice selection, curated voice lists, sample text, and sample generation status.',
+    icon: Mic2,
+  },
+  {
+    section: 'authoring',
+    label: 'Authoring',
+    href: '/admin/settings/authoring',
+    description: 'Prompt/seed authoring limits and seed preview pricing.',
+    icon: FileText,
+  },
+  {
+    section: 'characters',
+    label: 'Character references',
+    href: '/admin/settings/characters',
+    description: 'Character sheet availability for Free, Plus, and Creator workflows.',
+    icon: UserRound,
+  },
+  {
+    section: 'video-export',
+    label: 'Video export',
+    href: '/admin/settings/video-export',
+    description: 'Global video download availability and admin-only bypass for testing.',
+    icon: Video,
+  },
+  {
+    section: 'generation',
+    label: 'Generation timeouts',
+    href: '/admin/settings/generation',
+    description: 'Gemini text, image, TTS, and cloud-save timeout guards.',
+    icon: Clock3,
+  },
+];
+
+const GLOBAL_SETTINGS_SECTION_LINKS = GLOBAL_SETTINGS_LINKS.filter(
+  (item): item is GlobalSettingsLink & { section: GlobalSettingsSubsection } => item.section !== 'overview'
+);
+
 function ToggleRow({
   label,
   description,
@@ -87,7 +182,46 @@ function sampleStatusClassName(status: NarrationVoiceSampleClientStatus['status'
   return 'border-white/10 bg-neutral-800 text-neutral-400';
 }
 
-export default function GlobalSettings() {
+function formatToggleSummary(enabled: boolean): string {
+  return enabled ? 'Enabled' : 'Disabled';
+}
+
+function OverviewLinkCard({
+  href,
+  label,
+  description,
+  summary,
+  icon: Icon,
+}: {
+  href: string;
+  label: string;
+  description: string;
+  summary: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <span className="rounded-lg bg-emerald-500/10 p-2 text-emerald-300">
+            <Icon size={16} />
+          </span>
+          <span className="text-sm font-medium text-neutral-100 group-hover:text-emerald-200">{label}</span>
+        </div>
+        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-neutral-500">
+          Open
+        </span>
+      </div>
+      <p className="mt-3 text-xs leading-relaxed text-neutral-400">{description}</p>
+      <p className="mt-4 text-xs text-emerald-300/80">{summary}</p>
+    </Link>
+  );
+}
+
+export default function GlobalSettings({ section = 'overview' }: { section?: GlobalSettingsSection }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [cycleOverride, setCycleOverrideState] = useState(false);
@@ -453,11 +587,23 @@ export default function GlobalSettings() {
   const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
   const parsedNarrationMaleVoices = parseNarrationVoiceInput(narrationMaleVoiceInput);
   const parsedNarrationFemaleVoices = parseNarrationVoiceInput(narrationFemaleVoiceInput);
+  const sectionMeta = GLOBAL_SETTINGS_LINKS.find((item) => item.section === section) ?? GLOBAL_SETTINGS_LINKS[0];
+  const overviewSummaries: Record<Exclude<GlobalSettingsSection, 'overview'>, string> = {
+    storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
+    reader: `${storyUiTextLineCount} text lines, loader reveal ${formatToggleSummary(loadingReaderStoryTextEnabled).toLowerCase()}`,
+    narration: narrationVoiceSettings
+      ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
+      : 'Voice settings not loaded',
+    authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview`,
+    characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
+    'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
+    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, ${Math.round(ttsTimeoutMs / 1000)}s TTS`,
+  };
 
   return (
     <div className="mx-auto max-w-7xl">
-      <h1 className="mb-1 text-2xl text-neutral-100">Global Settings</h1>
-      <p className="mb-8 text-sm text-neutral-400">Runtime feature flags that shape story generation, playback timing, and character reference behavior across the app.</p>
+      <h1 className="mb-1 text-2xl text-neutral-100">{sectionMeta.label}</h1>
+      <p className="mb-8 text-sm text-neutral-400">{sectionMeta.description}</p>
 
       {loadError && (
         <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
@@ -469,6 +615,36 @@ export default function GlobalSettings() {
         <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading settings...</div>
       ) : (
         <div className="space-y-6">
+          {section === 'overview' && (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-medium text-neutral-100">Global settings workspace</h2>
+                  <p className="mt-1 text-sm text-neutral-400">
+                    Settings are grouped by workflow so new controls can be added without turning this page into a long scroll.
+                  </p>
+                </div>
+                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs uppercase tracking-wider text-emerald-300">
+                  {GLOBAL_SETTINGS_SECTION_LINKS.length} sections
+                </span>
+              </div>
+
+              <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {GLOBAL_SETTINGS_SECTION_LINKS.map(({ section: linkSection, href, label, description, icon }) => (
+                  <OverviewLinkCard
+                    key={href}
+                    href={href}
+                    label={label}
+                    description={description}
+                    icon={icon}
+                    summary={overviewSummaries[linkSection]}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {section === 'storyboard' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Storyboard</h2>
 
@@ -693,7 +869,9 @@ export default function GlobalSettings() {
               </div>
             )}
           </div>
+          )}
 
+          {section === 'reader' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">UI</h2>
             <p className="text-xs text-neutral-400 -mt-2">
@@ -757,8 +935,9 @@ export default function GlobalSettings() {
               }}
             />
           </div>
+          )}
 
-          {narrationVoiceSettings && (
+          {section === 'narration' && narrationVoiceSettings && (
             <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
               <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Narration Voice Settings</h2>
               <p className="text-xs text-neutral-400 -mt-2">
@@ -912,6 +1091,7 @@ export default function GlobalSettings() {
             </div>
           )}
 
+          {section === 'reader' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Loader Screen</h2>
             <p className="text-xs text-neutral-400 -mt-2">
@@ -1042,7 +1222,9 @@ export default function GlobalSettings() {
               }}
             />
           </div>
+          )}
 
+          {section === 'characters' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Character References</h2>
             <p className="text-xs text-neutral-400 -mt-2">
@@ -1083,7 +1265,9 @@ export default function GlobalSettings() {
               }}
             />
           </div>
+          )}
 
+          {section === 'authoring' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Authoring</h2>
             <p className="text-xs text-neutral-400 -mt-2">
@@ -1156,7 +1340,9 @@ export default function GlobalSettings() {
               )}
             </div>
           </div>
+          )}
 
+          {section === 'video-export' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Video Export</h2>
             <p className="text-xs text-neutral-400 -mt-2">
@@ -1197,7 +1383,9 @@ export default function GlobalSettings() {
               }}
             />
           </div>
+          )}
 
+          {section === 'generation' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Generation Timeouts</h2>
             <p className="text-xs text-neutral-400 -mt-2">All values in seconds. Changes take effect on the next generation call.</p>
@@ -1240,6 +1428,7 @@ export default function GlobalSettings() {
               );
             })}
           </div>
+          )}
         </div>
       )}
     </div>

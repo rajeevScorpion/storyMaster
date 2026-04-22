@@ -24,7 +24,21 @@ const navItems = [
       { label: 'Recent audit', href: '/admin/pricing/audit' },
     ],
   },
-  { label: 'Global Settings', href: '/admin/settings', icon: Settings },
+  {
+    label: 'Global Settings',
+    href: '/admin/settings',
+    icon: Settings,
+    children: [
+      { label: 'Overview', href: '/admin/settings' },
+      { label: 'Storyboard', href: '/admin/settings/storyboard' },
+      { label: 'Reader and loader', href: '/admin/settings/reader' },
+      { label: 'Narration voices', href: '/admin/settings/narration' },
+      { label: 'Authoring', href: '/admin/settings/authoring' },
+      { label: 'Character references', href: '/admin/settings/characters' },
+      { label: 'Video export', href: '/admin/settings/video-export' },
+      { label: 'Generation timeouts', href: '/admin/settings/generation' },
+    ],
+  },
 ];
 
 function isActivePath(pathname: string, href: string) {
