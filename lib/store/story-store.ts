@@ -10,10 +10,10 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeStoryConfig } from '@/lib/ai/story-config';
-import { getStoryModelOverrides } from '@/app/actions/admin';
+import { getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import {
@@ -96,7 +96,8 @@ interface StoryState {
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
-  saveStoryToCloud: (userId: string) => Promise<void>;
+  saveStoryToCloud: (userId: string, options?: { signedUrlSwapEnabled?: boolean }) => Promise<void>;
+  saveStoryToCloudImmediate: (userId: string, options?: { signedUrlSwapEnabled?: boolean }) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
@@ -295,6 +296,90 @@ async function measureAsyncStep<T>(
 
 function logGenerationTiming(summary: GenerationTimingSummary) {
   console.info(`[timing:${summary.scope}]`, summary);
+}
+
+const SIGNED_ASSET_PRELOAD_TIMEOUT_MS = 4000;
+const LONG_SAVE_RETRY_MESSAGE = 'Cloud save is taking longer than usual. A retry is queued.';
+
+let activeSavePromise: Promise<void> | null = null;
+let queuedSaveRequest: { userId: string; signedUrlSwapEnabled?: boolean } | null = null;
+
+function isDataUrl(value: string | undefined): boolean {
+  return !!value && value.startsWith('data:');
+}
+
+function preloadImageUrl(url: string, timeoutMs = SIGNED_ASSET_PRELOAD_TIMEOUT_MS): Promise<boolean> {
+  if (typeof Image === 'undefined') {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      resolve(ok);
+    };
+
+    img.onload = () => settle(true);
+    img.onerror = () => settle(false);
+    img.src = url;
+  });
+}
+
+async function buildPreloadedSignedAssetMap(
+  storyMap: StoryMap,
+  signedAssetMap: NodeAssetUrlMap
+): Promise<NodeAssetUrlMap> {
+  const entries = await Promise.all(
+    Object.entries(signedAssetMap).map(async ([nodeId, urls]) => {
+      const node = storyMap.nodes[nodeId];
+      const nextUrls: { imageUrl?: string; audioUrl?: string } = {};
+
+      if (urls.audioUrl) {
+        nextUrls.audioUrl = urls.audioUrl;
+      }
+
+      if (urls.imageUrl) {
+        const shouldPreload = isDataUrl(node?.data.imageUrl);
+        const imageReady = shouldPreload
+          ? await preloadImageUrl(urls.imageUrl)
+          : true;
+        if (imageReady) {
+          nextUrls.imageUrl = urls.imageUrl;
+        }
+      }
+
+      return [nodeId, nextUrls] as const;
+    })
+  );
+
+  return entries.reduce<NodeAssetUrlMap>((acc, [nodeId, urls]) => {
+    if (urls.imageUrl || urls.audioUrl) {
+      acc[nodeId] = urls;
+    }
+    return acc;
+  }, {});
+}
+
+async function resolveSignedUrlSwapEnabled(optionValue?: boolean): Promise<boolean> {
+  if (typeof optionValue === 'boolean') {
+    return optionValue;
+  }
+
+  try {
+    return await getStoryAssetSignedUrlSwapEnabled();
+  } catch {
+    return false;
+  }
 }
 
 function setLoadingStage(
@@ -1884,10 +1969,41 @@ export const useStoryStore = create<StoryState>()(
         set((state) => ({ storyMode: !state.storyMode }));
       },
 
-      saveStoryToCloud: async (userId: string) => {
+      saveStoryToCloud: async (userId: string, options: { signedUrlSwapEnabled?: boolean } = {}) => {
+        if (activeSavePromise) {
+          queuedSaveRequest = { userId, signedUrlSwapEnabled: options.signedUrlSwapEnabled };
+          set({ error: LONG_SAVE_RETRY_MESSAGE });
+          return activeSavePromise;
+        }
+
+        activeSavePromise = (async () => {
+          let nextRequest: { userId: string; signedUrlSwapEnabled?: boolean } | null = {
+            userId,
+            signedUrlSwapEnabled: options.signedUrlSwapEnabled,
+          };
+
+          try {
+            while (nextRequest) {
+              queuedSaveRequest = null;
+              await get().saveStoryToCloudImmediate(nextRequest.userId, {
+                signedUrlSwapEnabled: nextRequest.signedUrlSwapEnabled,
+              });
+              nextRequest = queuedSaveRequest;
+            }
+          } finally {
+            activeSavePromise = null;
+          }
+        })();
+
+        return activeSavePromise;
+      },
+
+      saveStoryToCloudImmediate: async (userId: string, options: { signedUrlSwapEnabled?: boolean } = {}) => {
         const { session } = get();
         if (!session) return;
 
+        const saveStartedSession = session;
+        const signedUrlSwapEnabled = await resolveSignedUrlSwapEnabled(options.signedUrlSwapEnabled);
         set({ isSaving: true, saveStatus: 'saving', saveWarning: null, error: null });
 
         try {
@@ -1919,11 +2035,36 @@ export const useStoryStore = create<StoryState>()(
           // Re-read latest session to preserve audioUrls written by concurrent narration
           const latestSession = get().session;
           const latestMap = latestSession?.storyMap || session.storyMap;
+          let localDisplayMap = latestMap;
+
+          if (signedUrlSwapEnabled) {
+            try {
+              const signedAssetMap = await signNodeAssetUrls('story-assets', assetMap);
+              const preloadedSignedAssetMap = await buildPreloadedSignedAssetMap(latestMap, signedAssetMap);
+              if (Object.keys(preloadedSignedAssetMap).length > 0) {
+                localDisplayMap = replaceBase64WithUrls(latestMap, preloadedSignedAssetMap);
+              }
+            } catch (signError) {
+              console.warn('Signed asset URL swap failed; keeping local base64 assets:', signError);
+            }
+          }
+
+          if (latestSession && latestSession !== saveStartedSession) {
+            queuedSaveRequest = { userId, signedUrlSwapEnabled };
+          }
+
           const updatedSession = deriveSessionFields(
             { ...(latestSession || session), savedStoryId: storyId, savedByUserId: userId },
-            latestMap
+            localDisplayMap
           );
-          set({ session: updatedSession, isSaving: false, saveStatus: 'saved', saveWarning: w2 ?? null });
+          const hasQueuedSave = !!queuedSaveRequest;
+          set({
+            session: updatedSession,
+            isSaving: hasQueuedSave,
+            saveStatus: hasQueuedSave ? 'saving' : 'saved',
+            saveWarning: w2 ?? null,
+            error: hasQueuedSave ? LONG_SAVE_RETRY_MESSAGE : null,
+          });
         } catch (error: any) {
           set({ isSaving: false, saveStatus: 'unsaved', error: error.message || 'Failed to save story' });
         }

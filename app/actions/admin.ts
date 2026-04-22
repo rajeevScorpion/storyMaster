@@ -258,6 +258,7 @@ export async function getGlobalSettings(): Promise<{
   creatorCharacterSheetsEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
+  storyAssetSignedUrlSwapEnabled: boolean;
   textTimeoutMs: number;
   imageTimeoutMs: number;
   ttsTimeoutMs: number;
@@ -268,7 +269,7 @@ export async function getGlobalSettings(): Promise<{
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -286,6 +287,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
+    getFeatureFlag('story_asset_signed_url_swap_enabled', false),
     getFeatureFlagValue('gemini_text_timeout_ms'),
     getFeatureFlagValue('gemini_image_timeout_ms'),
     getFeatureFlagValue('gemini_tts_timeout_ms'),
@@ -324,6 +326,7 @@ export async function getGlobalSettings(): Promise<{
     creatorCharacterSheetsEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,
+    storyAssetSignedUrlSwapEnabled,
     textTimeoutMs: parseInt(textMs ?? '30000', 10) || 30000,
     imageTimeoutMs: parseInt(imageMs ?? '90000', 10) || 90000,
     ttsTimeoutMs: parseInt(ttsMs ?? '120000', 10) || 120000,
@@ -450,6 +453,15 @@ export async function setVideoDownloadAdminBypass(enabled: boolean): Promise<voi
   await setFeatureFlag('video_download_admin_bypass', enabled);
 }
 
+export async function setStoryAssetSignedUrlSwap(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_asset_signed_url_swap_enabled', enabled);
+}
+
+export async function getStoryAssetSignedUrlSwapEnabled(): Promise<boolean> {
+  return getFeatureFlag('story_asset_signed_url_swap_enabled', false);
+}
+
 // Public (no admin gate) — lightweight check used by client to gate admin-only features
 export async function checkIsAdmin(): Promise<boolean> {
   try {
@@ -539,9 +551,10 @@ export async function getStoryboardSettings(): Promise<{
   creatorCharacterSheetsEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
+  storyAssetSignedUrlSwapEnabled: boolean;
   authoringWordCap: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -560,6 +573,7 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
+    getFeatureFlag('story_asset_signed_url_swap_enabled', false),
     getFeatureFlagValue('story_authoring_word_cap'),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
@@ -592,6 +606,7 @@ export async function getStoryboardSettings(): Promise<{
     creatorCharacterSheetsEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,
+    storyAssetSignedUrlSwapEnabled,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
   };
 }

@@ -37,6 +37,7 @@ import {
   setImageTimeout,
   setTtsTimeout,
   setCloudSaveTimeout,
+  setStoryAssetSignedUrlSwap,
   setAuthoringWordCap,
   setPreviewSeedPlanPriceCoins,
   setFreePlusCharacterSheets,
@@ -283,6 +284,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [cloudSaveTimeoutMs, setCloudSaveTimeoutMs] = useState(20000);
   const [cloudSaveTimeoutInput, setCloudSaveTimeoutInput] = useState('20');
   const [cloudSaveTimeoutSaving, setCloudSaveTimeoutSaving] = useState(false);
+  const [storyAssetSignedUrlSwapEnabled, setStoryAssetSignedUrlSwapEnabledState] = useState(false);
+  const [storyAssetSignedUrlSwapToggling, setStoryAssetSignedUrlSwapToggling] = useState(false);
   const [authoringWordCap, setAuthoringWordCapState] = useState(500);
   const [authoringWordCapInput, setAuthoringWordCapInput] = useState('500');
   const [authoringWordCapSaving, setAuthoringWordCapSaving] = useState(false);
@@ -329,6 +332,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         imageTimeoutMs: it,
         ttsTimeoutMs: at,
         cloudSaveTimeoutMs: st,
+        storyAssetSignedUrlSwapEnabled: assetSwapEnabled,
         authoringWordCap: awc,
         previewSeedPlanPriceCoins: previewPriceCoins,
         narrationVoiceSettings: nextNarrationVoiceSettings,
@@ -369,6 +373,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setTtsTimeoutInput(String(Math.round(at / 1000)));
         setCloudSaveTimeoutMs(st);
         setCloudSaveTimeoutInput(String(Math.round(st / 1000)));
+        setStoryAssetSignedUrlSwapEnabledState(assetSwapEnabled);
         setAuthoringWordCapState(awc);
         setAuthoringWordCapInput(String(awc));
         setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
@@ -597,7 +602,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
-    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, ${Math.round(ttsTimeoutMs / 1000)}s TTS`,
+    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, optimized saves ${formatToggleSummary(storyAssetSignedUrlSwapEnabled).toLowerCase()}`,
   };
 
   return (
@@ -1390,11 +1395,28 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Generation Timeouts</h2>
             <p className="text-xs text-neutral-400 -mt-2">All values in seconds. Changes take effect on the next generation call.</p>
 
+            <ToggleRow
+              label="Optimized Mobile Saves"
+              description="After successful save, use signed storage URLs locally so previous beat images are not re-uploaded."
+              checked={storyAssetSignedUrlSwapEnabled}
+              toggling={storyAssetSignedUrlSwapToggling}
+              onToggle={async () => {
+                setStoryAssetSignedUrlSwapToggling(true);
+                const next = !storyAssetSignedUrlSwapEnabled;
+                try {
+                  await setStoryAssetSignedUrlSwap(next);
+                  setStoryAssetSignedUrlSwapEnabledState(next);
+                } finally {
+                  setStoryAssetSignedUrlSwapToggling(false);
+                }
+              }}
+            />
+
             {([
               { label: 'Text / Story', description: 'Max wait for a story beat (JSON) from Gemini.', value: textTimeoutMs, input: textTimeoutInput, setInput: setTextTimeoutInput, saving: textTimeoutSaving, setSaving: setTextTimeoutSaving, setter: setTextTimeout, setMs: setTextTimeoutMs, min: 5, defaultSec: 30 },
               { label: 'Image', description: 'Max wait for image generation from Gemini.', value: imageTimeoutMs, input: imageTimeoutInput, setInput: setImageTimeoutInput, saving: imageTimeoutSaving, setSaving: setImageTimeoutSaving, setter: setImageTimeout, setMs: setImageTimeoutMs, min: 10, defaultSec: 90 },
               { label: 'Audio / TTS', description: 'Max wait for text-to-speech narration from Gemini.', value: ttsTimeoutMs, input: ttsTimeoutInput, setInput: setTtsTimeoutInput, saving: ttsTimeoutSaving, setSaving: setTtsTimeoutSaving, setter: setTtsTimeout, setMs: setTtsTimeoutMs, min: 10, defaultSec: 120 },
-              { label: 'Cloud Save Guard', description: 'Max wait before flipping a stuck save back to unsaved for retry.', value: cloudSaveTimeoutMs, input: cloudSaveTimeoutInput, setInput: setCloudSaveTimeoutInput, saving: cloudSaveTimeoutSaving, setSaving: setCloudSaveTimeoutSaving, setter: setCloudSaveTimeout, setMs: setCloudSaveTimeoutMs, min: 5, defaultSec: 20 },
+              { label: 'Cloud Save Guard', description: 'Max wait before marking a slow save as retry queued.', value: cloudSaveTimeoutMs, input: cloudSaveTimeoutInput, setInput: setCloudSaveTimeoutInput, saving: cloudSaveTimeoutSaving, setSaving: setCloudSaveTimeoutSaving, setter: setCloudSaveTimeout, setMs: setCloudSaveTimeoutMs, min: 5, defaultSec: 20 },
             ] as const).map(({ label, description, value, input, setInput, saving, setSaving, setter, setMs, min, defaultSec }) => {
               const parsed = parseInt(input, 10);
               const currentSec = Math.round(value / 1000);

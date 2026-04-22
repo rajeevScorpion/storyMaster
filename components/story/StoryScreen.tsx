@@ -166,6 +166,7 @@ interface StoryRuntimeSettings {
   vignetteEnabled: boolean;
   vignetteAmountPercent: number;
   cloudSaveTimeoutMs: number;
+  storyAssetSignedUrlSwapEnabled: boolean;
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
@@ -202,6 +203,7 @@ export default function StoryScreen() {
     vignetteEnabled: true,
     vignetteAmountPercent: 100,
     cloudSaveTimeoutMs: 20000,
+    storyAssetSignedUrlSwapEnabled: false,
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
@@ -255,7 +257,9 @@ export default function StoryScreen() {
       isSaving={isSaving}
       saveStatus={saveStatus}
       saveWarning={saveWarning}
-      onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id) : undefined}
+      onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id, {
+        signedUrlSwapEnabled: cycleSettings.storyAssetSignedUrlSwapEnabled,
+      }) : undefined}
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
       continueCoinCost={continueCoinCost}
@@ -464,9 +468,8 @@ function StoryScreenInner({
     }
   }, [saveStatus, onSave, isSaving]);
 
-  // Recovery guard for a save request that got stuck before the payload-size fix landed.
-  // If saving remains unresolved for too long, flip back to unsaved so the smaller patched
-  // payload can retry automatically without forcing the user to reload and lose local assets.
+  // Recovery guard for a save request that is taking longer than expected.
+  // The store queues one retry behind the active save instead of launching overlapping uploads.
   useEffect(() => {
     if (saveStatus !== 'saving' || !onSave) return;
 
@@ -474,10 +477,9 @@ function StoryScreenInner({
       const latest = useStoryStore.getState();
       if (latest.saveStatus === 'saving') {
         useStoryStore.setState({
-          isSaving: false,
-          saveStatus: 'unsaved',
-          error: latest.error || 'Cloud save timed out. Retrying with a smaller payload.',
+          error: latest.error || 'Cloud save is taking longer than usual. A retry is queued.',
         });
+        onSave();
       }
     }, cycleSettings.cloudSaveTimeoutMs);
 

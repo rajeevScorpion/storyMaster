@@ -18,8 +18,16 @@ function stripBase64(storyMap: StoryMap): StoryMap {
       ...node,
       data: {
         ...node.data,
-        imageUrl: node.data.imageUrl?.startsWith('data:') ? undefined : node.data.imageUrl,
-        audioUrl: node.data.audioUrl?.startsWith('data:') ? undefined : node.data.audioUrl,
+        imageUrl: node.data.imageUrl?.startsWith('data:')
+          ? undefined
+          : node.data.imageUrl
+            ? normalizeStorageUrl(node.data.imageUrl, 'story-assets')
+            : node.data.imageUrl,
+        audioUrl: node.data.audioUrl?.startsWith('data:')
+          ? undefined
+          : node.data.audioUrl
+            ? normalizeStorageUrl(node.data.audioUrl, 'story-assets')
+            : node.data.audioUrl,
         // Strip portrait base64 from characters — portraitUrl is preserved
         characters: node.data.characters.map(c => ({
           ...c,
@@ -471,8 +479,8 @@ export async function updateBeatAssets(
   if (authError || !user) throw new Error('Not authenticated');
 
   const updateData: Record<string, unknown> = {};
-  if (assets.imageUrl) updateData.image_url = assets.imageUrl;
-  if (assets.audioUrl) updateData.audio_url = assets.audioUrl;
+  if (assets.imageUrl) updateData.image_url = normalizeStorageUrl(assets.imageUrl, 'story-assets');
+  if (assets.audioUrl) updateData.audio_url = normalizeStorageUrl(assets.audioUrl, 'story-assets');
 
   if (Object.keys(updateData).length === 0) return;
 

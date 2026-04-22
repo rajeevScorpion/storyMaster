@@ -2,6 +2,8 @@ import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { StoryMap, StoryBeat } from '@/lib/types/story';
 
+export type NodeAssetUrlMap = Record<string, { imageUrl?: string; audioUrl?: string }>;
+
 /**
  * Convert a base64 data URL to a Blob with the correct content type.
  */
@@ -67,8 +69,8 @@ export async function uploadNodeAssets(
   basePath: string,
   storyMap: StoryMap,
   nodeIds: string[]
-): Promise<Record<string, { imageUrl?: string; audioUrl?: string }>> {
-  const results: Record<string, { imageUrl?: string; audioUrl?: string }> = {};
+): Promise<NodeAssetUrlMap> {
+  const results: NodeAssetUrlMap = {};
   const uploads: Promise<void>[] = [];
 
   for (const nodeId of nodeIds) {
@@ -128,7 +130,7 @@ export async function uploadNodeAssets(
  */
 export function replaceBase64WithUrls(
   storyMap: StoryMap,
-  assetMap: Record<string, { imageUrl?: string; audioUrl?: string }>
+  assetMap: NodeAssetUrlMap
 ): StoryMap {
   const cloned: StoryMap = {
     ...storyMap,
@@ -153,6 +155,53 @@ export function replaceBase64WithUrls(
 }
 
 /**
+ * Sign uploaded/private asset URLs for browser display.
+ * Returns only successfully signed fields so callers can fall back per node.
+ */
+export async function signNodeAssetUrls(
+  bucket: string,
+  assetMap: NodeAssetUrlMap,
+  expiresIn = 3600
+): Promise<NodeAssetUrlMap> {
+  const supabase = createClient();
+  const pathEntries: { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string }[] = [];
+
+  for (const [nodeId, urls] of Object.entries(assetMap)) {
+    for (const field of ['imageUrl', 'audioUrl'] as const) {
+      const url = urls[field];
+      if (!url) continue;
+      const path = extractStoragePath(url, bucket);
+      if (path) {
+        pathEntries.push({ nodeId, field, path });
+      }
+    }
+  }
+
+  if (pathEntries.length === 0) return {};
+
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrls(pathEntries.map((entry) => entry.path), expiresIn);
+
+  if (error || !data) {
+    console.error('Failed to sign uploaded asset URLs:', error?.message);
+    return {};
+  }
+
+  const signedMap: NodeAssetUrlMap = {};
+  pathEntries.forEach((entry, index) => {
+    const signedUrl = data[index]?.signedUrl;
+    if (!signedUrl || data[index]?.error) return;
+    signedMap[entry.nodeId] = {
+      ...signedMap[entry.nodeId],
+      [entry.field]: signedUrl,
+    };
+  });
+
+  return signedMap;
+}
+
+/**
  * Strip all base64 data URLs from a StoryMap (replace with empty string).
  * Used before saving to database to avoid bloating JSONB.
  */
@@ -167,8 +216,8 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
       ...node,
       data: {
         ...node.data,
-        imageUrl: isBase64DataUrl(node.data.imageUrl) ? undefined : node.data.imageUrl,
-        audioUrl: isBase64DataUrl(node.data.audioUrl) ? undefined : node.data.audioUrl,
+        imageUrl: isBase64DataUrl(node.data.imageUrl) ? undefined : node.data.imageUrl ? normalizeStorageUrl(node.data.imageUrl, 'story-assets') : node.data.imageUrl,
+        audioUrl: isBase64DataUrl(node.data.audioUrl) ? undefined : node.data.audioUrl ? normalizeStorageUrl(node.data.audioUrl, 'story-assets') : node.data.audioUrl,
         characters: node.data.characters.map(c => ({
           ...c,
           portraitBase64: undefined,
