@@ -1,7 +1,9 @@
 'use server';
 
 import { GoogleGenAI } from '@google/genai';
+import { createHash } from 'crypto';
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
 import {
   LOCKED_PROMPT_GUARDRAILS,
@@ -11,8 +13,25 @@ import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
+import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
+import {
+  getDefaultVoiceForGender,
+  resolveStoryNarrationLanguage,
+  type NarrationGenderBucket,
+  type NarrationLanguageCode,
+  type NarrationVoiceClientConfig,
+  type NarrationVoiceMode,
+  type NarrationVoiceSampleClientStatus,
+  type NarrationVoiceSampleStatus,
+  type NarrationVoiceSettings,
+} from '@/lib/ai/narration-voices';
 
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
+const NARRATION_SAMPLE_BUCKET = 'narration-voice-samples';
+const VOICE_SAMPLE_BATCH_SIZE = 6;
+const VOICE_SAMPLE_BATCH_DELAY_MS = 65_000;
+const VOICE_SAMPLE_MAX_ATTEMPTS = 3;
 
 function narrationNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -98,6 +117,345 @@ function pcmToWavBuffer(pcmBase64: string, sampleRate = 24000, channels = 1, bit
   header.writeUInt32LE(dataSize, 40);
 
   return Buffer.concat([header, pcmBytes]);
+}
+
+function pcmBase64DurationMs(pcmBase64: string, sampleRate = 24000, channels = 1, bitsPerSample = 16): number {
+  const bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
+  const pcmBytes = Buffer.from(pcmBase64, 'base64');
+  return Math.round((pcmBytes.length / bytesPerSecond) * 1000);
+}
+
+function sampleTextHash(text: string): string {
+  return createHash('sha256').update(text, 'utf8').digest('hex').slice(0, 24);
+}
+
+function safeStorageSegment(value: string): string {
+  return value.trim().replace(/[^a-z0-9_-]+/gi, '_') || 'voice';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'Unknown error';
+  }
+}
+
+function extractRetryDelayMs(error: unknown): number | null {
+  const text = getErrorText(error);
+  const retryMatch = text.match(/retry\s+in\s+([\d.]+)\s*s/i);
+  if (retryMatch?.[1]) {
+    return Math.ceil(Number(retryMatch[1]) * 1000) + 1000;
+  }
+
+  const retryDelayMatch = text.match(/"retryDelay"\s*:\s*"([\d.]+)s"/i);
+  if (retryDelayMatch?.[1]) {
+    return Math.ceil(Number(retryDelayMatch[1]) * 1000) + 1000;
+  }
+
+  return null;
+}
+
+function isRateLimitError(error: unknown): boolean {
+  const text = getErrorText(error);
+  return text.includes('429') || /RESOURCE_EXHAUSTED/i.test(text) || /quota exceeded/i.test(text);
+}
+
+function sanitizeNarrationSampleError(error: unknown): string {
+  const text = getErrorText(error);
+  if (isRateLimitError(error)) {
+    const retryDelayMs = extractRetryDelayMs(error);
+    if (retryDelayMs) {
+      return `Gemini TTS rate limit reached. Try again in about ${Math.ceil(retryDelayMs / 1000)} seconds.`;
+    }
+    return 'Gemini TTS rate limit reached. Try again in about a minute.';
+  }
+
+  if (/voice/i.test(text) && (/invalid|unsupported|not found/i.test(text))) {
+    return 'Gemini TTS could not use this voice ID. Check the voice list and regenerate samples.';
+  }
+
+  if (/upload|storage/i.test(text)) {
+    return 'Voice sample was generated, but storage upload failed. Try regenerating samples.';
+  }
+
+  const firstLine = text.split(/\r?\n/)[0]?.trim();
+  return firstLine ? firstLine.slice(0, 180) : 'Voice sample generation failed.';
+}
+
+function isMissingNarrationColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error?.message) return false;
+  return (
+    error.code === 'PGRST204'
+    || (/schema cache/i.test(error.message) && /column/i.test(error.message))
+  );
+}
+
+function buildVoiceEntries(settings: Pick<NarrationVoiceSettings, 'maleVoiceList' | 'femaleVoiceList'>): Array<{
+  voiceId: string;
+  genderBucket: NarrationGenderBucket;
+}> {
+  return [
+    ...settings.maleVoiceList.map((voiceId) => ({ voiceId, genderBucket: 'male' as const })),
+    ...settings.femaleVoiceList.map((voiceId) => ({ voiceId, genderBucket: 'female' as const })),
+  ];
+}
+
+async function listNarrationVoiceSampleStatuses(
+  settings: NarrationVoiceSettings
+): Promise<NarrationVoiceSampleClientStatus[]> {
+  const voiceEntries = buildVoiceEntries(settings);
+  const languageHashes = new Map(
+    settings.supportedLanguages.map((language) => [
+      language.code,
+      sampleTextHash(settings.sampleTextByLanguage[language.code]),
+    ])
+  );
+
+  let rows: Array<{
+    voice_id: string;
+    gender_bucket: string;
+    language_code: string;
+    sample_text_hash: string;
+    file_url: string | null;
+    generation_status: string;
+    generation_error: string | null;
+    updated_at: string | null;
+  }> = [];
+
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('narration_voice_samples')
+      .select('voice_id, gender_bucket, language_code, sample_text_hash, file_url, generation_status, generation_error, updated_at')
+      .in('voice_id', voiceEntries.map((entry) => entry.voiceId))
+      .in('language_code', settings.supportedLanguages.map((language) => language.code))
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      console.error('Failed to list narration voice sample statuses:', error.message);
+    } else {
+      rows = data || [];
+    }
+  } catch (error) {
+    console.error('Failed to list narration voice sample statuses:', error);
+  }
+
+  return voiceEntries.flatMap((entry) =>
+    settings.supportedLanguages.map((language) => {
+      const activeHash = languageHashes.get(language.code);
+      const row = rows.find((candidate) =>
+        candidate.voice_id === entry.voiceId
+        && candidate.language_code === language.code
+        && candidate.sample_text_hash === activeHash
+      );
+      const status = (row?.generation_status || 'pending') as NarrationVoiceSampleStatus;
+
+      return {
+        voiceId: entry.voiceId,
+        genderBucket: entry.genderBucket,
+        languageCode: language.code,
+        status,
+        audioUrl: status === 'ready' ? row?.file_url || null : null,
+        lastGeneratedAt: status === 'ready' ? row?.updated_at || null : row?.updated_at || null,
+        error: status === 'failed' ? sanitizeNarrationSampleError(row?.generation_error || 'Sample generation failed.') : null,
+      };
+    })
+  );
+}
+
+export async function getNarrationVoiceSelectionConfig(
+  storyLanguage: string = 'english'
+): Promise<NarrationVoiceClientConfig> {
+  const settings = await getNarrationVoiceSettings();
+  const languageResolution = resolveStoryNarrationLanguage(storyLanguage);
+  const samples = await listNarrationVoiceSampleStatuses(settings);
+
+  return {
+    enabled: settings.userLedVoiceSelectionEnabled,
+    maleVoiceList: settings.maleVoiceList,
+    femaleVoiceList: settings.femaleVoiceList,
+    defaultMaleVoice: settings.defaultMaleVoice,
+    defaultFemaleVoice: settings.defaultFemaleVoice,
+    languageCode: languageResolution.languageCode,
+    requestedStoryLanguage: storyLanguage === 'hindi' ? 'hindi' : 'english',
+    fallbackToEnglishSample: languageResolution.fallbackToEnglishSample,
+    samples: samples.filter((sample) => sample.languageCode === languageResolution.languageCode),
+  };
+}
+
+export async function getNarrationVoiceSampleStatusesForAdmin(): Promise<NarrationVoiceSampleClientStatus[]> {
+  const settings = await getNarrationVoiceSettings();
+  return listNarrationVoiceSampleStatuses(settings);
+}
+
+export async function generateNarrationVoiceSamples(options: { regenerateAll?: boolean } = {}): Promise<{
+  statuses: NarrationVoiceSampleClientStatus[];
+  generatedCount: number;
+  failedCount: number;
+  skippedCount: number;
+}> {
+  await verifyAdmin();
+  const settings = await getNarrationVoiceSettings();
+  const admin = createAdminClient();
+  const existingStatuses = await listNarrationVoiceSampleStatuses(settings);
+  const allTasks = buildVoiceEntries(settings).flatMap((entry) =>
+    settings.supportedLanguages.map((language) => ({
+      ...entry,
+      languageCode: language.code,
+      sampleText: settings.sampleTextByLanguage[language.code],
+    }))
+  );
+  const tasks = options.regenerateAll
+    ? allTasks
+    : allTasks.filter((task) => {
+        const existing = existingStatuses.find((status) =>
+          status.voiceId === task.voiceId && status.languageCode === task.languageCode
+        );
+        return existing?.status !== 'ready' || !existing.audioUrl;
+      });
+
+  let generatedCount = 0;
+  let failedCount = 0;
+  const skippedCount = allTasks.length - tasks.length;
+
+  for (let batchStart = 0; batchStart < tasks.length; batchStart += VOICE_SAMPLE_BATCH_SIZE) {
+    const batch = tasks.slice(batchStart, batchStart + VOICE_SAMPLE_BATCH_SIZE);
+    await Promise.all(batch.map(async (task) => {
+      const hash = sampleTextHash(task.sampleText);
+      const storagePath = `${task.languageCode}/${safeStorageSegment(task.voiceId)}/${hash}.wav`;
+
+      try {
+        await admin
+          .from('narration_voice_samples')
+          .upsert(
+            {
+              voice_id: task.voiceId,
+              gender_bucket: task.genderBucket,
+              language_code: task.languageCode,
+              sample_text_hash: hash,
+              sample_text: task.sampleText,
+              storage_bucket: NARRATION_SAMPLE_BUCKET,
+              storage_path: storagePath,
+              file_url: null,
+              duration_ms: null,
+              generation_status: 'generating',
+              generation_error: null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'voice_id,language_code,sample_text_hash' }
+          );
+
+        let pcmBase64: string | null = null;
+        let lastError: unknown = null;
+        for (let attempt = 1; attempt <= VOICE_SAMPLE_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            pcmBase64 = await callGeminiTTS(
+              task.sampleText,
+              'warm',
+              'narration voice sample',
+              task.voiceId,
+              task.languageCode
+            );
+            break;
+          } catch (error) {
+            lastError = error;
+            const retryDelayMs = extractRetryDelayMs(error);
+            if (!isRateLimitError(error) || attempt === VOICE_SAMPLE_MAX_ATTEMPTS) {
+              throw error;
+            }
+            await sleep(Math.max(retryDelayMs ?? VOICE_SAMPLE_BATCH_DELAY_MS, 10_000));
+          }
+        }
+
+        if (!pcmBase64) {
+          throw lastError || new Error('No audio generated.');
+        }
+
+        const wavBuffer = pcmToWavBuffer(pcmBase64);
+        const durationMs = pcmBase64DurationMs(pcmBase64);
+
+        const upload = await admin.storage
+          .from(NARRATION_SAMPLE_BUCKET)
+          .upload(storagePath, wavBuffer, {
+            contentType: 'audio/wav',
+            upsert: true,
+          });
+
+        if (upload.error) {
+          throw new Error(upload.error.message);
+        }
+
+        const { data: urlData } = admin.storage
+          .from(NARRATION_SAMPLE_BUCKET)
+          .getPublicUrl(storagePath);
+
+        const { error: updateError } = await admin
+          .from('narration_voice_samples')
+          .update({
+            file_url: urlData.publicUrl,
+            duration_ms: durationMs,
+            generation_status: 'ready',
+            generation_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('voice_id', task.voiceId)
+          .eq('language_code', task.languageCode)
+          .eq('sample_text_hash', hash);
+
+        if (updateError) {
+          throw new Error(updateError.message);
+        }
+
+        generatedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        const message = sanitizeNarrationSampleError(error);
+        console.error('Narration voice sample generation failed:', {
+          voiceId: task.voiceId,
+          languageCode: task.languageCode,
+          message,
+          rawMessage: getErrorText(error).slice(0, 500),
+        });
+        await admin
+          .from('narration_voice_samples')
+          .upsert(
+            {
+              voice_id: task.voiceId,
+              gender_bucket: task.genderBucket,
+              language_code: task.languageCode,
+              sample_text_hash: hash,
+              sample_text: task.sampleText,
+              storage_bucket: NARRATION_SAMPLE_BUCKET,
+              storage_path: storagePath,
+              file_url: null,
+              duration_ms: null,
+              generation_status: 'failed',
+              generation_error: message,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'voice_id,language_code,sample_text_hash' }
+          );
+      }
+    }));
+
+    if (batchStart + VOICE_SAMPLE_BATCH_SIZE < tasks.length) {
+      await sleep(VOICE_SAMPLE_BATCH_DELAY_MS);
+    }
+  }
+
+  return {
+    statuses: await listNarrationVoiceSampleStatuses(settings),
+    generatedCount,
+    failedCount,
+    skippedCount,
+  };
 }
 
 async function callGeminiTTS(
@@ -260,13 +618,26 @@ export async function generateAndPersistNarration(
         async () => {
           const { error: updateError } = await supabase
             .from('beats')
-            .update({ audio_url: urlData.publicUrl })
+            .update({ audio_url: urlData.publicUrl, narration_voice_id: voiceName })
             .eq('story_id', savedStoryId)
             .eq('node_id', nodeId)
             .eq('generated_by', user.id);
 
           if (updateError) {
-            console.error('Failed to update beat audio_url:', updateError.message);
+            if (isMissingNarrationColumnError(updateError)) {
+              const { error: fallbackError } = await supabase
+                .from('beats')
+                .update({ audio_url: urlData.publicUrl })
+                .eq('story_id', savedStoryId)
+                .eq('node_id', nodeId)
+                .eq('generated_by', user.id);
+
+              if (fallbackError) {
+                console.error('Failed to update beat audio_url:', fallbackError.message);
+              }
+            } else {
+              console.error('Failed to update beat audio_url:', updateError.message);
+            }
           }
 
           const { data: check } = await supabase
@@ -333,7 +704,12 @@ export async function generateNarrationOnly(
  */
 export async function ensureNarratorVoiceLocked(
   storyId: string,
-  proposedVoiceName: string
+  proposedVoiceName: string,
+  options: {
+    mode?: NarrationVoiceMode | null;
+    genderBucket?: NarrationGenderBucket | null;
+    languageCode?: NarrationLanguageCode | null;
+  } = {}
 ): Promise<string> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -354,13 +730,31 @@ export async function ensureNarratorVoiceLocked(
     return existingVoice;
   }
 
+  const updateData: Record<string, string | null> = {
+    narrator_voice: proposedVoiceName,
+  };
+  if (options.mode) updateData.narration_voice_mode = options.mode;
+  if (options.genderBucket) updateData.narration_voice_gender_bucket = options.genderBucket;
+  if (options.languageCode) updateData.narration_language_code = options.languageCode;
+
   const { error: updateError } = await supabase
     .from('stories')
-    .update({ narrator_voice: proposedVoiceName })
+    .update(updateData)
     .eq('id', storyId)
     .eq('user_id', user.id);
 
   if (updateError) {
+    if (isMissingNarrationColumnError(updateError)) {
+      const { error: fallbackError } = await supabase
+        .from('stories')
+        .update({ narrator_voice: proposedVoiceName })
+        .eq('id', storyId)
+        .eq('user_id', user.id);
+
+      if (!fallbackError) {
+        return proposedVoiceName;
+      }
+    }
     throw new Error(`Failed to lock narrator voice: ${updateError.message}`);
   }
 
@@ -390,9 +784,127 @@ export async function getNarratorVoiceForStory(storyId: string): Promise<string 
 }
 
 /**
- * Select narrator voice server-side.
+ * Resolve the narration voice for a story or newly-created story.
+ * This is the single decision point for the user-selected vs legacy selector paths.
  */
-export async function selectNarratorVoiceServer(
+export async function resolveNarrationVoiceServer(input: {
+  savedStoryId?: string | null;
+  requestedMode?: NarrationVoiceMode | null;
+  requestedVoiceId?: string | null;
+  requestedGenderBucket?: NarrationGenderBucket | null;
+  language?: string | null;
+  genre: string;
+  tone: string;
+  targetAge: string;
+  costTelemetry?: CostTelemetryContext;
+}): Promise<{
+  voiceId: string;
+  mode: NarrationVoiceMode;
+  genderBucket: NarrationGenderBucket | null;
+  languageCode: NarrationLanguageCode;
+  usedLegacySelector: boolean;
+  warnings: string[];
+}> {
+  const settings = await getNarrationVoiceSettings();
+  const languageResolution = resolveStoryNarrationLanguage(input.language);
+  let storyRecord: {
+    voiceId: string | null;
+    mode: NarrationVoiceMode | null;
+    genderBucket: NarrationGenderBucket | null;
+  } | null = null;
+
+  if (input.savedStoryId) {
+    try {
+      const supabase = await createClient();
+      const { data, error } = await supabase
+        .from('stories')
+        .select('narrator_voice, narration_voice_mode, narration_voice_gender_bucket')
+        .eq('id', input.savedStoryId)
+        .single();
+
+      if (error) {
+        if (isMissingNarrationColumnError(error)) {
+          const fallback = await supabase
+            .from('stories')
+            .select('narrator_voice')
+            .eq('id', input.savedStoryId)
+            .single();
+          storyRecord = {
+            voiceId: fallback.data?.narrator_voice?.trim() || null,
+            mode: 'legacy_auto',
+            genderBucket: null,
+          };
+        } else {
+          throw error;
+        }
+      } else {
+        storyRecord = {
+          voiceId: data?.narrator_voice?.trim() || null,
+          mode: data?.narration_voice_mode === 'user_selected' ? 'user_selected' : 'legacy_auto',
+          genderBucket: data?.narration_voice_gender_bucket === 'male' ? 'male' : data?.narration_voice_gender_bucket === 'female' ? 'female' : null,
+        };
+      }
+    } catch (error) {
+      console.error('Failed to load story narration voice record:', error);
+    }
+  }
+
+  const decision = resolveNarrationVoiceDecision({
+    globalUserLedVoiceSelectionEnabled: settings.userLedVoiceSelectionEnabled,
+    settings,
+    storyVoiceMode: storyRecord?.mode ?? null,
+    storyVoiceId: storyRecord?.voiceId ?? null,
+    storyGenderBucket: storyRecord?.genderBucket ?? null,
+    requestedVoiceMode: input.requestedMode ?? null,
+    requestedVoiceId: input.requestedVoiceId ?? null,
+    requestedGenderBucket: input.requestedGenderBucket ?? null,
+    hasPersistedStory: Boolean(storyRecord),
+  });
+
+  let voiceId = decision.voiceId;
+  let usedLegacySelector = false;
+
+  if (decision.shouldUseLegacySelector) {
+    usedLegacySelector = true;
+    voiceId = await selectLegacyNarratorVoiceServer(
+      input.genre,
+      input.tone,
+      input.targetAge,
+      input.language || 'english',
+      input.costTelemetry
+    );
+  }
+
+  if (!voiceId) {
+    const fallbackGender = decision.genderBucket || input.requestedGenderBucket || 'female';
+    voiceId = getDefaultVoiceForGender(fallbackGender, settings) || DEFAULT_VOICE;
+    decision.warnings.push(`Fell back to ${voiceId} because no narration voice was resolved.`);
+  }
+
+  console.info('[narration.voice_resolver]', {
+    storyId: input.savedStoryId ?? null,
+    mode: decision.mode,
+    voiceId,
+    languageCode: languageResolution.languageCode,
+    usedLegacySelector,
+    warnings: decision.warnings,
+  });
+
+  return {
+    voiceId,
+    mode: decision.mode,
+    genderBucket: decision.genderBucket,
+    languageCode: languageResolution.languageCode,
+    usedLegacySelector,
+    warnings: decision.warnings,
+  };
+}
+
+/**
+ * Legacy AI narrator voice selection.
+ * Kept for old content and for global setting OFF.
+ */
+export async function selectLegacyNarratorVoiceServer(
   genre: string,
   tone: string,
   targetAge: string,
@@ -446,7 +958,20 @@ export async function selectNarratorVoiceServer(
     const match = AVAILABLE_VOICES.find(v => voiceName.toLowerCase().includes(v.toLowerCase()));
     return match || DEFAULT_VOICE;
   } catch (error) {
-    console.error('Voice selection failed:', error);
+    console.error('Legacy voice selection failed:', error);
     return DEFAULT_VOICE;
   }
+}
+
+/**
+ * @deprecated Use resolveNarrationVoiceServer so user-selected mode can bypass legacy AI selection.
+ */
+export async function selectNarratorVoiceServer(
+  genre: string,
+  tone: string,
+  targetAge: string,
+  language: string = 'english',
+  costTelemetry?: CostTelemetryContext
+): Promise<string> {
+  return selectLegacyNarratorVoiceServer(genre, tone, targetAge, language, costTelemetry);
 }

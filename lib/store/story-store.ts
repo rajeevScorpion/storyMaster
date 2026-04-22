@@ -2,14 +2,13 @@ import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, materializeSeededBeat, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
-import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, getNarratorVoiceForStory, selectNarratorVoiceServer } from '@/app/actions/narration';
+import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import {
   authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
-import { DEFAULT_VOICE } from '@/lib/ai/narration-config';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
@@ -197,9 +196,18 @@ function buildSessionContextToNode(session: StorySession, nodeId: string | null)
 }
 
 function stripSessionForPrompt(session: Partial<StorySession>): Partial<StorySession> {
-  const stripped = { ...session } as Partial<StorySession> & { storyMap?: StoryMap; narratorVoice?: string };
+  const stripped = { ...session } as Partial<StorySession> & {
+    storyMap?: StoryMap;
+    narratorVoice?: string;
+    narrationVoiceMode?: string;
+    narrationVoiceGenderBucket?: string;
+    narrationLanguageCode?: string;
+  };
   delete stripped.storyMap;
   delete stripped.narratorVoice;
+  delete stripped.narrationVoiceMode;
+  delete stripped.narrationVoiceGenderBucket;
+  delete stripped.narrationLanguageCode;
   return stripped;
 }
 
@@ -314,21 +322,19 @@ function costPhase(
   };
 }
 
-async function resolveNarratorVoice(session: StorySession): Promise<string> {
-  if (session.narratorVoice) {
-    return session.narratorVoice;
-  }
-
-  if (!session.savedStoryId) {
-    return DEFAULT_VOICE;
-  }
-
-  try {
-    return (await getNarratorVoiceForStory(session.savedStoryId)) || DEFAULT_VOICE;
-  } catch (error) {
-    console.error('Failed to resolve locked narrator voice:', error);
-    return DEFAULT_VOICE;
-  }
+async function resolveNarratorVoice(session: StorySession, costTelemetry?: CostTelemetryContext) {
+  const storyVoiceConfig = session.storyConfig.narrationVoice;
+  return resolveNarrationVoiceServer({
+    savedStoryId: session.savedStoryId ?? null,
+    requestedMode: session.narrationVoiceMode ?? storyVoiceConfig?.mode ?? null,
+    requestedVoiceId: session.narratorVoice ?? storyVoiceConfig?.voiceId ?? null,
+    requestedGenderBucket: session.narrationVoiceGenderBucket ?? storyVoiceConfig?.genderBucket ?? null,
+    language: session.storyConfig.language,
+    genre: session.genre,
+    tone: session.tone,
+    targetAge: session.targetAge,
+    costTelemetry,
+  });
 }
 
 function getHardReservationId(
@@ -656,6 +662,7 @@ export const useStoryStore = create<StoryState>()(
         }
 
         try {
+          const requestedNarrationVoice = storyConfig.narrationVoice;
           const initialSession: Partial<StorySession> = {
             storySessionId: initialSessionId,
             userPrompt: storyPrompt,
@@ -679,6 +686,10 @@ export const useStoryStore = create<StoryState>()(
             openThreads: [],
             allowedEndings: ['friendship', 'moral', 'comedy', 'discovery', 'rescue', 'bittersweet'],
             safetyProfile: storyConfig.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
+            narratorVoice: requestedNarrationVoice?.mode === 'user_selected' ? requestedNarrationVoice.voiceId : undefined,
+            narrationVoiceMode: requestedNarrationVoice?.mode,
+            narrationVoiceGenderBucket: requestedNarrationVoice?.genderBucket,
+            narrationLanguageCode: requestedNarrationVoice?.languageCode,
           };
 
           setLoadingStage(set, 'start_story', 'beat');
@@ -765,18 +776,21 @@ export const useStoryStore = create<StoryState>()(
           let earlySavedStoryId: string | undefined;
           const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
 
-          // Start voice selection (fast ~1s)
+          // Resolve narration voice. User-led mode bypasses the legacy AI selector.
           const voicePromise = measureAsyncStep(
             timingSteps,
-            'voice_selection',
-            'Select narrator voice',
-            () => selectNarratorVoiceServer(
-              initialSession.genre!,
-              initialSession.tone!,
-              initialSession.targetAge!,
-              lang,
-              costPhase(baseCostTelemetry, 'voice_selection')
-            ),
+            'voice_resolution',
+            'Resolve narrator voice',
+            () => resolveNarrationVoiceServer({
+              requestedMode: initialSession.narrationVoiceMode ?? storyConfig.narrationVoice?.mode ?? null,
+              requestedVoiceId: initialSession.narratorVoice ?? storyConfig.narrationVoice?.voiceId ?? null,
+              requestedGenderBucket: initialSession.narrationVoiceGenderBucket ?? storyConfig.narrationVoice?.genderBucket ?? null,
+              language: lang,
+              genre: initialSession.genre!,
+              tone: initialSession.tone!,
+              targetAge: initialSession.targetAge!,
+              costTelemetry: costPhase(baseCostTelemetry, 'voice_selection'),
+            }),
             { background: true }
           );
 
@@ -803,16 +817,21 @@ export const useStoryStore = create<StoryState>()(
             'voice_lock',
             'Lock narrator voice',
             () => Promise.all([voicePromise, earlySavePromise]).then(
-              async ([voice, storyId]) => {
+              async ([voiceResolution, storyId]) => {
                 if (!storyId) {
-                  return voice;
+                  return voiceResolution;
                 }
 
                 try {
-                  return await ensureNarratorVoiceLocked(storyId, voice);
+                  const voiceId = await ensureNarratorVoiceLocked(storyId, voiceResolution.voiceId, {
+                    mode: voiceResolution.mode,
+                    genderBucket: voiceResolution.genderBucket,
+                    languageCode: voiceResolution.languageCode,
+                  });
+                  return { ...voiceResolution, voiceId };
                 } catch (error) {
                   console.error('Failed to persist locked narrator voice:', error);
-                  return voice;
+                  return voiceResolution;
                 }
               }
             ),
@@ -821,21 +840,21 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
           if (initialSession.userPrompt !== 'mock') {
-            Promise.all([lockedVoicePromise, earlySavePromise]).then(([voice, storyId]) => {
+            Promise.all([lockedVoicePromise, earlySavePromise]).then(([voiceResolution, storyId]) => {
               set({ isGeneratingAudio: true });
               const narrationStartedAt = nowMs();
 
               const narrationFn = storyId
                 ? generateAndPersistNarration(
-                    beat.storyText, initialSession.tone!, initialSession.genre!,
-                    voice, lang, storyId, rootNodeId,
-                    costPhase({ ...baseCostTelemetry, storyId }, 'tts')
-                  ).then(({ audioUrl }) => audioUrl)
+                  beat.storyText, initialSession.tone!, initialSession.genre!,
+                  voiceResolution.voiceId, voiceResolution.languageCode, storyId, rootNodeId,
+                  costPhase({ ...baseCostTelemetry, storyId }, 'tts')
+                ).then(({ audioUrl }) => audioUrl)
                 : generateNarrationOnly(
-                    beat.storyText, initialSession.tone!, initialSession.genre!,
-                    voice, lang,
-                    costPhase(baseCostTelemetry, 'tts')
-                  );
+                  beat.storyText, initialSession.tone!, initialSession.genre!,
+                  voiceResolution.voiceId, voiceResolution.languageCode,
+                  costPhase(baseCostTelemetry, 'tts')
+                );
 
               narrationFn.then((audioUrl) => {
                 console.info('[timing:start_story.narration]', {
@@ -854,7 +873,7 @@ export const useStoryStore = create<StoryState>()(
                   ...latestSession.storyMap.nodes,
                   [rootId]: {
                     ...rootNode,
-                    data: { ...rootNode.data, audioUrl },
+                    data: { ...rootNode.data, audioUrl, narrationVoiceId: voiceResolution.voiceId },
                   },
                 };
                 const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
@@ -884,7 +903,7 @@ export const useStoryStore = create<StoryState>()(
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
           setLoadingStage(set, 'start_story', 'image');
-          const [imageUrl, narratorVoice] = await Promise.all([
+          const [imageUrl, narratorVoiceResolution] = await Promise.all([
             measureAsyncStep(
               timingSteps,
               'image_generation',
@@ -946,6 +965,7 @@ export const useStoryStore = create<StoryState>()(
             data: {
               ...beat,
               imageUrl,
+              narrationVoiceId: narratorVoiceResolution.voiceId,
               ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
             },
           };
@@ -954,7 +974,10 @@ export const useStoryStore = create<StoryState>()(
             {
               ...initialSession,
               title: resolvedTitle,
-              narratorVoice,
+              narratorVoice: narratorVoiceResolution.voiceId,
+              narrationVoiceMode: narratorVoiceResolution.mode,
+              narrationVoiceGenderBucket: narratorVoiceResolution.genderBucket ?? undefined,
+              narrationLanguageCode: narratorVoiceResolution.languageCode,
               ...(earlySavedStoryId ? { savedStoryId: earlySavedStoryId } : {}),
             } as StorySession,
             storyMap
@@ -1157,6 +1180,9 @@ export const useStoryStore = create<StoryState>()(
           // Strip storyMap and heavy data from what we send to Gemini
           delete (sessionForPrompt as any).storyMap;
           delete (sessionForPrompt as any).narratorVoice;
+          delete (sessionForPrompt as any).narrationVoiceMode;
+          delete (sessionForPrompt as any).narrationVoiceGenderBucket;
+          delete (sessionForPrompt as any).narrationLanguageCode;
 
           // Fetch active model config (non-blocking fallback to defaults)
           let modelOverrides: StoryModelOverrides | undefined;
@@ -1243,8 +1269,6 @@ export const useStoryStore = create<StoryState>()(
             : [];
           const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
 
-          const lang = session.storyConfig?.language || 'english';
-
           // Track resolved audio URL — if narration finishes before image,
           // the .then() can't update the store (node doesn't exist yet),
           // so we capture the URL and apply it during the merge.
@@ -1252,17 +1276,27 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: start narration in parallel with image generation
           // Voice is locked at story start — use it directly or fall back to default constant
-          const voiceForBeat = await measureAsyncStep(
+          const voiceResolution = await measureAsyncStep(
             timingSteps,
             'voice_resolution',
             'Resolve locked narrator voice',
-            () => resolveNarratorVoice(session)
+            () => resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'))
           );
-          if (!session.narratorVoice && voiceForBeat !== DEFAULT_VOICE) {
+          const voiceForBeat = voiceResolution.voiceId;
+          const narrationLanguageCode = voiceResolution.languageCode;
+          if (
+            session.narratorVoice !== voiceForBeat
+            || session.narrationVoiceMode !== voiceResolution.mode
+            || session.narrationVoiceGenderBucket !== (voiceResolution.genderBucket ?? undefined)
+            || session.narrationLanguageCode !== narrationLanguageCode
+          ) {
             set((state) => state.session ? {
               session: {
                 ...state.session,
                 narratorVoice: voiceForBeat,
+                narrationVoiceMode: voiceResolution.mode,
+                narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                narrationLanguageCode,
               },
             } : state);
           }
@@ -1288,7 +1322,7 @@ export const useStoryStore = create<StoryState>()(
                 ...latestSession.storyMap.nodes,
                 [newNodeId]: {
                   ...node,
-                  data: { ...node.data, audioUrl },
+                  data: { ...node.data, audioUrl, narrationVoiceId: voiceForBeat },
                 },
               };
               const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
@@ -1315,7 +1349,7 @@ export const useStoryStore = create<StoryState>()(
               // Server-side: generate + upload to Supabase in one round trip
               narrationPromise = generateAndPersistNarration(
                 beat.storyText, session.tone, session.genre,
-                voiceForBeat, lang,
+                voiceForBeat, narrationLanguageCode,
                 session.savedStoryId, newNodeId,
                 costPhase(baseCostTelemetry, 'tts')
               ).then(({ audioUrl }) => handleNarrationResolved(audioUrl))
@@ -1324,7 +1358,7 @@ export const useStoryStore = create<StoryState>()(
               // Fallback: generate only (no persistence yet)
               narrationPromise = generateNarrationOnly(
                 beat.storyText, session.tone, session.genre,
-                voiceForBeat, lang,
+                voiceForBeat, narrationLanguageCode,
                 costPhase(baseCostTelemetry, 'tts')
               ).then(handleNarrationResolved)
                 .catch(handleNarrationError);
@@ -1388,6 +1422,7 @@ export const useStoryStore = create<StoryState>()(
                 ...updatedMap.nodes[newNodeId],
                 data: {
                   ...updatedMap.nodes[newNodeId].data,
+                  narrationVoiceId: voiceForBeat,
                   ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
                 },
               },
@@ -1422,7 +1457,16 @@ export const useStoryStore = create<StoryState>()(
             : {};
 
           set({
-            session: deriveSessionFields(latestSession, mergedMap),
+            session: deriveSessionFields(
+              {
+                ...latestSession,
+                narratorVoice: voiceForBeat,
+                narrationVoiceMode: voiceResolution.mode,
+                narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                narrationLanguageCode,
+              },
+              mergedMap
+            ),
             isLoading: false,
             saveStatus: 'unsaved',
             loadingClues: [],
@@ -1640,15 +1684,23 @@ export const useStoryStore = create<StoryState>()(
         set({ isGeneratingAudio: true });
 
         try {
-          const lang = session.storyConfig?.language || 'english';
-
           // Use locked voice — selected once at story start, never re-queried
-          const voiceName = await resolveNarratorVoice(session);
-          if (!session.narratorVoice && voiceName !== DEFAULT_VOICE) {
+          const voiceResolution = await resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'));
+          const voiceName = voiceResolution.voiceId;
+          const narrationLanguageCode = voiceResolution.languageCode;
+          if (
+            session.narratorVoice !== voiceName
+            || session.narrationVoiceMode !== voiceResolution.mode
+            || session.narrationVoiceGenderBucket !== (voiceResolution.genderBucket ?? undefined)
+            || session.narrationLanguageCode !== narrationLanguageCode
+          ) {
             set((state) => state.session ? {
               session: {
                 ...state.session,
                 narratorVoice: voiceName,
+                narrationVoiceMode: voiceResolution.mode,
+                narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                narrationLanguageCode,
               },
             } : state);
           }
@@ -1659,7 +1711,7 @@ export const useStoryStore = create<StoryState>()(
             // Server-side: generate + upload to Supabase in one round trip
             const result = await generateAndPersistNarration(
               node.data.storyText, session.tone, session.genre,
-              voiceName, lang, session.savedStoryId, nodeId,
+              voiceName, narrationLanguageCode, session.savedStoryId, nodeId,
               costPhase(baseCostTelemetry, 'tts')
             );
             audioUrl = result.audioUrl;
@@ -1667,7 +1719,7 @@ export const useStoryStore = create<StoryState>()(
             // No cloud save yet — generate only, returns base64
             audioUrl = await generateNarrationOnly(
               node.data.storyText, session.tone, session.genre,
-              voiceName, lang,
+              voiceName, narrationLanguageCode,
               costPhase(baseCostTelemetry, 'tts')
             );
           }
@@ -1680,12 +1732,21 @@ export const useStoryStore = create<StoryState>()(
             ...latestSession.storyMap.nodes,
             [nodeId]: {
               ...latestSession.storyMap.nodes[nodeId],
-              data: { ...latestSession.storyMap.nodes[nodeId].data, audioUrl },
+              data: { ...latestSession.storyMap.nodes[nodeId].data, audioUrl, narrationVoiceId: voiceName },
             },
           };
           const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
           set({
-            session: deriveSessionFields(latestSession, updatedMap),
+            session: deriveSessionFields(
+              {
+                ...latestSession,
+                narratorVoice: voiceName,
+                narrationVoiceMode: voiceResolution.mode,
+                narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                narrationLanguageCode,
+              },
+              updatedMap
+            ),
             isGeneratingAudio: false,
             audioReadyNodeId: nodeId,
           });

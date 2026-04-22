@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
+import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
 import { generateSeedPlanPreview } from '@/app/actions/story-runtime';
 import {
   authorizeCurrentUserBillableAction,
@@ -18,6 +19,10 @@ import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
+import type {
+  NarrationGenderBucket,
+  NarrationVoiceClientConfig,
+} from '@/lib/ai/narration-voices';
 
 interface LandingScreenProps {
   onBegin?: (prompt: string, config?: StoryConfig) => void;
@@ -60,6 +65,14 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     freePlusCharacterSheetsEnabled: false,
     creatorCharacterSheetsEnabled: false,
   });
+  const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(null);
+  const [narrationVoiceSelection, setNarrationVoiceSelection] = useState<{
+    genderBucket: NarrationGenderBucket;
+    voiceId: string;
+  }>({
+    genderBucket: 'female',
+    voiceId: '',
+  });
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const effectiveMaxBeats = storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
@@ -84,6 +97,34 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         setAuthoringWordCap(500);
       });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getNarrationVoiceSelectionConfig(language)
+      .then((config) => {
+        if (cancelled) return;
+        setNarrationVoiceConfig(config);
+        if (!config.enabled) return;
+        setNarrationVoiceSelection((current) => {
+          const list = current.genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
+          const configuredDefault = current.genderBucket === 'male' ? config.defaultMaleVoice : config.defaultFemaleVoice;
+          if (current.voiceId && list.includes(current.voiceId)) {
+            return current;
+          }
+          return {
+            genderBucket: current.genderBucket,
+            voiceId: list.includes(configuredDefault) ? configuredDefault : list[0] || '',
+          };
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setNarrationVoiceConfig(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [language]);
 
   // Restore prompt after OAuth redirect — use initializer pattern to avoid setState in effect
   useEffect(() => {
@@ -114,6 +155,12 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
               config.portraitReferences.mode === 'character_sheet' &&
               config.portraitReferences.quality === '1K'
             );
+            if (config.narrationVoice?.mode === 'user_selected') {
+              setNarrationVoiceSelection({
+                genderBucket: config.narrationVoice.genderBucket || 'female',
+                voiceId: config.narrationVoice.voiceId || '',
+              });
+            }
           } catch { /* ignore parse errors */ }
           sessionStorage.removeItem('kissago_pending_config');
         }
@@ -155,7 +202,10 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     };
   };
 
-  const buildStoryConfig = (seedPlan?: SeedPlan): StoryConfig => ({
+  const buildStoryConfig = (
+    seedPlan?: SeedPlan,
+    voiceConfig: NarrationVoiceClientConfig | null = narrationVoiceConfig
+  ): StoryConfig => ({
     language,
     ageGroup,
     settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
@@ -174,10 +224,25 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
           mode: 'prompt',
         },
     portraitReferences: buildPortraitReferences(),
+    narrationVoice: voiceConfig?.enabled
+      ? {
+          mode: 'user_selected',
+          genderBucket: narrationVoiceSelection.genderBucket,
+          voiceId: narrationVoiceSelection.voiceId || (
+            narrationVoiceSelection.genderBucket === 'male'
+              ? voiceConfig.defaultMaleVoice
+              : voiceConfig.defaultFemaleVoice
+          ),
+          languageCode: voiceConfig.languageCode,
+        }
+      : {
+          mode: 'legacy_auto',
+        },
   });
 
   const startConfiguredStory = async (seedPlan?: SeedPlan) => {
-    const config = buildStoryConfig(seedPlan);
+    const voiceConfig = narrationVoiceConfig || await getNarrationVoiceSelectionConfig(language).catch(() => null);
+    const config = buildStoryConfig(seedPlan, voiceConfig);
     const storyPrompt = authoringMode === 'seeded' ? sourceText.trim() : prompt.trim();
     if (!storyPrompt) return;
 
@@ -590,6 +655,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                 showCreatorSettings={showCreatorSettings}
                 creatorReferenceQuality={useCreatorOneKCharacterSheet ? '1K' : '0.5K'}
                 onCreatorReferenceQualityChange={(value) => setUseCreatorOneKCharacterSheet(value === '1K')}
+                narrationVoiceConfig={narrationVoiceConfig}
+                narrationVoiceSelection={narrationVoiceSelection}
+                onNarrationVoiceSelectionChange={setNarrationVoiceSelection}
               />
             )}
           </AnimatePresence>

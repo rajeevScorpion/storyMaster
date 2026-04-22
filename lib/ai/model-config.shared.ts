@@ -29,7 +29,7 @@ export const TASK_DEFINITIONS: {
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
   { key: 'portrait_generation', label: 'Portrait Generation', description: 'Generates character reference portraits for visual consistency across beats' },
   { key: 'tts', label: 'Text-to-Speech', description: 'Narrates story text with expressive voice acting' },
-  { key: 'voice_selection', label: 'Voice Selection', description: 'Picks the best narrator voice for the story genre and tone' },
+  { key: 'voice_selection', label: 'Legacy Voice Selection', description: 'Legacy AI selector used only when user-led narration voice selection is off' },
 ];
 
 export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: number | null }> = {

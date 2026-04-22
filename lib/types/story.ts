@@ -90,6 +90,7 @@ export interface StoryBeat {
   isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;
+  narrationVoiceId?: string;
   originKind?: 'generated' | 'seeded_canonical';
   seedPlanBeatIndex?: number;
   canonicalOptionId?: string;
@@ -153,6 +154,7 @@ export interface StoryConfig {
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
   portraitReferences: PortraitReferenceConfig;
+  narrationVoice?: import('@/lib/ai/narration-voices').StoryNarrationVoiceSelection;
 }
 
 export interface StoryNode {
@@ -199,5 +201,8 @@ export interface StorySession {
   allowedEndings: string[];
   safetyProfile: string;
   narratorVoice?: string;
+  narrationVoiceMode?: import('@/lib/ai/narration-voices').NarrationVoiceMode;
+  narrationVoiceGenderBucket?: import('@/lib/ai/narration-voices').NarrationGenderBucket;
+  narrationLanguageCode?: import('@/lib/ai/narration-voices').NarrationLanguageCode;
   enableReferenceImages?: boolean;
 }

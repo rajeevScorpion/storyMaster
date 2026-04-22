@@ -5,6 +5,17 @@ import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 import { savePricingActionCost } from '@/app/actions/pricing-admin';
+import { getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
+import {
+  getNarrationVoiceSettings,
+  saveNarrationVoiceSettings,
+  type NarrationVoiceSettingsInput,
+} from '@/lib/ai/narration-voice-settings';
+import type {
+  NarrationVoiceSampleClientStatus,
+  NarrationVoiceSettings,
+  NarrationVoiceSettingsSaveResult,
+} from '@/lib/ai/narration-voices';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import {
   DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS,
@@ -253,9 +264,11 @@ export async function getGlobalSettings(): Promise<{
   cloudSaveTimeoutMs: number;
   authoringWordCap: number;
   previewSeedPlanPriceCoins: number;
+  narrationVoiceSettings: NarrationVoiceSettings;
+  narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -279,6 +292,8 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
     getPreviewSeedPlanPriceCoins(),
+    getNarrationVoiceSettings(),
+    getNarrationVoiceSampleStatusesForAdmin(),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
@@ -315,6 +330,8 @@ export async function getGlobalSettings(): Promise<{
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
     previewSeedPlanPriceCoins,
+    narrationVoiceSettings,
+    narrationVoiceSampleStatuses,
   };
 }
 
@@ -489,6 +506,13 @@ export async function setPreviewSeedPlanPriceCoins(coins: number): Promise<void>
     beatCost: Math.round(coins / COINS_PER_BEAT),
     isActive: true,
   });
+}
+
+export async function saveAdminNarrationVoiceSettings(
+  input: NarrationVoiceSettingsInput
+): Promise<NarrationVoiceSettingsSaveResult> {
+  await verifyAdmin();
+  return saveNarrationVoiceSettings(input);
 }
 
 // Public (no admin gate) — read by StoryScreen to pace storyboard panels

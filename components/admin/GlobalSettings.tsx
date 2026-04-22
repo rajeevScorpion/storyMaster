@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, RefreshCcw } from 'lucide-react';
 import {
   getGlobalSettings,
+  saveAdminNarrationVoiceSettings,
   setCycleOverride,
   setCycleMs,
   setStoryboardVignette,
@@ -31,6 +32,13 @@ import {
   setVideoDownload,
   setVideoDownloadAdminBypass,
 } from '@/app/actions/admin';
+import { generateNarrationVoiceSamples, getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
+import {
+  normalizeNarrationVoiceList,
+  voicesToMultilineText,
+  type NarrationVoiceSampleClientStatus,
+  type NarrationVoiceSettings,
+} from '@/lib/ai/narration-voices';
 import {
   MAX_STORY_UI_TEXT_LINE_COUNT,
   MIN_STORY_UI_TEXT_LINE_COUNT,
@@ -65,6 +73,18 @@ function ToggleRow({
       </button>
     </div>
   );
+}
+
+function formatSampleTimestamp(value: string | null): string {
+  if (!value) return 'Never';
+  return new Date(value).toLocaleString();
+}
+
+function sampleStatusClassName(status: NarrationVoiceSampleClientStatus['status']): string {
+  if (status === 'ready') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+  if (status === 'failed') return 'border-rose-500/30 bg-rose-500/10 text-rose-300';
+  if (status === 'generating') return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
+  return 'border-white/10 bg-neutral-800 text-neutral-400';
 }
 
 export default function GlobalSettings() {
@@ -135,6 +155,17 @@ export default function GlobalSettings() {
   const [previewSeedPlanPriceCoins, setPreviewSeedPlanPriceCoinsState] = useState(0);
   const [previewSeedPlanPriceCoinsInput, setPreviewSeedPlanPriceCoinsInput] = useState('0');
   const [previewSeedPlanPriceCoinsSaving, setPreviewSeedPlanPriceCoinsSaving] = useState(false);
+  const [narrationVoiceSettings, setNarrationVoiceSettingsState] = useState<NarrationVoiceSettings | null>(null);
+  const [narrationMaleVoiceInput, setNarrationMaleVoiceInput] = useState('');
+  const [narrationFemaleVoiceInput, setNarrationFemaleVoiceInput] = useState('');
+  const [narrationDefaultMaleVoice, setNarrationDefaultMaleVoice] = useState('');
+  const [narrationDefaultFemaleVoice, setNarrationDefaultFemaleVoice] = useState('');
+  const [narrationSampleEnglish, setNarrationSampleEnglish] = useState('');
+  const [narrationSampleHindi, setNarrationSampleHindi] = useState('');
+  const [narrationVoiceSampleStatuses, setNarrationVoiceSampleStatuses] = useState<NarrationVoiceSampleClientStatus[]>([]);
+  const [narrationVoiceSaving, setNarrationVoiceSaving] = useState(false);
+  const [narrationVoiceGenerating, setNarrationVoiceGenerating] = useState(false);
+  const [narrationVoiceWarnings, setNarrationVoiceWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     getGlobalSettings()
@@ -166,6 +197,8 @@ export default function GlobalSettings() {
         cloudSaveTimeoutMs: st,
         authoringWordCap: awc,
         previewSeedPlanPriceCoins: previewPriceCoins,
+        narrationVoiceSettings: nextNarrationVoiceSettings,
+        narrationVoiceSampleStatuses: nextNarrationVoiceSampleStatuses,
       }) => {
         setCycleOverrideState(co);
         setCycleMsState(cm);
@@ -206,6 +239,14 @@ export default function GlobalSettings() {
         setAuthoringWordCapInput(String(awc));
         setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
         setPreviewSeedPlanPriceCoinsInput(String(previewPriceCoins));
+        setNarrationVoiceSettingsState(nextNarrationVoiceSettings);
+        setNarrationMaleVoiceInput(voicesToMultilineText(nextNarrationVoiceSettings.maleVoiceList));
+        setNarrationFemaleVoiceInput(voicesToMultilineText(nextNarrationVoiceSettings.femaleVoiceList));
+        setNarrationDefaultMaleVoice(nextNarrationVoiceSettings.defaultMaleVoice);
+        setNarrationDefaultFemaleVoice(nextNarrationVoiceSettings.defaultFemaleVoice);
+        setNarrationSampleEnglish(nextNarrationVoiceSettings.sampleTextByLanguage['en-IN']);
+        setNarrationSampleHindi(nextNarrationVoiceSettings.sampleTextByLanguage['hi-IN']);
+        setNarrationVoiceSampleStatuses(nextNarrationVoiceSampleStatuses);
         setLoading(false);
       })
       .catch((err) => {
@@ -247,6 +288,66 @@ export default function GlobalSettings() {
       setStoryboardImageSizeState(size);
     } finally {
       setStoryboardImageSizeSaving(false);
+    }
+  }
+
+  function parseNarrationVoiceInput(value: string): string[] {
+    return normalizeNarrationVoiceList(value.split(/[\n,]/));
+  }
+
+  async function saveNarrationVoiceSection(nextEnabled = narrationVoiceSettings?.userLedVoiceSelectionEnabled ?? false) {
+    const maleVoiceList = parseNarrationVoiceInput(narrationMaleVoiceInput);
+    const femaleVoiceList = parseNarrationVoiceInput(narrationFemaleVoiceInput);
+
+    setNarrationVoiceSaving(true);
+    setNarrationVoiceWarnings([]);
+    try {
+      const result = await saveAdminNarrationVoiceSettings({
+        userLedVoiceSelectionEnabled: nextEnabled,
+        maleVoiceList,
+        femaleVoiceList,
+        defaultMaleVoice: narrationDefaultMaleVoice,
+        defaultFemaleVoice: narrationDefaultFemaleVoice,
+        sampleTextByLanguage: {
+          'en-IN': narrationSampleEnglish,
+          'hi-IN': narrationSampleHindi,
+        },
+      });
+      setNarrationVoiceSettingsState(result.settings);
+      setNarrationMaleVoiceInput(voicesToMultilineText(result.settings.maleVoiceList));
+      setNarrationFemaleVoiceInput(voicesToMultilineText(result.settings.femaleVoiceList));
+      setNarrationDefaultMaleVoice(result.settings.defaultMaleVoice);
+      setNarrationDefaultFemaleVoice(result.settings.defaultFemaleVoice);
+      setNarrationSampleEnglish(result.settings.sampleTextByLanguage['en-IN']);
+      setNarrationSampleHindi(result.settings.sampleTextByLanguage['hi-IN']);
+      setNarrationVoiceSampleStatuses(await getNarrationVoiceSampleStatusesForAdmin());
+      setNarrationVoiceWarnings(result.warnings);
+    } finally {
+      setNarrationVoiceSaving(false);
+    }
+  }
+
+  async function handleGenerateNarrationVoiceSamples(regenerateAll = false) {
+    setNarrationVoiceGenerating(true);
+    setNarrationVoiceWarnings([]);
+    try {
+      await saveNarrationVoiceSection(narrationVoiceSettings?.userLedVoiceSelectionEnabled ?? false);
+      const result = await generateNarrationVoiceSamples({ regenerateAll });
+      setNarrationVoiceSampleStatuses(result.statuses);
+      const summary = [
+        result.generatedCount > 0
+          ? `Generated ${result.generatedCount} sample${result.generatedCount === 1 ? '' : 's'}`
+          : 'No new samples generated',
+        result.skippedCount > 0
+          ? `kept ${result.skippedCount} ready sample${result.skippedCount === 1 ? '' : 's'}`
+          : null,
+        result.failedCount > 0
+          ? `${result.failedCount} failed`
+          : null,
+      ].filter(Boolean).join(', ');
+      setNarrationVoiceWarnings([`${summary}.`]);
+    } finally {
+      setNarrationVoiceGenerating(false);
     }
   }
 
@@ -350,6 +451,8 @@ export default function GlobalSettings() {
   const parsedStoryUiTextLineCount = parseInt(storyUiTextLineCountInput, 10);
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
   const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
+  const parsedNarrationMaleVoices = parseNarrationVoiceInput(narrationMaleVoiceInput);
+  const parsedNarrationFemaleVoices = parseNarrationVoiceInput(narrationFemaleVoiceInput);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -654,6 +757,160 @@ export default function GlobalSettings() {
               }}
             />
           </div>
+
+          {narrationVoiceSettings && (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Narration Voice Settings</h2>
+              <p className="text-xs text-neutral-400 -mt-2">
+                Curated voice controls for deterministic story narration. New stories use these settings when user-led selection is enabled.
+              </p>
+
+              <ToggleRow
+                label="Enable user-led narration voice selection"
+                description="When enabled, new stories use the selected voice and bypass legacy AI voice selection."
+                checked={narrationVoiceSettings.userLedVoiceSelectionEnabled}
+                toggling={narrationVoiceSaving}
+                onToggle={async () => {
+                  await saveNarrationVoiceSection(!narrationVoiceSettings.userLedVoiceSelectionEnabled);
+                }}
+              />
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Male voice list</p>
+                  <p className="text-xs text-neutral-400 mb-3">One voice ID per line. Configured voices remain selectable for new stories.</p>
+                  <textarea
+                    value={narrationMaleVoiceInput}
+                    onChange={(event) => setNarrationMaleVoiceInput(event.target.value)}
+                    rows={7}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <label className="mt-3 block text-xs text-neutral-400" htmlFor="default-male-voice">
+                    Default male voice
+                  </label>
+                  <select
+                    id="default-male-voice"
+                    value={narrationDefaultMaleVoice}
+                    onChange={(event) => setNarrationDefaultMaleVoice(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    {parsedNarrationMaleVoices.map((voice) => (
+                      <option key={voice} value={voice}>{voice}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Female voice list</p>
+                  <p className="text-xs text-neutral-400 mb-3">One voice ID per line. Configured voices remain selectable for new stories.</p>
+                  <textarea
+                    value={narrationFemaleVoiceInput}
+                    onChange={(event) => setNarrationFemaleVoiceInput(event.target.value)}
+                    rows={7}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <label className="mt-3 block text-xs text-neutral-400" htmlFor="default-female-voice">
+                    Default female voice
+                  </label>
+                  <select
+                    id="default-female-voice"
+                    value={narrationDefaultFemaleVoice}
+                    onChange={(event) => setNarrationDefaultFemaleVoice(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  >
+                    {parsedNarrationFemaleVoices.map((voice) => (
+                      <option key={voice} value={voice}>{voice}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <p className="text-sm font-medium text-neutral-100 mb-1">English sample text</p>
+                  <textarea
+                    value={narrationSampleEnglish}
+                    onChange={(event) => setNarrationSampleEnglish(event.target.value)}
+                    rows={4}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Hindi sample text</p>
+                  <textarea
+                    value={narrationSampleHindi}
+                    onChange={(event) => setNarrationSampleHindi(event.target.value)}
+                    rows={4}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => saveNarrationVoiceSection()}
+                  disabled={narrationVoiceSaving || parsedNarrationMaleVoices.length === 0 || parsedNarrationFemaleVoices.length === 0}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {narrationVoiceSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save voice settings'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateNarrationVoiceSamples(false)}
+                  disabled={narrationVoiceGenerating || narrationVoiceSaving || parsedNarrationMaleVoices.length === 0 || parsedNarrationFemaleVoices.length === 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/70 px-4 py-2 text-xs font-medium text-neutral-200 hover:bg-white/10 disabled:opacity-50"
+                >
+                  {narrationVoiceGenerating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />}
+                  Generate Missing Samples
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleGenerateNarrationVoiceSamples(true)}
+                  disabled={narrationVoiceGenerating || narrationVoiceSaving || parsedNarrationMaleVoices.length === 0 || parsedNarrationFemaleVoices.length === 0}
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs font-medium text-amber-200 hover:bg-amber-500/15 disabled:opacity-50"
+                >
+                  {narrationVoiceGenerating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCcw size={12} />}
+                  Regenerate All
+                </button>
+              </div>
+
+              {narrationVoiceWarnings.length > 0 && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+                  {narrationVoiceWarnings.map((warning) => (
+                    <p key={warning}>{warning}</p>
+                  ))}
+                </div>
+              )}
+
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-neutral-100">Sample generation status</p>
+                  <p className="text-xs text-neutral-500">{narrationVoiceSampleStatuses.length} voice-language items</p>
+                </div>
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                  {narrationVoiceSampleStatuses.map((sample) => (
+                    <div key={`${sample.voiceId}-${sample.languageCode}`} className="rounded-lg border border-white/10 bg-neutral-950/60 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-neutral-100">{sample.voiceId}</p>
+                          <p className="text-xs text-neutral-500">{sample.genderBucket} - {sample.languageCode}</p>
+                        </div>
+                        <span className={`rounded-full border px-2 py-1 text-[11px] ${sampleStatusClassName(sample.status)}`}>
+                          {sample.status}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs text-neutral-500">Last generated: {formatSampleTimestamp(sample.lastGeneratedAt)}</p>
+                      {sample.error && (
+                        <p className="mt-2 text-xs text-rose-300">{sample.error}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Loader Screen</h2>

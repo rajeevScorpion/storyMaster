@@ -30,6 +30,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       endingForecast: (beat.ending_forecast || []) as string[],
       imageUrl: beat.image_url || undefined,
       audioUrl: beat.audio_url || undefined,
+      narrationVoiceId: beat.narration_voice_id || undefined,
       originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
       seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
       canonicalOptionId: beat.canonical_option_id || undefined,
@@ -96,6 +97,7 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     newCharacterIds: beat.newCharacterIds || fallback.newCharacterIds,
     changedCharacterIds: beat.changedCharacterIds || fallback.changedCharacterIds,
     storyboardPlan: beat.storyboardPlan || fallback.storyboardPlan,
+    narrationVoiceId: beat.narrationVoiceId || fallback.narrationVoiceId,
     originKind: beat.originKind || fallback.originKind,
     seedPlanBeatIndex: beat.seedPlanBeatIndex ?? fallback.seedPlanBeatIndex,
     canonicalOptionId: beat.canonicalOptionId || fallback.canonicalOptionId,
@@ -231,6 +233,9 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     allowedEndings: [],
     safetyProfile: 'all_ages',
     narratorVoice: dbStory.narrator_voice || undefined,
+    narrationVoiceMode: dbStory.narration_voice_mode === 'user_selected' ? 'user_selected' : 'legacy_auto',
+    narrationVoiceGenderBucket: dbStory.narration_voice_gender_bucket === 'male' ? 'male' : dbStory.narration_voice_gender_bucket === 'female' ? 'female' : undefined,
+    narrationLanguageCode: dbStory.narration_language_code === 'en-IN' || dbStory.narration_language_code === 'hi-IN' ? dbStory.narration_language_code : undefined,
   };
 }
 
@@ -368,6 +373,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
         audioUrl: b.audio_url || undefined,
+        narrationVoiceId: b.narration_voice_id || undefined,
         isStoryboard: b.is_storyboard || undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
@@ -500,6 +506,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
         audioUrl: b.audio_url || undefined,
+        narrationVoiceId: b.narration_voice_id || undefined,
         isStoryboard: b.is_storyboard || undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,

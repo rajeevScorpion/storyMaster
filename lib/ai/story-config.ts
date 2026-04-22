@@ -13,6 +13,12 @@ import type {
   VisualSettings,
   VisualStylePreset,
 } from '@/lib/types/story';
+import type {
+  NarrationGenderBucket,
+  NarrationLanguageCode,
+  NarrationVoiceMode,
+  StoryNarrationVoiceSelection,
+} from '@/lib/ai/narration-voices';
 
 export const VISUAL_PRESET_OPTIONS: Array<{ value: VisualStylePreset; label: string; description: string }> = [
   { value: 'storybook_illustration', label: 'Storybook Illustration', description: 'Painterly storybook frames with warm character appeal.' },
@@ -141,6 +147,7 @@ type RawStoryConfig = Partial<StoryConfig> & {
     preludeText?: string | null;
   }) | null;
   portraitReferences?: Partial<PortraitReferenceConfig> | null;
+  narrationVoice?: Partial<StoryNarrationVoiceSelection> | null;
 };
 
 export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig {
@@ -171,6 +178,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
   };
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
+  const narrationVoice = normalizeNarrationVoiceSelection(input?.narrationVoice);
 
   return {
     language: input?.language || DEFAULT_STORY_CONFIG.language,
@@ -180,6 +188,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     visualSettings,
     authoring,
     portraitReferences,
+    ...(narrationVoice ? { narrationVoice } : {}),
   };
 }
 
@@ -236,6 +245,46 @@ export function normalizePortraitReferenceConfig(
     mode,
     quality: normalizePortraitReferenceQuality(input?.quality),
   };
+}
+
+function normalizeNarrationVoiceSelection(
+  input?: Partial<StoryNarrationVoiceSelection> | null
+): StoryNarrationVoiceSelection | undefined {
+  if (!input?.mode) {
+    return undefined;
+  }
+
+  const mode = normalizeNarrationVoiceMode(input.mode);
+  if (mode === 'legacy_auto') {
+    return { mode };
+  }
+
+  const voiceId = sanitizeText(input.voiceId);
+  const genderBucket = normalizeNarrationGenderBucket(input.genderBucket);
+  const languageCode = normalizeNarrationLanguageCode(input.languageCode);
+
+  return {
+    mode,
+    genderBucket,
+    ...(voiceId ? { voiceId } : {}),
+    ...(languageCode ? { languageCode } : {}),
+  };
+}
+
+function normalizeNarrationVoiceMode(value?: string | null): NarrationVoiceMode {
+  return value === 'user_selected' ? 'user_selected' : 'legacy_auto';
+}
+
+function normalizeNarrationGenderBucket(value?: string | null): NarrationGenderBucket {
+  return value === 'male' ? 'male' : 'female';
+}
+
+function normalizeNarrationLanguageCode(value?: string | null): NarrationLanguageCode | undefined {
+  if (value === 'en-IN' || value === 'hi-IN') {
+    return value;
+  }
+
+  return undefined;
 }
 
 function sanitizeText(value?: string | null): string {

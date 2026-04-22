@@ -36,6 +36,9 @@ export interface DbStory {
   setting: Record<string, unknown> | null;
   status: string;
   narrator_voice: string | null;
+  narration_voice_mode: string | null;
+  narration_voice_gender_bucket: string | null;
+  narration_language_code: string | null;
   is_archived: boolean;
   current_node_id: string | null;
   cover_image_url: string | null;
@@ -95,6 +98,7 @@ export interface DbBeat {
   ending_forecast: string[] | null;
   image_url: string | null;
   audio_url: string | null;
+  narration_voice_id: string | null;
   is_storyboard: boolean;
   origin_kind: string | null;
   seed_plan_beat_index: number | null;
@@ -148,6 +152,23 @@ export interface DbAiCostEvent {
   latency_ms: number | null;
   metadata: Record<string, unknown>;
   created_at: string;
+}
+
+export interface DbNarrationVoiceSample {
+  id: string;
+  voice_id: string;
+  gender_bucket: string;
+  language_code: string;
+  sample_text_hash: string;
+  sample_text: string;
+  storage_bucket: string;
+  storage_path: string | null;
+  file_url: string | null;
+  duration_ms: number | null;
+  generation_status: string;
+  generation_error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Gallery types

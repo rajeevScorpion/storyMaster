@@ -11,7 +11,11 @@ import {
 } from '@/lib/ai/story-config';
 import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
-import { Coins } from 'lucide-react';
+import { Check, Coins, Volume2 } from 'lucide-react';
+import type {
+  NarrationGenderBucket,
+  NarrationVoiceClientConfig,
+} from '@/lib/ai/narration-voices';
 
 const LANGUAGE_OPTIONS: FilterDropdownOption[] = [
   { value: 'english', label: 'English' },
@@ -98,6 +102,12 @@ interface AdvancedOptionsProps {
   showCreatorSettings?: boolean;
   creatorReferenceQuality?: PortraitReferenceQuality;
   onCreatorReferenceQualityChange?: (value: PortraitReferenceQuality) => void;
+  narrationVoiceConfig?: NarrationVoiceClientConfig | null;
+  narrationVoiceSelection?: {
+    genderBucket: NarrationGenderBucket;
+    voiceId: string;
+  };
+  onNarrationVoiceSelectionChange?: (value: { genderBucket: NarrationGenderBucket; voiceId: string }) => void;
 }
 
 export default function AdvancedOptions({
@@ -124,16 +134,61 @@ export default function AdvancedOptions({
   showCreatorSettings = false,
   creatorReferenceQuality = '0.5K',
   onCreatorReferenceQualityChange,
+  narrationVoiceConfig = null,
+  narrationVoiceSelection,
+  onNarrationVoiceSelectionChange,
 }: AdvancedOptionsProps) {
   const [allowOverflow, setAllowOverflow] = useState(false);
+  const [playingSampleVoice, setPlayingSampleVoice] = useState<string | null>(null);
   const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
   const planLabel = `${currentPlanLabel.charAt(0).toUpperCase()}${currentPlanLabel.slice(1)} plan limit`;
+  const voiceGender = narrationVoiceSelection?.genderBucket || 'female';
+  const voiceList = voiceGender === 'male'
+    ? narrationVoiceConfig?.maleVoiceList || []
+    : narrationVoiceConfig?.femaleVoiceList || [];
+  const selectedVoice = narrationVoiceSelection?.voiceId || (
+    voiceGender === 'male'
+      ? narrationVoiceConfig?.defaultMaleVoice
+      : narrationVoiceConfig?.defaultFemaleVoice
+  ) || voiceList[0] || '';
+  const voiceDropdownOptions: FilterDropdownOption[] = voiceList.map((voice) => ({ value: voice, label: voice }));
 
   const setVisualSetting = <K extends keyof VisualSettings,>(key: K, value: VisualSettings[K]) => {
     onVisualSettingsChange({
       ...visualSettings,
       [key]: value,
     });
+  };
+
+  const setNarrationVoiceGender = (genderBucket: NarrationGenderBucket) => {
+    if (!narrationVoiceConfig || !onNarrationVoiceSelectionChange) return;
+    const nextVoiceList = genderBucket === 'male'
+      ? narrationVoiceConfig.maleVoiceList
+      : narrationVoiceConfig.femaleVoiceList;
+    const defaultVoice = genderBucket === 'male'
+      ? narrationVoiceConfig.defaultMaleVoice
+      : narrationVoiceConfig.defaultFemaleVoice;
+    const nextVoice = nextVoiceList.includes(defaultVoice) ? defaultVoice : nextVoiceList[0] || '';
+    onNarrationVoiceSelectionChange({ genderBucket, voiceId: nextVoice });
+  };
+
+  const setNarrationVoice = (voiceId: string) => {
+    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId });
+  };
+
+  const playVoiceSample = async (voiceId: string) => {
+    const sample = narrationVoiceConfig?.samples.find((candidate) => candidate.voiceId === voiceId);
+    if (!sample?.audioUrl || sample.status !== 'ready') return;
+
+    setPlayingSampleVoice(voiceId);
+    try {
+      const audio = new Audio(sample.audioUrl);
+      audio.onended = () => setPlayingSampleVoice((current) => current === voiceId ? null : current);
+      audio.onerror = () => setPlayingSampleVoice((current) => current === voiceId ? null : current);
+      await audio.play();
+    } catch {
+      setPlayingSampleVoice((current) => current === voiceId ? null : current);
+    }
   };
 
   return (
@@ -264,6 +319,95 @@ export default function AdvancedOptions({
                 {VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description}
               </p>
             </div>
+
+            {narrationVoiceConfig?.enabled && (
+              <div className="space-y-4 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-sans text-neutral-200">Narration Voice</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                      Selected voice will be used for the entire story narration.
+                    </p>
+                  </div>
+                  {selectedVoice && (
+                    <div className="inline-flex items-center gap-1 rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300">
+                      <Check className="h-3 w-3" />
+                      {selectedVoice}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {(['female', 'male'] as const).map((genderBucket) => (
+                    <button
+                      key={genderBucket}
+                      type="button"
+                      onClick={() => setNarrationVoiceGender(genderBucket)}
+                      className={`min-h-11 rounded-2xl border px-4 py-2 text-sm transition-colors ${
+                        voiceGender === genderBucket
+                          ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+                          : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:bg-white/10'
+                      }`}
+                    >
+                      {genderBucket === 'female' ? 'Female' : 'Male'}
+                    </button>
+                  ))}
+                </div>
+
+                {voiceDropdownOptions.length > 0 && (
+                  <FilterDropdown
+                    value={selectedVoice}
+                    options={voiceDropdownOptions}
+                    onChange={setNarrationVoice}
+                    fullWidth
+                    size="form"
+                    mode="inline"
+                    ariaLabel="Choose narration voice"
+                  />
+                )}
+
+                <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                  {voiceList.map((voice) => {
+                    const sample = narrationVoiceConfig.samples.find((candidate) => candidate.voiceId === voice);
+                    const sampleReady = sample?.status === 'ready' && Boolean(sample.audioUrl);
+                    const selected = voice === selectedVoice;
+                    return (
+                      <div
+                        key={voice}
+                        className={`flex h-12 items-center justify-between gap-3 rounded-2xl border px-3 ${
+                          selected
+                            ? 'border-emerald-400/30 bg-emerald-500/10'
+                            : 'border-white/10 bg-neutral-900/50'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setNarrationVoice(voice)}
+                          className="min-w-0 flex-1 text-left"
+                        >
+                          <span className="block truncate text-sm text-neutral-100">{voice}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => playVoiceSample(voice)}
+                          disabled={!sampleReady || playingSampleVoice === voice}
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-neutral-800 text-neutral-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          aria-label={`Play ${voice} sample`}
+                        >
+                          <Volume2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {narrationVoiceConfig.fallbackToEnglishSample && (
+                  <p className="text-xs leading-relaxed text-amber-300">
+                    English sample preview is being used because this story language does not have a stored sample yet.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="grid gap-3 sm:grid-cols-3">
               <FilterDropdown

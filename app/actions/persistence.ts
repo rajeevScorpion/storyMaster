@@ -70,6 +70,7 @@ const ADDITIVE_BEAT_COLUMNS = [
   'origin_kind',
   'seed_plan_beat_index',
   'canonical_option_id',
+  'narration_voice_id',
 ] as const;
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -131,6 +132,10 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.audio_url = normalizeStorageUrl(audioUrl, 'story-assets');
   }
 
+  if (node.data.narrationVoiceId) {
+    row.narration_voice_id = node.data.narrationVoiceId;
+  }
+
   if (node.data.isStoryboard) {
     row.is_storyboard = true;
   }
@@ -162,6 +167,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       endingForecast: (beat.ending_forecast || []) as string[],
       imageUrl: beat.image_url || undefined,
       audioUrl: beat.audio_url || undefined,
+      narrationVoiceId: beat.narration_voice_id || undefined,
       isStoryboard: beat.is_storyboard || undefined,
       originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
       seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
@@ -240,6 +246,9 @@ export async function saveStory(
     setting: session.setting as unknown as Record<string, unknown>,
     status: session.status,
     narrator_voice: session.narratorVoice || null,
+    narration_voice_mode: session.narrationVoiceMode || session.storyConfig.narrationVoice?.mode || 'legacy_auto',
+    narration_voice_gender_bucket: session.narrationVoiceGenderBucket || session.storyConfig.narrationVoice?.genderBucket || null,
+    narration_language_code: session.narrationLanguageCode || session.storyConfig.narrationVoice?.languageCode || null,
     current_node_id: cleanMap.currentNodeId || null,
     updated_at: new Date().toISOString(),
   };
@@ -397,6 +406,9 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     allowedEndings: [],
     safetyProfile: 'all_ages',
     narratorVoice: story.narrator_voice || undefined,
+    narrationVoiceMode: story.narration_voice_mode === 'user_selected' ? 'user_selected' : 'legacy_auto',
+    narrationVoiceGenderBucket: story.narration_voice_gender_bucket === 'male' ? 'male' : story.narration_voice_gender_bucket === 'female' ? 'female' : undefined,
+    narrationLanguageCode: story.narration_language_code === 'en-IN' || story.narration_language_code === 'hi-IN' ? story.narration_language_code : undefined,
   };
 }
 
@@ -606,6 +618,7 @@ export async function autoPublishStoryline(
     endingForecast: b.ending_forecast,
     imageUrl: b.image_url,
     audioUrl: b.audio_url,
+    narrationVoiceId: b.narration_voice_id || undefined,
     isStoryboard: b.is_storyboard || undefined,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
