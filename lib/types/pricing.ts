@@ -347,8 +347,6 @@ export interface PricingWalletActivityItem {
 }
 
 export interface PricingWalletPageData {
-  pricingMarketKey: PricingMarketKey;
-  checkoutEnabled: boolean;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   storyCount: number;

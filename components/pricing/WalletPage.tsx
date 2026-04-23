@@ -273,10 +273,12 @@ export default function WalletPage() {
   const {
     data: pricingData,
     isLoading: pricingLoading,
-    marketOverride,
     setMarketOverride,
     refresh: refreshPricing,
   } = pricing;
+  const resolvedMarketKey = pricingData.snapshot.pricingMarketKey;
+  const checkoutEnabled = pricingData.controls.pricingCheckoutEnabled;
+  const currentPlanKey = pricingData.snapshot.planKey;
   const [showMyStories, setShowMyStories] = useState(false);
   const [walletData, setWalletData] = useState<PricingWalletPageData | null>(null);
   const [walletLoading, setWalletLoading] = useState(true);
@@ -293,7 +295,8 @@ export default function WalletPage() {
 
     try {
       const next = await getPricingWalletPageData({
-        pricingMarketKey: marketOverride,
+        pricingMarketKey: resolvedMarketKey,
+        currentPlanKey,
       });
       setWalletData(next);
     } catch (err: any) {
@@ -301,11 +304,12 @@ export default function WalletPage() {
     } finally {
       setWalletLoading(false);
     }
-  }, [marketOverride]);
+  }, [resolvedMarketKey, currentPlanKey]);
 
   useEffect(() => {
+    if (pricingLoading) return;
     void loadWalletData();
-  }, [loadWalletData, pricingData.userId]);
+  }, [loadWalletData, pricingLoading]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -348,7 +352,7 @@ export default function WalletPage() {
   const primaryTopup = topups[0] ?? null;
   const marketLabel = pricingData.snapshot.pricingMarketKey === 'IN' ? 'India' : 'Outside India';
   const headlineActionDisabled =
-    !walletData?.checkoutEnabled ||
+    !checkoutEnabled ||
     !pricingData.userId ||
     !usingRazorpayMarket ||
     !razorpayReady;
@@ -438,7 +442,7 @@ export default function WalletPage() {
 
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
-      {walletData?.checkoutEnabled && usingRazorpayMarket && (
+      {checkoutEnabled && usingRazorpayMarket && (
         <Script
           src={RAZORPAY_CHECKOUT_SCRIPT_URL}
           strategy="afterInteractive"
@@ -542,7 +546,7 @@ export default function WalletPage() {
                 >
                   {!pricingData.userId
                     ? 'Sign in to continue'
-                    : !walletData?.checkoutEnabled
+                    : !checkoutEnabled
                     ? 'Upgrade coming soon'
                     : !usingRazorpayMarket
                     ? 'India checkout first'
@@ -566,7 +570,7 @@ export default function WalletPage() {
                 >
                   {!pricingData.userId
                     ? 'Sign in to continue'
-                    : !walletData?.checkoutEnabled
+                    : !checkoutEnabled
                     ? 'Top-ups coming soon'
                     : !usingRazorpayMarket
                     ? 'India checkout first'
@@ -622,7 +626,7 @@ export default function WalletPage() {
           </section>
         </div>
 
-        {(walletError || checkoutError || checkoutStatus || (walletData?.checkoutEnabled && !usingRazorpayMarket)) && (
+        {(walletError || checkoutError || checkoutStatus || (checkoutEnabled && !usingRazorpayMarket)) && (
           <div className="mt-6 space-y-3">
             {walletError && (
               <div className="rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
@@ -639,7 +643,7 @@ export default function WalletPage() {
                 {checkoutStatus}
               </div>
             )}
-            {walletData?.checkoutEnabled && !usingRazorpayMarket && (
+            {checkoutEnabled && !usingRazorpayMarket && (
               <div className="rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
                 Razorpay is the first checkout path being integrated. Switch the market selector to India to test real checkout buttons for now.
               </div>
@@ -693,7 +697,7 @@ export default function WalletPage() {
                   offer.planKey === 'free' ||
                   !pricingData.userId ||
                   isDowngrade ||
-                  !walletData?.checkoutEnabled ||
+                  !checkoutEnabled ||
                   (yearlyCheckoutDeferred && selectedPlanInterval === 'annual') ||
                   selectedProvider == null ||
                   selectedProvider !== 'razorpay' ||
@@ -709,7 +713,7 @@ export default function WalletPage() {
                   selectedProvider,
                   pricingMarketKey: pricingData.snapshot.pricingMarketKey,
                   userId: pricingData.userId,
-                  checkoutEnabled: walletData?.checkoutEnabled ?? false,
+                  checkoutEnabled,
                   yearlyCheckoutDeferred,
                   razorpayReady,
                   checkoutBusyKey,
@@ -803,7 +807,7 @@ export default function WalletPage() {
                       type="button"
                       disabled={
                         !pricingData.userId ||
-                        !walletData?.checkoutEnabled ||
+                        !checkoutEnabled ||
                         pack.provider !== 'razorpay' ||
                         !razorpayReady ||
                         checkoutBusyKey !== null
@@ -813,7 +817,7 @@ export default function WalletPage() {
                     >
                       {!pricingData.userId
                         ? 'Sign in to continue'
-                        : !walletData?.checkoutEnabled
+                        : !checkoutEnabled
                         ? 'Top-up coming soon'
                         : pack.provider !== 'razorpay'
                         ? 'Stripe comes next'
