@@ -630,7 +630,7 @@ export default function StorylinePlayer({
                   }
                 }}
                 disabled={isExporting}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-sans uppercase tracking-widest transition-all duration-300 ${
+                className={`flex items-center gap-1.5 rounded-full p-2 text-xs font-sans uppercase tracking-widest transition-all duration-300 [&>span]:hidden md:px-2.5 md:py-1.5 md:[&>span]:inline ${
                   isExporting
                     ? 'bg-white/5 text-neutral-500 cursor-wait'
                     : 'bg-white/5 hover:bg-white/10 text-neutral-300 cursor-pointer'
@@ -657,7 +657,7 @@ export default function StorylinePlayer({
             ) : (
               <button
                 onClick={() => window.open('/wallet', '_blank')}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-sans uppercase tracking-widest bg-white/5 text-neutral-500 cursor-pointer hover:bg-white/10 hover:text-neutral-400 transition-all duration-300"
+                className="flex items-center gap-1.5 rounded-full bg-white/5 p-2 text-xs font-sans uppercase tracking-widest text-neutral-500 transition-all duration-300 cursor-pointer hover:bg-white/10 hover:text-neutral-400 [&>span]:hidden md:px-2.5 md:py-1.5 md:[&>span]:inline"
                 title="Video export — available on Plus and above"
               >
                 <Lock className="w-3.5 h-3.5" />
@@ -745,7 +745,7 @@ export default function StorylinePlayer({
         </div>
 
         {/* Story Text Card */}
-        <div className="flex flex-col items-center">
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-end md:flex-none">
           <AnimatePresence mode="wait">
             {!showChoice && !isMinimized && (
               <motion.div
@@ -785,7 +785,7 @@ export default function StorylinePlayer({
         </div>
 
         {/* Navigation Controls */}
-        <div className="mt-6 mb-4 space-y-3 md:space-y-0">
+        <div className="mb-0 mt-3 space-y-3 md:mb-4 md:mt-6 md:space-y-0">
           {/* Mobile Row 1: Prev/Next buttons — right-aligned, above controls */}
           <div className="flex items-center justify-end gap-2 md:hidden">
             <button
