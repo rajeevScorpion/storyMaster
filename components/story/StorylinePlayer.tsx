@@ -69,6 +69,7 @@ function StoryboardCycler({
   vignetteEnabled,
   vignetteAmountPercent,
   playbackState,
+  imageClassName,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -77,6 +78,7 @@ function StoryboardCycler({
   vignetteEnabled: boolean;
   vignetteAmountPercent: number;
   playbackState: 'idle' | 'playing' | 'paused';
+  imageClassName?: string;
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
@@ -123,24 +125,26 @@ function StoryboardCycler({
 
   return (
     <div className="absolute inset-0 overflow-hidden">
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={activePanel}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.6, ease: 'easeInOut' }}
-          className="absolute inset-0 overflow-hidden"
-        >
-          <div
-            className="absolute"
-            style={getStoryboardPanelCropStyle(activePanel)}
+      <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activePanel}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6, ease: 'easeInOut' }}
+            className="absolute inset-0 overflow-hidden"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={gridUrl} alt="" className="w-full h-full object-cover" />
-          </div>
-        </motion.div>
-      </AnimatePresence>
+            <div
+              className="absolute"
+              style={getStoryboardPanelCropStyle(activePanel)}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={gridUrl} alt="" className="w-full h-full object-cover" />
+            </div>
+          </motion.div>
+        </AnimatePresence>
+      </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
         {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
@@ -333,6 +337,8 @@ export default function StorylinePlayer({
   }, [storylineId, isLoggedIn]);
 
   const currentBeat = currentBeats[currentIndex];
+  const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
+  const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
   const {
     scrollRef: storyScrollRef,
     isAutoScrolling,
@@ -475,20 +481,42 @@ export default function StorylinePlayer({
     <div ref={containerRef} className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
-        {currentBeat.isStoryboard && currentBeat.imageUrl ? (
-          <>
-            <div className={`absolute inset-0 transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}>
-              <StoryboardCycler
-                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                gridUrl={currentBeat.imageUrl}
-                audioUrl={currentBeat.audioUrl || undefined}
-                cycleOverride={cycleSettings.cycleOverride}
-                cycleMs={cycleSettings.cycleMs}
-                vignetteEnabled={cycleSettings.vignetteEnabled}
-                vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
-                playbackState={playbackState}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={displayImageUrl ?? `storyline-${currentIndex}`}
+            initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
+            animate={isStoryboard ? { opacity: 1, scale: [1, 1.06] } : { opacity: 1, scale: [1, 1.08] }}
+            exit={{ opacity: 0 }}
+            transition={{
+              opacity: { duration: 1.5, ease: 'easeOut' },
+              scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
+            }}
+            className="absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none"
+          >
+            {isStoryboard ? (
+              <div className={`absolute inset-0 transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}>
+                <StoryboardCycler
+                  key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                  gridUrl={currentBeat.imageUrl!}
+                  audioUrl={currentBeat.audioUrl || undefined}
+                  cycleOverride={cycleSettings.cycleOverride}
+                  cycleMs={cycleSettings.cycleMs}
+                  vignetteEnabled={cycleSettings.vignetteEnabled}
+                  vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+                  playbackState={playbackState}
+                />
+              </div>
+            ) : displayImageUrl ? (
+              <Image
+                src={displayImageUrl}
+                alt={currentBeat.sceneSummary}
+                fill
+                className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
+                referrerPolicy="no-referrer"
+                priority
+                unoptimized
               />
-            </div>
+            ) : null}
             <motion.div
               initial={false}
               animate={{
@@ -498,48 +526,14 @@ export default function StorylinePlayer({
               transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
             />
-          </>
-        ) : (
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentBeat.imageUrl}
-              initial={{ opacity: 0, scale: 1.05 }}
-              animate={{ opacity: 1, scale: [1, 1.08] }}
-              exit={{ opacity: 0 }}
-              transition={{
-                opacity: { duration: 1.5, ease: 'easeOut' },
-                scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
-              }}
-              className="absolute inset-0"
-            >
-              {(currentBeat.portraitImageUrl || currentBeat.imageUrl) && (
-                <Image
-                  src={currentBeat.portraitImageUrl || currentBeat.imageUrl!}
-                  alt={currentBeat.sceneSummary}
-                  fill
-                  className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
-                  referrerPolicy="no-referrer"
-                  priority
-                  unoptimized
-                />
-              )}
-              <motion.div
-                initial={false}
-                animate={{
-                  height: isMinimized ? '20%' : '60%',
-                  opacity: isMinimized ? 0.5 : 0.7,
-                }}
-                transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-neutral-950 via-neutral-950/90 to-transparent"
-              />
-            </motion.div>
-          </AnimatePresence>
-        )}
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {/* Header */}
-      <header className="relative z-20 p-4 md:p-6 flex justify-between items-center bg-gradient-to-b from-neutral-950/80 to-transparent shrink-0">
-        <div className="flex items-center gap-4">
+      <header className="relative z-20 shrink-0 bg-gradient-to-b from-neutral-950/80 to-transparent px-4 pb-2 pt-4 md:p-6">
+        <div className="flex items-center justify-between gap-3">
+        <div className="flex shrink-0 items-center gap-4">
           {/* Kissago branding — matches main page style */}
           <KissagoLogo fixed={false} />
           <div className="hidden md:block">
@@ -549,8 +543,8 @@ export default function StorylinePlayer({
             )}
           </div>
         </div>
-        <div className="flex items-center gap-3 text-sm font-sans uppercase tracking-widest text-neutral-400">
-          <span className="text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto pl-1 text-sm font-sans uppercase tracking-widest text-neutral-400 scrollbar-none [&>*]:shrink-0 md:gap-3 md:overflow-visible md:pl-0">
+          <span className="shrink-0 text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
 
           {/* Save to profile button — logged-in only */}
           {isLoggedIn && (
@@ -690,21 +684,23 @@ export default function StorylinePlayer({
 
 
           {/* User menu — logged-in only */}
-          <UserMenu onMyStories={() => setShowMyStories(true)} />
+          <div className="shrink-0">
+            <UserMenu onMyStories={() => setShowMyStories(true)} />
+          </div>
+        </div>
+        </div>
+
+        <div className="mt-3 md:hidden">
+          <h1 className="text-lg font-serif leading-snug tracking-wide text-neutral-200">{title}</h1>
+          {authorName && (
+            <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
+          )}
         </div>
       </header>
 
-      {/* Mobile title (shown below header on small screens) */}
-      <div className="relative px-4 md:hidden">
-        <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
-        {authorName && (
-          <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
-        )}
-      </div>
-
       {/* Main Content */}
       <motion.main
-        className="relative z-10 flex-1 flex flex-col justify-end p-4 md:p-12 max-w-4xl mx-auto w-full min-h-0"
+        className="relative z-10 flex-1 flex flex-col p-4 md:justify-end md:p-12 max-w-4xl mx-auto w-full min-h-0"
         onPan={onPan}
         onPanEnd={onPanEnd}
         style={{ x: dragX }}
@@ -715,6 +711,38 @@ export default function StorylinePlayer({
             <ChoiceTransition optionLabel={currentChoice.optionLabel} />
           )}
         </AnimatePresence>
+
+        <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
+          {displayImageUrl && (
+            <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
+              {isStoryboard ? (
+                <StoryboardCycler
+                  key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                  gridUrl={currentBeat.imageUrl!}
+                  audioUrl={currentBeat.audioUrl || undefined}
+                  cycleOverride={cycleSettings.cycleOverride}
+                  cycleMs={cycleSettings.cycleMs}
+                  vignetteEnabled={cycleSettings.vignetteEnabled}
+                  vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+                  playbackState={playbackState}
+                  imageClassName="mobile-scene-shuttle"
+                />
+              ) : (
+                <div className="mobile-scene-shuttle absolute inset-0">
+                  <Image
+                    src={displayImageUrl}
+                    alt={currentBeat.sceneSummary}
+                    fill
+                    className="object-cover"
+                    referrerPolicy="no-referrer"
+                    priority
+                    unoptimized
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Story Text Card */}
         <div className="flex flex-col items-center">
