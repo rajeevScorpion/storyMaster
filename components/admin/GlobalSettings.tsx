@@ -66,7 +66,8 @@ export type GlobalSettingsSection =
   | 'authoring'
   | 'characters'
   | 'video-export'
-  | 'generation';
+  | 'generation'
+  | 'pages';
 
 type GlobalSettingsSubsection = Exclude<GlobalSettingsSection, 'overview'>;
 
@@ -134,6 +135,13 @@ const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
     href: '/admin/settings/generation',
     description: 'Gemini text, image, TTS, and cloud-save timeout guards.',
     icon: Clock3,
+  },
+  {
+    section: 'pages',
+    label: 'Pages',
+    href: '/admin/settings/pages',
+    description: 'Rollout legal, support, blog, docs, FAQ, and footer controls.',
+    icon: FileText,
   },
 ];
 
@@ -603,6 +611,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, optimized saves ${formatToggleSummary(storyAssetSignedUrlSwapEnabled).toLowerCase()}`,
+    pages: 'Managed rollout pages, footer controls, and route guards',
   };
 
   return (

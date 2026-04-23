@@ -13,6 +13,7 @@ import type {
   PricingMarketKey,
   PromotionMarketScope,
 } from './pricing';
+import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
 
 export interface DbProfile {
   id: string;
@@ -169,6 +170,26 @@ export interface DbNarrationVoiceSample {
   generation_error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface DbManagedPage {
+  page_key: string;
+  title: string;
+  slug: string;
+  enabled: boolean;
+  show_in_footer: boolean;
+  footer_order: number;
+  open_in_new_tab: boolean;
+  access_level: ManagedPageAccessLevel;
+  page_type: ManagedPageType;
+  seed_version: number;
+  content: string;
+  excerpt: string | null;
+  metadata_json: Record<string, unknown>;
+  is_system_page: boolean;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
 }
 
 // Gallery types

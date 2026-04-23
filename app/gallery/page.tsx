@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/hooks/useAuth';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
+import ManagedFooter from '@/components/layout/ManagedFooter';
 import GenreShowcase, { GenreShowcaseSkeleton } from '@/components/gallery/GenreShowcase';
 import GalleryFiltersBar from '@/components/gallery/GalleryFilters';
 import GalleryItemCard from '@/components/gallery/GalleryItemCard';
@@ -468,6 +469,7 @@ export default function GalleryPage() {
           )}
         </div>
       </div>
+      <ManagedFooter />
     </main>
   );
 }

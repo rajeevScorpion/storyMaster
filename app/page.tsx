@@ -10,6 +10,7 @@ import LoadingState from '@/components/story/LoadingState';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
+import ManagedFooter from '@/components/layout/ManagedFooter';
 import { AnimatePresence } from 'motion/react';
 import type { StoryConfig } from '@/lib/types/story';
 
@@ -101,6 +102,8 @@ function HomeContent() {
       <AnimatePresence>
         {isLoading && <LoadingState key="loading" />}
       </AnimatePresence>
+
+      {!session && <ManagedFooter />}
     </main>
   );
 }
