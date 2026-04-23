@@ -589,9 +589,10 @@ export default function WalletPage() {
                 label="Subscription coins"
                 value={displaySubscriptionCoins}
                 hint={showAllowancePreview ? 'Preview of your monthly plan refill' : 'Monthly refill bucket'}
+                loading={pricingLoading}
               />
-              <BalanceCard icon={WalletIcon} label="Top-up coins" value={topupCoins} hint="Non-expiring coin packs" />
-              <BalanceCard icon={Sparkles} label="Bonus coins" value={bonusCoins} hint="Promos and rewards" />
+              <BalanceCard icon={WalletIcon} label="Top-up coins" value={topupCoins} hint="Non-expiring coin packs" loading={pricingLoading} />
+              <BalanceCard icon={Sparkles} label="Bonus coins" value={bonusCoins} hint="Promos and rewards" loading={pricingLoading} />
             </div>
           </section>
 
@@ -893,11 +894,13 @@ function BalanceCard({
   label,
   value,
   hint,
+  loading = false,
 }: {
   icon: typeof Coins;
   label: string;
   value: number;
   hint: string;
+  loading?: boolean;
 }) {
   return (
     <div className="rounded-3xl border border-white/10 bg-neutral-900/60 p-4">
@@ -907,7 +910,7 @@ function BalanceCard({
         </div>
         <div>
           <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">{label}</p>
-          <p className="mt-1 text-2xl text-neutral-100">{value.toLocaleString()}</p>
+          <p className="mt-1 text-2xl text-neutral-100">{loading ? '•••' : value.toLocaleString()}</p>
         </div>
       </div>
       <p className="mt-3 text-xs text-neutral-500">{hint}</p>
