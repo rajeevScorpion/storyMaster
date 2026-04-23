@@ -17,6 +17,7 @@ import type {
   DbBeatUsageEvent,
 } from '@/lib/types/database';
 import type {
+  PlanKey,
   PricingMarketKey,
   PricingRuntimeContext,
   PricingWalletActivityItem,
@@ -166,11 +167,17 @@ export async function getPricingRuntimeContext(
   };
 }
 
+export interface GetPricingWalletPageDataInput {
+  pricingMarketKey: PricingMarketKey;
+  currentPlanKey?: PlanKey;
+}
+
 export async function getPricingWalletPageData(
-  input: GetPricingRuntimeContextInput = {}
+  input: GetPricingWalletPageDataInput
 ): Promise<PricingWalletPageData> {
-  const context = await getPricingRuntimeContext(input);
+  const userId = await getCurrentUserId();
   const supabase = createAdminClient();
+  const currentPlanKey: PlanKey = input.currentPlanKey ?? 'free';
 
   const [plansResult, planVersionsResult, topupsResult, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled] = await Promise.all([
     supabase
@@ -183,13 +190,13 @@ export async function getPricingWalletPageData(
       .from('pricing_plan_versions')
       .select('*')
       .eq('status', 'published')
-      .eq('pricing_market_key', context.snapshot.pricingMarketKey)
+      .eq('pricing_market_key', input.pricingMarketKey)
       .order('plan_id', { ascending: true }),
     supabase
       .from('pricing_topup_packs')
       .select('*')
       .eq('status', 'published')
-      .eq('pricing_market_key', context.snapshot.pricingMarketKey)
+      .eq('pricing_market_key', input.pricingMarketKey)
       .order('beat_amount', { ascending: true }),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
@@ -203,29 +210,29 @@ export async function getPricingWalletPageData(
   let storyCount = 0;
   let storylineCount = 0;
 
-  if (context.userId) {
+  if (userId) {
     const [grantsResult, usageResult, storiesCountResult, storylinesCountResult] = await Promise.all([
       supabase
         .from('beat_grants')
         .select('*')
-        .eq('user_id', context.userId)
+        .eq('user_id', userId)
         .order('granted_at', { ascending: false })
         .limit(10),
       supabase
         .from('beat_usage_events')
         .select('*')
-        .eq('user_id', context.userId)
+        .eq('user_id', userId)
         .order('created_at', { ascending: false })
         .limit(10),
       supabase
         .from('stories')
         .select('*', { count: 'exact', head: true })
-        .eq('user_id', context.userId)
+        .eq('user_id', userId)
         .eq('is_archived', false),
       supabase
         .from('storylines')
         .select('*', { count: 'exact', head: true })
-        .eq('user_id', context.userId),
+        .eq('user_id', userId),
     ]);
 
     throwIfQueryFailed(grantsResult.error, 'Failed to load wallet grant activity');
@@ -242,8 +249,6 @@ export async function getPricingWalletPageData(
   }
 
   return {
-    pricingMarketKey: context.snapshot.pricingMarketKey,
-    checkoutEnabled: context.controls.pricingCheckoutEnabled,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     storyCount,
@@ -251,7 +256,7 @@ export async function getPricingWalletPageData(
     planOffers: buildPlanOffers(
       (plansResult.data ?? []) as DbPricingPlan[],
       (planVersionsResult.data ?? []) as DbPricingPlanVersion[],
-      context.snapshot.planKey
+      currentPlanKey
     ),
     topupOffers: buildTopupOffers((topupsResult.data ?? []) as DbPricingTopupPack[]),
     recentActivity,

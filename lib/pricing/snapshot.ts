@@ -281,7 +281,7 @@ function resolvePricingMarketKey({
     return currentCustomer.pricing_market_key;
   }
 
-  return 'ROW';
+  return 'IN';
 }
 
 function selectCurrentBillingCustomer(
