@@ -5,7 +5,7 @@ import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToP
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
-import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import { normalizeBeatMediaFields, BEAT_ROW_NOT_FOUND_MESSAGE } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 
@@ -559,7 +559,7 @@ export async function updateBeatMediaState(
     throw new Error(`Failed to update beat media state: ${error.message}`);
   }
   if (!updatedBeatRows || updatedBeatRows.length === 0) {
-    throw new Error('Failed to update beat media state: beat row not found');
+    throw new Error(`Failed to update beat media state: ${BEAT_ROW_NOT_FOUND_MESSAGE}`);
   }
 
   const { data: story, error: storyError } = await supabase

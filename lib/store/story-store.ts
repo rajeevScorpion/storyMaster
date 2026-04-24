@@ -16,7 +16,7 @@ import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorat
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
-import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import { normalizeBeatMediaFields, isBeatRowNotFoundError } from '@/lib/types/beat-media';
 import {
   createStoryLoadingStage,
   type StoryLoadingFlow,
@@ -1095,6 +1095,22 @@ export const useStoryStore = create<StoryState>()(
               });
             }
           } catch (error) {
+            // Transient: beat row has not been persisted yet (saveBeat/saveStory race).
+            // Don't count it as a retry attempt — just schedule a short re-drain so we
+            // retry once the row exists.
+            if (isBeatRowNotFoundError(error)) {
+              queuedBeatAssetSyncStoryIds.add(storyId);
+              schedulePendingBeatImageRetry(
+                storyId,
+                record.nodeId,
+                BEAT_IMAGE_RETRY_BACKOFF_MS[0],
+                () => {
+                  void retryPendingBeatAssetSyncInternal();
+                }
+              );
+              continue;
+            }
+
             const message = error instanceof Error ? error.message : 'Beat image upload failed';
             const updateResult = await updatePendingBeatImageAttempt(
               storyId,
