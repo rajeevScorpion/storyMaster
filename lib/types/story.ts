@@ -89,6 +89,7 @@ export interface StoryBeat {
   changedCharacterIds?: string[];
   storyboardPlan?: StoryboardPlan;
   imageUrl?: string;
+  persistedImageUrl?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
   isStoryboard?: boolean;

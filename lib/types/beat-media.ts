@@ -13,12 +13,38 @@ export function isBeatMediaStatus(value: unknown): value is BeatMediaStatus {
   return value === 'not_requested' || value === 'pending' || value === 'ready' || value === 'failed';
 }
 
+function isDurableMediaUrl(url: string | undefined): url is string {
+  return Boolean(url && !url.startsWith('data:'));
+}
+
+export function getBeatDisplayImageUrl<T extends { imageUrl?: string }>(beat: T): string | undefined {
+  return beat.imageUrl;
+}
+
+export function getBeatPersistedImageUrl<T extends {
+  imageUrl?: string;
+  persistedImageUrl?: string;
+}>(beat: T): string | undefined {
+  if (isDurableMediaUrl(beat.persistedImageUrl)) {
+    return beat.persistedImageUrl;
+  }
+  if (isDurableMediaUrl(beat.imageUrl)) {
+    return beat.imageUrl;
+  }
+  return undefined;
+}
+
+export function getBeatPersistedAudioUrl<T extends { audioUrl?: string }>(beat: T): string | undefined {
+  return isDurableMediaUrl(beat.audioUrl) ? beat.audioUrl : undefined;
+}
+
 export function normalizeImageMediaStatus(
   status: BeatMediaStatus | undefined,
   imageUrl: string | undefined,
+  persistedImageUrl: string | undefined,
   isStoryboard: boolean | undefined
 ): BeatMediaStatus {
-  if (imageUrl && !imageUrl.startsWith('data:')) {
+  if (getBeatPersistedImageUrl({ imageUrl, persistedImageUrl })) {
     return 'ready';
   }
   if (isBeatMediaStatus(status)) {
@@ -37,7 +63,7 @@ export function normalizeAudioMediaStatus(
   status: BeatMediaStatus | undefined,
   audioUrl: string | undefined
 ): BeatMediaStatus {
-  if (audioUrl && !audioUrl.startsWith('data:')) {
+  if (getBeatPersistedAudioUrl({ audioUrl })) {
     return 'ready';
   }
   if (isBeatMediaStatus(status)) {
@@ -51,6 +77,7 @@ export function normalizeAudioMediaStatus(
 
 export function normalizeBeatMediaFields<T extends {
   imageUrl?: string;
+  persistedImageUrl?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
   isStoryboard?: boolean;
@@ -58,6 +85,7 @@ export function normalizeBeatMediaFields<T extends {
   audioStatus?: BeatMediaStatus;
   audioError?: string;
 }>(beat: T): T & {
+  persistedImageUrl?: string;
   imageStatus: BeatMediaStatus;
   imageError?: string;
   audioStatus: BeatMediaStatus;
@@ -65,9 +93,22 @@ export function normalizeBeatMediaFields<T extends {
 } {
   return {
     ...beat,
-    imageStatus: normalizeImageMediaStatus(beat.imageStatus, beat.imageUrl, beat.isStoryboard),
+    persistedImageUrl: getBeatPersistedImageUrl(beat),
+    imageStatus: normalizeImageMediaStatus(beat.imageStatus, beat.imageUrl, beat.persistedImageUrl, beat.isStoryboard),
     imageError: beat.imageError || undefined,
     audioStatus: normalizeAudioMediaStatus(beat.audioStatus, beat.audioUrl),
     audioError: beat.audioError || undefined,
   };
+}
+
+export function hasBeatImpossibleImageState<T extends {
+  imageUrl?: string;
+  persistedImageUrl?: string;
+  imageStatus?: BeatMediaStatus;
+  isStoryboard?: boolean;
+}>(beat: T): boolean {
+  return (
+    normalizeImageMediaStatus(beat.imageStatus, beat.imageUrl, beat.persistedImageUrl, beat.isStoryboard) === 'ready'
+    && !getBeatPersistedImageUrl(beat)
+  );
 }
