@@ -45,5 +45,8 @@
   - story-wide warning aggregation now normalizes beat media fields before counting pending/failed nodes
   - `updateBeatMediaState` now errors if the normalized `beats` row was not actually updated
   - mobile no longer shows the large duplicated background warning panel on top of the dedicated image-card retry state
+- Drain race fix (mobile spinner never turning green):
+  - `putPendingBeatImage` is now idempotent on unchanged data — it preserves the existing `updatedAt` when the staged `imageDataUrl` matches. This stops the re-stage path (triggered by `stagePendingBeatImagesForSession` inside `saveStoryToCloudImmediate`) from invalidating an in-flight drain via the optimistic-concurrency `updatedAt` check, which was causing successful uploads to be discarded locally.
+  - `updateBeatMediaState` now uses a `BEAT_ROW_NOT_FOUND` sentinel when the normalized row is missing, and the drain treats that as a short soft-retry without consuming `attemptCount` — so the drain launched from `continueStory` before `saveBeat`/`saveStory` has written the beat row no longer burns retries and flips the beat to `failed`.
 - Verification:
   - `npm run build` passed successfully on 2026-04-24

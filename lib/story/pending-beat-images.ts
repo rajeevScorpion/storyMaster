@@ -111,6 +111,14 @@ export async function putPendingBeatImage(
   input: Omit<PendingBeatImageRecord, 'key' | 'createdAt' | 'updatedAt' | 'attemptCount' | 'lastError'>
 ): Promise<PendingBeatImageRecord | null> {
   const existing = await getPendingBeatImage(input.storyId, input.nodeId);
+
+  // Idempotent: if the same image data is already staged, don't bump updatedAt.
+  // Bumping it would invalidate an in-flight drain that keyed its optimistic-concurrency
+  // check on the original updatedAt, causing the drain to discard a successful upload.
+  if (existing && existing.imageDataUrl === input.imageDataUrl) {
+    return existing;
+  }
+
   const nextRecord: PendingBeatImageRecord = {
     key: getRecordKey(input.storyId, input.nodeId),
     storyId: input.storyId,
@@ -119,8 +127,8 @@ export async function putPendingBeatImage(
     imageDataUrl: input.imageDataUrl,
     createdAt: existing?.createdAt ?? Date.now(),
     updatedAt: Date.now(),
-    attemptCount: existing?.attemptCount ?? 0,
-    lastError: existing?.lastError ?? null,
+    attemptCount: 0,
+    lastError: null,
   };
 
   await withStore('readwrite', (store) => {

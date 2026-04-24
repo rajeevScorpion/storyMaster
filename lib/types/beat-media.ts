@@ -3,6 +3,12 @@ export type BeatMediaStatus = 'not_requested' | 'pending' | 'ready' | 'failed';
 export const DEFAULT_IMAGE_MEDIA_STATUS: BeatMediaStatus = 'not_requested';
 export const DEFAULT_AUDIO_MEDIA_STATUS: BeatMediaStatus = 'not_requested';
 
+export const BEAT_ROW_NOT_FOUND_MESSAGE = 'BEAT_ROW_NOT_FOUND';
+
+export function isBeatRowNotFoundError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(BEAT_ROW_NOT_FOUND_MESSAGE);
+}
+
 export function isBeatMediaStatus(value: unknown): value is BeatMediaStatus {
   return value === 'not_requested' || value === 'pending' || value === 'ready' || value === 'failed';
 }
