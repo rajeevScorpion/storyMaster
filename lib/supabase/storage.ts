@@ -1,6 +1,7 @@
 import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { StoryMap, StoryBeat } from '@/lib/types/story';
+import { getBeatPersistedAudioUrl, getBeatPersistedImageUrl } from '@/lib/types/beat-media';
 
 export type NodeAssetUrlMap = Record<string, { imageUrl?: string; audioUrl?: string }>;
 
@@ -212,12 +213,15 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
   };
 
   for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
+    const persistedImageUrl = getBeatPersistedImageUrl(node.data);
+    const persistedAudioUrl = getBeatPersistedAudioUrl(node.data);
     cloned.nodes[nodeId] = {
       ...node,
       data: {
         ...node.data,
-        imageUrl: isBase64DataUrl(node.data.imageUrl) ? undefined : node.data.imageUrl ? normalizeStorageUrl(node.data.imageUrl, 'story-assets') : node.data.imageUrl,
-        audioUrl: isBase64DataUrl(node.data.audioUrl) ? undefined : node.data.audioUrl ? normalizeStorageUrl(node.data.audioUrl, 'story-assets') : node.data.audioUrl,
+        imageUrl: persistedImageUrl ? normalizeStorageUrl(persistedImageUrl, 'story-assets') : undefined,
+        persistedImageUrl: undefined,
+        audioUrl: persistedAudioUrl ? normalizeStorageUrl(persistedAudioUrl, 'story-assets') : undefined,
         characters: node.data.characters.map(c => ({
           ...c,
           portraitBase64: undefined,

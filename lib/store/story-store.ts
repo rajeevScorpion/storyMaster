@@ -16,7 +16,12 @@ import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorat
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
-import { normalizeBeatMediaFields, isBeatRowNotFoundError } from '@/lib/types/beat-media';
+import {
+  normalizeBeatMediaFields,
+  isBeatRowNotFoundError,
+  getBeatPersistedImageUrl,
+  hasBeatImpossibleImageState,
+} from '@/lib/types/beat-media';
 import {
   createStoryLoadingStage,
   type StoryLoadingFlow,
@@ -328,6 +333,7 @@ const SIGNED_ASSET_PRELOAD_TIMEOUT_MS = 4000;
 const LONG_SAVE_RETRY_MESSAGE = 'Cloud save is taking longer than usual. A retry is queued.';
 const ASSET_SYNC_PENDING_MESSAGE = 'Beat media is syncing in the background.';
 const ASSET_SYNC_FAILED_MESSAGE = 'A beat image still needs upload. Tap to retry.';
+const ASSET_SYNC_REPAIR_MESSAGE = 'A beat image still needs repair. Tap to retry.';
 const BEAT_IMAGE_RETRY_BACKOFF_MS = [10_000, 30_000, 60_000] as const;
 const DEFAULT_STORY_SAVE_RUNTIME_SETTINGS: StorySaveRuntimeSettings = {
   storyAssetSignedUrlSwapEnabled: false,
@@ -515,7 +521,7 @@ function updateSessionBeat(
 }
 
 function shouldStageBeatImage(beat: StoryBeat): boolean {
-  return isDataUrl(beat.imageUrl) && beat.imageStatus !== 'ready';
+  return isDataUrl(beat.imageUrl) && (beat.imageStatus !== 'ready' || !getBeatPersistedImageUrl(beat));
 }
 
 function hasPersistedReadyImage(beat: StoryBeat | undefined): boolean {
@@ -524,11 +530,7 @@ function hasPersistedReadyImage(beat: StoryBeat | undefined): boolean {
   }
 
   const normalizedBeat = normalizeBeatMediaFields(beat);
-  return Boolean(
-    normalizedBeat.imageUrl
-    && !isDataUrl(normalizedBeat.imageUrl)
-    && normalizedBeat.imageStatus === 'ready'
-  );
+  return normalizedBeat.imageStatus === 'ready' && Boolean(getBeatPersistedImageUrl(normalizedBeat));
 }
 
 function markUploadedAssetStatusesReady(storyMap: StoryMap, assetMap: NodeAssetUrlMap): StoryMap {
@@ -539,7 +541,7 @@ function markUploadedAssetStatusesReady(storyMap: StoryMap, assetMap: NodeAssetU
 
     return updateStoryMapBeat(nextMap, nodeId, (beat) => ({
       ...beat,
-      ...(urls.imageUrl ? { imageStatus: 'ready', imageError: undefined } : {}),
+      ...(urls.imageUrl ? { imageStatus: 'ready', imageError: undefined, persistedImageUrl: urls.imageUrl } : {}),
       ...(urls.audioUrl ? { audioStatus: 'ready', audioError: undefined } : {}),
     }));
   }, storyMap);
@@ -548,27 +550,33 @@ function markUploadedAssetStatusesReady(storyMap: StoryMap, assetMap: NodeAssetU
 function getStoryMapImageSyncSummary(storyMap: StoryMap | null | undefined): {
   pendingCount: number;
   failedCount: number;
+  impossibleCount: number;
 } {
   if (!storyMap) {
-    return { pendingCount: 0, failedCount: 0 };
+    return { pendingCount: 0, failedCount: 0, impossibleCount: 0 };
   }
 
   return Object.values(storyMap.nodes).reduce(
     (summary, node) => {
       const normalizedBeat = normalizeBeatMediaFields(node.data);
-      if (normalizedBeat.imageStatus === 'failed') {
+      if (hasBeatImpossibleImageState(normalizedBeat)) {
+        summary.impossibleCount += 1;
+      } else if (normalizedBeat.imageStatus === 'failed') {
         summary.failedCount += 1;
       } else if (normalizedBeat.imageStatus === 'pending') {
         summary.pendingCount += 1;
       }
       return summary;
     },
-    { pendingCount: 0, failedCount: 0 }
+    { pendingCount: 0, failedCount: 0, impossibleCount: 0 }
   );
 }
 
 function deriveSaveWarning(storyMap: StoryMap | null | undefined, queueActive: boolean): string | null {
-  const { failedCount, pendingCount } = getStoryMapImageSyncSummary(storyMap);
+  const { failedCount, pendingCount, impossibleCount } = getStoryMapImageSyncSummary(storyMap);
+  if (impossibleCount > 0) {
+    return ASSET_SYNC_REPAIR_MESSAGE;
+  }
   if (failedCount > 0) {
     return ASSET_SYNC_FAILED_MESSAGE;
   }
@@ -1083,6 +1091,7 @@ export const useStoryStore = create<StoryState>()(
                 session: updateSessionBeat(newestSession, record.nodeId, (beat) => ({
                   ...beat,
                   ...(uploadedCharacters ? { characters: uploadedCharacters } : {}),
+                  persistedImageUrl: imageUrl,
                   imageStatus: hasNewerLocalImage ? 'pending' : 'ready',
                   imageError: undefined,
                   imageUrl: hasNewerLocalImage
@@ -1658,6 +1667,7 @@ export const useStoryStore = create<StoryState>()(
             data: {
               ...normalizeBeatMediaFields({
                 ...beat,
+                persistedImageUrl: undefined,
                 imageStatus: 'pending',
                 audioStatus: resolvedAudioUrl
                   ? (earlySavedStoryId ? 'ready' : 'not_requested')
@@ -2155,6 +2165,7 @@ export const useStoryStore = create<StoryState>()(
                 data: normalizeBeatMediaFields({
                   ...updatedMap.nodes[newNodeId].data,
                   narrationVoiceId: voiceForBeat,
+                  persistedImageUrl: undefined,
                   ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
                   imageStatus: 'pending',
                   audioStatus: resolvedAudioUrl
@@ -2636,6 +2647,7 @@ export const useStoryStore = create<StoryState>()(
                 ...latestSession.storyMap.nodes[nodeId].data,
                 ...beatForRender,
                 imageUrl,
+                persistedImageUrl: undefined,
                 isStoryboard: true,
                 imageStatus: 'pending',
                 imageError: undefined,

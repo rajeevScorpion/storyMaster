@@ -48,5 +48,14 @@
 - Drain race fix (mobile spinner never turning green):
   - `putPendingBeatImage` is now idempotent on unchanged data — it preserves the existing `updatedAt` when the staged `imageDataUrl` matches. This stops the re-stage path (triggered by `stagePendingBeatImagesForSession` inside `saveStoryToCloudImmediate`) from invalidating an in-flight drain via the optimistic-concurrency `updatedAt` check, which was causing successful uploads to be discarded locally.
   - `updateBeatMediaState` now uses a `BEAT_ROW_NOT_FOUND` sentinel when the normalized row is missing, and the drain treats that as a short soft-retry without consuming `attemptCount` — so the drain launched from `continueStory` before `saveBeat`/`saveStory` has written the beat row no longer burns retries and flips the beat to `failed`.
+- Durable beat image persistence repair:
+  - introduced runtime-only `persistedImageUrl` on `StoryBeat` so the current device can keep showing a local base64 image while save paths still preserve the canonical storage URL
+  - updated `stripBase64FromStoryMap`, `saveStory`, and `saveBeat` to prefer durable persisted URLs over local `data:` display URLs during DB writes
+  - added a server-side fallback merge in `saveStory` that pulls existing `beats.image_url` / `audio_url` values before snapshot saves, preventing later checkpoint saves from nulling durable asset URLs
+  - background beat-image drain now stores the uploaded canonical URL into `persistedImageUrl` while leaving local base64 display intact for instant UX
+  - warning/tick logic now treats `imageStatus = ready` without a durable URL as an impossible repair-needed state instead of a clean success
+  - owner story loads now lazily repair `ready + NULL image_url` beats by checking the deterministic `story-assets/{userId}/{storyId}/{nodeId}/image.webp` path and patching both `beats` and `stories.story_map`
+  - added an admin backfill endpoint and UI action for bulk repair of already-broken production beats with missing durable `image_url`
+  - prompt payload stripping now removes `persistedImageUrl` so runtime-only persistence hints do not leak into model context
 - Verification:
   - `npm run build` passed successfully on 2026-04-24

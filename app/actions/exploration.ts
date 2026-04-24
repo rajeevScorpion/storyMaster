@@ -6,6 +6,7 @@ import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/s
 import type { DbBeat, DbStory } from '@/lib/types/database';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import { repairMissingReadyBeatImageUrls } from '@/app/actions/persistence';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -95,6 +96,7 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
   return {
     ...beat,
     imageUrl: beat.imageUrl || fallback.imageUrl,
+    persistedImageUrl: beat.persistedImageUrl || fallback.persistedImageUrl || fallback.imageUrl,
     imageStatus: beat.imageStatus || fallback.imageStatus,
     imageError: beat.imageError || fallback.imageError,
     audioUrl: beat.audioUrl || fallback.audioUrl,
@@ -138,6 +140,9 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
 
   const dbStory = story as DbStory;
   const isOwner = dbStory.user_id === user.id;
+  let rawStoryMap = dbStory.story_map && typeof dbStory.story_map === 'object' && 'nodes' in dbStory.story_map
+    ? (dbStory.story_map as unknown as StoryMap)
+    : null;
 
   // Fetch all beats for the story
   const { data: beats, error: beatsError } = await supabase
@@ -147,14 +152,25 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     .order('beat_number', { ascending: true });
 
   if (beatsError) throw new Error('Failed to load story beats');
+  let repairedBeats = (beats as DbBeat[] | null) || [];
+  if (isOwner && repairedBeats.length > 0) {
+    const repairResult = await repairMissingReadyBeatImageUrls(
+      supabase,
+      storyId,
+      dbStory.user_id,
+      repairedBeats,
+      rawStoryMap
+    );
+    repairedBeats = repairResult.beats;
+    rawStoryMap = repairResult.storyMap;
+  }
 
   let storyMap: StoryMap;
-  if (beats && beats.length > 0) {
+  if (repairedBeats.length > 0) {
     // Always start from root node — exploration begins from beat 1
-    storyMap = reconstructStoryMap(beats as DbBeat[], null);
-    const rawMap = dbStory.story_map;
-    if (rawMap && typeof rawMap === 'object' && 'nodes' in rawMap) {
-      const jsonbMap = rawMap as unknown as StoryMap;
+    storyMap = reconstructStoryMap(repairedBeats, null);
+    if (rawStoryMap) {
+      const jsonbMap = rawStoryMap;
       for (const nodeId of Object.keys(storyMap.nodes)) {
         const jsonbNode = jsonbMap.nodes?.[nodeId];
         if (!jsonbNode?.data) continue;
@@ -202,7 +218,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     }
   } else {
     // Fallback to legacy story_map JSONB
-    const rawFallbackMap = dbStory.story_map;
+    const rawFallbackMap = rawStoryMap;
     if (!rawFallbackMap || typeof rawFallbackMap !== 'object' || !('nodes' in rawFallbackMap)) {
       throw new Error('Story map is missing or corrupted');
     }

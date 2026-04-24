@@ -20,7 +20,7 @@ import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
-import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import { getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
 
 function StoryboardCycler({
   gridUrl,
@@ -409,12 +409,13 @@ function StoryScreenInner({
 
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
+  const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
-  const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || normalizedCurrentBeat.imageUrl;
+  const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || getBeatDisplayImageUrl(normalizedCurrentBeat);
   const imageKey = normalizedCurrentBeat.imageUrl || displayImageUrl;
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
   const showPendingImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'pending';
-  const showFailedImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'failed';
+  const showFailedImageState = !displayImageUrl && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
   const canRegenerateImage = !normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed;
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(normalizedCurrentBeat.audioUrl, currentNodeId);

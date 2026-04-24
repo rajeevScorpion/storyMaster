@@ -157,7 +157,7 @@ export async function generateStoryBeat(
     const { storyMap, storyConfig, ...safeState } = sessionState as any;
     if (safeState.beats) {
       safeState.beats = safeState.beats.map((beat: any) => {
-        const { imageUrl, audioUrl, ...rest } = beat;
+        const { imageUrl, persistedImageUrl, audioUrl, ...rest } = beat;
         return rest;
       });
     }

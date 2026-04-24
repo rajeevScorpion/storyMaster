@@ -1,11 +1,18 @@
 'use server';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
+import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
-import { normalizeBeatMediaFields, BEAT_ROW_NOT_FOUND_MESSAGE } from '@/lib/types/beat-media';
+import {
+  normalizeBeatMediaFields,
+  BEAT_ROW_NOT_FOUND_MESSAGE,
+  getBeatPersistedAudioUrl,
+  getBeatPersistedImageUrl,
+} from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 
@@ -13,23 +20,23 @@ import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-c
  * Strip base64 data URLs from a StoryMap before saving to DB.
  * Keeps HTTP URLs intact (already uploaded to storage).
  */
-function stripBase64(storyMap: StoryMap): StoryMap {
+function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): StoryMap {
   const nodes: StoryMap['nodes'] = {};
   for (const [id, node] of Object.entries(storyMap.nodes)) {
+    const existingBeat = existingStoryMap?.nodes?.[id]?.data;
+    const persistedImageUrl = resolvePersistedImageUrlForSave(node.data, existingBeat);
+    const persistedAudioUrl = resolvePersistedAudioUrlForSave(node.data, existingBeat);
     nodes[id] = {
       ...node,
       data: {
         ...node.data,
-        imageUrl: node.data.imageUrl?.startsWith('data:')
-          ? undefined
-          : node.data.imageUrl
-            ? normalizeStorageUrl(node.data.imageUrl, 'story-assets')
-            : node.data.imageUrl,
-        audioUrl: node.data.audioUrl?.startsWith('data:')
-          ? undefined
-          : node.data.audioUrl
-            ? normalizeStorageUrl(node.data.audioUrl, 'story-assets')
-            : node.data.audioUrl,
+        imageUrl: persistedImageUrl
+          ? normalizeStorageUrl(persistedImageUrl, 'story-assets')
+          : undefined,
+        persistedImageUrl: undefined,
+        audioUrl: persistedAudioUrl
+          ? normalizeStorageUrl(persistedAudioUrl, 'story-assets')
+          : undefined,
         // Strip portrait base64 from characters — portraitUrl is preserved
         characters: node.data.characters.map(c => ({
           ...c,
@@ -73,6 +80,192 @@ function mergeCharactersWithFallback(
   }
 
   return Array.from(merged.values());
+}
+
+function resolvePersistedImageUrlForSave(
+  beat: Pick<StoryBeat, 'imageUrl' | 'persistedImageUrl' | 'imageStatus'>,
+  existingBeat?: Pick<StoryBeat, 'imageUrl' | 'persistedImageUrl'>
+): string | undefined {
+  return getBeatPersistedImageUrl(beat)
+    || (beat.imageStatus === 'ready' ? getBeatPersistedImageUrl(existingBeat || {}) : undefined);
+}
+
+function resolvePersistedAudioUrlForSave(
+  beat: Pick<StoryBeat, 'audioUrl' | 'audioStatus'>,
+  existingBeat?: Pick<StoryBeat, 'audioUrl'>
+): string | undefined {
+  return getBeatPersistedAudioUrl(beat)
+    || (beat.audioStatus === 'ready' ? getBeatPersistedAudioUrl(existingBeat || {}) : undefined);
+}
+
+function buildStorageObjectPublicUrl(bucket: string, path: string): string {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!supabaseUrl) {
+    return `/storage/v1/object/public/${bucket}/${path}`;
+  }
+  return `${supabaseUrl}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+function getBeatImageStoragePath(storyOwnerId: string, storyId: string, nodeId: string): string {
+  return `${storyOwnerId}/${storyId}/${nodeId}/image.webp`;
+}
+
+async function storageObjectExists(
+  supabase: SupabaseClient,
+  bucket: string,
+  path: string
+): Promise<boolean> {
+  const separatorIndex = path.lastIndexOf('/');
+  const directory = separatorIndex === -1 ? '' : path.slice(0, separatorIndex);
+  const fileName = separatorIndex === -1 ? path : path.slice(separatorIndex + 1);
+
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .list(directory, {
+      limit: 100,
+      search: fileName,
+    });
+
+  if (error) {
+    console.error(`Failed to inspect storage path ${bucket}/${path}:`, error.message);
+    return false;
+  }
+
+  return Boolean(data?.some((entry) => entry.name === fileName));
+}
+
+export async function repairMissingReadyBeatImageUrls(
+  supabase: SupabaseClient,
+  storyId: string,
+  storyOwnerId: string,
+  beats: DbBeat[],
+  rawStoryMap?: StoryMap | null
+): Promise<{
+  beats: DbBeat[];
+  storyMap: StoryMap | null;
+  repairedCount: number;
+  skippedCount: number;
+  failedCount: number;
+}> {
+  const candidates = beats.filter((beat) => beat.image_status === 'ready' && !beat.image_url);
+  if (candidates.length === 0) {
+    return {
+      beats,
+      storyMap: rawStoryMap ?? null,
+      repairedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+    };
+  }
+
+  const nextBeats = beats.map((beat) => ({ ...beat }));
+  const nextStoryMap = rawStoryMap
+    ? {
+        ...rawStoryMap,
+        nodes: { ...rawStoryMap.nodes },
+      }
+    : null;
+
+  let repairedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let storyMapChanged = false;
+
+  for (const candidate of candidates) {
+    try {
+      const storyMapNode = nextStoryMap?.nodes?.[candidate.node_id];
+      const storyMapImageUrl = storyMapNode?.data ? getBeatPersistedImageUrl(storyMapNode.data) : undefined;
+      const storagePath = getBeatImageStoragePath(storyOwnerId, storyId, candidate.node_id);
+      const repairedImageUrl = storyMapImageUrl
+        || (
+          await storageObjectExists(supabase, 'story-assets', storagePath)
+            ? normalizeStorageUrl(buildStorageObjectPublicUrl('story-assets', storagePath), 'story-assets')
+            : undefined
+        );
+
+      if (!repairedImageUrl) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const { error: beatUpdateError } = await supabase
+        .from('beats')
+        .update({
+          image_url: repairedImageUrl,
+          image_status: 'ready',
+          image_error: null,
+          image_synced_at: candidate.image_synced_at || new Date().toISOString(),
+        })
+        .eq('story_id', storyId)
+        .eq('node_id', candidate.node_id);
+
+      if (beatUpdateError) {
+        console.error('Failed to repair beat image_url:', beatUpdateError.message);
+        failedCount += 1;
+        continue;
+      }
+
+      const beatIndex = nextBeats.findIndex((beat) => beat.node_id === candidate.node_id);
+      if (beatIndex !== -1) {
+        nextBeats[beatIndex] = {
+          ...nextBeats[beatIndex],
+          image_url: repairedImageUrl,
+          image_status: 'ready',
+          image_error: null,
+          image_synced_at: nextBeats[beatIndex].image_synced_at || new Date().toISOString(),
+        };
+      }
+
+      if (storyMapNode) {
+        nextStoryMap!.nodes[candidate.node_id] = {
+          ...storyMapNode,
+          data: {
+            ...storyMapNode.data,
+            imageUrl: repairedImageUrl,
+            imageStatus: 'ready',
+            imageError: undefined,
+          },
+        };
+        storyMapChanged = true;
+      }
+
+      repairedCount += 1;
+    } catch (error) {
+      console.error('Failed to repair missing beat image URL:', error);
+      failedCount += 1;
+    }
+  }
+
+  if (storyMapChanged && nextStoryMap) {
+    const { error: storyMapError } = await supabase
+      .from('stories')
+      .update({
+        story_map: stripBase64(nextStoryMap) as unknown as Record<string, unknown>,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', storyId);
+
+    if (storyMapError) {
+      console.error('Failed to persist repaired story_map image URLs:', storyMapError.message);
+      failedCount += repairedCount;
+      repairedCount = 0;
+      return {
+        beats,
+        storyMap: rawStoryMap ?? null,
+        repairedCount,
+        skippedCount,
+        failedCount,
+      };
+    }
+  }
+
+  return {
+    beats: nextBeats,
+    storyMap: nextStoryMap,
+    repairedCount,
+    skippedCount,
+    failedCount,
+  };
 }
 
 const ADDITIVE_BEAT_COLUMNS = [
@@ -145,12 +338,12 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
 
   // Only include asset URLs when they have values — prevents UPSERT from
   // overwriting audio_url set by generateAndPersistNarration (race condition)
-  const imageUrl = normalizedBeat.imageUrl?.startsWith('data:') ? null : normalizedBeat.imageUrl;
+  const imageUrl = resolvePersistedImageUrlForSave(normalizedBeat);
   if (imageUrl) {
     row.image_url = normalizeStorageUrl(imageUrl, 'story-assets');
   }
 
-  const audioUrl = normalizedBeat.audioUrl?.startsWith('data:') ? null : normalizedBeat.audioUrl;
+  const audioUrl = resolvePersistedAudioUrlForSave(normalizedBeat);
   if (audioUrl) {
     row.audio_url = normalizeStorageUrl(audioUrl, 'story-assets');
   }
@@ -258,7 +451,73 @@ export async function saveStory(
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
-  const cleanMap = stripBase64(storyMapWithUrls);
+  let existingStoryMap: StoryMap | null = null;
+  const existingBeatUrlMap = new Map<string, { imageUrl?: string; audioUrl?: string }>();
+  if (session.savedStoryId) {
+    const { data: existingStory, error: existingStoryError } = await supabase
+      .from('stories')
+      .select('story_map')
+      .eq('id', session.savedStoryId)
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (existingStoryError) {
+      throw new Error(`Failed to load existing story before save: ${existingStoryError.message}`);
+    }
+
+    const rawExistingStoryMap = existingStory?.story_map;
+    if (rawExistingStoryMap && typeof rawExistingStoryMap === 'object' && 'nodes' in rawExistingStoryMap) {
+      existingStoryMap = rawExistingStoryMap as unknown as StoryMap;
+    }
+
+    const { data: existingBeatRows, error: existingBeatRowsError } = await supabase
+      .from('beats')
+      .select('node_id, image_url, audio_url')
+      .eq('story_id', session.savedStoryId)
+      .eq('generated_by', user.id);
+
+    if (existingBeatRowsError) {
+      throw new Error(`Failed to load existing beat assets before save: ${existingBeatRowsError.message}`);
+    }
+
+    for (const beat of existingBeatRows || []) {
+      existingBeatUrlMap.set(beat.node_id, {
+        imageUrl: beat.image_url || undefined,
+        audioUrl: beat.audio_url || undefined,
+      });
+    }
+  }
+
+  const fallbackStoryMap = existingStoryMap
+    ? {
+        ...existingStoryMap,
+        nodes: { ...existingStoryMap.nodes },
+      }
+    : {
+        nodes: {},
+        rootNodeId: storyMapWithUrls.rootNodeId,
+        currentNodeId: storyMapWithUrls.currentNodeId,
+      };
+
+  for (const [nodeId, node] of Object.entries(storyMapWithUrls.nodes)) {
+    const existingNode = fallbackStoryMap.nodes[nodeId];
+    const existingBeatUrls = existingBeatUrlMap.get(nodeId);
+    if (!existingNode && !existingBeatUrls) {
+      continue;
+    }
+
+    fallbackStoryMap.nodes[nodeId] = {
+      ...(existingNode || node),
+      ...(!existingNode ? { id: node.id, beatNumber: node.beatNumber, parentId: node.parentId, selectedOptionId: node.selectedOptionId, children: node.children } : {}),
+      data: {
+        ...(existingNode?.data || node.data),
+        ...(existingBeatUrls?.imageUrl && !(existingNode?.data?.imageUrl) ? { imageUrl: existingBeatUrls.imageUrl } : {}),
+        ...(existingBeatUrls?.audioUrl && !(existingNode?.data?.audioUrl) ? { audioUrl: existingBeatUrls.audioUrl } : {}),
+      },
+    };
+  }
+
+  const cleanMap = stripBase64(storyMapWithUrls, fallbackStoryMap);
 
   const storyData = {
     user_id: user.id,
@@ -355,6 +614,9 @@ export async function loadStory(storyId: string): Promise<StorySession> {
   if (error || !data) throw new Error('Story not found');
 
   const story = data as DbStory;
+  let rawStoryMap = story.story_map && typeof story.story_map === 'object' && 'nodes' in story.story_map
+    ? (story.story_map as unknown as StoryMap)
+    : null;
 
   // Try loading from normalized beats table
   const { data: beats } = await supabase
@@ -363,13 +625,26 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     .eq('story_id', storyId)
     .order('beat_number', { ascending: true });
 
+  let repairedBeats = (beats as DbBeat[] | null) || [];
+  if (repairedBeats.length > 0) {
+    const repairResult = await repairMissingReadyBeatImageUrls(
+      supabase,
+      storyId,
+      story.user_id,
+      repairedBeats,
+      rawStoryMap
+    );
+    repairedBeats = repairResult.beats;
+    rawStoryMap = repairResult.storyMap;
+  }
+
   let storyMap: StoryMap;
-  if (beats && beats.length > 0) {
-    storyMap = reconstructStoryMap(beats as DbBeat[], story.current_node_id);
+  if (repairedBeats.length > 0) {
+    storyMap = reconstructStoryMap(repairedBeats, story.current_node_id);
     // Merge fields that only live inside story_map JSONB so older normalized rows still
     // preserve storyboard metadata and additive compatibility fields.
-    if (story.story_map) {
-      const jsonbMap = story.story_map as unknown as StoryMap;
+    if (rawStoryMap) {
+      const jsonbMap = rawStoryMap;
       for (const nodeId of Object.keys(storyMap.nodes)) {
         const jsonbNode = jsonbMap.nodes?.[nodeId];
         if (!jsonbNode?.data) continue;
@@ -417,7 +692,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     }
   } else {
     // Fallback to legacy story_map JSONB
-    storyMap = story.story_map as unknown as StoryMap;
+    storyMap = rawStoryMap as StoryMap;
   }
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
@@ -476,7 +751,29 @@ export async function saveBeat(
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
-  const beatRow = nodeToBeatRow(storyId, nodeId, node, user.id);
+  const { data: existingBeat } = await supabase
+    .from('beats')
+    .select('image_url, audio_url')
+    .eq('story_id', storyId)
+    .eq('node_id', nodeId)
+    .eq('generated_by', user.id)
+    .maybeSingle();
+
+  const beatForSave: StoryNode = {
+    ...node,
+    data: {
+      ...node.data,
+      imageUrl: resolvePersistedImageUrlForSave(node.data, existingBeat
+        ? { imageUrl: existingBeat.image_url || undefined }
+        : undefined),
+      persistedImageUrl: undefined,
+      audioUrl: resolvePersistedAudioUrlForSave(node.data, existingBeat
+        ? { audioUrl: existingBeat.audio_url || undefined }
+        : undefined),
+    },
+  };
+
+  const beatRow = nodeToBeatRow(storyId, nodeId, beatForSave, user.id);
 
   const { data, error } = await supabase
     .from('beats')
@@ -1249,4 +1546,91 @@ export async function backfillMissingCovers(): Promise<{
   }
 
   return { storylinesFixed, treesFixed, failed };
+}
+
+export async function backfillMissingReadyBeatImageUrls(): Promise<{
+  storiesScanned: number;
+  candidateBeats: number;
+  repairedCount: number;
+  skippedCount: number;
+  failedCount: number;
+}> {
+  const supabase = createAdminClient();
+
+  const { data: candidateRows, error: candidateError } = await supabase
+    .from('beats')
+    .select('story_id')
+    .eq('image_status', 'ready')
+    .is('image_url', null);
+
+  if (candidateError) {
+    throw new Error(`Failed to load beat image repair candidates: ${candidateError.message}`);
+  }
+
+  const storyIds = Array.from(new Set((candidateRows || []).map((row) => row.story_id).filter(Boolean)));
+  if (storyIds.length === 0) {
+    return {
+      storiesScanned: 0,
+      candidateBeats: 0,
+      repairedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+    };
+  }
+
+  let candidateBeats = 0;
+  let repairedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (const storyId of storyIds) {
+    const { data: story, error: storyError } = await supabase
+      .from('stories')
+      .select('id, user_id, story_map')
+      .eq('id', storyId)
+      .maybeSingle();
+
+    if (storyError || !story) {
+      failedCount += 1;
+      console.error('Failed to load story for beat image repair:', storyError?.message || storyId);
+      continue;
+    }
+
+    const { data: storyBeats, error: storyBeatsError } = await supabase
+      .from('beats')
+      .select('*')
+      .eq('story_id', storyId)
+      .order('beat_number', { ascending: true });
+
+    if (storyBeatsError || !storyBeats) {
+      failedCount += 1;
+      console.error('Failed to load story beats for image repair:', storyBeatsError?.message || storyId);
+      continue;
+    }
+
+    candidateBeats += storyBeats.filter((beat) => beat.image_status === 'ready' && !beat.image_url).length;
+    const rawStoryMap = story.story_map && typeof story.story_map === 'object' && 'nodes' in story.story_map
+      ? (story.story_map as unknown as StoryMap)
+      : null;
+
+    const result = await repairMissingReadyBeatImageUrls(
+      supabase,
+      storyId,
+      story.user_id,
+      storyBeats as DbBeat[],
+      rawStoryMap
+    );
+
+    repairedCount += result.repairedCount;
+    skippedCount += result.skippedCount;
+    failedCount += result.failedCount;
+  }
+
+  return {
+    storiesScanned: storyIds.length,
+    candidateBeats,
+    repairedCount,
+    skippedCount,
+    failedCount,
+  };
 }
