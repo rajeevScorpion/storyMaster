@@ -5,36 +5,42 @@ import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/supabase/st
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
  */
 function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
+  const normalizedBeat = normalizeBeatMediaFields({
+    title: beat.title,
+    beatNumber: beat.beat_number,
+    isEnding: beat.is_ending,
+    storyText: beat.story_text,
+    sceneSummary: beat.scene_summary || '',
+    options: (beat.options || []) as unknown as StoryBeat['options'],
+    characters: (beat.characters || []) as unknown as StoryBeat['characters'],
+    continuityNotes: (beat.continuity_notes || []) as string[],
+    imagePrompt: beat.image_prompt || '',
+    clues: (beat.clues || []) as string[],
+    nextBeatGoal: beat.next_beat_goal || '',
+    endingForecast: (beat.ending_forecast || []) as string[],
+    imageUrl: beat.image_url || undefined,
+    imageStatus: beat.image_status,
+    imageError: beat.image_error || undefined,
+    audioUrl: beat.audio_url || undefined,
+    audioStatus: beat.audio_status,
+    audioError: beat.audio_error || undefined,
+    narrationVoiceId: beat.narration_voice_id || undefined,
+    originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
+    seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
+    canonicalOptionId: beat.canonical_option_id || undefined,
+  });
   return {
     id: beat.node_id,
     beatNumber: beat.beat_number,
     parentId: beat.parent_node_id,
     selectedOptionId: beat.selected_option_id,
-    data: {
-      title: beat.title,
-      beatNumber: beat.beat_number,
-      isEnding: beat.is_ending,
-      storyText: beat.story_text,
-      sceneSummary: beat.scene_summary || '',
-      options: (beat.options || []) as unknown as StoryBeat['options'],
-      characters: (beat.characters || []) as unknown as StoryBeat['characters'],
-      continuityNotes: (beat.continuity_notes || []) as string[],
-      imagePrompt: beat.image_prompt || '',
-      clues: (beat.clues || []) as string[],
-      nextBeatGoal: beat.next_beat_goal || '',
-      endingForecast: (beat.ending_forecast || []) as string[],
-      imageUrl: beat.image_url || undefined,
-      audioUrl: beat.audio_url || undefined,
-      narrationVoiceId: beat.narration_voice_id || undefined,
-      originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
-      seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
-      canonicalOptionId: beat.canonical_option_id || undefined,
-    },
+    data: normalizedBeat,
     children: childNodeIds,
   };
 }
@@ -89,7 +95,11 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
   return {
     ...beat,
     imageUrl: beat.imageUrl || fallback.imageUrl,
+    imageStatus: beat.imageStatus || fallback.imageStatus,
+    imageError: beat.imageError || fallback.imageError,
     audioUrl: beat.audioUrl || fallback.audioUrl,
+    audioStatus: beat.audioStatus || fallback.audioStatus,
+    audioError: beat.audioError || fallback.audioError,
     characters: fallback.characters
       ? mergeCharactersWithFallback(beat.characters, fallback.characters)
       : beat.characters,
@@ -155,8 +165,20 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
             ...(!storyMap.nodes[nodeId].data.imageUrl && jsonbNode.data.imageUrl
               ? { imageUrl: jsonbNode.data.imageUrl }
               : {}),
+            ...(!storyMap.nodes[nodeId].data.imageStatus && jsonbNode.data.imageStatus
+              ? { imageStatus: jsonbNode.data.imageStatus }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.imageError && jsonbNode.data.imageError
+              ? { imageError: jsonbNode.data.imageError }
+              : {}),
             ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
               ? { audioUrl: jsonbNode.data.audioUrl }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioStatus && jsonbNode.data.audioStatus
+              ? { audioStatus: jsonbNode.data.audioStatus }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioError && jsonbNode.data.audioError
+              ? { audioError: jsonbNode.data.audioError }
               : {}),
             ...(jsonbNode.data.characters
               ? {
@@ -175,6 +197,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
           },
         };
+        storyMap.nodes[nodeId].data = normalizeBeatMediaFields(storyMap.nodes[nodeId].data);
       }
     }
   } else {
@@ -192,6 +215,12 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
   storyMap = await signStoryMapAssetUrls(supabase, storyMap);
+  for (const nodeId of Object.keys(storyMap.nodes)) {
+    storyMap.nodes[nodeId] = {
+      ...storyMap.nodes[nodeId],
+      data: normalizeBeatMediaFields(storyMap.nodes[nodeId].data),
+    };
+  }
   const storyConfig = normalizeStoryConfig(dbStory.story_config as any);
 
   // Track exploration for non-owners
@@ -358,7 +387,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   if (junctionBeats && junctionBeats.length > 0) {
     const beats: StoryBeat[] = junctionBeats.map((jb: any) => {
       const b = jb.beats as DbBeat;
-      const normalizedBeat: StoryBeat = {
+      const normalizedBeat = normalizeBeatMediaFields({
         title: b.title,
         beatNumber: b.beat_number,
         isEnding: b.is_ending,
@@ -372,13 +401,17 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         nextBeatGoal: b.next_beat_goal || '',
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
+        imageStatus: b.image_status,
+        imageError: b.image_error || undefined,
         audioUrl: b.audio_url || undefined,
+        audioStatus: b.audio_status,
+        audioError: b.audio_error || undefined,
         narrationVoiceId: b.narration_voice_id || undefined,
         isStoryboard: b.is_storyboard || undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,
-      };
+      });
       return mergeStoryMapBeatFallback(normalizedBeat, fallbackStoryMap?.nodes?.[b.node_id]?.data);
     });
 
@@ -491,7 +524,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
   if (junctionBeats && junctionBeats.length > 0) {
     beats = junctionBeats.map((jb: any) => {
       const b = jb.beats as DbBeat;
-      const normalizedBeat: StoryBeat = {
+      const normalizedBeat = normalizeBeatMediaFields({
         title: b.title,
         beatNumber: b.beat_number,
         isEnding: b.is_ending,
@@ -505,13 +538,17 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         nextBeatGoal: b.next_beat_goal || '',
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
+        imageStatus: b.image_status,
+        imageError: b.image_error || undefined,
         audioUrl: b.audio_url || undefined,
+        audioStatus: b.audio_status,
+        audioError: b.audio_error || undefined,
         narrationVoiceId: b.narration_voice_id || undefined,
         isStoryboard: b.is_storyboard || undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,
-      };
+      });
       return mergeStoryMapBeatFallback(normalizedBeat, fallbackStoryMap?.nodes?.[b.node_id]?.data);
     });
   } else {

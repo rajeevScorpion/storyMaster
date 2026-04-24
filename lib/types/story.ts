@@ -1,3 +1,5 @@
+import type { BeatMediaStatus } from './beat-media';
+
 export interface Character {
   id: string;
   name: string;
@@ -87,9 +89,13 @@ export interface StoryBeat {
   changedCharacterIds?: string[];
   storyboardPlan?: StoryboardPlan;
   imageUrl?: string;
+  imageStatus?: BeatMediaStatus;
+  imageError?: string;
   isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;
+  audioStatus?: BeatMediaStatus;
+  audioError?: string;
   narrationVoiceId?: string;
   originKind?: 'generated' | 'seeded_canonical';
   seedPlanBeatIndex?: number;

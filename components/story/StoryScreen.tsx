@@ -167,6 +167,9 @@ interface StoryRuntimeSettings {
   vignetteAmountPercent: number;
   cloudSaveTimeoutMs: number;
   storyAssetSignedUrlSwapEnabled: boolean;
+  storyIncrementalAssetSyncEnabled: boolean;
+  storyAssetUploadPauseDuringGenerationEnabled: boolean;
+  storyAssetSyncWarningTimeoutMs: number;
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
@@ -191,6 +194,8 @@ export default function StoryScreen() {
   const saveStatus = useStoryStore((state) => state.saveStatus);
   const saveWarning = useStoryStore((state) => state.saveWarning);
   const saveStoryToCloud = useStoryStore((state) => state.saveStoryToCloud);
+  const setSaveRuntimeSettings = useStoryStore((state) => state.setSaveRuntimeSettings);
+  const retryPendingBeatAssetSync = useStoryStore((state) => state.retryPendingBeatAssetSync);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
   const { user } = useAuth();
@@ -204,6 +209,9 @@ export default function StoryScreen() {
     vignetteAmountPercent: 100,
     cloudSaveTimeoutMs: 20000,
     storyAssetSignedUrlSwapEnabled: false,
+    storyIncrementalAssetSyncEnabled: false,
+    storyAssetUploadPauseDuringGenerationEnabled: false,
+    storyAssetSyncWarningTimeoutMs: 15000,
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
@@ -211,8 +219,18 @@ export default function StoryScreen() {
 
   // Fetch storyboard cycle settings once on mount
   useEffect(() => {
-    getStoryboardSettings().then(setCycleSettings).catch(() => {/* use defaults */});
-  }, []);
+    getStoryboardSettings()
+      .then((settings) => {
+        setCycleSettings(settings);
+        setSaveRuntimeSettings({
+          storyAssetSignedUrlSwapEnabled: settings.storyAssetSignedUrlSwapEnabled,
+          storyIncrementalAssetSyncEnabled: settings.storyIncrementalAssetSyncEnabled,
+          storyAssetUploadPauseDuringGenerationEnabled: settings.storyAssetUploadPauseDuringGenerationEnabled,
+          storyAssetSyncWarningTimeoutMs: settings.storyAssetSyncWarningTimeoutMs,
+        });
+      })
+      .catch(() => {/* use defaults */});
+  }, [setSaveRuntimeSettings]);
 
   // Refresh signed URLs every 50 minutes to prevent expiry
   useEffect(() => {
@@ -221,6 +239,21 @@ export default function StoryScreen() {
     }, 50 * 60 * 1000);
     return () => clearInterval(interval);
   }, [refreshSignedUrls]);
+
+  useEffect(() => {
+    if (!cycleSettings.storyIncrementalAssetSyncEnabled) return;
+
+    const handleForegroundRetry = () => {
+      retryPendingBeatAssetSync().catch(() => {});
+    };
+
+    window.addEventListener('focus', handleForegroundRetry);
+    window.addEventListener('online', handleForegroundRetry);
+    return () => {
+      window.removeEventListener('focus', handleForegroundRetry);
+      window.removeEventListener('online', handleForegroundRetry);
+    };
+  }, [cycleSettings.storyIncrementalAssetSyncEnabled, retryPendingBeatAssetSync]);
 
   if (!session || !session.storyMap) return null;
 
@@ -259,6 +292,9 @@ export default function StoryScreen() {
       saveWarning={saveWarning}
       onSave={user && !session.sourceStoryOwnerId ? () => saveStoryToCloud(user.id, {
         signedUrlSwapEnabled: cycleSettings.storyAssetSignedUrlSwapEnabled,
+        incrementalAssetSyncEnabled: cycleSettings.storyIncrementalAssetSyncEnabled,
+        pauseAssetUploadsDuringGenerationEnabled: cycleSettings.storyAssetUploadPauseDuringGenerationEnabled,
+        assetSyncWarningTimeoutMs: cycleSettings.storyAssetSyncWarningTimeoutMs,
       }) : undefined}
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
@@ -375,6 +411,9 @@ function StoryScreenInner({
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
   const imageKey = currentBeat.imageUrl || displayImageUrl;
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
+  const showPendingImageState = !displayImageUrl && currentBeat.imageStatus === 'pending';
+  const showFailedImageState = !displayImageUrl && currentBeat.imageStatus === 'failed';
+  const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
   const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
@@ -471,20 +510,35 @@ function StoryScreenInner({
   // Recovery guard for a save request that is taking longer than expected.
   // The store queues one retry behind the active save instead of launching overlapping uploads.
   useEffect(() => {
-    if (saveStatus !== 'saving' || !onSave) return;
+    if (!onSave || saveStatus !== 'saving') return;
 
     const timeoutId = window.setTimeout(() => {
       const latest = useStoryStore.getState();
-      if (latest.saveStatus === 'saving') {
+      if (latest.saveStatus !== 'saving') return;
+
+      if (cycleSettings.storyIncrementalAssetSyncEnabled) {
         useStoryStore.setState({
-          error: latest.error || 'Cloud save is taking longer than usual. A retry is queued.',
+          saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
         });
-        onSave();
+        return;
       }
-    }, cycleSettings.cloudSaveTimeoutMs);
+
+      useStoryStore.setState({
+        error: latest.error || 'Cloud save is taking longer than usual. A retry is queued.',
+      });
+      onSave();
+    }, cycleSettings.storyIncrementalAssetSyncEnabled
+      ? cycleSettings.storyAssetSyncWarningTimeoutMs
+      : cycleSettings.cloudSaveTimeoutMs);
 
     return () => window.clearTimeout(timeoutId);
-  }, [saveStatus, onSave, cycleSettings.cloudSaveTimeoutMs]);
+  }, [
+    saveStatus,
+    onSave,
+    cycleSettings.cloudSaveTimeoutMs,
+    cycleSettings.storyIncrementalAssetSyncEnabled,
+    cycleSettings.storyAssetSyncWarningTimeoutMs,
+  ]);
 
   // Auto-scroll focused option into view
   useEffect(() => {
@@ -565,6 +619,22 @@ function StoryScreenInner({
             />
           </motion.div>
         </AnimatePresence>
+        {!displayImageUrl && (showPendingImageState || showFailedImageState) && (
+          <div className="absolute inset-0 flex items-center justify-center px-6 text-center">
+            <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
+              <div className="mb-3 flex justify-center">
+                {showPendingImageState ? (
+                  <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
+                ) : (
+                  <AlertTriangle className="h-8 w-8 text-amber-300" />
+                )}
+              </div>
+              <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">
+                {showPendingImageState ? 'Beat Image Syncing' : 'Beat Image Needs Retry'}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Header */}
@@ -584,10 +654,10 @@ function StoryScreenInner({
               onClick={onSave}
               disabled={isSaving || (saveStatus === 'saved' && !saveWarning)}
               className={`p-2 rounded-full transition-all duration-300 ${
-                saveStatus === 'saving'
-                  ? 'text-amber-400'
-                  : saveStatus === 'saved' && saveWarning
+                showSaveAlert
                   ? 'text-amber-400 hover:bg-white/10'
+                  : saveStatus === 'saving'
+                  ? 'text-amber-400'
                   : saveStatus === 'saved'
                   ? 'text-emerald-400'
                   : saveStatus === 'unsaved'
@@ -595,10 +665,10 @@ function StoryScreenInner({
                   : 'text-neutral-400 hover:bg-white/10'
               } disabled:cursor-default`}
               title={
-                saveStatus === 'saving'
+                showSaveAlert
+                  ? saveWarning ?? 'Beat media needs attention.'
+                  : saveStatus === 'saving'
                   ? 'Saving...'
-                  : saveStatus === 'saved' && saveWarning
-                  ? saveWarning
                   : saveStatus === 'saved'
                   ? 'Saved to cloud'
                   : saveStatus === 'unsaved'
@@ -606,10 +676,10 @@ function StoryScreenInner({
                   : 'Save Story'
               }
             >
-              {saveStatus === 'saving' ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : saveStatus === 'saved' && saveWarning ? (
+              {showSaveAlert ? (
                 <AlertTriangle className="w-4 h-4" />
+              ) : saveStatus === 'saving' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
               ) : saveStatus === 'saved' ? (
                 <CheckCircle2 className="w-4 h-4" />
               ) : saveStatus === 'unsaved' ? (
@@ -637,7 +707,7 @@ function StoryScreenInner({
       {/* Main Content */}
       <main className={`relative z-10 flex-1 flex flex-col px-4 pb-4 pt-1 md:justify-end md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
         <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
-          {displayImageUrl && (
+          {(displayImageUrl || showPendingImageState || showFailedImageState) && (
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
               {isStoryboard ? (
                 <StoryboardCycler
@@ -653,7 +723,7 @@ function StoryScreenInner({
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}
                 />
-              ) : (
+              ) : displayImageUrl ? (
                 <div className="mobile-scene-shuttle absolute inset-0">
                   <Image
                     src={displayImageUrl}
@@ -666,6 +736,20 @@ function StoryScreenInner({
                     onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                     onError={() => setFailedImageUrl(displayImageUrl)}
                   />
+                </div>
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
+                  {showPendingImageState ? (
+                    <>
+                      <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
+                      <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Syncing</p>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="h-8 w-8 text-amber-300" />
+                      <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Upload Needs Retry</p>
+                    </>
+                  )}
                 </div>
               )}
             </div>

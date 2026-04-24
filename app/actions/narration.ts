@@ -15,6 +15,7 @@ import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
+import { updateBeatMediaState } from '@/app/actions/persistence';
 import {
   getDefaultVoiceForGender,
   resolveStoryNarrationLanguage,
@@ -616,44 +617,18 @@ export async function generateAndPersistNarration(
           nodeId,
         },
         async () => {
-          const { error: updateError } = await supabase
-            .from('beats')
-            .update({ audio_url: urlData.publicUrl, narration_voice_id: voiceName })
-            .eq('story_id', savedStoryId)
-            .eq('node_id', nodeId)
-            .eq('generated_by', user.id);
-
-          if (updateError) {
-            if (isMissingNarrationColumnError(updateError)) {
-              const { error: fallbackError } = await supabase
-                .from('beats')
-                .update({ audio_url: urlData.publicUrl })
-                .eq('story_id', savedStoryId)
-                .eq('node_id', nodeId)
-                .eq('generated_by', user.id);
-
-              if (fallbackError) {
-                console.error('Failed to update beat audio_url:', fallbackError.message);
-              }
-            } else {
-              console.error('Failed to update beat audio_url:', updateError.message);
-            }
-          }
-
-          const { data: check } = await supabase
-            .from('beats')
-            .select('audio_url')
-            .eq('story_id', savedStoryId)
-            .eq('node_id', nodeId)
-            .single();
-
-          if (!check?.audio_url) {
-            await new Promise(r => setTimeout(r, 2000));
-            await supabase
-              .from('beats')
-              .update({ audio_url: urlData.publicUrl })
-              .eq('story_id', savedStoryId)
-              .eq('node_id', nodeId);
+          try {
+            await updateBeatMediaState(savedStoryId, nodeId, {
+              audioUrl: urlData.publicUrl,
+              audioStatus: 'ready',
+              audioError: null,
+              narrationVoiceId: voiceName,
+            });
+          } catch (updateError) {
+            console.error(
+              'Failed to update beat audio media state:',
+              updateError instanceof Error ? updateError.message : updateError
+            );
           }
         }
       );

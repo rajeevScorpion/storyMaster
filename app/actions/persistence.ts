@@ -2,8 +2,10 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
-import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
+import type { StorySession, StoryMap, StoryBeat, StoryNode, Character } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
+import type { BeatMediaStatus } from '@/lib/types/beat-media';
+import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 
@@ -79,6 +81,12 @@ const ADDITIVE_BEAT_COLUMNS = [
   'seed_plan_beat_index',
   'canonical_option_id',
   'narration_voice_id',
+  'image_status',
+  'image_error',
+  'image_synced_at',
+  'audio_status',
+  'audio_error',
+  'audio_synced_at',
 ] as const;
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -105,6 +113,7 @@ function withoutAdditiveBeatColumnsBatch(rows: Record<string, unknown>[]): Recor
  * Convert a StoryNode + beat data into a beats table row object.
  */
 function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId: string) {
+  const normalizedBeat = normalizeBeatMediaFields(node.data);
   const row: Record<string, unknown> = {
     story_id: storyId,
     node_id: nodeId,
@@ -112,39 +121,45 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     parent_node_id: node.parentId || null,
     selected_option_id: node.selectedOptionId || null,
     generated_by: userId,
-    title: node.data.title,
-    is_ending: node.data.isEnding,
-    story_text: node.data.storyText,
-    scene_summary: node.data.sceneSummary || null,
-    options: node.data.options as unknown as Record<string, unknown>[],
-    characters: node.data.characters as unknown as Record<string, unknown>[],
-    continuity_notes: node.data.continuityNotes || null,
-    image_prompt: node.data.imagePrompt || null,
-    clues: node.data.clues || null,
-    next_beat_goal: node.data.nextBeatGoal || null,
-    ending_forecast: node.data.endingForecast || null,
-    origin_kind: node.data.originKind || null,
-    seed_plan_beat_index: node.data.seedPlanBeatIndex || null,
-    canonical_option_id: node.data.canonicalOptionId || null,
+    title: normalizedBeat.title,
+    is_ending: normalizedBeat.isEnding,
+    story_text: normalizedBeat.storyText,
+    scene_summary: normalizedBeat.sceneSummary || null,
+    options: normalizedBeat.options as unknown as Record<string, unknown>[],
+    characters: normalizedBeat.characters as unknown as Record<string, unknown>[],
+    continuity_notes: normalizedBeat.continuityNotes || null,
+    image_prompt: normalizedBeat.imagePrompt || null,
+    clues: normalizedBeat.clues || null,
+    next_beat_goal: normalizedBeat.nextBeatGoal || null,
+    ending_forecast: normalizedBeat.endingForecast || null,
+    origin_kind: normalizedBeat.originKind || null,
+    seed_plan_beat_index: normalizedBeat.seedPlanBeatIndex || null,
+    canonical_option_id: normalizedBeat.canonicalOptionId || null,
+    image_status: normalizedBeat.imageStatus,
+    image_error: normalizedBeat.imageError || null,
+    image_synced_at: normalizedBeat.imageStatus === 'ready' ? new Date().toISOString() : null,
+    audio_status: normalizedBeat.audioStatus,
+    audio_error: normalizedBeat.audioError || null,
+    audio_synced_at: normalizedBeat.audioStatus === 'ready' ? new Date().toISOString() : null,
   };
 
   // Only include asset URLs when they have values — prevents UPSERT from
   // overwriting audio_url set by generateAndPersistNarration (race condition)
-  const imageUrl = node.data.imageUrl?.startsWith('data:') ? null : node.data.imageUrl;
+  const imageUrl = normalizedBeat.imageUrl?.startsWith('data:') ? null : normalizedBeat.imageUrl;
   if (imageUrl) {
     row.image_url = normalizeStorageUrl(imageUrl, 'story-assets');
   }
 
-  const audioUrl = node.data.audioUrl?.startsWith('data:') ? null : node.data.audioUrl;
+  const audioUrl = normalizedBeat.audioUrl?.startsWith('data:') ? null : normalizedBeat.audioUrl;
   if (audioUrl) {
     row.audio_url = normalizeStorageUrl(audioUrl, 'story-assets');
   }
 
-  if (node.data.narrationVoiceId) {
-    row.narration_voice_id = node.data.narrationVoiceId;
+  if (normalizedBeat.narrationVoiceId) {
+    row.narration_voice_id = normalizedBeat.narrationVoiceId;
   }
 
-  if (node.data.isStoryboard) {
+  if (normalizedBeat.isStoryboard) {
     row.is_storyboard = true;
   }
 
@@ -155,32 +170,37 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
  */
 function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
+  const normalizedBeat = normalizeBeatMediaFields({
+    title: beat.title,
+    beatNumber: beat.beat_number,
+    isEnding: beat.is_ending,
+    storyText: beat.story_text,
+    sceneSummary: beat.scene_summary || '',
+    options: (beat.options || []) as unknown as StoryBeat['options'],
+    characters: (beat.characters || []) as unknown as StoryBeat['characters'],
+    continuityNotes: (beat.continuity_notes || []) as string[],
+    imagePrompt: beat.image_prompt || '',
+    clues: (beat.clues || []) as string[],
+    nextBeatGoal: beat.next_beat_goal || '',
+    endingForecast: (beat.ending_forecast || []) as string[],
+    imageUrl: beat.image_url || undefined,
+    imageStatus: beat.image_status,
+    imageError: beat.image_error || undefined,
+    audioUrl: beat.audio_url || undefined,
+    audioStatus: beat.audio_status,
+    audioError: beat.audio_error || undefined,
+    narrationVoiceId: beat.narration_voice_id || undefined,
+    isStoryboard: beat.is_storyboard || undefined,
+    originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
+    seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
+    canonicalOptionId: beat.canonical_option_id || undefined,
+  });
   return {
     id: beat.node_id,
     beatNumber: beat.beat_number,
     parentId: beat.parent_node_id,
     selectedOptionId: beat.selected_option_id,
-    data: {
-      title: beat.title,
-      beatNumber: beat.beat_number,
-      isEnding: beat.is_ending,
-      storyText: beat.story_text,
-      sceneSummary: beat.scene_summary || '',
-      options: (beat.options || []) as unknown as StoryBeat['options'],
-      characters: (beat.characters || []) as unknown as StoryBeat['characters'],
-      continuityNotes: (beat.continuity_notes || []) as string[],
-      imagePrompt: beat.image_prompt || '',
-      clues: (beat.clues || []) as string[],
-      nextBeatGoal: beat.next_beat_goal || '',
-      endingForecast: (beat.ending_forecast || []) as string[],
-      imageUrl: beat.image_url || undefined,
-      audioUrl: beat.audio_url || undefined,
-      narrationVoiceId: beat.narration_voice_id || undefined,
-      isStoryboard: beat.is_storyboard || undefined,
-      originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
-      seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
-      canonicalOptionId: beat.canonical_option_id || undefined,
-    },
+    data: normalizedBeat,
     children: childNodeIds,
   };
 }
@@ -360,8 +380,20 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(!storyMap.nodes[nodeId].data.imageUrl && jsonbNode.data.imageUrl
               ? { imageUrl: jsonbNode.data.imageUrl }
               : {}),
+            ...(!storyMap.nodes[nodeId].data.imageStatus && jsonbNode.data.imageStatus
+              ? { imageStatus: jsonbNode.data.imageStatus }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.imageError && jsonbNode.data.imageError
+              ? { imageError: jsonbNode.data.imageError }
+              : {}),
             ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
               ? { audioUrl: jsonbNode.data.audioUrl }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioStatus && jsonbNode.data.audioStatus
+              ? { audioStatus: jsonbNode.data.audioStatus }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.audioError && jsonbNode.data.audioError
+              ? { audioError: jsonbNode.data.audioError }
               : {}),
             ...(jsonbNode.data.characters
               ? {
@@ -380,6 +412,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
           },
         };
+        storyMap.nodes[nodeId].data = normalizeBeatMediaFields(storyMap.nodes[nodeId].data);
       }
     }
   } else {
@@ -389,6 +422,12 @@ export async function loadStory(storyId: string): Promise<StorySession> {
 
   // Replace private storage URLs with signed URLs so images/audio load in the browser
   storyMap = await signStoryMapAssetUrls(supabase, storyMap);
+  for (const nodeId of Object.keys(storyMap.nodes)) {
+    storyMap.nodes[nodeId] = {
+      ...storyMap.nodes[nodeId],
+      data: normalizeBeatMediaFields(storyMap.nodes[nodeId].data),
+    };
+  }
   const storyConfig = normalizeStoryConfig(story.story_config as any);
 
   return {
@@ -467,20 +506,43 @@ export async function saveBeat(
 }
 
 /**
- * Update a beat's asset URLs (e.g., after uploading audio).
+ * Patch beat media fields in both normalized beats rows and stories.story_map.
  */
-export async function updateBeatAssets(
+export async function updateBeatMediaState(
   storyId: string,
   nodeId: string,
-  assets: { imageUrl?: string; audioUrl?: string }
+  patch: {
+    imageUrl?: string;
+    imageStatus?: BeatMediaStatus;
+    imageError?: string | null;
+    audioUrl?: string;
+    audioStatus?: BeatMediaStatus;
+    audioError?: string | null;
+    narrationVoiceId?: string;
+    characters?: Character[];
+  }
 ): Promise<void> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
   const updateData: Record<string, unknown> = {};
-  if (assets.imageUrl) updateData.image_url = normalizeStorageUrl(assets.imageUrl, 'story-assets');
-  if (assets.audioUrl) updateData.audio_url = normalizeStorageUrl(assets.audioUrl, 'story-assets');
+  if (patch.imageUrl) updateData.image_url = normalizeStorageUrl(patch.imageUrl, 'story-assets');
+  if (patch.imageStatus) updateData.image_status = patch.imageStatus;
+  if ('imageError' in patch) updateData.image_error = patch.imageError ?? null;
+  if (patch.imageStatus === 'ready') {
+    updateData.image_synced_at = new Date().toISOString();
+  }
+  if (patch.audioUrl) updateData.audio_url = normalizeStorageUrl(patch.audioUrl, 'story-assets');
+  if (patch.audioStatus) updateData.audio_status = patch.audioStatus;
+  if ('audioError' in patch) updateData.audio_error = patch.audioError ?? null;
+  if (patch.audioStatus === 'ready') {
+    updateData.audio_synced_at = new Date().toISOString();
+  }
+  if (patch.narrationVoiceId) updateData.narration_voice_id = patch.narrationVoiceId;
+  if (patch.characters) {
+    updateData.characters = patch.characters as unknown as Record<string, unknown>[];
+  }
 
   if (Object.keys(updateData).length === 0) return;
 
@@ -492,8 +554,77 @@ export async function updateBeatAssets(
     .eq('generated_by', user.id);
 
   if (error) {
-    console.error('Failed to update beat assets:', error.message);
+    throw new Error(`Failed to update beat media state: ${error.message}`);
   }
+
+  const { data: story, error: storyError } = await supabase
+    .from('stories')
+    .select('story_map')
+    .eq('id', storyId)
+    .eq('user_id', user.id)
+    .single();
+
+  if (storyError || !story) {
+    throw new Error(`Failed to load story map for media patch: ${storyError?.message || 'Story not found'}`);
+  }
+
+  const rawMap = story.story_map;
+  if (!rawMap || typeof rawMap !== 'object' || !('nodes' in rawMap)) {
+    throw new Error('Story map is missing or corrupted');
+  }
+
+  const storyMap = rawMap as unknown as StoryMap;
+  const node = storyMap.nodes[nodeId];
+  if (!node) {
+    throw new Error('Story node was not found while patching media state');
+  }
+
+  const nextBeat = normalizeBeatMediaFields({
+    ...node.data,
+    ...(patch.imageUrl ? { imageUrl: normalizeStorageUrl(patch.imageUrl, 'story-assets') } : {}),
+    ...(patch.imageStatus ? { imageStatus: patch.imageStatus } : {}),
+    ...('imageError' in patch ? { imageError: patch.imageError || undefined } : {}),
+    ...(patch.audioUrl ? { audioUrl: normalizeStorageUrl(patch.audioUrl, 'story-assets') } : {}),
+    ...(patch.audioStatus ? { audioStatus: patch.audioStatus } : {}),
+    ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
+    ...(patch.narrationVoiceId ? { narrationVoiceId: patch.narrationVoiceId } : {}),
+    ...(patch.characters ? { characters: patch.characters } : {}),
+  });
+
+  const patchedMap: StoryMap = {
+    ...storyMap,
+    nodes: {
+      ...storyMap.nodes,
+      [nodeId]: {
+        ...node,
+        data: nextBeat,
+      },
+    },
+  };
+
+  const { error: storyUpdateError } = await supabase
+    .from('stories')
+    .update({
+      story_map: stripBase64(patchedMap) as unknown as Record<string, unknown>,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', storyId)
+    .eq('user_id', user.id);
+
+  if (storyUpdateError) {
+    throw new Error(`Failed to patch story map media state: ${storyUpdateError.message}`);
+  }
+}
+
+export async function updateBeatAssets(
+  storyId: string,
+  nodeId: string,
+  assets: { imageUrl?: string; audioUrl?: string }
+): Promise<void> {
+  await updateBeatMediaState(storyId, nodeId, {
+    ...(assets.imageUrl ? { imageUrl: assets.imageUrl, imageStatus: 'ready' as const, imageError: null } : {}),
+    ...(assets.audioUrl ? { audioUrl: assets.audioUrl, audioStatus: 'ready' as const, audioError: null } : {}),
+  });
 }
 
 // ============================================================
@@ -625,7 +756,11 @@ export async function autoPublishStoryline(
     nextBeatGoal: b.next_beat_goal,
     endingForecast: b.ending_forecast,
     imageUrl: b.image_url,
+    imageStatus: b.image_status,
+    imageError: b.image_error || undefined,
     audioUrl: b.audio_url,
+    audioStatus: b.audio_status,
+    audioError: b.audio_error || undefined,
     narrationVoiceId: b.narration_voice_id || undefined,
     isStoryboard: b.is_storyboard || undefined,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,

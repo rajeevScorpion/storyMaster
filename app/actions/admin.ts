@@ -259,17 +259,20 @@ export async function getGlobalSettings(): Promise<{
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
   storyAssetSignedUrlSwapEnabled: boolean;
+  storyIncrementalAssetSyncEnabled: boolean;
+  storyAssetUploadPauseDuringGenerationEnabled: boolean;
   textTimeoutMs: number;
   imageTimeoutMs: number;
   ttsTimeoutMs: number;
   cloudSaveTimeoutMs: number;
+  storyAssetSyncWarningTimeoutMs: number;
   authoringWordCap: number;
   previewSeedPlanPriceCoins: number;
   narrationVoiceSettings: NarrationVoiceSettings;
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, textMs, imageMs, ttsMs, saveMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -288,10 +291,13 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
     getFeatureFlag('story_asset_signed_url_swap_enabled', false),
+    getFeatureFlag('story_incremental_asset_sync_enabled', false),
+    getFeatureFlag('story_asset_upload_pause_during_generation_enabled', false),
     getFeatureFlagValue('gemini_text_timeout_ms'),
     getFeatureFlagValue('gemini_image_timeout_ms'),
     getFeatureFlagValue('gemini_tts_timeout_ms'),
     getFeatureFlagValue('cloud_save_timeout_ms'),
+    getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
     getPreviewSeedPlanPriceCoins(),
     getNarrationVoiceSettings(),
@@ -327,10 +333,13 @@ export async function getGlobalSettings(): Promise<{
     videoDownloadEnabled,
     videoDownloadAdminBypass,
     storyAssetSignedUrlSwapEnabled,
+    storyIncrementalAssetSyncEnabled,
+    storyAssetUploadPauseDuringGenerationEnabled,
     textTimeoutMs: parseInt(textMs ?? '30000', 10) || 30000,
     imageTimeoutMs: parseInt(imageMs ?? '90000', 10) || 90000,
     ttsTimeoutMs: parseInt(ttsMs ?? '120000', 10) || 120000,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
+    storyAssetSyncWarningTimeoutMs: parseInt(storyAssetSyncWarningTimeoutMs ?? '15000', 10) || 15000,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
     previewSeedPlanPriceCoins,
     narrationVoiceSettings,
@@ -462,6 +471,24 @@ export async function getStoryAssetSignedUrlSwapEnabled(): Promise<boolean> {
   return getFeatureFlag('story_asset_signed_url_swap_enabled', false);
 }
 
+export async function setStoryIncrementalAssetSync(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_incremental_asset_sync_enabled', enabled);
+}
+
+export async function getStoryIncrementalAssetSyncEnabled(): Promise<boolean> {
+  return getFeatureFlag('story_incremental_asset_sync_enabled', false);
+}
+
+export async function setStoryAssetUploadPauseDuringGeneration(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_asset_upload_pause_during_generation_enabled', enabled);
+}
+
+export async function getStoryAssetUploadPauseDuringGenerationEnabled(): Promise<boolean> {
+  return getFeatureFlag('story_asset_upload_pause_during_generation_enabled', false);
+}
+
 // Public (no admin gate) — lightweight check used by client to gate admin-only features
 export async function checkIsAdmin(): Promise<boolean> {
   try {
@@ -494,6 +521,14 @@ export async function setTtsTimeout(ms: number): Promise<void> {
 export async function setCloudSaveTimeout(ms: number): Promise<void> {
   await verifyAdmin();
   await setFeatureFlagValue('cloud_save_timeout_ms', String(ms));
+}
+
+export async function setStoryAssetSyncWarningTimeout(ms: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(ms) || ms < 1000) {
+    throw new Error('Beat asset sync warning timeout must be at least 1000 milliseconds.');
+  }
+  await setFeatureFlagValue('story_asset_sync_warning_timeout_ms', String(Math.round(ms)));
 }
 
 export async function setAuthoringWordCap(words: number): Promise<void> {
@@ -552,9 +587,12 @@ export async function getStoryboardSettings(): Promise<{
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
   storyAssetSignedUrlSwapEnabled: boolean;
+  storyIncrementalAssetSyncEnabled: boolean;
+  storyAssetUploadPauseDuringGenerationEnabled: boolean;
   authoringWordCap: number;
+  storyAssetSyncWarningTimeoutMs: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -574,6 +612,9 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
     getFeatureFlag('story_asset_signed_url_swap_enabled', false),
+    getFeatureFlag('story_incremental_asset_sync_enabled', false),
+    getFeatureFlag('story_asset_upload_pause_during_generation_enabled', false),
+    getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
@@ -607,7 +648,10 @@ export async function getStoryboardSettings(): Promise<{
     videoDownloadEnabled,
     videoDownloadAdminBypass,
     storyAssetSignedUrlSwapEnabled,
+    storyIncrementalAssetSyncEnabled,
+    storyAssetUploadPauseDuringGenerationEnabled,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
+    storyAssetSyncWarningTimeoutMs: parseInt(storyAssetSyncWarningTimeoutMs ?? '15000', 10) || 15000,
   };
 }
 

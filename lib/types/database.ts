@@ -14,6 +14,7 @@ import type {
   PromotionMarketScope,
 } from './pricing';
 import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
+import type { BeatMediaStatus } from './beat-media';
 
 export interface DbProfile {
   id: string;
@@ -98,7 +99,13 @@ export interface DbBeat {
   next_beat_goal: string | null;
   ending_forecast: string[] | null;
   image_url: string | null;
+  image_status: BeatMediaStatus;
+  image_error: string | null;
+  image_synced_at: string | null;
   audio_url: string | null;
+  audio_status: BeatMediaStatus;
+  audio_error: string | null;
+  audio_synced_at: string | null;
   narration_voice_id: string | null;
   is_storyboard: boolean;
   origin_kind: string | null;

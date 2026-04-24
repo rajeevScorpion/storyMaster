@@ -38,6 +38,9 @@ import {
   setTtsTimeout,
   setCloudSaveTimeout,
   setStoryAssetSignedUrlSwap,
+  setStoryIncrementalAssetSync,
+  setStoryAssetUploadPauseDuringGeneration,
+  setStoryAssetSyncWarningTimeout,
   setAuthoringWordCap,
   setPreviewSeedPlanPriceCoins,
   setFreePlusCharacterSheets,
@@ -294,6 +297,13 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [cloudSaveTimeoutSaving, setCloudSaveTimeoutSaving] = useState(false);
   const [storyAssetSignedUrlSwapEnabled, setStoryAssetSignedUrlSwapEnabledState] = useState(false);
   const [storyAssetSignedUrlSwapToggling, setStoryAssetSignedUrlSwapToggling] = useState(false);
+  const [storyIncrementalAssetSyncEnabled, setStoryIncrementalAssetSyncEnabledState] = useState(false);
+  const [storyIncrementalAssetSyncToggling, setStoryIncrementalAssetSyncToggling] = useState(false);
+  const [storyAssetUploadPauseDuringGenerationEnabled, setStoryAssetUploadPauseDuringGenerationEnabledState] = useState(false);
+  const [storyAssetUploadPauseDuringGenerationToggling, setStoryAssetUploadPauseDuringGenerationToggling] = useState(false);
+  const [storyAssetSyncWarningTimeoutMs, setStoryAssetSyncWarningTimeoutMs] = useState(15000);
+  const [storyAssetSyncWarningTimeoutInput, setStoryAssetSyncWarningTimeoutInput] = useState('15');
+  const [storyAssetSyncWarningTimeoutSaving, setStoryAssetSyncWarningTimeoutSaving] = useState(false);
   const [authoringWordCap, setAuthoringWordCapState] = useState(500);
   const [authoringWordCapInput, setAuthoringWordCapInput] = useState('500');
   const [authoringWordCapSaving, setAuthoringWordCapSaving] = useState(false);
@@ -341,6 +351,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         ttsTimeoutMs: at,
         cloudSaveTimeoutMs: st,
         storyAssetSignedUrlSwapEnabled: assetSwapEnabled,
+        storyIncrementalAssetSyncEnabled: incrementalAssetSyncEnabled,
+        storyAssetUploadPauseDuringGenerationEnabled: pauseUploadsDuringGenerationEnabled,
+        storyAssetSyncWarningTimeoutMs: assetSyncWarningTimeoutMs,
         authoringWordCap: awc,
         previewSeedPlanPriceCoins: previewPriceCoins,
         narrationVoiceSettings: nextNarrationVoiceSettings,
@@ -382,6 +395,10 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setCloudSaveTimeoutMs(st);
         setCloudSaveTimeoutInput(String(Math.round(st / 1000)));
         setStoryAssetSignedUrlSwapEnabledState(assetSwapEnabled);
+        setStoryIncrementalAssetSyncEnabledState(incrementalAssetSyncEnabled);
+        setStoryAssetUploadPauseDuringGenerationEnabledState(pauseUploadsDuringGenerationEnabled);
+        setStoryAssetSyncWarningTimeoutMs(assetSyncWarningTimeoutMs);
+        setStoryAssetSyncWarningTimeoutInput(String(Math.round(assetSyncWarningTimeoutMs / 1000)));
         setAuthoringWordCapState(awc);
         setAuthoringWordCapInput(String(awc));
         setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
@@ -610,7 +627,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
-    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, optimized saves ${formatToggleSummary(storyAssetSignedUrlSwapEnabled).toLowerCase()}`,
+    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
     pages: 'Managed rollout pages, footer controls, and route guards',
   };
 
@@ -1421,11 +1438,46 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
               }}
             />
 
+            <ToggleRow
+              label="Incremental Beat Asset Sync"
+              description="Save beat media independently and upload generated beat images in the background."
+              checked={storyIncrementalAssetSyncEnabled}
+              toggling={storyIncrementalAssetSyncToggling}
+              onToggle={async () => {
+                setStoryIncrementalAssetSyncToggling(true);
+                const next = !storyIncrementalAssetSyncEnabled;
+                try {
+                  await setStoryIncrementalAssetSync(next);
+                  setStoryIncrementalAssetSyncEnabledState(next);
+                } finally {
+                  setStoryIncrementalAssetSyncToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Pause Beat Uploads During Generation"
+              description="Temporarily pause background beat image uploads while a new beat is generating."
+              checked={storyAssetUploadPauseDuringGenerationEnabled}
+              toggling={storyAssetUploadPauseDuringGenerationToggling}
+              onToggle={async () => {
+                setStoryAssetUploadPauseDuringGenerationToggling(true);
+                const next = !storyAssetUploadPauseDuringGenerationEnabled;
+                try {
+                  await setStoryAssetUploadPauseDuringGeneration(next);
+                  setStoryAssetUploadPauseDuringGenerationEnabledState(next);
+                } finally {
+                  setStoryAssetUploadPauseDuringGenerationToggling(false);
+                }
+              }}
+            />
+
             {([
               { label: 'Text / Story', description: 'Max wait for a story beat (JSON) from Gemini.', value: textTimeoutMs, input: textTimeoutInput, setInput: setTextTimeoutInput, saving: textTimeoutSaving, setSaving: setTextTimeoutSaving, setter: setTextTimeout, setMs: setTextTimeoutMs, min: 5, defaultSec: 30 },
               { label: 'Image', description: 'Max wait for image generation from Gemini.', value: imageTimeoutMs, input: imageTimeoutInput, setInput: setImageTimeoutInput, saving: imageTimeoutSaving, setSaving: setImageTimeoutSaving, setter: setImageTimeout, setMs: setImageTimeoutMs, min: 10, defaultSec: 90 },
               { label: 'Audio / TTS', description: 'Max wait for text-to-speech narration from Gemini.', value: ttsTimeoutMs, input: ttsTimeoutInput, setInput: setTtsTimeoutInput, saving: ttsTimeoutSaving, setSaving: setTtsTimeoutSaving, setter: setTtsTimeout, setMs: setTtsTimeoutMs, min: 10, defaultSec: 120 },
               { label: 'Cloud Save Guard', description: 'Max wait before marking a slow save as retry queued.', value: cloudSaveTimeoutMs, input: cloudSaveTimeoutInput, setInput: setCloudSaveTimeoutInput, saving: cloudSaveTimeoutSaving, setSaving: setCloudSaveTimeoutSaving, setter: setCloudSaveTimeout, setMs: setCloudSaveTimeoutMs, min: 5, defaultSec: 20 },
+              { label: 'Beat Asset Sync Warning', description: 'How long to wait before showing that beat media is still syncing in the background.', value: storyAssetSyncWarningTimeoutMs, input: storyAssetSyncWarningTimeoutInput, setInput: setStoryAssetSyncWarningTimeoutInput, saving: storyAssetSyncWarningTimeoutSaving, setSaving: setStoryAssetSyncWarningTimeoutSaving, setter: setStoryAssetSyncWarningTimeout, setMs: setStoryAssetSyncWarningTimeoutMs, min: 1, defaultSec: 15 },
             ] as const).map(({ label, description, value, input, setInput, saving, setSaving, setter, setMs, min, defaultSec }) => {
               const parsed = parseInt(input, 10);
               const currentSec = Math.round(value / 1000);

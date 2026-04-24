@@ -1,0 +1,43 @@
+# Beat Asset Sync Implementation Log
+
+## 2026-04-24
+
+- Created implementation plan doc: `docs/beat-asset-sync-plan.md`
+- Started implementation for incremental beat asset sync, local pending-image staging, durable media status fields, and admin rollout controls.
+- Current implementation goals:
+  - eliminate repeated re-upload of previous beat images
+  - prevent same-device image loss on refresh during slow mobile sync
+  - preserve rollback to the legacy story-wide save path behind admin flags
+- Added migration `033_incremental_beat_asset_sync.sql` and rollback with:
+  - `beats.image_status`, `image_error`, `image_synced_at`
+  - `beats.audio_status`, `audio_error`, `audio_synced_at`
+  - feature flags:
+    - `story_incremental_asset_sync_enabled`
+    - `story_asset_upload_pause_during_generation_enabled`
+    - `story_asset_sync_warning_timeout_ms`
+- Added shared media status normalization in `lib/types/beat-media.ts`.
+- Extended story/database/persistence/exploration types and mappers so beats now carry:
+  - `imageStatus`
+  - `imageError`
+  - `audioStatus`
+  - `audioError`
+- Added admin settings/actions/UI for:
+  - `Incremental Beat Asset Sync`
+  - `Pause Beat Uploads During Generation`
+  - `Beat Asset Sync Warning`
+- Added client-side pending beat image staging in `lib/story/pending-beat-images.ts` using IndexedDB.
+- Reworked `lib/store/story-store.ts` so that when incremental sync is enabled:
+  - cloud save checkpoints story tree/text metadata without story-wide image uploads
+  - unsynced beat images are staged locally by `storyId + nodeId`
+  - only pending beat images are uploaded in the background
+  - upload retries use `10s / 30s / 60s`
+  - successful beat sync patches DB media state with canonical storage URLs
+  - same-device story reload overlays staged local beat images before retrying upload
+- Updated narration persistence to use shared beat media patching so audio status stays aligned with story map + beats row updates.
+- Updated `StoryScreen` to:
+  - pass the new runtime flags into save calls
+  - retry pending beat sync on window focus / online
+  - show pending / failed beat image states when a beat has no server image yet
+  - surface beat media warning state through the save icon
+- Verification:
+  - `npm run build` passed successfully on 2026-04-24

@@ -10,12 +10,13 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeStoryConfig } from '@/lib/ai/story-config';
-import { getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
-import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage } from '@/app/actions/persistence';
+import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
+import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, type NodeAssetUrlMap } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
+import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import {
   createStoryLoadingStage,
   type StoryLoadingFlow,
@@ -23,6 +24,14 @@ import {
 } from '@/lib/story/loading-progress';
 import { dispatchPricingRuntimeRefresh } from '@/lib/pricing/runtime-events';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import {
+  putPendingBeatImage,
+  getPendingBeatImage,
+  listPendingBeatImagesForStory,
+  updatePendingBeatImageAttempt,
+  deletePendingBeatImage,
+  type PendingBeatImageRecord,
+} from '@/lib/story/pending-beat-images';
 import { getPathToNode } from '../utils/story-map';
 import {
   createStoryMap,
@@ -58,6 +67,13 @@ interface GenerationTimingSummary {
   meta?: Record<string, unknown>;
 }
 
+interface StorySaveRuntimeSettings {
+  storyAssetSignedUrlSwapEnabled: boolean;
+  storyIncrementalAssetSyncEnabled: boolean;
+  storyAssetUploadPauseDuringGenerationEnabled: boolean;
+  storyAssetSyncWarningTimeoutMs: number;
+}
+
 export interface LoadingReaderState {
   flow: StoryLoadingFlow;
   startedAt: number;
@@ -85,6 +101,7 @@ interface StoryState {
   isSaving: boolean;
   saveStatus: 'idle' | 'unsaved' | 'saving' | 'saved';
   saveWarning: string | null;
+  saveRuntimeSettings: StorySaveRuntimeSettings;
   lastPublishResult: PublishResult | null;
   startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
@@ -96,13 +113,22 @@ interface StoryState {
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
-  saveStoryToCloud: (userId: string, options?: { signedUrlSwapEnabled?: boolean }) => Promise<void>;
-  saveStoryToCloudImmediate: (userId: string, options?: { signedUrlSwapEnabled?: boolean }) => Promise<void>;
+  setSaveRuntimeSettings: (settings: Partial<StorySaveRuntimeSettings>) => void;
+  saveStoryToCloud: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
+  saveStoryToCloudImmediate: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
+  retryPendingBeatAssetSync: () => Promise<void>;
   clearPublishResult: () => void;
   clearError: () => void;
+}
+
+interface SaveStoryToCloudOptions {
+  signedUrlSwapEnabled?: boolean;
+  incrementalAssetSyncEnabled?: boolean;
+  pauseAssetUploadsDuringGenerationEnabled?: boolean;
+  assetSyncWarningTimeoutMs?: number;
 }
 
 function deriveSessionFields(session: StorySession, storyMap: StoryMap): StorySession {
@@ -300,9 +326,23 @@ function logGenerationTiming(summary: GenerationTimingSummary) {
 
 const SIGNED_ASSET_PRELOAD_TIMEOUT_MS = 4000;
 const LONG_SAVE_RETRY_MESSAGE = 'Cloud save is taking longer than usual. A retry is queued.';
+const ASSET_SYNC_PENDING_MESSAGE = 'Beat media is syncing in the background.';
+const ASSET_SYNC_FAILED_MESSAGE = 'A beat image still needs upload. Tap to retry.';
+const BEAT_IMAGE_RETRY_BACKOFF_MS = [10_000, 30_000, 60_000] as const;
+const DEFAULT_STORY_SAVE_RUNTIME_SETTINGS: StorySaveRuntimeSettings = {
+  storyAssetSignedUrlSwapEnabled: false,
+  storyIncrementalAssetSyncEnabled: false,
+  storyAssetUploadPauseDuringGenerationEnabled: false,
+  storyAssetSyncWarningTimeoutMs: 15_000,
+};
 
 let activeSavePromise: Promise<void> | null = null;
-let queuedSaveRequest: { userId: string; signedUrlSwapEnabled?: boolean } | null = null;
+let queuedSaveRequest: { userId: string; options?: SaveStoryToCloudOptions } | null = null;
+let activeBeatAssetSyncPromise: Promise<void> | null = null;
+const queuedBeatAssetSyncStoryIds = new Set<string>();
+const beatAssetRetryTimers = new Map<string, number>();
+let cachedStorySaveRuntimeSettings = DEFAULT_STORY_SAVE_RUNTIME_SETTINGS;
+let cachedStorySaveRuntimeSettingsHydrated = false;
 
 function isDataUrl(value: string | undefined): boolean {
   return !!value && value.startsWith('data:');
@@ -380,6 +420,285 @@ async function resolveSignedUrlSwapEnabled(optionValue?: boolean): Promise<boole
   } catch {
     return false;
   }
+}
+
+function extractStorySaveRuntimeSettings(
+  settings: Awaited<ReturnType<typeof getStoryboardSettings>>
+): StorySaveRuntimeSettings {
+  return {
+    storyAssetSignedUrlSwapEnabled: settings.storyAssetSignedUrlSwapEnabled,
+    storyIncrementalAssetSyncEnabled: settings.storyIncrementalAssetSyncEnabled,
+    storyAssetUploadPauseDuringGenerationEnabled: settings.storyAssetUploadPauseDuringGenerationEnabled,
+    storyAssetSyncWarningTimeoutMs: settings.storyAssetSyncWarningTimeoutMs,
+  };
+}
+
+function mergeSaveRuntimeOverrides(options: SaveStoryToCloudOptions = {}): Partial<StorySaveRuntimeSettings> {
+  return {
+    ...(typeof options.signedUrlSwapEnabled === 'boolean'
+      ? { storyAssetSignedUrlSwapEnabled: options.signedUrlSwapEnabled }
+      : {}),
+    ...(typeof options.incrementalAssetSyncEnabled === 'boolean'
+      ? { storyIncrementalAssetSyncEnabled: options.incrementalAssetSyncEnabled }
+      : {}),
+    ...(typeof options.pauseAssetUploadsDuringGenerationEnabled === 'boolean'
+      ? { storyAssetUploadPauseDuringGenerationEnabled: options.pauseAssetUploadsDuringGenerationEnabled }
+      : {}),
+    ...(typeof options.assetSyncWarningTimeoutMs === 'number'
+      ? { storyAssetSyncWarningTimeoutMs: options.assetSyncWarningTimeoutMs }
+      : {}),
+  };
+}
+
+function cacheStorySaveRuntimeSettings(settings: Partial<StorySaveRuntimeSettings>) {
+  cachedStorySaveRuntimeSettings = {
+    ...cachedStorySaveRuntimeSettings,
+    ...settings,
+  };
+  cachedStorySaveRuntimeSettingsHydrated = true;
+}
+
+async function resolveStorySaveRuntimeSettings(
+  current: StorySaveRuntimeSettings,
+  options: SaveStoryToCloudOptions = {}
+): Promise<StorySaveRuntimeSettings> {
+  if (!cachedStorySaveRuntimeSettingsHydrated) {
+    try {
+      const settings = await getStoryboardSettings();
+      cacheStorySaveRuntimeSettings(extractStorySaveRuntimeSettings(settings));
+    } catch {
+      try {
+        cacheStorySaveRuntimeSettings({
+          storyAssetSignedUrlSwapEnabled: await getStoryAssetSignedUrlSwapEnabled(),
+        });
+      } catch {
+        // Fall back to defaults already in cache.
+      }
+    }
+  }
+
+  return {
+    ...cachedStorySaveRuntimeSettings,
+    ...current,
+    ...mergeSaveRuntimeOverrides(options),
+  };
+}
+
+function updateStoryMapBeat(
+  storyMap: StoryMap,
+  nodeId: string,
+  updater: (beat: StoryBeat) => StoryBeat
+): StoryMap {
+  const node = storyMap.nodes[nodeId];
+  if (!node) {
+    return storyMap;
+  }
+
+  return {
+    ...storyMap,
+    nodes: {
+      ...storyMap.nodes,
+      [nodeId]: {
+        ...node,
+        data: normalizeBeatMediaFields(updater(node.data)),
+      },
+    },
+  };
+}
+
+function updateSessionBeat(
+  session: StorySession,
+  nodeId: string,
+  updater: (beat: StoryBeat) => StoryBeat
+): StorySession {
+  return deriveSessionFields(session, updateStoryMapBeat(session.storyMap, nodeId, updater));
+}
+
+function shouldStageBeatImage(beat: StoryBeat): boolean {
+  return isDataUrl(beat.imageUrl) && beat.imageStatus !== 'ready';
+}
+
+function getStoryMapImageSyncSummary(storyMap: StoryMap | null | undefined): {
+  pendingCount: number;
+  failedCount: number;
+} {
+  if (!storyMap) {
+    return { pendingCount: 0, failedCount: 0 };
+  }
+
+  return Object.values(storyMap.nodes).reduce(
+    (summary, node) => {
+      if (node.data.imageStatus === 'failed') {
+        summary.failedCount += 1;
+      } else if (node.data.imageStatus === 'pending') {
+        summary.pendingCount += 1;
+      }
+      return summary;
+    },
+    { pendingCount: 0, failedCount: 0 }
+  );
+}
+
+function deriveSaveWarning(storyMap: StoryMap | null | undefined, queueActive: boolean): string | null {
+  const { failedCount, pendingCount } = getStoryMapImageSyncSummary(storyMap);
+  if (failedCount > 0) {
+    return ASSET_SYNC_FAILED_MESSAGE;
+  }
+  if (pendingCount > 0 && !queueActive) {
+    return ASSET_SYNC_PENDING_MESSAGE;
+  }
+  return null;
+}
+
+function syncSaveUiState(
+  setState: (partial: Partial<StoryState>) => void,
+  getState: () => StoryState,
+  partial: Partial<StoryState> = {}
+) {
+  const current = getState();
+  const nextSession = partial.session === undefined ? current.session : partial.session;
+  const nextIsSaving = partial.isSaving === undefined ? current.isSaving : partial.isSaving;
+  const nextSaveStatus = partial.saveStatus ?? (
+    nextSession
+      ? (nextIsSaving || Boolean(activeBeatAssetSyncPromise) ? 'saving' : 'saved')
+      : 'idle'
+  );
+  const nextSaveWarning = partial.saveWarning === undefined
+    ? (nextSaveStatus === 'unsaved' ? null : deriveSaveWarning(nextSession?.storyMap, Boolean(activeBeatAssetSyncPromise)))
+    : partial.saveWarning;
+
+  setState({
+    ...partial,
+    saveStatus: nextSaveStatus,
+    saveWarning: nextSaveWarning,
+  });
+}
+
+async function resolveCurrentUserId(fallbackUserId?: string): Promise<string | null> {
+  if (fallbackUserId) {
+    return fallbackUserId;
+  }
+
+  try {
+    const supabase = createBrowserClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function getPendingBeatImageTimerKey(storyId: string, nodeId: string): string {
+  return `${storyId}:${nodeId}`;
+}
+
+function clearPendingBeatImageRetry(storyId: string, nodeId: string) {
+  const key = getPendingBeatImageTimerKey(storyId, nodeId);
+  const timer = beatAssetRetryTimers.get(key);
+  if (timer) {
+    window.clearTimeout(timer);
+    beatAssetRetryTimers.delete(key);
+  }
+}
+
+function schedulePendingBeatImageRetry(
+  storyId: string,
+  nodeId: string,
+  delayMs: number,
+  callback: () => void
+) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  clearPendingBeatImageRetry(storyId, nodeId);
+  const key = getPendingBeatImageTimerKey(storyId, nodeId);
+  const timer = window.setTimeout(() => {
+    beatAssetRetryTimers.delete(key);
+    callback();
+  }, delayMs);
+  beatAssetRetryTimers.set(key, timer);
+}
+
+async function stagePendingBeatImagesForSession(
+  session: StorySession,
+  userId: string,
+  storyId: string
+): Promise<string[]> {
+  const stagedNodeIds: string[] = [];
+
+  for (const [nodeId, node] of Object.entries(session.storyMap.nodes)) {
+    if (!shouldStageBeatImage(node.data) || !node.data.imageUrl) {
+      continue;
+    }
+
+    await putPendingBeatImage({
+      storyId,
+      userId,
+      nodeId,
+      imageDataUrl: node.data.imageUrl,
+    });
+    stagedNodeIds.push(nodeId);
+  }
+
+  return stagedNodeIds;
+}
+
+async function overlayPendingBeatImages(
+  storyMap: StoryMap,
+  storyId: string
+): Promise<StoryMap> {
+  const pendingImages = await listPendingBeatImagesForStory(storyId);
+  if (pendingImages.length === 0) {
+    return storyMap;
+  }
+
+  return pendingImages.reduce((nextMap, record) => {
+    if (!nextMap.nodes[record.nodeId]) {
+      return nextMap;
+    }
+
+    return updateStoryMapBeat(nextMap, record.nodeId, (beat) => ({
+      ...beat,
+      imageUrl: record.imageDataUrl,
+    }));
+  }, storyMap);
+}
+
+async function uploadBeatPortraits(
+  userId: string,
+  storyId: string,
+  nodeId: string,
+  characters: Character[]
+): Promise<Character[]> {
+  return Promise.all(
+    characters.map(async (character) => {
+      if (!isDataUrl(character.portraitBase64)) {
+        return character;
+      }
+      const portraitBase64 = character.portraitBase64;
+      if (!portraitBase64) {
+        return character;
+      }
+
+      try {
+        const portraitUrl = await uploadAsset(
+          'story-assets',
+          `${userId}/${storyId}/${nodeId}/portrait_${character.id}.webp`,
+          portraitBase64
+        );
+
+        return {
+          ...character,
+          portraitUrl,
+          portraitBase64: undefined,
+        };
+      } catch (error) {
+        console.error(`Failed to upload portrait for ${character.id}:`, error);
+        return character;
+      }
+    })
+  );
 }
 
 function setLoadingStage(
@@ -621,7 +940,206 @@ function updateLoadingReaderWithBeat(
 }
 
 export const useStoryStore = create<StoryState>()(
-    (set, get) => ({
+    (set, get) => {
+      const updateStoreSaveUi = (partial: Partial<StoryState> = {}) => {
+        syncSaveUiState(
+          (nextPartial) => set(nextPartial),
+          get,
+          partial
+        );
+      };
+
+      const drainPendingBeatImagesForStory = async (
+        storyId: string,
+        runtimeSettings: StorySaveRuntimeSettings
+      ) => {
+        const pendingImages = await listPendingBeatImagesForStory(storyId);
+        if (pendingImages.length === 0) {
+          return;
+        }
+
+        for (const record of pendingImages.sort((left, right) => left.updatedAt - right.updatedAt)) {
+          const latestState = get();
+          if (
+            runtimeSettings.storyAssetUploadPauseDuringGenerationEnabled
+            && (latestState.isLoading || latestState.isRegeneratingImage)
+          ) {
+            queuedBeatAssetSyncStoryIds.add(storyId);
+            return;
+          }
+
+          clearPendingBeatImageRetry(storyId, record.nodeId);
+
+          const currentSession = latestState.session;
+          const currentNode =
+            currentSession?.savedStoryId === storyId
+              ? currentSession.storyMap.nodes[record.nodeId]
+              : undefined;
+          const userId = await resolveCurrentUserId(
+            currentNode ? currentSession?.savedByUserId || record.userId : record.userId
+          );
+
+          if (!userId) {
+            queuedBeatAssetSyncStoryIds.add(storyId);
+            return;
+          }
+
+          if (currentSession?.savedStoryId === storyId && currentNode) {
+            updateStoreSaveUi({
+              session: updateSessionBeat(currentSession, record.nodeId, (beat) => ({
+                ...beat,
+                imageStatus: 'pending',
+                imageError: undefined,
+              })),
+              error: null,
+            });
+          }
+
+          try {
+            const imageUrl = await uploadAsset(
+              'story-assets',
+              `${userId}/${storyId}/${record.nodeId}/image.webp`,
+              record.imageDataUrl
+            );
+
+            const latestSession = get().session;
+            const latestNode =
+              latestSession?.savedStoryId === storyId
+                ? latestSession.storyMap.nodes[record.nodeId]
+                : undefined;
+            const latestPendingRecord = await getPendingBeatImage(storyId, record.nodeId);
+            if (latestPendingRecord && latestPendingRecord.updatedAt !== record.updatedAt) {
+              queuedBeatAssetSyncStoryIds.add(storyId);
+              continue;
+            }
+            const uploadedCharacters = latestNode
+              ? await uploadBeatPortraits(userId, storyId, record.nodeId, latestNode.data.characters)
+              : undefined;
+
+            await updateBeatMediaState(storyId, record.nodeId, {
+              imageUrl,
+              imageStatus: 'ready',
+              imageError: null,
+              ...(uploadedCharacters ? { characters: uploadedCharacters } : {}),
+            });
+
+            await deletePendingBeatImage(storyId, record.nodeId, record.updatedAt);
+
+            const newestSession = get().session;
+            const newestNode =
+              newestSession?.savedStoryId === storyId
+                ? newestSession.storyMap.nodes[record.nodeId]
+                : undefined;
+
+            if (newestSession && newestNode) {
+              const hasNewerLocalImage =
+                isDataUrl(newestNode.data.imageUrl)
+                && newestNode.data.imageUrl !== record.imageDataUrl;
+
+              updateStoreSaveUi({
+                session: updateSessionBeat(newestSession, record.nodeId, (beat) => ({
+                  ...beat,
+                  ...(uploadedCharacters ? { characters: uploadedCharacters } : {}),
+                  imageStatus: hasNewerLocalImage ? 'pending' : 'ready',
+                  imageError: undefined,
+                  imageUrl: hasNewerLocalImage
+                    ? beat.imageUrl
+                    : isDataUrl(beat.imageUrl)
+                    ? beat.imageUrl
+                    : beat.imageUrl || imageUrl,
+                })),
+                error: null,
+              });
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Beat image upload failed';
+            const updateResult = await updatePendingBeatImageAttempt(
+              storyId,
+              record.nodeId,
+              message,
+              record.updatedAt
+            );
+
+            if (!updateResult.updated) {
+              queuedBeatAssetSyncStoryIds.add(storyId);
+              continue;
+            }
+
+            const failedRecord = updateResult.record;
+            const exhaustedRetries = Boolean(
+              failedRecord && failedRecord.attemptCount > BEAT_IMAGE_RETRY_BACKOFF_MS.length
+            );
+            const nextStatus = exhaustedRetries ? 'failed' as const : 'pending' as const;
+
+            try {
+              if (exhaustedRetries) {
+                await updateBeatMediaState(storyId, record.nodeId, {
+                  imageStatus: 'failed',
+                  imageError: message,
+                });
+              }
+            } catch (persistError) {
+              console.error('Failed to persist beat image sync failure:', persistError);
+            }
+
+            const newestSession = get().session;
+            if (newestSession?.savedStoryId === storyId && newestSession.storyMap.nodes[record.nodeId]) {
+              updateStoreSaveUi({
+                session: updateSessionBeat(newestSession, record.nodeId, (beat) => ({
+                  ...beat,
+                  imageStatus: nextStatus,
+                  imageError: message,
+                })),
+              });
+            }
+
+            if (!exhaustedRetries && failedRecord) {
+              schedulePendingBeatImageRetry(
+                storyId,
+                record.nodeId,
+                BEAT_IMAGE_RETRY_BACKOFF_MS[Math.max(0, failedRecord.attemptCount - 1)],
+                () => {
+                  void retryPendingBeatAssetSyncInternal();
+                }
+              );
+            }
+          }
+        }
+      };
+
+      const retryPendingBeatAssetSyncInternal = async (storyId?: string) => {
+        if (storyId) {
+          queuedBeatAssetSyncStoryIds.add(storyId);
+        } else {
+          const currentStoryId = get().session?.savedStoryId;
+          if (currentStoryId) {
+            queuedBeatAssetSyncStoryIds.add(currentStoryId);
+          }
+        }
+
+        if (activeBeatAssetSyncPromise) {
+          return activeBeatAssetSyncPromise;
+        }
+
+        activeBeatAssetSyncPromise = (async () => {
+          try {
+            while (queuedBeatAssetSyncStoryIds.size > 0) {
+              const [nextStoryId] = Array.from(queuedBeatAssetSyncStoryIds);
+              queuedBeatAssetSyncStoryIds.delete(nextStoryId);
+              const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
+              await drainPendingBeatImagesForStory(nextStoryId, runtimeSettings);
+            }
+          } finally {
+            activeBeatAssetSyncPromise = null;
+            updateStoreSaveUi({ isSaving: false, error: null });
+          }
+        })();
+
+        updateStoreSaveUi({ error: null });
+        return activeBeatAssetSyncPromise;
+      };
+
+      return ({
       session: null,
       isLoading: false,
       loadingClues: [],
@@ -636,7 +1154,18 @@ export const useStoryStore = create<StoryState>()(
       isSaving: false,
       saveStatus: 'idle' as const,
       saveWarning: null,
+      saveRuntimeSettings: DEFAULT_STORY_SAVE_RUNTIME_SETTINGS,
       lastPublishResult: null,
+
+      setSaveRuntimeSettings: (settings: Partial<StorySaveRuntimeSettings>) => {
+        cacheStorySaveRuntimeSettings(settings);
+        set((state) => ({
+          saveRuntimeSettings: {
+            ...state.saveRuntimeSettings,
+            ...settings,
+          },
+        }));
+      },
 
       startStory: async (prompt: string, config?: StoryConfig) => {
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
@@ -859,6 +1388,7 @@ export const useStoryStore = create<StoryState>()(
           // Track resolved audio URL for merging after image resolves
           let resolvedAudioUrl: string | undefined;
           let earlySavedStoryId: string | undefined;
+          let earlySavedByUserId: string | undefined;
           const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
 
           // Resolve narration voice. User-led mode bypasses the legacy AI selector.
@@ -924,7 +1454,7 @@ export const useStoryStore = create<StoryState>()(
           );
 
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
-          if (initialSession.userPrompt !== 'mock') {
+          if (storyPrompt.toLowerCase() !== 'mock') {
             Promise.all([lockedVoicePromise, earlySavePromise]).then(([voiceResolution, storyId]) => {
               set({ isGeneratingAudio: true });
               const narrationStartedAt = nowMs();
@@ -958,7 +1488,13 @@ export const useStoryStore = create<StoryState>()(
                   ...latestSession.storyMap.nodes,
                   [rootId]: {
                     ...rootNode,
-                    data: { ...rootNode.data, audioUrl, narrationVoiceId: voiceResolution.voiceId },
+                    data: normalizeBeatMediaFields({
+                      ...rootNode.data,
+                      audioUrl,
+                      narrationVoiceId: voiceResolution.voiceId,
+                      audioStatus: storyId ? 'ready' : 'not_requested',
+                      audioError: undefined,
+                    }),
                   },
                 };
                 const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
@@ -975,7 +1511,19 @@ export const useStoryStore = create<StoryState>()(
                   message: err instanceof Error ? err.message : 'Narration generation failed',
                 });
                 console.error('Narration generation failed:', err);
-                set({ isGeneratingAudio: false });
+                const latestSession = get().session;
+                if (storyId && latestSession?.storyMap.nodes[rootNodeId]) {
+                  set({
+                    session: updateSessionBeat(latestSession, rootNodeId, (rootBeat) => ({
+                      ...rootBeat,
+                      audioStatus: 'failed',
+                      audioError: err instanceof Error ? err.message : 'Narration generation failed',
+                    })),
+                    isGeneratingAudio: false,
+                  });
+                } else {
+                  set({ isGeneratingAudio: false });
+                }
               });
             }).catch((err) => {
               console.error('Narration pipeline failed:', err);
@@ -1017,6 +1565,7 @@ export const useStoryStore = create<StoryState>()(
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
           if (earlySavedStoryId) {
+            earlySavedByUserId = (await resolveCurrentUserId()) ?? undefined;
             linkCostEventsToBeat({
               storySessionId: initialSessionId,
               storyId: earlySavedStoryId,
@@ -1048,7 +1597,15 @@ export const useStoryStore = create<StoryState>()(
           storyMap.nodes[rootNodeId] = {
             ...storyMap.nodes[rootNodeId],
             data: {
-              ...beat,
+              ...normalizeBeatMediaFields({
+                ...beat,
+                imageStatus: 'pending',
+                audioStatus: resolvedAudioUrl
+                  ? (earlySavedStoryId ? 'ready' : 'not_requested')
+                  : storyPrompt.toLowerCase() !== 'mock' && earlySavedStoryId
+                  ? 'pending'
+                  : 'not_requested',
+              }),
               imageUrl,
               narrationVoiceId: narratorVoiceResolution.voiceId,
               ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
@@ -1064,6 +1621,7 @@ export const useStoryStore = create<StoryState>()(
               narrationVoiceGenderBucket: narratorVoiceResolution.genderBucket ?? undefined,
               narrationLanguageCode: narratorVoiceResolution.languageCode,
               ...(earlySavedStoryId ? { savedStoryId: earlySavedStoryId } : {}),
+              ...(earlySavedByUserId ? { savedByUserId: earlySavedByUserId } : {}),
             } as StorySession,
             storyMap
           );
@@ -1084,6 +1642,18 @@ export const useStoryStore = create<StoryState>()(
             errorAction: null,
             ...audioExtra,
           });
+          if (earlySavedStoryId && earlySavedByUserId) {
+            const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
+            if (runtimeSettings.storyIncrementalAssetSyncEnabled) {
+              await putPendingBeatImage({
+                storyId: earlySavedStoryId,
+                userId: earlySavedByUserId,
+                nodeId: rootNodeId,
+                imageDataUrl: imageUrl,
+              });
+              void retryPendingBeatAssetSyncInternal(earlySavedStoryId);
+            }
+          }
           dispatchPricingRuntimeRefresh();
           logGenerationTiming({
             scope: 'start_story',
@@ -1407,7 +1977,13 @@ export const useStoryStore = create<StoryState>()(
                 ...latestSession.storyMap.nodes,
                 [newNodeId]: {
                   ...node,
-                  data: { ...node.data, audioUrl, narrationVoiceId: voiceForBeat },
+                  data: normalizeBeatMediaFields({
+                    ...node.data,
+                    audioUrl,
+                    narrationVoiceId: voiceForBeat,
+                    audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
+                    audioError: undefined,
+                  }),
                 },
               };
               const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
@@ -1427,7 +2003,19 @@ export const useStoryStore = create<StoryState>()(
                 message: err instanceof Error ? err.message : 'Narration generation failed',
               });
               console.error('Narration generation failed:', err);
-              set({ isGeneratingAudio: false });
+              const latestSession = get().session;
+              if (session.savedStoryId && latestSession?.storyMap.nodes[newNodeId]) {
+                set({
+                  session: updateSessionBeat(latestSession, newNodeId, (beatState) => ({
+                    ...beatState,
+                    audioStatus: 'failed',
+                    audioError: err instanceof Error ? err.message : 'Narration generation failed',
+                  })),
+                  isGeneratingAudio: false,
+                });
+              } else {
+                set({ isGeneratingAudio: false });
+              }
             };
 
             if (session.savedStoryId) {
@@ -1505,11 +2093,17 @@ export const useStoryStore = create<StoryState>()(
               // Re-apply new node, merging in audioUrl if narration already resolved
               [newNodeId]: {
                 ...updatedMap.nodes[newNodeId],
-                data: {
+                data: normalizeBeatMediaFields({
                   ...updatedMap.nodes[newNodeId].data,
                   narrationVoiceId: voiceForBeat,
                   ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
-                },
+                  imageStatus: 'pending',
+                  audioStatus: resolvedAudioUrl
+                    ? (session.savedStoryId ? 'ready' : 'not_requested')
+                    : session.userPrompt.toLowerCase() !== 'mock' && session.savedStoryId
+                    ? 'pending'
+                    : 'not_requested',
+                }),
               },
             },
           };
@@ -1561,6 +2155,19 @@ export const useStoryStore = create<StoryState>()(
             errorAction: null,
             ...audioExtra,
           });
+          if (session.savedStoryId) {
+            const uploadUserId = (await resolveCurrentUserId(session.savedByUserId)) ?? undefined;
+            const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
+            if (uploadUserId && runtimeSettings.storyIncrementalAssetSyncEnabled) {
+              await putPendingBeatImage({
+                storyId: session.savedStoryId,
+                userId: uploadUserId,
+                nodeId: newNodeId,
+                imageDataUrl: imageUrl,
+              });
+              void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+            }
+          }
           dispatchPricingRuntimeRefresh();
           logGenerationTiming({
             scope: 'continue_story',
@@ -1731,7 +2338,18 @@ export const useStoryStore = create<StoryState>()(
       },
 
       resetStory: () => {
-        set({ session: null, error: null, errorAction: null, isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null });
+        updateStoreSaveUi({
+          session: null,
+          error: null,
+          errorAction: null,
+          isLoading: false,
+          loadingClues: [],
+          loadingStage: null,
+          loadingReader: null,
+          isSaving: false,
+          saveStatus: 'idle',
+          saveWarning: null,
+        });
       },
 
       restartExploration: () => {
@@ -1766,7 +2384,14 @@ export const useStoryStore = create<StoryState>()(
         // Skip for mock stories
         if (session.userPrompt.toLowerCase() === 'mock') return;
 
-        set({ isGeneratingAudio: true });
+        set({
+          isGeneratingAudio: true,
+          session: updateSessionBeat(session, nodeId, (beat) => ({
+            ...beat,
+            audioStatus: session.savedStoryId ? 'pending' : beat.audioStatus,
+            audioError: undefined,
+          })),
+        });
 
         try {
           // Use locked voice — selected once at story start, never re-queried
@@ -1817,7 +2442,13 @@ export const useStoryStore = create<StoryState>()(
             ...latestSession.storyMap.nodes,
             [nodeId]: {
               ...latestSession.storyMap.nodes[nodeId],
-              data: { ...latestSession.storyMap.nodes[nodeId].data, audioUrl, narrationVoiceId: voiceName },
+              data: normalizeBeatMediaFields({
+                ...latestSession.storyMap.nodes[nodeId].data,
+                audioUrl,
+                narrationVoiceId: voiceName,
+                audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
+                audioError: undefined,
+              }),
             },
           };
           const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
@@ -1837,7 +2468,19 @@ export const useStoryStore = create<StoryState>()(
           });
         } catch (error) {
           console.error('Narration generation failed:', error);
-          set({ isGeneratingAudio: false });
+          const latestSession = get().session;
+          if (session.savedStoryId && latestSession?.storyMap.nodes[nodeId]) {
+            set({
+              session: updateSessionBeat(latestSession, nodeId, (beat) => ({
+                ...beat,
+                audioStatus: 'failed',
+                audioError: error instanceof Error ? error.message : 'Narration generation failed',
+              })),
+              isGeneratingAudio: false,
+            });
+          } else {
+            set({ isGeneratingAudio: false });
+          }
         }
       },
 
@@ -1930,12 +2573,14 @@ export const useStoryStore = create<StoryState>()(
             ...latestSession.storyMap.nodes,
             [nodeId]: {
               ...latestSession.storyMap.nodes[nodeId],
-              data: {
+              data: normalizeBeatMediaFields({
                 ...latestSession.storyMap.nodes[nodeId].data,
                 ...beatForRender,
                 imageUrl,
                 isStoryboard: true,
-              },
+                imageStatus: 'pending',
+                imageError: undefined,
+              }),
             },
           };
           const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
@@ -1949,9 +2594,25 @@ export const useStoryStore = create<StoryState>()(
           const authClient = createBrowserClient();
           const { data: { user } } = await authClient.auth.getUser();
           const saveUserId = user?.id || updatedSession.savedByUserId;
+          const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
+
+          if (saveUserId && updatedSession.savedStoryId && runtimeSettings.storyIncrementalAssetSyncEnabled) {
+            await putPendingBeatImage({
+              storyId: updatedSession.savedStoryId,
+              userId: saveUserId,
+              nodeId,
+              imageDataUrl: imageUrl,
+            });
+            void retryPendingBeatAssetSyncInternal(updatedSession.savedStoryId);
+          }
 
           if (saveUserId && !updatedSession.sourceStoryOwnerId) {
-            await get().saveStoryToCloud(saveUserId);
+            await get().saveStoryToCloud(saveUserId, {
+              signedUrlSwapEnabled: runtimeSettings.storyAssetSignedUrlSwapEnabled,
+              incrementalAssetSyncEnabled: runtimeSettings.storyIncrementalAssetSyncEnabled,
+              pauseAssetUploadsDuringGenerationEnabled: runtimeSettings.storyAssetUploadPauseDuringGenerationEnabled,
+              assetSyncWarningTimeoutMs: runtimeSettings.storyAssetSyncWarningTimeoutMs,
+            });
           } else if (!updatedSession.sourceStoryOwnerId) {
             set({ saveStatus: 'unsaved' });
           }
@@ -1969,25 +2630,23 @@ export const useStoryStore = create<StoryState>()(
         set((state) => ({ storyMode: !state.storyMode }));
       },
 
-      saveStoryToCloud: async (userId: string, options: { signedUrlSwapEnabled?: boolean } = {}) => {
+      saveStoryToCloud: async (userId: string, options: SaveStoryToCloudOptions = {}) => {
         if (activeSavePromise) {
-          queuedSaveRequest = { userId, signedUrlSwapEnabled: options.signedUrlSwapEnabled };
+          queuedSaveRequest = { userId, options };
           set({ error: LONG_SAVE_RETRY_MESSAGE });
           return activeSavePromise;
         }
 
         activeSavePromise = (async () => {
-          let nextRequest: { userId: string; signedUrlSwapEnabled?: boolean } | null = {
+          let nextRequest: { userId: string; options?: SaveStoryToCloudOptions } | null = {
             userId,
-            signedUrlSwapEnabled: options.signedUrlSwapEnabled,
+            options,
           };
 
           try {
             while (nextRequest) {
               queuedSaveRequest = null;
-              await get().saveStoryToCloudImmediate(nextRequest.userId, {
-                signedUrlSwapEnabled: nextRequest.signedUrlSwapEnabled,
-              });
+              await get().saveStoryToCloudImmediate(nextRequest.userId, nextRequest.options);
               nextRequest = queuedSaveRequest;
             }
           } finally {
@@ -1998,17 +2657,53 @@ export const useStoryStore = create<StoryState>()(
         return activeSavePromise;
       },
 
-      saveStoryToCloudImmediate: async (userId: string, options: { signedUrlSwapEnabled?: boolean } = {}) => {
+      saveStoryToCloudImmediate: async (userId: string, options: SaveStoryToCloudOptions = {}) => {
         const { session } = get();
         if (!session) return;
 
         const saveStartedSession = session;
-        const signedUrlSwapEnabled = await resolveSignedUrlSwapEnabled(options.signedUrlSwapEnabled);
-        set({ isSaving: true, saveStatus: 'saving', saveWarning: null, error: null });
+        const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings, options);
+        cacheStorySaveRuntimeSettings(runtimeSettings);
+        updateStoreSaveUi({
+          isSaving: true,
+          saveRuntimeSettings: runtimeSettings,
+          saveWarning: null,
+          error: null,
+        });
 
         try {
+          if (runtimeSettings.storyIncrementalAssetSyncEnabled) {
+            const strippedMap = stripBase64FromStoryMap(session.storyMap);
+            const strippedSession = buildPersistableSessionSnapshot(session, strippedMap, {
+              savedByUserId: userId,
+            });
+            const { storyId } = await saveStoryAction(strippedSession, strippedMap);
+
+            const latestSession = get().session;
+            if (latestSession && latestSession !== saveStartedSession) {
+              queuedSaveRequest = { userId, options };
+            }
+
+            const updatedSession = deriveSessionFields(
+              { ...(latestSession || session), savedStoryId: storyId, savedByUserId: userId },
+              (latestSession || session).storyMap
+            );
+
+            updateStoreSaveUi({
+              session: updatedSession,
+              isSaving: false,
+              saveRuntimeSettings: runtimeSettings,
+              error: queuedSaveRequest ? LONG_SAVE_RETRY_MESSAGE : null,
+            });
+
+            await stagePendingBeatImagesForSession(updatedSession, userId, storyId);
+            void retryPendingBeatAssetSyncInternal(storyId);
+            return;
+          }
+
           // Persist story to DB first to get a stable storyId for asset paths.
           // On first save this inserts and returns a new ID; on subsequent saves it updates.
+          const signedUrlSwapEnabled = await resolveSignedUrlSwapEnabled(runtimeSettings.storyAssetSignedUrlSwapEnabled);
           const strippedForId = buildPersistableSessionSnapshot(
             session,
             stripBase64FromStoryMap(session.storyMap)
@@ -2050,23 +2745,26 @@ export const useStoryStore = create<StoryState>()(
           }
 
           if (latestSession && latestSession !== saveStartedSession) {
-            queuedSaveRequest = { userId, signedUrlSwapEnabled };
+            queuedSaveRequest = { userId, options };
           }
 
           const updatedSession = deriveSessionFields(
             { ...(latestSession || session), savedStoryId: storyId, savedByUserId: userId },
             localDisplayMap
           );
-          const hasQueuedSave = !!queuedSaveRequest;
-          set({
+          updateStoreSaveUi({
             session: updatedSession,
-            isSaving: hasQueuedSave,
-            saveStatus: hasQueuedSave ? 'saving' : 'saved',
-            saveWarning: w2 ?? null,
-            error: hasQueuedSave ? LONG_SAVE_RETRY_MESSAGE : null,
+            isSaving: Boolean(queuedSaveRequest),
+            saveRuntimeSettings: runtimeSettings,
+            saveWarning: w2 ?? undefined,
+            error: queuedSaveRequest ? LONG_SAVE_RETRY_MESSAGE : null,
           });
         } catch (error: any) {
-          set({ isSaving: false, saveStatus: 'unsaved', error: error.message || 'Failed to save story' });
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error.message || 'Failed to save story',
+          });
         }
       },
 
@@ -2075,7 +2773,10 @@ export const useStoryStore = create<StoryState>()(
 
         try {
           const session = await loadStoryAction(storyId);
-          const fullSession = deriveSessionFields(session, session.storyMap);
+          const hydratedMap = session.savedStoryId
+            ? await overlayPendingBeatImages(session.storyMap, session.savedStoryId)
+            : session.storyMap;
+          const fullSession = deriveSessionFields(session, hydratedMap);
 
           if (process.env.NODE_ENV === 'development') {
             const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
@@ -2084,7 +2785,7 @@ export const useStoryStore = create<StoryState>()(
             console.log(`[loadStory] Loaded ${nodeCount} nodes, ${branchPoints} branch points`);
           }
 
-          set({
+          updateStoreSaveUi({
             session: fullSession,
             isLoading: false,
             loadingClues: [],
@@ -2092,8 +2793,10 @@ export const useStoryStore = create<StoryState>()(
             loadingReader: null,
             isSaving: false,
             saveStatus: 'saved',
-            saveWarning: null,
           });
+          if (session.savedStoryId) {
+            void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+          }
         } catch (error: any) {
           set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story' });
         }
@@ -2104,14 +2807,28 @@ export const useStoryStore = create<StoryState>()(
 
         try {
           const session = await loadStoryTreeAction(storyId);
-          const fullSession = deriveSessionFields(session, session.storyMap);
+          const hydratedMap = session.savedStoryId
+            ? await overlayPendingBeatImages(session.storyMap, session.savedStoryId)
+            : session.storyMap;
+          const fullSession = deriveSessionFields(session, hydratedMap);
 
           if (process.env.NODE_ENV === 'development') {
             const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
             console.log(`[exploreStory] Loaded ${nodeCount} nodes, exploration=${fullSession.explorationMode}`);
           }
 
-          set({ session: fullSession, isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, saveStatus: 'saved' });
+          updateStoreSaveUi({
+            session: fullSession,
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            isSaving: false,
+            saveStatus: 'saved',
+          });
+          if (session.savedStoryId) {
+            void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+          }
         } catch (error: any) {
           set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story for exploration' });
         }
@@ -2124,10 +2841,24 @@ export const useStoryStore = create<StoryState>()(
           const refreshedMap = await refreshStoryMapAction(session.savedStoryId);
           const current = get().session;
           if (!current || current.savedStoryId !== session.savedStoryId) return;
-          set({ session: deriveSessionFields(current, refreshedMap) });
+          const hydratedMap = await overlayPendingBeatImages(refreshedMap, session.savedStoryId);
+          updateStoreSaveUi({
+            session: deriveSessionFields(current, hydratedMap),
+          });
+          void retryPendingBeatAssetSyncInternal(session.savedStoryId);
         } catch {
           // Silent fail — URLs will still work until full expiry
         }
+      },
+
+      retryPendingBeatAssetSync: async () => {
+        const currentSession = get().session;
+        if (!currentSession?.savedStoryId) return;
+        const userId = await resolveCurrentUserId(currentSession.savedByUserId);
+        if (userId) {
+          await stagePendingBeatImagesForSession(currentSession, userId, currentSession.savedStoryId);
+        }
+        await retryPendingBeatAssetSyncInternal(currentSession.savedStoryId);
       },
 
       clearPublishResult: () => {
@@ -2137,5 +2868,6 @@ export const useStoryStore = create<StoryState>()(
       clearError: () => {
         set({ error: null, errorAction: null });
       },
-    })
+    });
+    }
 );
