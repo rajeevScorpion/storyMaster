@@ -518,6 +518,33 @@ function shouldStageBeatImage(beat: StoryBeat): boolean {
   return isDataUrl(beat.imageUrl) && beat.imageStatus !== 'ready';
 }
 
+function hasPersistedReadyImage(beat: StoryBeat | undefined): boolean {
+  if (!beat) {
+    return false;
+  }
+
+  const normalizedBeat = normalizeBeatMediaFields(beat);
+  return Boolean(
+    normalizedBeat.imageUrl
+    && !isDataUrl(normalizedBeat.imageUrl)
+    && normalizedBeat.imageStatus === 'ready'
+  );
+}
+
+function markUploadedAssetStatusesReady(storyMap: StoryMap, assetMap: NodeAssetUrlMap): StoryMap {
+  return Object.entries(assetMap).reduce((nextMap, [nodeId, urls]) => {
+    if (!nextMap.nodes[nodeId]) {
+      return nextMap;
+    }
+
+    return updateStoryMapBeat(nextMap, nodeId, (beat) => ({
+      ...beat,
+      ...(urls.imageUrl ? { imageStatus: 'ready', imageError: undefined } : {}),
+      ...(urls.audioUrl ? { audioStatus: 'ready', audioError: undefined } : {}),
+    }));
+  }, storyMap);
+}
+
 function getStoryMapImageSyncSummary(storyMap: StoryMap | null | undefined): {
   pendingCount: number;
   failedCount: number;
@@ -528,9 +555,10 @@ function getStoryMapImageSyncSummary(storyMap: StoryMap | null | undefined): {
 
   return Object.values(storyMap.nodes).reduce(
     (summary, node) => {
-      if (node.data.imageStatus === 'failed') {
+      const normalizedBeat = normalizeBeatMediaFields(node.data);
+      if (normalizedBeat.imageStatus === 'failed') {
         summary.failedCount += 1;
-      } else if (node.data.imageStatus === 'pending') {
+      } else if (normalizedBeat.imageStatus === 'pending') {
         summary.pendingCount += 1;
       }
       return summary;
@@ -653,16 +681,27 @@ async function overlayPendingBeatImages(
     return storyMap;
   }
 
-  return pendingImages.reduce((nextMap, record) => {
-    if (!nextMap.nodes[record.nodeId]) {
-      return nextMap;
+  let nextMap = storyMap;
+
+  for (const record of pendingImages) {
+    const node = nextMap.nodes[record.nodeId];
+    if (!node) {
+      await deletePendingBeatImage(storyId, record.nodeId, record.updatedAt);
+      continue;
     }
 
-    return updateStoryMapBeat(nextMap, record.nodeId, (beat) => ({
+    if (hasPersistedReadyImage(node.data)) {
+      await deletePendingBeatImage(storyId, record.nodeId, record.updatedAt);
+      continue;
+    }
+
+    nextMap = updateStoryMapBeat(nextMap, record.nodeId, (beat) => ({
       ...beat,
       imageUrl: record.imageDataUrl,
     }));
-  }, storyMap);
+  }
+
+  return nextMap;
 }
 
 async function uploadBeatPortraits(
@@ -975,6 +1014,10 @@ export const useStoryStore = create<StoryState>()(
             currentSession?.savedStoryId === storyId
               ? currentSession.storyMap.nodes[record.nodeId]
               : undefined;
+          if (hasPersistedReadyImage(currentNode?.data)) {
+            await deletePendingBeatImage(storyId, record.nodeId, record.updatedAt);
+            continue;
+          }
           const userId = await resolveCurrentUserId(
             currentNode ? currentSession?.savedByUserId || record.userId : record.userId
           );
@@ -2730,14 +2773,14 @@ export const useStoryStore = create<StoryState>()(
           // Re-read latest session to preserve audioUrls written by concurrent narration
           const latestSession = get().session;
           const latestMap = latestSession?.storyMap || session.storyMap;
-          let localDisplayMap = latestMap;
+          let localDisplayMap = markUploadedAssetStatusesReady(latestMap, assetMap);
 
           if (signedUrlSwapEnabled) {
             try {
               const signedAssetMap = await signNodeAssetUrls('story-assets', assetMap);
-              const preloadedSignedAssetMap = await buildPreloadedSignedAssetMap(latestMap, signedAssetMap);
+              const preloadedSignedAssetMap = await buildPreloadedSignedAssetMap(localDisplayMap, signedAssetMap);
               if (Object.keys(preloadedSignedAssetMap).length > 0) {
-                localDisplayMap = replaceBase64WithUrls(latestMap, preloadedSignedAssetMap);
+                localDisplayMap = replaceBase64WithUrls(localDisplayMap, preloadedSignedAssetMap);
               }
             } catch (signError) {
               console.warn('Signed asset URL swap failed; keeping local base64 assets:', signError);

@@ -546,15 +546,20 @@ export async function updateBeatMediaState(
 
   if (Object.keys(updateData).length === 0) return;
 
-  const { error } = await supabase
+  const { data: updatedBeatRows, error } = await supabase
     .from('beats')
     .update(updateData)
     .eq('story_id', storyId)
     .eq('node_id', nodeId)
-    .eq('generated_by', user.id);
+    .eq('generated_by', user.id)
+    .select('id')
+    .limit(1);
 
   if (error) {
     throw new Error(`Failed to update beat media state: ${error.message}`);
+  }
+  if (!updatedBeatRows || updatedBeatRows.length === 0) {
+    throw new Error('Failed to update beat media state: beat row not found');
   }
 
   const { data: story, error: storyError } = await supabase
