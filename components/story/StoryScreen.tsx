@@ -20,6 +20,7 @@ import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
+import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 
 function StoryboardCycler({
   gridUrl,
@@ -260,7 +261,7 @@ export default function StoryScreen() {
   const currentNode = getCurrentNode(session.storyMap);
   if (!currentNode) return null;
 
-  const currentBeat = currentNode.data;
+  const currentBeat = normalizeBeatMediaFields(currentNode.data);
   const isEnding = currentBeat.isEnding;
   const continueCoinCost = (pricing.actionCosts.continue_story_new_beat ?? 1) * 10;
   const showCoinHint = pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled;
@@ -407,15 +408,16 @@ function StoryScreenInner({
   }, [scrollRef]);
 
   // Audio player
-  const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
-  const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
-  const imageKey = currentBeat.imageUrl || displayImageUrl;
+  const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
+  const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
+  const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || normalizedCurrentBeat.imageUrl;
+  const imageKey = normalizedCurrentBeat.imageUrl || displayImageUrl;
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
-  const showPendingImageState = !displayImageUrl && currentBeat.imageStatus === 'pending';
-  const showFailedImageState = !displayImageUrl && currentBeat.imageStatus === 'failed';
+  const showPendingImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'pending';
+  const showFailedImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'failed';
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
-  const canRegenerateImage = !currentBeat.imageUrl || isFallbackImageUrl(currentBeat.imageUrl) || imageLoadFailed;
-  const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(currentBeat.audioUrl, currentNodeId);
+  const canRegenerateImage = !normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed;
+  const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(normalizedCurrentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
   const orderedOptions = currentBeat.canonicalOptionId
@@ -429,18 +431,18 @@ function StoryScreenInner({
   useEffect(() => {
     if (prevNodeIdForAutoplay.current !== currentNodeId) {
       prevNodeIdForAutoplay.current = currentNodeId;
-      if (storyMode && currentBeat.audioUrl && playbackState === 'idle') {
+      if (storyMode && normalizedCurrentBeat.audioUrl && playbackState === 'idle') {
         playAudio();
       }
     }
-  }, [currentNodeId, storyMode, currentBeat.audioUrl, playbackState, playAudio]);
+  }, [currentNodeId, storyMode, normalizedCurrentBeat.audioUrl, playbackState, playAudio]);
 
   // Autoplay when audio becomes ready on current node in story mode
   useEffect(() => {
-    if (storyMode && isAudioReady && currentBeat.audioUrl && playbackState === 'idle') {
+    if (storyMode && isAudioReady && normalizedCurrentBeat.audioUrl && playbackState === 'idle') {
       playAudio();
     }
-  }, [storyMode, isAudioReady, currentBeat.audioUrl, playbackState, playAudio]);
+  }, [storyMode, isAudioReady, normalizedCurrentBeat.audioUrl, playbackState, playAudio]);
 
   // Chime when audio becomes ready for current node
   useEffect(() => {
@@ -458,7 +460,7 @@ function StoryScreenInner({
     onSelectOption: continueStory,
     onToggleMinimized: () => setIsMinimized(prev => !prev),
     onToggleNarration: () => {
-      if (currentBeat.audioUrl) {
+      if (normalizedCurrentBeat.audioUrl) {
         togglePlayPause();
       } else if (!isGeneratingAudio) {
         generateNarrationForNode(currentNodeId);
@@ -584,16 +586,16 @@ function StoryScreenInner({
           >
             {isStoryboard ? (
               <StoryboardCycler
-                key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                gridUrl={currentBeat.imageUrl!}
-                audioUrl={currentBeat.audioUrl}
+                key={`${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                gridUrl={normalizedCurrentBeat.imageUrl!}
+                audioUrl={normalizedCurrentBeat.audioUrl}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
                 vignetteEnabled={cycleSettings.vignetteEnabled}
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
-                onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
-                onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}
+                onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
+                onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
               />
             ) : displayImageUrl && (
               <Image
@@ -620,7 +622,7 @@ function StoryScreenInner({
           </motion.div>
         </AnimatePresence>
         {!displayImageUrl && (showPendingImageState || showFailedImageState) && (
-          <div className="absolute inset-0 flex items-center justify-center px-6 text-center">
+          <div className="absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
             <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
               <div className="mb-3 flex justify-center">
                 {showPendingImageState ? (
@@ -711,17 +713,17 @@ function StoryScreenInner({
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
               {isStoryboard ? (
                 <StoryboardCycler
-                  key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                  gridUrl={currentBeat.imageUrl!}
-                  audioUrl={currentBeat.audioUrl}
+                  key={`mobile-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                  gridUrl={normalizedCurrentBeat.imageUrl!}
+                  audioUrl={normalizedCurrentBeat.audioUrl}
                   cycleOverride={cycleSettings.cycleOverride}
                   cycleMs={cycleSettings.cycleMs}
                   vignetteEnabled={cycleSettings.vignetteEnabled}
                   vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                   playbackState={playbackState}
                   imageClassName="mobile-scene-shuttle"
-                  onImageLoad={() => setFailedImageUrl((prev) => (prev === currentBeat.imageUrl ? null : prev))}
-                  onImageError={() => setFailedImageUrl(currentBeat.imageUrl!)}
+                  onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
+                  onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                 />
               ) : displayImageUrl ? (
                 <div className="mobile-scene-shuttle absolute inset-0">
@@ -850,7 +852,7 @@ function StoryScreenInner({
                   isGeneratingAudio={isGeneratingAudio}
                   isAudioReady={isAudioReady}
                   playbackState={playbackState}
-                  hasAudio={!!currentBeat.audioUrl}
+                  hasAudio={!!normalizedCurrentBeat.audioUrl}
                   onTogglePlayPause={togglePlayPause}
                   onGenerateNarration={() => generateNarrationForNode(currentNodeId)}
                   onClearGlow={clearAudioReady}

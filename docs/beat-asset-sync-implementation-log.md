@@ -39,5 +39,11 @@
   - retry pending beat sync on window focus / online
   - show pending / failed beat image states when a beat has no server image yet
   - surface beat media warning state through the save icon
+- Follow-up warning-state hardening:
+  - stale IndexedDB pending-image records are now discarded on load/retry when the beat already has a persisted server image
+  - legacy full-story saves now mark uploaded beat assets as `ready` locally so successful uploads do not keep warning badges around
+  - story-wide warning aggregation now normalizes beat media fields before counting pending/failed nodes
+  - `updateBeatMediaState` now errors if the normalized `beats` row was not actually updated
+  - mobile no longer shows the large duplicated background warning panel on top of the dedicated image-card retry state
 - Verification:
   - `npm run build` passed successfully on 2026-04-24

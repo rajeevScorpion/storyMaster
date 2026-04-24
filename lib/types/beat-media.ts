@@ -12,11 +12,11 @@ export function normalizeImageMediaStatus(
   imageUrl: string | undefined,
   isStoryboard: boolean | undefined
 ): BeatMediaStatus {
-  if (isBeatMediaStatus(status)) {
-    return status;
-  }
   if (imageUrl && !imageUrl.startsWith('data:')) {
     return 'ready';
+  }
+  if (isBeatMediaStatus(status)) {
+    return status;
   }
   if (imageUrl?.startsWith('data:')) {
     return 'pending';
@@ -31,11 +31,11 @@ export function normalizeAudioMediaStatus(
   status: BeatMediaStatus | undefined,
   audioUrl: string | undefined
 ): BeatMediaStatus {
-  if (isBeatMediaStatus(status)) {
-    return status;
-  }
   if (audioUrl && !audioUrl.startsWith('data:')) {
     return 'ready';
+  }
+  if (isBeatMediaStatus(status)) {
+    return status;
   }
   if (audioUrl?.startsWith('data:')) {
     return 'pending';
