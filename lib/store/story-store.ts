@@ -597,7 +597,14 @@ function getStoryMapImageSyncSummary(storyMap: StoryMap | null | undefined): {
   );
 }
 
-function deriveSaveWarning(storyMap: StoryMap | null | undefined, queueActive: boolean): string | null {
+function deriveSaveWarning(
+  storyMap: StoryMap | null | undefined,
+  queueActive: boolean,
+  storyConfig?: StoryConfig | null
+): string | null {
+  if (storyConfig && isPromptOnlyStoryConfig(storyConfig)) {
+    return null;
+  }
   const { failedCount, pendingCount, impossibleCount } = getStoryMapImageSyncSummary(storyMap);
   if (impossibleCount > 0) {
     return ASSET_SYNC_REPAIR_MESSAGE;
@@ -625,7 +632,7 @@ function syncSaveUiState(
       : 'idle'
   );
   const nextSaveWarning = partial.saveWarning === undefined
-    ? (nextSaveStatus === 'unsaved' ? null : deriveSaveWarning(nextSession?.storyMap, Boolean(activeBeatAssetSyncPromise)))
+    ? (nextSaveStatus === 'unsaved' ? null : deriveSaveWarning(nextSession?.storyMap, Boolean(activeBeatAssetSyncPromise), nextSession?.storyConfig))
     : partial.saveWarning;
 
   setState({
@@ -3122,33 +3129,59 @@ export const useStoryStore = create<StoryState>()(
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;
 
+        const previousBeat = normalizeBeatMediaFields(node.data);
+
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
           if (userId) {
-            const uploadedUrl = await uploadAsset(
-              'story-assets',
-              `${userId}/${session.savedStoryId}/${nodeId}/image.webp`,
-              imageDataUrl
-            );
-            await updateBeatMediaState(session.savedStoryId, nodeId, {
-              imageUrl: uploadedUrl,
-              imageStatus: 'ready',
-              imageError: null,
-            });
-
-            const latestSession = get().session;
-            if (!latestSession) return;
+            // Optimistic local render — show the uploaded image immediately while the
+            // cloud upload runs in the background.
             updateStoreSaveUi({
-              session: updateSessionBeat(latestSession, nodeId, (beat) => ({
+              session: updateSessionBeat(session, nodeId, (beat) => ({
                 ...beat,
-                imageUrl: uploadedUrl,
-                persistedImageUrl: uploadedUrl,
-                imageStatus: 'ready',
+                imageUrl: imageDataUrl,
+                persistedImageUrl: undefined,
+                imageStatus: 'pending',
                 imageError: undefined,
               })),
-              saveStatus: 'saved',
+              saveStatus: 'saving',
             });
-            return;
+
+            try {
+              const uploadedUrl = await uploadAsset(
+                'story-assets',
+                `${userId}/${session.savedStoryId}/${nodeId}/image.webp`,
+                imageDataUrl
+              );
+              await updateBeatMediaState(session.savedStoryId, nodeId, {
+                imageUrl: uploadedUrl,
+                imageStatus: 'ready',
+                imageError: null,
+              });
+
+              const latestSession = get().session;
+              if (!latestSession) return;
+              updateStoreSaveUi({
+                session: updateSessionBeat(latestSession, nodeId, (beat) => ({
+                  ...beat,
+                  imageUrl: uploadedUrl,
+                  persistedImageUrl: uploadedUrl,
+                  imageStatus: 'ready',
+                  imageError: undefined,
+                })),
+                saveStatus: 'saved',
+              });
+              return;
+            } catch (error) {
+              // Roll the optimistic write back to whatever the beat looked like before.
+              const latestSession = get().session;
+              if (latestSession) {
+                updateStoreSaveUi({
+                  session: updateSessionBeat(latestSession, nodeId, () => previousBeat),
+                });
+              }
+              throw error;
+            }
           }
         }
 

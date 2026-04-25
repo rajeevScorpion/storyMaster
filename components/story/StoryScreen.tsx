@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, AlertTriangle, Copy, Upload, Trash2, X } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import PublishDialog from './PublishDialog';
@@ -497,6 +497,9 @@ function StoryScreenInner({
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploadingPromptOnlyImage, setIsUploadingPromptOnlyImage] = useState(false);
+  const [showPromptToolsPopover, setShowPromptToolsPopover] = useState(false);
+  const promptToolsPopoverRef = useRef<HTMLDivElement>(null);
+  const promptToolsToggleRef = useRef<HTMLButtonElement>(null);
   const visibleReaderPanel: StoryReaderPanel = isEnding ? 'story' : activeReaderPanel;
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
     enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
@@ -668,6 +671,34 @@ function StoryScreenInner({
     }
   }, [saveStatus, onSave, isSaving]);
 
+  // Close the prompt-tools popover on click-outside or Escape.
+  useEffect(() => {
+    if (!showPromptToolsPopover) return;
+    const handlePointer = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (promptToolsPopoverRef.current?.contains(target)) return;
+      if (promptToolsToggleRef.current?.contains(target)) return;
+      setShowPromptToolsPopover(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowPromptToolsPopover(false);
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('touchstart', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('touchstart', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [showPromptToolsPopover]);
+
+  // Close the popover when the active beat changes — context shifts to a different beat's prompts.
+  useEffect(() => {
+    setShowPromptToolsPopover(false);
+  }, [currentNodeId]);
+
   // Recovery guard for a save request that is taking longer than expected.
   // The store queues one retry behind the active save instead of launching overlapping uploads.
   useEffect(() => {
@@ -678,9 +709,11 @@ function StoryScreenInner({
       if (latest.saveStatus !== 'saving') return;
 
       if (cycleSettings.storyIncrementalAssetSyncEnabled) {
-        useStoryStore.setState({
-          saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
-        });
+        if (!isPromptOnlyStory) {
+          useStoryStore.setState({
+            saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
+          });
+        }
         return;
       }
 
@@ -696,6 +729,7 @@ function StoryScreenInner({
   }, [
     saveStatus,
     onSave,
+    isPromptOnlyStory,
     cycleSettings.cloudSaveTimeoutMs,
     cycleSettings.storyIncrementalAssetSyncEnabled,
     cycleSettings.storyAssetSyncWarningTimeoutMs,
@@ -776,6 +810,7 @@ function StoryScreenInner({
     try {
       await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl);
       setShowUploadModal(false);
+      setShowPromptToolsPopover(false);
       setUploadPreview(null);
       if (uploadInputRef.current) {
         uploadInputRef.current.value = '';
@@ -848,52 +883,19 @@ function StoryScreenInner({
             />
           </motion.div>
         </AnimatePresence>
-        {!displayImageUrl && (showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
+        {!displayImageUrl && (showPendingImageState || showFailedImageState) && (
           <div className="absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
             <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
               <div className="mb-3 flex justify-center">
                 {showPendingImageState ? (
                   <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                ) : showPromptOnlyPlaceholder ? (
-                  <ImageIcon className="h-8 w-8 text-sky-200" />
                 ) : (
                   <AlertTriangle className="h-8 w-8 text-amber-300" />
                 )}
               </div>
               <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">
-                {showPendingImageState
-                  ? 'Beat Image Syncing'
-                  : showPromptOnlyPlaceholder
-                  ? 'Prompt-Only Beat Image'
-                  : 'Beat Image Needs Retry'}
+                {showPendingImageState ? 'Beat Image Syncing' : 'Beat Image Needs Retry'}
               </p>
-              {showPromptOnlyPlaceholder && (
-                <>
-                  <p className="mt-3 max-w-sm text-sm text-neutral-300">
-                    This beat was created without an image. Copy the prompt or upload your own 16:9 storyboard image.
-                  </p>
-                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                    {beatPromptText && (
-                      <button
-                        type="button"
-                        onClick={() => void copyPromptText('beat', beatPromptText)}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                        {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={openUploadModal}
-                      className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                    >
-                      <Upload className="h-3.5 w-3.5" />
-                      Upload Image
-                    </button>
-                  </div>
-                </>
-              )}
             </div>
           </div>
         )}
@@ -1000,34 +1002,11 @@ function StoryScreenInner({
                   />
                 </div>
               ) : showPromptOnlyPlaceholder ? (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/75 px-5 text-center text-neutral-200">
-                  <ImageIcon className="h-8 w-8 text-sky-200" />
-                  <div>
-                    <p className="text-sm uppercase tracking-[0.18em] text-neutral-200">Prompt-Only Beat</p>
-                    <p className="mt-2 text-sm text-neutral-400">
-                      Copy the beat prompt or upload your own 16:9 image for this beat.
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    {beatPromptText && (
-                      <button
-                        type="button"
-                        onClick={() => void copyPromptText('beat', beatPromptText)}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                        {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Prompt'}
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={openUploadModal}
-                      className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                    >
-                      <Upload className="h-3.5 w-3.5" />
-                      Upload
-                    </button>
-                  </div>
+                <div
+                  className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
+                  title="No image for this beat — use the prompt tools to upload one"
+                >
+                  <ImageOff className="h-10 w-10 text-sky-200/80" />
                 </div>
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
@@ -1094,24 +1073,135 @@ function StoryScreenInner({
             onMouseEnter={() => setIsCardHovered(true)}
             onMouseLeave={() => setIsCardHovered(false)}
           >
-            {/* Minimize/maximize toggle — attached above card */}
-            <button
-              onClick={() => setIsMinimized(!isMinimized)}
-              className="mb-2 hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
-              title={isMinimized ? 'Expand' : 'Minimize'}
-            >
-              {isMinimized ? (
-                <ChevronUp className="w-5 h-5 text-neutral-300" />
-              ) : (
-                <ChevronDown className="w-5 h-5 text-neutral-300" />
+            {/* Card chrome toggles — minimize + prompt-tools popover */}
+            <div className="relative mb-2 flex items-center gap-2 self-end">
+              <button
+                onClick={() => setIsMinimized(!isMinimized)}
+                className="hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
+                title={isMinimized ? 'Expand story' : 'Minimize story'}
+              >
+                {isMinimized ? (
+                  <ChevronUp className="w-5 h-5 text-neutral-300" />
+                ) : (
+                  <ChevronDown className="w-5 h-5 text-neutral-300" />
+                )}
+              </button>
+              {(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0) && (
+                <>
+                  <button
+                    ref={promptToolsToggleRef}
+                    type="button"
+                    onClick={() => setShowPromptToolsPopover((open) => !open)}
+                    aria-expanded={showPromptToolsPopover}
+                    aria-haspopup="dialog"
+                    className={`p-2 rounded-full backdrop-blur-md transition-colors ${
+                      showPromptToolsPopover
+                        ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
+                        : 'bg-white/5 hover:bg-white/10 text-neutral-300'
+                    }`}
+                    title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                  >
+                    <Layers className="w-5 h-5" />
+                  </button>
+                  {showPromptToolsPopover && (
+                    <div
+                      ref={promptToolsPopoverRef}
+                      role="dialog"
+                      aria-label={isPromptOnlyStory ? 'Prompt and image tools' : 'Prompt tools'}
+                      className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-sky-500/20 bg-neutral-950/95 p-5 shadow-2xl backdrop-blur-md"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-sky-200">
+                          {isPromptOnlyStory ? 'Prompt and Image Tools' : 'Prompt Tools'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowPromptToolsPopover(false)}
+                          className="rounded-full p-1 text-neutral-400 hover:bg-white/10 hover:text-neutral-100"
+                          title="Close"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <p className="mt-3 text-sm leading-relaxed text-neutral-300">
+                        {isPromptOnlyStory
+                          ? 'This story was generated without images. Copy the exact prompts for external image generation, then upload or replace a 16:9 beat image here.'
+                          : 'Copy the exact prompt text that was sent to the image model for this beat, including any character-sheet prompts stored for continuity.'}
+                      </p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {beatPromptText && (
+                          <button
+                            type="button"
+                            onClick={() => void copyPromptText('beat', beatPromptText)}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
+                            title="Copy this beat's image prompt"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
+                          </button>
+                        )}
+                        {isPromptOnlyStory && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPromptToolsPopover(false);
+                              openUploadModal();
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                            title={displayImageUrl ? 'Replace this beat’s image' : 'Upload a 16:9 image for this beat'}
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            {displayImageUrl ? 'Replace Image' : 'Upload Image'}
+                          </button>
+                        )}
+                        {isPromptOnlyStory && displayImageUrl && (
+                          <button
+                            type="button"
+                            onClick={() => void handlePromptOnlyDelete()}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition-colors hover:bg-rose-500/20"
+                            title="Remove the uploaded image for this beat"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete Image
+                          </button>
+                        )}
+                      </div>
+                      {characterPromptItems.length > 0 && (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {characterPromptItems.map((item) => (
+                            <button
+                              key={item.key}
+                              type="button"
+                              onClick={() => void copyPromptText(item.key, item.promptText)}
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
+                              title={`Copy the ${item.label} character sheet prompt`}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              {copiedPromptKey === item.key ? `Copied ${item.label}` : `Copy ${item.label} Sheet`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
-            </button>
+            </div>
 
           {/* Card + Narration button row */}
           <div className="flex items-end gap-3 w-full md:gap-5">
             {/* Narration + Regenerate image buttons — outside card, left side */}
             {!isMinimized && (
               <div className="shrink-0 pb-3 flex flex-col items-center gap-2 md:pb-4">
+                {/* Missing-image indicator — prompt-only beat without an uploaded image */}
+                {showPromptOnlyPlaceholder && (
+                  <div
+                    className="p-2.5 backdrop-blur-md rounded-full bg-neutral-900/60 border border-sky-500/20 text-sky-300"
+                    title="No image for this beat — open prompt tools to upload one"
+                  >
+                    <ImageOff className="w-5 h-5" />
+                  </div>
+                )}
                 {/* Regenerate image button — only when image is missing */}
                 {canRegenerateImage && (
                   <button
@@ -1129,16 +1219,6 @@ function StoryScreenInner({
                     ) : (
                       <ImageIcon className="w-5 h-5 text-amber-400 hover:text-amber-300 transition-colors" />
                     )}
-                  </button>
-                )}
-                {isPromptOnlyStory && beatPromptText && (
-                  <button
-                    type="button"
-                    onClick={() => void copyPromptText('beat', beatPromptText)}
-                    className="p-2.5 backdrop-blur-md rounded-full transition-all duration-300 bg-neutral-900/60 border border-sky-500/20 hover:border-sky-500/40 hover:bg-neutral-800"
-                    title={copiedPromptKey === 'beat' ? 'Beat prompt copied' : 'Copy beat prompt'}
-                  >
-                    <Copy className={`w-5 h-5 transition-colors ${copiedPromptKey === 'beat' ? 'text-emerald-300' : 'text-sky-300'}`} />
                   </button>
                 )}
                 {cycleSettings.storyUiAutoScrollEnabled && (
@@ -1195,71 +1275,6 @@ function StoryScreenInner({
                   exit={{ opacity: 0 }}
                 transition={{ duration: 0.4 }}
               >
-                  {!isMinimized && (isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0) && (
-                    <div className="mb-8 rounded-2xl border border-sky-500/15 bg-sky-500/5 p-5">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-sky-200">
-                            {isPromptOnlyStory ? 'Prompt and Image Tools' : 'Prompt Tools'}
-                          </p>
-                          <p className="mt-3 text-sm leading-relaxed text-neutral-300">
-                            {isPromptOnlyStory
-                              ? 'This story was generated without images. Copy the exact prompts for external image generation, then upload or replace a 16:9 beat image here.'
-                              : 'Copy the exact prompt text that was sent to the image model for this beat, including any character-sheet prompts stored for continuity.'}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {beatPromptText && (
-                            <button
-                              type="button"
-                              onClick={() => void copyPromptText('beat', beatPromptText)}
-                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                              {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
-                            </button>
-                          )}
-                          {isPromptOnlyStory && (
-                            <button
-                              type="button"
-                              onClick={openUploadModal}
-                              className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                            >
-                              <Upload className="h-3.5 w-3.5" />
-                              {displayImageUrl ? 'Replace Image' : 'Upload Image'}
-                            </button>
-                          )}
-                          {isPromptOnlyStory && displayImageUrl && (
-                            <button
-                              type="button"
-                              onClick={() => void handlePromptOnlyDelete()}
-                              className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition-colors hover:bg-rose-500/20"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                              Delete Image
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {characterPromptItems.length > 0 && (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {characterPromptItems.map((item) => (
-                            <button
-                              key={item.key}
-                              type="button"
-                              onClick={() => void copyPromptText(item.key, item.promptText)}
-                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                              {copiedPromptKey === item.key ? `Copied ${item.label}` : `Copy ${item.label} Sheet`}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
                   {preludeText && !isMinimized && (
                     <div className="mb-8 rounded-2xl border border-emerald-500/15 bg-emerald-500/5 p-5">
                       <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300">
