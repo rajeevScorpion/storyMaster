@@ -3,7 +3,9 @@ import type { GeminiImageSize } from '@/lib/ai/pricing';
 
 export type CostActivityKey =
   | 'start_story_initial_beat'
+  | 'start_story_initial_beat_prompt_only'
   | 'continue_story_new_beat'
+  | 'continue_story_new_beat_prompt_only'
   | 'preview_seed_plan'
   | 'regenerate_image'
   | 'regenerate_narration';

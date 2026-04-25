@@ -256,6 +256,8 @@ export async function getGlobalSettings(): Promise<{
   storyUiAutoScrollEnabled: boolean;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
+  storyPromptOnlyModeEnabled: boolean;
+  audioStorylinePublishEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
   storyAssetSignedUrlSwapEnabled: boolean;
@@ -272,7 +274,7 @@ export async function getGlobalSettings(): Promise<{
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -288,6 +290,8 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('story_ui_auto_scroll_enabled', true),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
+    getFeatureFlag('story_prompt_only_mode_enabled', false),
+    getFeatureFlag('audio_storyline_publish_enabled', false),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
     getFeatureFlag('story_asset_signed_url_swap_enabled', false),
@@ -330,6 +334,8 @@ export async function getGlobalSettings(): Promise<{
     storyUiAutoScrollEnabled,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
+    storyPromptOnlyModeEnabled,
+    audioStorylinePublishEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,
     storyAssetSignedUrlSwapEnabled,
@@ -450,6 +456,16 @@ export async function setFreePlusCharacterSheets(enabled: boolean): Promise<void
 export async function setCreatorCharacterSheets(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('character_sheet_enabled_creator', enabled);
+}
+
+export async function setStoryPromptOnlyModeEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('story_prompt_only_mode_enabled', enabled);
+}
+
+export async function setAudioStorylinePublishEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('audio_storyline_publish_enabled', enabled);
 }
 
 export async function setVideoDownload(enabled: boolean): Promise<void> {
@@ -584,6 +600,8 @@ export async function getStoryboardSettings(): Promise<{
   cloudSaveTimeoutMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
+  storyPromptOnlyModeEnabled: boolean;
+  audioStorylinePublishEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
   storyAssetSignedUrlSwapEnabled: boolean;
@@ -592,7 +610,7 @@ export async function getStoryboardSettings(): Promise<{
   authoringWordCap: number;
   storyAssetSyncWarningTimeoutMs: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -609,6 +627,8 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
+    getFeatureFlag('story_prompt_only_mode_enabled', false),
+    getFeatureFlag('audio_storyline_publish_enabled', false),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
     getFeatureFlag('story_asset_signed_url_swap_enabled', false),
@@ -645,6 +665,8 @@ export async function getStoryboardSettings(): Promise<{
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
+    storyPromptOnlyModeEnabled,
+    audioStorylinePublishEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,
     storyAssetSignedUrlSwapEnabled,

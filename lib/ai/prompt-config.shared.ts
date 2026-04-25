@@ -76,6 +76,9 @@ Core behavior rules:
 20. Explicitly flag newly introduced named characters in newCharacterIds.
 21. Explicitly flag characters with major visible changes in changedCharacterIds.
 22. imagePrompt is a high-level visual intent for the beat. The visual composer will break it into four storyboard frames later.
+23. Never duplicate a named character in a beat or panel unless the runtime story state explicitly requires multiple copies of that same character.
+24. If a named character is absent from the beat, omit them instead of cloning or reintroducing them visually.
+25. Preserve one-to-one identity for every named character across beats, including species, face, body proportions, colors, clothing logic, and distinguishing features.
 
 Age group adaptation rules:
 - kids_3_5: Very simple sentences, 2-3 sentences per beat, no scary content, bright and happy themes, familiar objects, warm and safe tone.
@@ -111,6 +114,7 @@ Continuity rules:
 - Do not rename characters unless the runtime state explicitly changes them.
 - Do not suddenly change setting, time of day, or mood without narrative reason.
 - Keep cast size compact and only introduce extra named characters when they materially help the current beat.
+- Never imply, request, or normalize duplicate copies of a named character unless the story explicitly calls for multiples.
 
 Output schema:
 Return a JSON object with these keys:
@@ -196,6 +200,7 @@ Core rules:
 16. Keep titles short and useful. Keep sceneSummary compact.
 17. Do not add random lore, surprise characters, or off-tone twists that are not grounded in the source.
 18. Keep the output safe for the requested story configuration.
+19. Preserve one-to-one character identity from scene to scene. Do not introduce duplicate copies of a named character unless the source explicitly calls for it.
 
 Return JSON with exactly these keys:
 - beatCount
@@ -254,6 +259,9 @@ Core rules:
 15. Flag only meaningful visible character changes in changedCharacterIds.
 16. beatNumber must match the seeded beat index.
 17. The returned options must remain compatible with future branching.
+18. Never duplicate a named character in the beat unless the source beat explicitly requires multiple copies.
+19. If a named character is absent from the seeded beat, omit them instead of visually cloning them into the moment.
+20. Preserve one-to-one character identity across all later storyboard panels for this beat.
 
 Return a JSON object with these keys:
 - title
@@ -348,6 +356,9 @@ Core rules:
 14. Use {{visualStyle}} as the controlling style direction. Interpret it faithfully instead of replacing it.
 15. Use {{previousStoryboardContext}} to keep continuity with the prior storyboard when this is not beat 1.
 16. The final storyboard image must be full-bleed: no white or cream gutters, no empty gaps, no outer padding, and no page-like margins.
+17. Never duplicate a named character across panels unless the beat explicitly requires multiple copies of that same character.
+18. If a named character is not present in a given panel, omit them from that panel instead of echoing them for balance.
+19. Preserve one-to-one identity for each named character across all four panels.
 
 Frame design rules:
 - topLeft should establish the beat or its opening emotional note
@@ -361,6 +372,7 @@ Portrait task rules:
 - prompt must describe a single-character reference only
 - portrait prompts must be explicit enough for consistent face, clothing, silhouette, accessories, and repeatable turnaround details
 - portrait prompts must match the same world and style as the storyboard
+- portraitTasks must never request duplicate copies of the same named character
 
 Return JSON with exactly these keys:
 - sharedVisualInvariants
@@ -460,6 +472,8 @@ Hard requirements:
 - Each panel must show a distinct sequential moment in reading order: top-left, top-right, bottom-left, bottom-right.
 - Respect the shared visual invariants and each panel-specific prompt exactly.
 - Preserve character identity exactly across all four panels: same face, clothing, body proportions, colors, and distinguishing features.
+- Never duplicate a named character unless the supplied story brief explicitly requires multiple copies of that same character.
+- If a named character is absent from a panel, omit them instead of cloning them into the composition.
 - Keep staging readable, emotionally expressive, and visually rich.
 - Panels must snap tightly to each other and to the outer image bounds; no white gutters, cream gutters, empty gaps, padding, matting, page borders, or outer margins.
 - If panel dividers are present, they must be thin black or near-black lines only.
@@ -481,6 +495,7 @@ Requirements:
 - If the reference mode is "character sheet", create one square sheet that shows only this same character in every requested view from the required layout
 - Clean, simple background (soft gradient or neutral tone) behind the character or sheet
 - Single character only, no other characters or figures
+- No duplicate copies beyond the requested single portrait or required turnaround views of this same character
 - High detail on distinguishing features (face, clothing, accessories, coloring)
 - Expressive pose or poses that reflect personality without changing outfit or silhouette
 - No text, labels, or watermarks`;
@@ -490,8 +505,8 @@ export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
-  image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown.',
-  portrait_generation: 'Generate a single-character reference image only. No text overlays, no other characters, and no cluttered background.',
+  image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
+  portrait_generation: 'Generate a single-character reference image only. No text overlays, no other characters, and no cluttered background. Do not duplicate the character beyond the requested reference views.',
   tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata or alternative takes.',
   voice_selection: 'Return only a single voice name from the available list. Do not add commentary or punctuation beyond the voice name.',
 };

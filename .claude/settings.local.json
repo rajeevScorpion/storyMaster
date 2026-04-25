@@ -48,5 +48,13 @@
       "WebFetch(domain:deepmind.google)",
       "Bash(tee /tmp/audio_branch.txt)"
     ]
+  },
+  "sandbox": {
+    "filesystem": {
+      "allowWrite": [
+        "d:/AiCoding/storyMaster/.next/**",
+        "d:/AiCoding/storyMaster/tsconfig.tsbuildinfo"
+      ]
+    }
   }
 }

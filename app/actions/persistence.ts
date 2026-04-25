@@ -682,6 +682,8 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+            ...(jsonbNode.data.storyboardPromptText ? { storyboardPromptText: jsonbNode.data.storyboardPromptText } : {}),
+            ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
             ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
@@ -799,6 +801,40 @@ export async function saveBeat(
 
     throw new Error(`Failed to save beat: ${error.message}`);
   }
+
+  const { data: storyForPatch, error: storyForPatchError } = await supabase
+    .from('stories')
+    .select('story_map')
+    .eq('id', storyId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!storyForPatchError && storyForPatch?.story_map && typeof storyForPatch.story_map === 'object' && 'nodes' in storyForPatch.story_map) {
+    const storyMap = storyForPatch.story_map as unknown as StoryMap;
+    const patchedMap: StoryMap = {
+      ...storyMap,
+      nodes: {
+        ...storyMap.nodes,
+        [nodeId]: node,
+      },
+      currentNodeId: storyMap.currentNodeId || nodeId,
+      rootNodeId: storyMap.rootNodeId || nodeId,
+    };
+
+    const { error: storyMapPatchError } = await supabase
+      .from('stories')
+      .update({
+        story_map: stripBase64(patchedMap, storyMap) as unknown as Record<string, unknown>,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', storyId)
+      .eq('user_id', user.id);
+
+    if (storyMapPatchError) {
+      console.warn('Failed to patch story_map during incremental beat save:', storyMapPatchError.message);
+    }
+  }
+
   return { beatId: data.id };
 }
 
@@ -809,10 +845,10 @@ export async function updateBeatMediaState(
   storyId: string,
   nodeId: string,
   patch: {
-    imageUrl?: string;
+    imageUrl?: string | null;
     imageStatus?: BeatMediaStatus;
     imageError?: string | null;
-    audioUrl?: string;
+    audioUrl?: string | null;
     audioStatus?: BeatMediaStatus;
     audioError?: string | null;
     narrationVoiceId?: string;
@@ -824,17 +860,25 @@ export async function updateBeatMediaState(
   if (authError || !user) throw new Error('Not authenticated');
 
   const updateData: Record<string, unknown> = {};
-  if (patch.imageUrl) updateData.image_url = normalizeStorageUrl(patch.imageUrl, 'story-assets');
+  if ('imageUrl' in patch) {
+    updateData.image_url = patch.imageUrl ? normalizeStorageUrl(patch.imageUrl, 'story-assets') : null;
+  }
   if (patch.imageStatus) updateData.image_status = patch.imageStatus;
   if ('imageError' in patch) updateData.image_error = patch.imageError ?? null;
   if (patch.imageStatus === 'ready') {
     updateData.image_synced_at = new Date().toISOString();
+  } else if ('imageUrl' in patch || patch.imageStatus) {
+    updateData.image_synced_at = null;
   }
-  if (patch.audioUrl) updateData.audio_url = normalizeStorageUrl(patch.audioUrl, 'story-assets');
+  if ('audioUrl' in patch) {
+    updateData.audio_url = patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : null;
+  }
   if (patch.audioStatus) updateData.audio_status = patch.audioStatus;
   if ('audioError' in patch) updateData.audio_error = patch.audioError ?? null;
   if (patch.audioStatus === 'ready') {
     updateData.audio_synced_at = new Date().toISOString();
+  } else if ('audioUrl' in patch || patch.audioStatus) {
+    updateData.audio_synced_at = null;
   }
   if (patch.narrationVoiceId) updateData.narration_voice_id = patch.narrationVoiceId;
   if (patch.characters) {
@@ -883,10 +927,13 @@ export async function updateBeatMediaState(
 
   const nextBeat = normalizeBeatMediaFields({
     ...node.data,
-    ...(patch.imageUrl ? { imageUrl: normalizeStorageUrl(patch.imageUrl, 'story-assets') } : {}),
+    ...('imageUrl' in patch ? {
+      imageUrl: patch.imageUrl ? normalizeStorageUrl(patch.imageUrl, 'story-assets') : undefined,
+      persistedImageUrl: patch.imageUrl ? normalizeStorageUrl(patch.imageUrl, 'story-assets') : undefined,
+    } : {}),
     ...(patch.imageStatus ? { imageStatus: patch.imageStatus } : {}),
     ...('imageError' in patch ? { imageError: patch.imageError || undefined } : {}),
-    ...(patch.audioUrl ? { audioUrl: normalizeStorageUrl(patch.audioUrl, 'story-assets') } : {}),
+    ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),
     ...(patch.audioStatus ? { audioStatus: patch.audioStatus } : {}),
     ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
     ...(patch.narrationVoiceId ? { narrationVoiceId: patch.narrationVoiceId } : {}),

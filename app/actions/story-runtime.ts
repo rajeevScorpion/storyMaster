@@ -37,6 +37,9 @@ const STORYBOARD_LAYOUT_HARD_REQUIREMENTS = [
   '- Do not add outer padding, matting, margins, rounded frames, poster borders, page borders, or whitespace around the grid.',
   '- Use only thin dark divider lines between panels; if dividers are visible, they must be black or near-black.',
   '- Each panel artwork must fill its full quadrant edge-to-edge.',
+  '- Never duplicate a named character unless the story brief explicitly requires multiple copies of that same character.',
+  '- If a named character is absent from a panel, omit them instead of cloning them into the composition.',
+  '- Preserve one-to-one identity for every named character across all four panels.',
 ].join('\n');
 
 function runtimeNowMs(): number {
@@ -343,6 +346,16 @@ export interface ReferenceImage {
   url?: string;
 }
 
+export interface GeneratedImageResult {
+  imageUrl: string;
+  finalPromptText: string;
+}
+
+export interface GeneratedPortraitResult {
+  imageUrl: string;
+  finalPromptText: string;
+}
+
 function buildFallbackStoryboardPlan(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null,
@@ -632,6 +645,29 @@ export function renderStoryboardPlan(plan: StoryboardPlan): string {
   ].join('\n');
 }
 
+export function buildFinalStoryboardImagePrompt(
+  prompt: string,
+  characters: Character[],
+  visualStyle: string,
+  beatNumber: number | undefined,
+  modelOverrides?: StoryModelOverrides
+): string {
+  const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
+  const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
+    ? imageTemplateCandidate
+    : getDefaultPromptBody('image_generation');
+
+  return [
+    resolvePromptTemplate(imageTemplate, {
+      prompt,
+      characters: buildPromptCharacterAnchors(characters),
+      visualStyle,
+      beatNumber,
+    }),
+    STORYBOARD_LAYOUT_HARD_REQUIREMENTS,
+  ].join('\n\n');
+}
+
 function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined): string {
   if (!previousBeat) {
     return 'None yet - first beat';
@@ -655,19 +691,30 @@ function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined): strin
 
 export async function generateImage(
   prompt: string,
-  characters: any[],
+  characters: Character[],
   visualStyle: string,
   modelOverrides?: StoryModelOverrides,
   referenceImages?: ReferenceImage[],
   beatNumber?: number,
   costTelemetry?: CostTelemetryContext
-): Promise<string> {
+): Promise<GeneratedImageResult> {
+  const finalImagePrompt = buildFinalStoryboardImagePrompt(
+    prompt,
+    characters,
+    visualStyle,
+    beatNumber,
+    modelOverrides
+  );
+
   if (
     prompt.includes("Cinematic children's storybook illustration") ||
     characters.some((character) => ['Miko', 'Bhoora'].includes(character.name))
   ) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
-    return `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`;
+    return {
+      imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`,
+      finalPromptText: finalImagePrompt,
+    };
   }
 
   try {
@@ -679,20 +726,6 @@ export async function generateImage(
         referenceCount: referenceImages?.length ?? 0,
       },
       async () => {
-        const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
-        const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
-          ? imageTemplateCandidate
-          : getDefaultPromptBody('image_generation');
-        const finalImagePrompt = [
-          resolvePromptTemplate(imageTemplate, {
-            prompt,
-            characters: buildPromptCharacterAnchors(characters),
-            visualStyle,
-            beatNumber,
-          }),
-          STORYBOARD_LAYOUT_HARD_REQUIREMENTS,
-        ].join('\n\n');
-
         const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
         const referenceParts = await resolveReferenceImageParts(referenceImages);
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
@@ -717,7 +750,7 @@ export async function generateImage(
         );
 
         if (result.dataUrl) {
-          return await maybeProcessStoryboardImage(
+          const imageUrl = await maybeProcessStoryboardImage(
             result.dataUrl,
             storyboardImageSettings,
             {
@@ -725,9 +758,14 @@ export async function generateImage(
               imageSize,
             }
           );
+          return {
+            imageUrl,
+            finalPromptText: finalImagePrompt,
+          };
         }
 
         if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
+          const retryPrompt = [result.fallbackText, STORYBOARD_LAYOUT_HARD_REQUIREMENTS].join('\n\n');
           const retryResult = await timeRuntimeStep(
             'story_runtime.generate_image.gemini_retry',
             {
@@ -738,7 +776,7 @@ export async function generateImage(
             () => callGeminiImage({
               task: 'image_generation',
               model: imageModel,
-              prompt: [result.fallbackText!, STORYBOARD_LAYOUT_HARD_REQUIREMENTS].join('\n\n'),
+              prompt: retryPrompt,
               referenceParts,
               aspectRatio: '16:9',
               imageSize,
@@ -746,7 +784,7 @@ export async function generateImage(
             })
           );
           if (retryResult.dataUrl) {
-            return await maybeProcessStoryboardImage(
+            const imageUrl = await maybeProcessStoryboardImage(
               retryResult.dataUrl,
               storyboardImageSettings,
               {
@@ -755,6 +793,10 @@ export async function generateImage(
                 retry: true,
               }
             );
+            return {
+              imageUrl,
+              finalPromptText: retryPrompt,
+            };
           }
         }
 
@@ -763,7 +805,10 @@ export async function generateImage(
     );
   } catch (error) {
     console.error('Image generation failed:', error);
-    return `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`;
+    return {
+      imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`,
+      finalPromptText: finalImagePrompt,
+    };
   }
 }
 
@@ -798,7 +843,7 @@ export async function generateCharacterPortrait(
   modelOverrides?: StoryModelOverrides,
   promptOverride?: string,
   costTelemetry?: CostTelemetryContext
-): Promise<string> {
+): Promise<GeneratedPortraitResult> {
   try {
     return await timeRuntimeStep(
       'story_runtime.generate_character_portrait',
@@ -810,20 +855,13 @@ export async function generateCharacterPortrait(
       },
       async () => {
         const normalizedPortraitReferenceConfig = normalizePortraitReferenceConfig(portraitReferenceConfig);
-        const referenceLayout = buildPortraitReferenceLayoutDescription(normalizedPortraitReferenceConfig);
-        const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
-        const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
-          ? portraitTemplateCandidate
-          : getDefaultPromptBody('portrait_generation');
-        const prompt = resolvePromptTemplate(portraitTemplate, {
-          characterName: character.name,
-          characterAppearance: promptOverride || character.appearanceSummary,
-          characterType: character.type,
+        const prompt = buildFinalPortraitPrompt(
+          character,
           visualStyle,
-          portraitMode: normalizedPortraitReferenceConfig.mode === 'character_sheet' ? 'character sheet' : 'single portrait',
-          referenceQuality: normalizedPortraitReferenceConfig.quality,
-          sheetLayout: referenceLayout,
-        });
+          normalizedPortraitReferenceConfig,
+          modelOverrides,
+          promptOverride
+        );
 
         const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
         const result = await callGeminiImage({
@@ -836,13 +874,17 @@ export async function generateCharacterPortrait(
         });
 
         if (result.dataUrl) {
-          return await timeRuntimeStep(
+          const imageUrl = await timeRuntimeStep(
             'story_runtime.generate_character_portrait.compress',
             {
               characterId: character.id,
             },
             () => compressImage(result.dataUrl!, PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY)
           );
+          return {
+            imageUrl,
+            finalPromptText: prompt,
+          };
         }
 
         throw new Error('No portrait image generated');
@@ -944,6 +986,31 @@ function buildPortraitReferenceLayoutDescription(
   }
 
   return 'a single square character sheet showing the same character in three views: close-up face, front full body, and 3/4 full body';
+}
+
+export function buildFinalPortraitPrompt(
+  character: Character,
+  visualStyle: string,
+  portraitReferenceConfig: PortraitReferenceConfig,
+  modelOverrides?: StoryModelOverrides,
+  promptOverride?: string
+): string {
+  const normalizedPortraitReferenceConfig = normalizePortraitReferenceConfig(portraitReferenceConfig);
+  const referenceLayout = buildPortraitReferenceLayoutDescription(normalizedPortraitReferenceConfig);
+  const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
+  const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
+    ? portraitTemplateCandidate
+    : getDefaultPromptBody('portrait_generation');
+
+  return resolvePromptTemplate(portraitTemplate, {
+    characterName: character.name,
+    characterAppearance: promptOverride || character.appearanceSummary,
+    characterType: character.type,
+    visualStyle,
+    portraitMode: normalizedPortraitReferenceConfig.mode === 'character_sheet' ? 'character sheet' : 'single portrait',
+    referenceQuality: normalizedPortraitReferenceConfig.quality,
+    sheetLayout: referenceLayout,
+  });
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

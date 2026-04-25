@@ -42,6 +42,7 @@ export interface PortraitTask {
   characterName: string;
   reason: 'new_character' | 'visual_change';
   prompt: string;
+  finalPromptText?: string;
 }
 
 export type PortraitReferenceMode = 'single_portrait' | 'character_sheet';
@@ -88,6 +89,8 @@ export interface StoryBeat {
   newCharacterIds?: string[];
   changedCharacterIds?: string[];
   storyboardPlan?: StoryboardPlan;
+  storyboardPromptText?: string;
+  finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;
   imageStatus?: BeatMediaStatus;
@@ -158,6 +161,7 @@ export interface StoryConfig {
   settingCountry: string;
   maxBeats: number;
   language: StoryLanguage;
+  imageGenerationMode: 'generate' | 'prompt_only';
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
   portraitReferences: PortraitReferenceConfig;

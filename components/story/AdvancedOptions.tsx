@@ -102,6 +102,9 @@ interface AdvancedOptionsProps {
   showCreatorSettings?: boolean;
   creatorReferenceQuality?: PortraitReferenceQuality;
   onCreatorReferenceQualityChange?: (value: PortraitReferenceQuality) => void;
+  storyPromptOnlyModeEnabled?: boolean;
+  imageGenerationMode?: 'generate' | 'prompt_only';
+  onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
   narrationVoiceConfig?: NarrationVoiceClientConfig | null;
   narrationVoiceSelection?: {
     genderBucket: NarrationGenderBucket;
@@ -134,6 +137,9 @@ export default function AdvancedOptions({
   showCreatorSettings = false,
   creatorReferenceQuality = '0.5K',
   onCreatorReferenceQualityChange,
+  storyPromptOnlyModeEnabled = false,
+  imageGenerationMode = 'generate',
+  onImageGenerationModeChange,
   narrationVoiceConfig = null,
   narrationVoiceSelection,
   onNarrationVoiceSelectionChange,
@@ -302,6 +308,47 @@ export default function AdvancedOptions({
                 </div>
               )}
             </div>
+
+            {storyPromptOnlyModeEnabled && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h4 className="text-sm font-sans text-neutral-200">Storyboard images</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                      Turn this off to generate story text and narration only, then copy the exact beat prompts and upload your own 16:9 images later.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onImageGenerationModeChange?.(
+                      imageGenerationMode === 'prompt_only' ? 'generate' : 'prompt_only'
+                    )}
+                    className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                      imageGenerationMode === 'prompt_only'
+                        ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                        : 'justify-start border-white/10 bg-neutral-800'
+                    }`}
+                    aria-pressed={imageGenerationMode === 'prompt_only'}
+                    aria-label="Toggle storyboard image generation"
+                  >
+                    <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                  </button>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-3">
+                  <p className="text-sm text-neutral-100">
+                    {imageGenerationMode === 'prompt_only'
+                      ? 'Generate without images'
+                      : 'Generate storyboards in Kissago'}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                    {imageGenerationMode === 'prompt_only'
+                      ? 'Kissago will keep the exact beat prompts ready for copy and manual image upload.'
+                      : 'Kissago will continue generating storyboard images automatically for each beat.'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-5 text-left">

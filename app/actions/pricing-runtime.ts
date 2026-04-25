@@ -402,8 +402,12 @@ function getSpendTitle(actionKey: string): string {
   switch (actionKey) {
     case 'start_story_initial_beat':
       return 'Started a story';
+    case 'start_story_initial_beat_prompt_only':
+      return 'Started a prompt-only story';
     case 'continue_story_new_beat':
       return 'Added a new beat';
+    case 'continue_story_new_beat_prompt_only':
+      return 'Added a prompt-only beat';
     case 'preview_seed_plan':
       return 'Previewed a seed plan';
     case 'regenerate_image':

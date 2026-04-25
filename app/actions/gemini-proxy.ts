@@ -160,8 +160,11 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
     contents = [{ role: 'user', parts }];
   }
 
-  const systemInstruction =
-    task === 'portrait_generation' ? LOCKED_PROMPT_GUARDRAILS.portrait_generation : undefined;
+  const systemInstruction = task === 'image_generation'
+    ? LOCKED_PROMPT_GUARDRAILS.image_generation
+    : task === 'portrait_generation'
+    ? LOCKED_PROMPT_GUARDRAILS.portrait_generation
+    : undefined;
 
   const imgFlagVal = await getFeatureFlagValue('gemini_image_timeout_ms');
   const imgTimeoutMs = (imgFlagVal ? parseInt(imgFlagVal, 10) : 0) || GEMINI_IMAGE_TIMEOUT_MS;

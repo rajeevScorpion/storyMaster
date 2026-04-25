@@ -45,6 +45,8 @@ import {
   setPreviewSeedPlanPriceCoins,
   setFreePlusCharacterSheets,
   setCreatorCharacterSheets,
+  setStoryPromptOnlyModeEnabled,
+  setAudioStorylinePublishEnabled,
   setVideoDownload,
   setVideoDownloadAdminBypass,
 } from '@/app/actions/admin';
@@ -279,6 +281,10 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
   const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
   const [creatorCharacterSheetsToggling, setCreatorCharacterSheetsToggling] = useState(false);
+  const [storyPromptOnlyModeEnabled, setStoryPromptOnlyModeEnabledState] = useState(false);
+  const [storyPromptOnlyModeToggling, setStoryPromptOnlyModeToggling] = useState(false);
+  const [audioStorylinePublishEnabled, setAudioStorylinePublishEnabledState] = useState(false);
+  const [audioStorylinePublishToggling, setAudioStorylinePublishToggling] = useState(false);
   const [videoDownloadEnabled, setVideoDownloadEnabledState] = useState(false);
   const [videoDownloadToggling, setVideoDownloadToggling] = useState(false);
   const [videoDownloadAdminBypass, setVideoDownloadAdminBypassState] = useState(false);
@@ -344,6 +350,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         storyUiAutoScrollEnabled: uiAutoScrollEnabled,
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
+        storyPromptOnlyModeEnabled: promptOnlyModeEnabled,
+        audioStorylinePublishEnabled: audioPublishEnabled,
         videoDownloadEnabled: vidDl,
         videoDownloadAdminBypass: vidDlBypass,
         textTimeoutMs: tt,
@@ -384,6 +392,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setStoryUiAutoScrollEnabledState(uiAutoScrollEnabled);
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
+        setStoryPromptOnlyModeEnabledState(promptOnlyModeEnabled);
+        setAudioStorylinePublishEnabledState(audioPublishEnabled);
         setVideoDownloadEnabledState(vidDl);
         setVideoDownloadAdminBypassState(vidDlBypass);
         setTextTimeoutMs(tt);
@@ -1370,6 +1380,40 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 <p className="mt-3 text-xs text-amber-400">Use multiples of 10 coins.</p>
               )}
             </div>
+
+            <ToggleRow
+              label="Enable Prompt-Only Story Mode"
+              description="Show the advanced option that lets creators generate beats without AI images and copy the exact image prompts instead."
+              checked={storyPromptOnlyModeEnabled}
+              toggling={storyPromptOnlyModeToggling}
+              onToggle={async () => {
+                setStoryPromptOnlyModeToggling(true);
+                const next = !storyPromptOnlyModeEnabled;
+                try {
+                  await setStoryPromptOnlyModeEnabled(next);
+                  setStoryPromptOnlyModeEnabledState(next);
+                } finally {
+                  setStoryPromptOnlyModeToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Allow Audio-Only Storyline Publish"
+              description="Let incomplete prompt-only stories publish as audio stories even when some beat images are still missing."
+              checked={audioStorylinePublishEnabled}
+              toggling={audioStorylinePublishToggling}
+              onToggle={async () => {
+                setAudioStorylinePublishToggling(true);
+                const next = !audioStorylinePublishEnabled;
+                try {
+                  await setAudioStorylinePublishEnabled(next);
+                  setAudioStorylinePublishEnabledState(next);
+                } finally {
+                  setAudioStorylinePublishToggling(false);
+                }
+              }}
+            />
           </div>
           )}
 
