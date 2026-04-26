@@ -47,6 +47,9 @@ import {
   setCreatorCharacterSheets,
   setStoryPromptOnlyModeEnabled,
   setAudioStorylinePublishEnabled,
+  setPromptOnlyMaxImagesPerBeat,
+  setPromptOnlyImageGalleryCleanupEnabled,
+  setPromptOnlyImageGalleryCleanupDays,
   setVideoDownload,
   setVideoDownloadAdminBypass,
 } from '@/app/actions/admin';
@@ -285,6 +288,14 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [storyPromptOnlyModeToggling, setStoryPromptOnlyModeToggling] = useState(false);
   const [audioStorylinePublishEnabled, setAudioStorylinePublishEnabledState] = useState(false);
   const [audioStorylinePublishToggling, setAudioStorylinePublishToggling] = useState(false);
+  const [promptOnlyMaxImagesPerBeat, setPromptOnlyMaxImagesPerBeatState] = useState(3);
+  const [promptOnlyMaxImagesInput, setPromptOnlyMaxImagesInput] = useState('3');
+  const [promptOnlyMaxImagesSaving, setPromptOnlyMaxImagesSaving] = useState(false);
+  const [promptOnlyGalleryCleanupEnabled, setPromptOnlyGalleryCleanupEnabledState] = useState(true);
+  const [promptOnlyGalleryCleanupToggling, setPromptOnlyGalleryCleanupToggling] = useState(false);
+  const [promptOnlyGalleryCleanupDays, setPromptOnlyGalleryCleanupDaysState] = useState(7);
+  const [promptOnlyGalleryCleanupDaysInput, setPromptOnlyGalleryCleanupDaysInput] = useState('7');
+  const [promptOnlyGalleryCleanupDaysSaving, setPromptOnlyGalleryCleanupDaysSaving] = useState(false);
   const [videoDownloadEnabled, setVideoDownloadEnabledState] = useState(false);
   const [videoDownloadToggling, setVideoDownloadToggling] = useState(false);
   const [videoDownloadAdminBypass, setVideoDownloadAdminBypassState] = useState(false);
@@ -352,6 +363,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         creatorCharacterSheetsEnabled: creatorSheets,
         storyPromptOnlyModeEnabled: promptOnlyModeEnabled,
         audioStorylinePublishEnabled: audioPublishEnabled,
+        promptOnlyMaxImagesPerBeat: promptOnlyMaxImages,
+        promptOnlyImageGalleryCleanupEnabled: promptOnlyCleanupEnabled,
+        promptOnlyImageGalleryCleanupDays: promptOnlyCleanupDays,
         videoDownloadEnabled: vidDl,
         videoDownloadAdminBypass: vidDlBypass,
         textTimeoutMs: tt,
@@ -394,6 +408,11 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setCreatorCharacterSheetsEnabledState(creatorSheets);
         setStoryPromptOnlyModeEnabledState(promptOnlyModeEnabled);
         setAudioStorylinePublishEnabledState(audioPublishEnabled);
+        setPromptOnlyMaxImagesPerBeatState(promptOnlyMaxImages);
+        setPromptOnlyMaxImagesInput(String(promptOnlyMaxImages));
+        setPromptOnlyGalleryCleanupEnabledState(promptOnlyCleanupEnabled);
+        setPromptOnlyGalleryCleanupDaysState(promptOnlyCleanupDays);
+        setPromptOnlyGalleryCleanupDaysInput(String(promptOnlyCleanupDays));
         setVideoDownloadEnabledState(vidDl);
         setVideoDownloadAdminBypassState(vidDlBypass);
         setTextTimeoutMs(tt);
@@ -616,6 +635,30 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
+  async function handlePromptOnlyMaxImagesSave() {
+    const count = parseInt(promptOnlyMaxImagesInput, 10);
+    if (!Number.isFinite(count) || count < 1 || count > 10) return;
+    setPromptOnlyMaxImagesSaving(true);
+    try {
+      await setPromptOnlyMaxImagesPerBeat(count);
+      setPromptOnlyMaxImagesPerBeatState(count);
+    } finally {
+      setPromptOnlyMaxImagesSaving(false);
+    }
+  }
+
+  async function handlePromptOnlyGalleryCleanupDaysSave() {
+    const days = parseInt(promptOnlyGalleryCleanupDaysInput, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 90) return;
+    setPromptOnlyGalleryCleanupDaysSaving(true);
+    try {
+      await setPromptOnlyImageGalleryCleanupDays(days);
+      setPromptOnlyGalleryCleanupDaysState(days);
+    } finally {
+      setPromptOnlyGalleryCleanupDaysSaving(false);
+    }
+  }
+
   const parsedMs = parseInt(cycleMsInput, 10);
   const parsedVignetteAmountPercent = parseInt(vignetteAmountInput, 10);
   const parsedStoryboardWebpQualityPercent = parseInt(storyboardWebpQualityInput, 10);
@@ -625,6 +668,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const parsedStoryUiTextLineCount = parseInt(storyUiTextLineCountInput, 10);
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
   const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
+  const parsedPromptOnlyMaxImages = parseInt(promptOnlyMaxImagesInput, 10);
+  const parsedPromptOnlyGalleryCleanupDays = parseInt(promptOnlyGalleryCleanupDaysInput, 10);
   const parsedNarrationMaleVoices = parseNarrationVoiceInput(narrationMaleVoiceInput);
   const parsedNarrationFemaleVoices = parseNarrationVoiceInput(narrationFemaleVoiceInput);
   const sectionMeta = GLOBAL_SETTINGS_LINKS.find((item) => item.section === section) ?? GLOBAL_SETTINGS_LINKS[0];
@@ -1414,6 +1459,95 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 }
               }}
             />
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Max images per prompt-only beat</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Each beat can hold up to this many uploaded 16:9 images. Users select one as active; the rest stay in the gallery for re-use.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  step={1}
+                  value={promptOnlyMaxImagesInput}
+                  onChange={(e) => setPromptOnlyMaxImagesInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="3"
+                />
+                <span className="text-xs text-neutral-500">images</span>
+                <button
+                  onClick={handlePromptOnlyMaxImagesSave}
+                  disabled={
+                    promptOnlyMaxImagesSaving ||
+                    !Number.isFinite(parsedPromptOnlyMaxImages) ||
+                    parsedPromptOnlyMaxImages < 1 ||
+                    parsedPromptOnlyMaxImages > 10
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {promptOnlyMaxImagesSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {promptOnlyMaxImagesPerBeat !== parsedPromptOnlyMaxImages && parsedPromptOnlyMaxImages >= 1 && parsedPromptOnlyMaxImages <= 10 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+            </div>
+
+            <ToggleRow
+              label="Auto-prune unused beat images"
+              description="Nightly job removes prompt-only beat images that aren't currently active and were uploaded more than the configured number of days ago."
+              checked={promptOnlyGalleryCleanupEnabled}
+              toggling={promptOnlyGalleryCleanupToggling}
+              onToggle={async () => {
+                setPromptOnlyGalleryCleanupToggling(true);
+                const next = !promptOnlyGalleryCleanupEnabled;
+                try {
+                  await setPromptOnlyImageGalleryCleanupEnabled(next);
+                  setPromptOnlyGalleryCleanupEnabledState(next);
+                } finally {
+                  setPromptOnlyGalleryCleanupToggling(false);
+                }
+              }}
+            />
+
+            <div className={`rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-opacity ${promptOnlyGalleryCleanupEnabled ? '' : 'opacity-50'}`}>
+              <p className="text-sm font-medium text-neutral-100 mb-1">Days before pruning unused images</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Inactive beat images older than this are deleted from storage during the nightly cleanup job. Users see this number in the upload dialog.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={90}
+                  step={1}
+                  value={promptOnlyGalleryCleanupDaysInput}
+                  onChange={(e) => setPromptOnlyGalleryCleanupDaysInput(e.target.value)}
+                  disabled={!promptOnlyGalleryCleanupEnabled}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+                  placeholder="7"
+                />
+                <span className="text-xs text-neutral-500">days</span>
+                <button
+                  onClick={handlePromptOnlyGalleryCleanupDaysSave}
+                  disabled={
+                    !promptOnlyGalleryCleanupEnabled ||
+                    promptOnlyGalleryCleanupDaysSaving ||
+                    !Number.isFinite(parsedPromptOnlyGalleryCleanupDays) ||
+                    parsedPromptOnlyGalleryCleanupDays < 1 ||
+                    parsedPromptOnlyGalleryCleanupDays > 90
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {promptOnlyGalleryCleanupDaysSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {promptOnlyGalleryCleanupDays !== parsedPromptOnlyGalleryCleanupDays && parsedPromptOnlyGalleryCleanupDays >= 1 && parsedPromptOnlyGalleryCleanupDays <= 90 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+            </div>
           </div>
           )}
 

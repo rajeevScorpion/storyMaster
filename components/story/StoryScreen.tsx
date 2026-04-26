@@ -21,7 +21,7 @@ import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
-import { getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import type { StoryBeat } from '@/lib/types/story';
 
 function StoryboardCycler({
@@ -279,6 +279,9 @@ interface StoryRuntimeSettings {
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  promptOnlyMaxImagesPerBeat: number;
+  promptOnlyImageGalleryCleanupEnabled: boolean;
+  promptOnlyImageGalleryCleanupDays: number;
 }
 
 export default function StoryScreen() {
@@ -305,7 +308,9 @@ export default function StoryScreen() {
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
   const setPromptOnlyBeatImage = useStoryStore((state) => state.setPromptOnlyBeatImage);
+  const selectPromptOnlyBeatImage = useStoryStore((state) => state.selectPromptOnlyBeatImage);
   const deletePromptOnlyBeatImage = useStoryStore((state) => state.deletePromptOnlyBeatImage);
+  const permanentlyDeletePromptOnlyBeatImage = useStoryStore((state) => state.permanentlyDeletePromptOnlyBeatImage);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
@@ -322,6 +327,9 @@ export default function StoryScreen() {
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
+    promptOnlyMaxImagesPerBeat: 3,
+    promptOnlyImageGalleryCleanupEnabled: true,
+    promptOnlyImageGalleryCleanupDays: 7,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -415,7 +423,9 @@ export default function StoryScreen() {
       continueCoinCost={continueCoinCost}
       showCoinHint={showCoinHint}
       setPromptOnlyBeatImage={setPromptOnlyBeatImage}
+      selectPromptOnlyBeatImage={selectPromptOnlyBeatImage}
       deletePromptOnlyBeatImage={deletePromptOnlyBeatImage}
+      permanentlyDeletePromptOnlyBeatImage={permanentlyDeletePromptOnlyBeatImage}
     />
   );
 }
@@ -448,7 +458,9 @@ function StoryScreenInner({
   continueCoinCost,
   showCoinHint,
   setPromptOnlyBeatImage,
+  selectPromptOnlyBeatImage,
   deletePromptOnlyBeatImage,
+  permanentlyDeletePromptOnlyBeatImage,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -475,8 +487,10 @@ function StoryScreenInner({
   cycleSettings: StoryRuntimeSettings;
   continueCoinCost: number;
   showCoinHint: boolean;
-  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string) => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => Promise<void>;
+  selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
+  permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -497,6 +511,8 @@ function StoryScreenInner({
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploadingPromptOnlyImage, setIsUploadingPromptOnlyImage] = useState(false);
+  const [pendingDeleteStorageKey, setPendingDeleteStorageKey] = useState<string | null>(null);
+  const [isPermanentlyDeletingKey, setIsPermanentlyDeletingKey] = useState<string | null>(null);
   const [showPromptToolsPopover, setShowPromptToolsPopover] = useState(false);
   const promptToolsPopoverRef = useRef<HTMLDivElement>(null);
   const promptToolsToggleRef = useRef<HTMLButtonElement>(null);
@@ -808,7 +824,9 @@ function StoryScreenInner({
     setIsUploadingPromptOnlyImage(true);
     setUploadError(null);
     try {
-      await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl);
+      await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl, {
+        maxImagesPerBeat: cycleSettings.promptOnlyMaxImagesPerBeat,
+      });
       setShowUploadModal(false);
       setShowPromptToolsPopover(false);
       setUploadPreview(null);
@@ -820,7 +838,7 @@ function StoryScreenInner({
     } finally {
       setIsUploadingPromptOnlyImage(false);
     }
-  }, [currentNodeId, setPromptOnlyBeatImage, uploadPreview]);
+  }, [currentNodeId, setPromptOnlyBeatImage, uploadPreview, cycleSettings.promptOnlyMaxImagesPerBeat]);
 
   const handlePromptOnlyDelete = useCallback(async () => {
     try {
@@ -829,6 +847,26 @@ function StoryScreenInner({
       // Keep the current editor state if deletion fails.
     }
   }, [currentNodeId, deletePromptOnlyBeatImage]);
+
+  const handleSelectGalleryImage = useCallback(async (storageKey: string) => {
+    try {
+      await selectPromptOnlyBeatImage(currentNodeId, storageKey);
+    } catch {
+      // Selection failures shouldn't break the modal — keep state as-is.
+    }
+  }, [currentNodeId, selectPromptOnlyBeatImage]);
+
+  const handlePermanentDelete = useCallback(async (storageKey: string) => {
+    setIsPermanentlyDeletingKey(storageKey);
+    try {
+      await permanentlyDeletePromptOnlyBeatImage(currentNodeId, storageKey);
+      setPendingDeleteStorageKey(null);
+    } catch (error: any) {
+      setUploadError(error?.message || 'Could not delete this image.');
+    } finally {
+      setIsPermanentlyDeletingKey(null);
+    }
+  }, [currentNodeId, permanentlyDeletePromptOnlyBeatImage]);
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -1555,40 +1593,147 @@ function StoryScreenInner({
                 </button>
               </div>
 
-              <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                <p>Accepted formats: JPG, PNG, or WebP.</p>
-                <p className="mt-1">Maximum file size: 3 MB.</p>
-                <p className="mt-1">Required aspect ratio: 16:9.</p>
-                <p className="mt-1">Recommended resolution: 1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.</p>
-              </div>
+              {(() => {
+                const gallery = normalizedCurrentBeat.imageGallery ?? [];
+                const cap = cycleSettings.promptOnlyMaxImagesPerBeat;
+                const capReached = gallery.length >= cap;
+                const cleanupDays = cycleSettings.promptOnlyImageGalleryCleanupDays;
+                const cleanupEnabled = cycleSettings.promptOnlyImageGalleryCleanupEnabled;
+                const activeStorageKey = getActiveGalleryStorageKey(normalizedCurrentBeat);
+                return (
+                  <>
+                    {gallery.length > 0 && (
+                      <div className="mt-5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                            Saved Images ({gallery.length} / {cap})
+                          </p>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-3">
+                          {gallery.map((entry) => {
+                            const isActive = activeStorageKey === entry.storageKey;
+                            const isPendingConfirm = pendingDeleteStorageKey === entry.storageKey;
+                            const isDeleting = isPermanentlyDeletingKey === entry.storageKey;
+                            return (
+                              <div key={entry.storageKey} className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleSelectGalleryImage(entry.storageKey)}
+                                  disabled={isActive || isDeleting}
+                                  className={`group relative block aspect-video w-32 overflow-hidden rounded-xl border transition-colors ${
+                                    isActive
+                                      ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
+                                      : 'border-white/10 hover:border-sky-400/40'
+                                  } ${isDeleting ? 'opacity-50' : ''}`}
+                                  title={isActive ? 'Active beat image' : 'Use this image'}
+                                >
+                                  <Image
+                                    src={entry.url}
+                                    alt="Beat image option"
+                                    fill
+                                    className="object-cover"
+                                    unoptimized
+                                  />
+                                  {isActive && (
+                                    <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                      Active
+                                    </span>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isDeleting) return;
+                                    if (isActive) {
+                                      setPendingDeleteStorageKey(entry.storageKey);
+                                    } else {
+                                      void handlePermanentDelete(entry.storageKey);
+                                    }
+                                  }}
+                                  disabled={isDeleting}
+                                  className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                                  title="Permanently delete this image"
+                                >
+                                  {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                                </button>
+                                {isPendingConfirm && (
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
+                                    <p>Permanently delete this active image? The most recent remaining image will become active.</p>
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPendingDeleteStorageKey(null)}
+                                        className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
+                                      >
+                                        Keep
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handlePermanentDelete(entry.storageKey)}
+                                        className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {cleanupEnabled && (
+                          <p className="mt-2 text-[11px] text-neutral-500">
+                            Unused images are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
+                          </p>
+                        )}
+                      </div>
+                    )}
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <input
-                  ref={uploadInputRef}
-                  type="file"
-                  accept={PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.join(',')}
-                  onChange={handlePromptOnlyFileSelected}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => uploadInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10"
-                >
-                  <Upload className="h-4 w-4" />
-                  {uploadPreview ? 'Choose Different Image' : 'Choose Image'}
-                </button>
-                {displayImageUrl && (
-                  <button
-                    type="button"
-                    onClick={() => void handlePromptOnlyDelete()}
-                    className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Delete Current Image
-                  </button>
-                )}
-              </div>
+                    <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                      <p>Accepted formats: JPG, PNG, or WebP.</p>
+                      <p className="mt-1">Maximum file size: 3 MB.</p>
+                      <p className="mt-1">Required aspect ratio: 16:9.</p>
+                      <p className="mt-1">Recommended resolution: 1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.</p>
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <input
+                        ref={uploadInputRef}
+                        type="file"
+                        accept={PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.join(',')}
+                        onChange={handlePromptOnlyFileSelected}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => uploadInputRef.current?.click()}
+                        disabled={capReached}
+                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        title={capReached ? `Limit of ${cap} images per beat reached` : undefined}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {uploadPreview ? 'Choose Different Image' : 'Choose Image'}
+                      </button>
+                      {displayImageUrl && (
+                        <button
+                          type="button"
+                          onClick={() => void handlePromptOnlyDelete()}
+                          className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
+                          title="Clear active image (keeps it in the gallery)"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Clear Active
+                        </button>
+                      )}
+                    </div>
+                    {capReached && (
+                      <p className="mt-3 text-xs text-amber-300">
+                        You&apos;ve reached the limit of {cap} image{cap === 1 ? '' : 's'} per beat. Delete one to upload another.
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
 
               {uploadPreview && (
                 <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">

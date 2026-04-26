@@ -24,7 +24,7 @@ import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeS
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, deleteAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import {
@@ -32,6 +32,7 @@ import {
   isBeatRowNotFoundError,
   getBeatPersistedImageUrl,
   hasBeatImpossibleImageState,
+  getActiveGalleryStorageKey,
 } from '@/lib/types/beat-media';
 import {
   createStoryLoadingStage,
@@ -136,8 +137,10 @@ interface StoryState {
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
   retryPendingBeatAssetSync: () => Promise<void>;
-  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string) => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => Promise<void>;
+  selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
+  permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   clearPublishResult: () => void;
   clearError: () => void;
 }
@@ -3121,7 +3124,7 @@ export const useStoryStore = create<StoryState>()(
         await retryPendingBeatAssetSyncInternal(currentSession.savedStoryId);
       },
 
-      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string) => {
+      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => {
         const { session } = get();
         if (!session) return;
         if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
@@ -3130,12 +3133,25 @@ export const useStoryStore = create<StoryState>()(
         if (!node) return;
 
         const previousBeat = normalizeBeatMediaFields(node.data);
+        const cap = Math.max(1, options?.maxImagesPerBeat ?? 3);
+        if ((previousBeat.imageGallery?.length ?? 0) >= cap) {
+          throw new Error(`You can only keep ${cap} images per beat. Delete one before uploading another.`);
+        }
+
+        const storageKeySuffix = `image-${crypto.randomUUID()}.webp`;
+        const uploadedAt = new Date().toISOString();
 
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
           if (userId) {
-            // Optimistic local render — show the uploaded image immediately while the
+            const storageKey = `${userId}/${session.savedStoryId}/${nodeId}/${storageKeySuffix}`;
+
+            // Optimistic local render — surface the chosen image instantly while the
             // cloud upload runs in the background.
+            const optimisticGallery = [
+              ...(previousBeat.imageGallery ?? []),
+              { url: imageDataUrl, storageKey, uploadedAt },
+            ];
             updateStoreSaveUi({
               session: updateSessionBeat(session, nodeId, (beat) => ({
                 ...beat,
@@ -3143,37 +3159,41 @@ export const useStoryStore = create<StoryState>()(
                 persistedImageUrl: undefined,
                 imageStatus: 'pending',
                 imageError: undefined,
+                imageGallery: optimisticGallery,
               })),
               saveStatus: 'saving',
             });
 
             try {
-              const uploadedUrl = await uploadAsset(
-                'story-assets',
-                `${userId}/${session.savedStoryId}/${nodeId}/image.webp`,
-                imageDataUrl
+              const uploadedUrl = await uploadAsset('story-assets', storageKey, imageDataUrl);
+              const persistedGallery = optimisticGallery.map((entry) =>
+                entry.storageKey === storageKey ? { ...entry, url: uploadedUrl } : entry
               );
               await updateBeatMediaState(session.savedStoryId, nodeId, {
                 imageUrl: uploadedUrl,
                 imageStatus: 'ready',
                 imageError: null,
+                imageGallery: persistedGallery,
               });
 
+              // Local store keeps the data URL for display because the bucket is
+              // private; the cloud URL only lives on persistedImageUrl + DB and is
+              // re-signed on the next page load.
               const latestSession = get().session;
               if (!latestSession) return;
               updateStoreSaveUi({
                 session: updateSessionBeat(latestSession, nodeId, (beat) => ({
                   ...beat,
-                  imageUrl: uploadedUrl,
+                  imageUrl: isDataUrl(beat.imageUrl) ? beat.imageUrl : uploadedUrl,
                   persistedImageUrl: uploadedUrl,
                   imageStatus: 'ready',
                   imageError: undefined,
+                  imageGallery: optimisticGallery,
                 })),
                 saveStatus: 'saved',
               });
               return;
             } catch (error) {
-              // Roll the optimistic write back to whatever the beat looked like before.
               const latestSession = get().session;
               if (latestSession) {
                 updateStoreSaveUi({
@@ -3185,6 +3205,9 @@ export const useStoryStore = create<StoryState>()(
           }
         }
 
+        // Unsaved local-only fallback — gallery still grows so users see the image
+        // before any cloud sync happens. Storage key is provisional.
+        const provisionalKey = `pending/${nodeId}/${storageKeySuffix}`;
         updateStoreSaveUi({
           session: updateSessionBeat(session, nodeId, (beat) => ({
             ...beat,
@@ -3192,8 +3215,46 @@ export const useStoryStore = create<StoryState>()(
             persistedImageUrl: undefined,
             imageStatus: 'pending',
             imageError: undefined,
+            imageGallery: [
+              ...(previousBeat.imageGallery ?? []),
+              { url: imageDataUrl, storageKey: provisionalKey, uploadedAt },
+            ],
           })),
           saveStatus: 'unsaved',
+        });
+      },
+
+      selectPromptOnlyBeatImage: async (nodeId: string, storageKey: string) => {
+        const { session } = get();
+        if (!session) return;
+        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) return;
+        const beat = normalizeBeatMediaFields(node.data);
+        const target = beat.imageGallery?.find((entry) => entry.storageKey === storageKey);
+        if (!target) return;
+        if (beat.imageUrl === target.url) return;
+
+        if (session.savedStoryId) {
+          await updateBeatMediaState(session.savedStoryId, nodeId, {
+            imageUrl: target.url,
+            imageStatus: 'ready',
+            imageError: null,
+          });
+        }
+
+        const latestSession = get().session;
+        if (!latestSession) return;
+        updateStoreSaveUi({
+          session: updateSessionBeat(latestSession, nodeId, (existing) => ({
+            ...existing,
+            imageUrl: target.url,
+            persistedImageUrl: target.url,
+            imageStatus: 'ready',
+            imageError: undefined,
+          })),
+          saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
         });
       },
 
@@ -3219,6 +3280,62 @@ export const useStoryStore = create<StoryState>()(
             persistedImageUrl: undefined,
             imageStatus: 'not_requested',
             imageError: undefined,
+          })),
+          saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
+        });
+      },
+
+      permanentlyDeletePromptOnlyBeatImage: async (nodeId: string, storageKey: string) => {
+        const { session } = get();
+        if (!session) return;
+        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) return;
+        const beat = normalizeBeatMediaFields(node.data);
+        const target = beat.imageGallery?.find((entry) => entry.storageKey === storageKey);
+        if (!target) return;
+
+        const remaining = (beat.imageGallery ?? []).filter((entry) => entry.storageKey !== storageKey);
+        // Compare by storage key, not URL — the local store keeps data URLs while DB
+        // holds public URLs and signed URLs are time-limited copies of either.
+        const activeStorageKey = getActiveGalleryStorageKey(beat);
+        const wasActive = activeStorageKey === storageKey;
+        const fallback = wasActive
+          ? [...remaining].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0]
+          : undefined;
+
+        if (!storageKey.startsWith('pending/')) {
+          await deleteAsset('story-assets', storageKey);
+        }
+
+        if (session.savedStoryId) {
+          await updateBeatMediaState(session.savedStoryId, nodeId, {
+            imageGallery: remaining,
+            ...(wasActive
+              ? {
+                  imageUrl: fallback?.url ?? null,
+                  imageStatus: fallback ? 'ready' : 'not_requested',
+                  imageError: null,
+                }
+              : {}),
+          });
+        }
+
+        const latestSession = get().session;
+        if (!latestSession) return;
+        updateStoreSaveUi({
+          session: updateSessionBeat(latestSession, nodeId, (existing) => ({
+            ...existing,
+            imageGallery: remaining,
+            ...(wasActive
+              ? {
+                  imageUrl: fallback?.url,
+                  persistedImageUrl: fallback?.url,
+                  imageStatus: fallback ? 'ready' : 'not_requested',
+                  imageError: undefined,
+                }
+              : {}),
           })),
           saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
         });

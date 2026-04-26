@@ -28,6 +28,13 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageUrl: beat.image_url || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
+    imageGallery: Array.isArray(beat.image_gallery)
+      ? beat.image_gallery.map((entry) => ({
+          url: entry.url,
+          storageKey: entry.storage_key,
+          uploadedAt: entry.uploaded_at,
+        }))
+      : [],
     audioUrl: beat.audio_url || undefined,
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,

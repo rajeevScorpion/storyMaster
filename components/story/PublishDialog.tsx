@@ -92,14 +92,21 @@ export default function PublishDialog({
         }
       }
 
-      // Step 4: Build beats with storage URLs
+      // Step 4: Build beats with storage URLs.
+      // Drop imageGallery (editor-only, may carry local data URLs from a fresh
+      // upload) and persistedImageUrl (transient local pointer). Anything left
+      // is needed by the storyline player.
       const beatsWithUrls: StoryBeat[] = storylineData.beats.map((beat, i) => {
         const nodeId = storylineData.path[i].id;
         const urls = assetMap[nodeId];
+        const resolvedImageUrl = urls?.imageUrl || beat.imageUrl;
+        const resolvedAudioUrl = urls?.audioUrl || beat.audioUrl;
+        const { imageGallery: _ig, persistedImageUrl: _pi, ...rest } = beat;
+        void _ig; void _pi;
         return {
-          ...beat,
-          imageUrl: urls?.imageUrl || beat.imageUrl,
-          audioUrl: urls?.audioUrl || beat.audioUrl,
+          ...rest,
+          imageUrl: resolvedImageUrl && resolvedImageUrl.startsWith('data:') ? undefined : resolvedImageUrl,
+          audioUrl: resolvedAudioUrl && resolvedAudioUrl.startsWith('data:') ? undefined : resolvedAudioUrl,
         };
       });
 

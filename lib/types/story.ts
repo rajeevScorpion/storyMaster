@@ -73,6 +73,12 @@ export interface StoryboardPlan {
   negativeConstraints: string[];
 }
 
+export interface BeatImageGalleryEntry {
+  url: string;
+  storageKey: string;
+  uploadedAt: string;
+}
+
 export interface StoryBeat {
   title: string;
   beatNumber: number;
@@ -95,6 +101,7 @@ export interface StoryBeat {
   persistedImageUrl?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
+  imageGallery?: BeatImageGalleryEntry[];
   isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;

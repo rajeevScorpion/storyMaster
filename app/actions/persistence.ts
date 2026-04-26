@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
 import { createAdminClient } from '@/lib/supabase/admin';
-import type { StorySession, StoryMap, StoryBeat, StoryNode, Character } from '@/lib/types/story';
+import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
 import {
@@ -26,6 +26,13 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
     const existingBeat = existingStoryMap?.nodes?.[id]?.data;
     const persistedImageUrl = resolvePersistedImageUrlForSave(node.data, existingBeat);
     const persistedAudioUrl = resolvePersistedAudioUrlForSave(node.data, existingBeat);
+    const cleanedGallery = (node.data.imageGallery ?? [])
+      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
+      .map((entry) => ({
+        url: normalizeStorageUrl(entry.url, 'story-assets'),
+        storageKey: entry.storageKey,
+        uploadedAt: entry.uploadedAt,
+      }));
     nodes[id] = {
       ...node,
       data: {
@@ -37,6 +44,7 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
         audioUrl: persistedAudioUrl
           ? normalizeStorageUrl(persistedAudioUrl, 'story-assets')
           : undefined,
+        imageGallery: cleanedGallery,
         // Strip portrait base64 from characters — portraitUrl is preserved
         characters: node.data.characters.map(c => ({
           ...c,
@@ -277,6 +285,7 @@ const ADDITIVE_BEAT_COLUMNS = [
   'image_status',
   'image_error',
   'image_synced_at',
+  'image_gallery',
   'audio_status',
   'audio_error',
   'audio_synced_at',
@@ -356,6 +365,14 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.is_storyboard = true;
   }
 
+  if (normalizedBeat.imageGallery && normalizedBeat.imageGallery.length > 0) {
+    row.image_gallery = normalizedBeat.imageGallery.map((entry) => ({
+      url: normalizeStorageUrl(entry.url, 'story-assets'),
+      storage_key: entry.storageKey,
+      uploaded_at: entry.uploadedAt,
+    }));
+  }
+
   return row;
 }
 
@@ -379,6 +396,13 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageUrl: beat.image_url || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
+    imageGallery: Array.isArray(beat.image_gallery)
+      ? beat.image_gallery.map((entry) => ({
+          url: entry.url,
+          storageKey: entry.storage_key,
+          uploadedAt: entry.uploaded_at,
+        }))
+      : [],
     audioUrl: beat.audio_url || undefined,
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,
@@ -687,6 +711,10 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
             ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
+            ...((!storyMap.nodes[nodeId].data.imageGallery || storyMap.nodes[nodeId].data.imageGallery.length === 0)
+              && Array.isArray(jsonbNode.data.imageGallery)
+              ? { imageGallery: jsonbNode.data.imageGallery }
+              : {}),
           },
         };
         storyMap.nodes[nodeId].data = normalizeBeatMediaFields(storyMap.nodes[nodeId].data);
@@ -848,6 +876,7 @@ export async function updateBeatMediaState(
     imageUrl?: string | null;
     imageStatus?: BeatMediaStatus;
     imageError?: string | null;
+    imageGallery?: BeatImageGalleryEntry[];
     audioUrl?: string | null;
     audioStatus?: BeatMediaStatus;
     audioError?: string | null;
@@ -869,6 +898,13 @@ export async function updateBeatMediaState(
     updateData.image_synced_at = new Date().toISOString();
   } else if ('imageUrl' in patch || patch.imageStatus) {
     updateData.image_synced_at = null;
+  }
+  if ('imageGallery' in patch) {
+    updateData.image_gallery = (patch.imageGallery ?? []).map((entry) => ({
+      url: normalizeStorageUrl(entry.url, 'story-assets'),
+      storage_key: entry.storageKey,
+      uploaded_at: entry.uploadedAt,
+    }));
   }
   if ('audioUrl' in patch) {
     updateData.audio_url = patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : null;
@@ -933,6 +969,13 @@ export async function updateBeatMediaState(
     } : {}),
     ...(patch.imageStatus ? { imageStatus: patch.imageStatus } : {}),
     ...('imageError' in patch ? { imageError: patch.imageError || undefined } : {}),
+    ...('imageGallery' in patch ? {
+      imageGallery: (patch.imageGallery ?? []).map((entry) => ({
+        url: normalizeStorageUrl(entry.url, 'story-assets'),
+        storageKey: entry.storageKey,
+        uploadedAt: entry.uploadedAt,
+      })),
+    } : {}),
     ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),
     ...(patch.audioStatus ? { audioStatus: patch.audioStatus } : {}),
     ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
@@ -1440,7 +1483,37 @@ export async function publishStoryline(params: {
     .select('id')
     .single();
 
-  if (error) throw new Error(`Failed to publish storyline: ${error.message}`);
+  if (error) {
+    // Path-hash collision: another publish race already created this storyline.
+    // Surface the existing one and link it to the author so it lands in their list.
+    if (error.code === '23505') {
+      const { data: dup } = await supabase
+        .from('storylines')
+        .select('id')
+        .eq('path_hash', pathHash)
+        .maybeSingle();
+      if (dup) {
+        await supabase
+          .from('saved_storylines')
+          .upsert(
+            { user_id: user.id, storyline_id: dup.id },
+            { onConflict: 'user_id,storyline_id' }
+          );
+        return { storylineId: dup.id };
+      }
+    }
+    throw new Error(`Failed to publish storyline: ${error.message}`);
+  }
+
+  // Link the author to their own published storyline so it appears in the
+  // saved-storylines list alongside the auto-publish path's behavior.
+  await supabase
+    .from('saved_storylines')
+    .upsert(
+      { user_id: user.id, storyline_id: data.id },
+      { onConflict: 'user_id,storyline_id' }
+    );
+
   return { storylineId: data.id };
 }
 

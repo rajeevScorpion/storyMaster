@@ -270,11 +270,14 @@ export async function getGlobalSettings(): Promise<{
   storyAssetSyncWarningTimeoutMs: number;
   authoringWordCap: number;
   previewSeedPlanPriceCoins: number;
+  promptOnlyMaxImagesPerBeat: number;
+  promptOnlyImageGalleryCleanupEnabled: boolean;
+  promptOnlyImageGalleryCleanupDays: number;
   narrationVoiceSettings: NarrationVoiceSettings;
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -304,6 +307,9 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
     getPreviewSeedPlanPriceCoins(),
+    getFeatureFlagValue('prompt_only_max_images_per_beat'),
+    getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
+    getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
     getNarrationVoiceSettings(),
     getNarrationVoiceSampleStatusesForAdmin(),
   ]);
@@ -348,6 +354,9 @@ export async function getGlobalSettings(): Promise<{
     storyAssetSyncWarningTimeoutMs: parseInt(storyAssetSyncWarningTimeoutMs ?? '15000', 10) || 15000,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
     previewSeedPlanPriceCoins,
+    promptOnlyMaxImagesPerBeat: Math.max(1, Math.min(10, parseInt(promptOnlyMaxImagesPerBeatStr ?? '3', 10) || 3)),
+    promptOnlyImageGalleryCleanupEnabled: promptOnlyImageGalleryCleanupEnabledFlag,
+    promptOnlyImageGalleryCleanupDays: Math.max(1, Math.min(90, parseInt(promptOnlyImageGalleryCleanupDaysStr ?? '7', 10) || 7)),
     narrationVoiceSettings,
     narrationVoiceSampleStatuses,
   };
@@ -547,6 +556,27 @@ export async function setStoryAssetSyncWarningTimeout(ms: number): Promise<void>
   await setFeatureFlagValue('story_asset_sync_warning_timeout_ms', String(Math.round(ms)));
 }
 
+export async function setPromptOnlyMaxImagesPerBeat(count: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(count) || count < 1 || count > 10) {
+    throw new Error('Max images per prompt-only beat must be between 1 and 10.');
+  }
+  await setFeatureFlagValue('prompt_only_max_images_per_beat', String(Math.round(count)));
+}
+
+export async function setPromptOnlyImageGalleryCleanupEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('prompt_only_image_gallery_cleanup_enabled', enabled);
+}
+
+export async function setPromptOnlyImageGalleryCleanupDays(days: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(days) || days < 1 || days > 90) {
+    throw new Error('Cleanup window must be between 1 and 90 days.');
+  }
+  await setFeatureFlagValue('prompt_only_image_gallery_cleanup_days', String(Math.round(days)));
+}
+
 export async function setAuthoringWordCap(words: number): Promise<void> {
   await verifyAdmin();
   if (!Number.isFinite(words) || words < 50) {
@@ -609,8 +639,11 @@ export async function getStoryboardSettings(): Promise<{
   storyAssetUploadPauseDuringGenerationEnabled: boolean;
   authoringWordCap: number;
   storyAssetSyncWarningTimeoutMs: number;
+  promptOnlyMaxImagesPerBeat: number;
+  promptOnlyImageGalleryCleanupEnabled: boolean;
+  promptOnlyImageGalleryCleanupDays: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -636,6 +669,9 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('story_asset_upload_pause_during_generation_enabled', false),
     getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
+    getFeatureFlagValue('prompt_only_max_images_per_beat'),
+    getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
+    getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
@@ -674,6 +710,9 @@ export async function getStoryboardSettings(): Promise<{
     storyAssetUploadPauseDuringGenerationEnabled,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
     storyAssetSyncWarningTimeoutMs: parseInt(storyAssetSyncWarningTimeoutMs ?? '15000', 10) || 15000,
+    promptOnlyMaxImagesPerBeat: Math.max(1, Math.min(10, parseInt(promptOnlyMaxImagesPerBeatStr ?? '3', 10) || 3)),
+    promptOnlyImageGalleryCleanupEnabled,
+    promptOnlyImageGalleryCleanupDays: Math.max(1, Math.min(90, parseInt(promptOnlyImageGalleryCleanupDaysStr ?? '7', 10) || 7)),
   };
 }
 
