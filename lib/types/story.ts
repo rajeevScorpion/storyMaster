@@ -42,6 +42,7 @@ export interface PortraitTask {
   characterName: string;
   reason: 'new_character' | 'visual_change';
   prompt: string;
+  finalPromptText?: string;
 }
 
 export type PortraitReferenceMode = 'single_portrait' | 'character_sheet';
@@ -72,6 +73,12 @@ export interface StoryboardPlan {
   negativeConstraints: string[];
 }
 
+export interface BeatImageGalleryEntry {
+  url: string;
+  storageKey: string;
+  uploadedAt: string;
+}
+
 export interface StoryBeat {
   title: string;
   beatNumber: number;
@@ -88,10 +95,13 @@ export interface StoryBeat {
   newCharacterIds?: string[];
   changedCharacterIds?: string[];
   storyboardPlan?: StoryboardPlan;
+  storyboardPromptText?: string;
+  finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
+  imageGallery?: BeatImageGalleryEntry[];
   isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;
@@ -158,6 +168,7 @@ export interface StoryConfig {
   settingCountry: string;
   maxBeats: number;
   language: StoryLanguage;
+  imageGenerationMode: 'generate' | 'prompt_only';
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
   portraitReferences: PortraitReferenceConfig;

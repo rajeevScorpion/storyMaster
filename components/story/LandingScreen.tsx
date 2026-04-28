@@ -64,7 +64,11 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [setupSettings, setSetupSettings] = useState({
     freePlusCharacterSheetsEnabled: false,
     creatorCharacterSheetsEnabled: false,
+    storyPromptOnlyModeEnabled: false,
   });
+  const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
+    DEFAULT_STORY_CONFIG.imageGenerationMode
+  );
   const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(null);
   const [narrationVoiceSelection, setNarrationVoiceSelection] = useState<{
     genderBucket: NarrationGenderBucket;
@@ -76,16 +80,28 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const effectiveMaxBeats = storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
-  const startStoryCoinCost = (pricing.actionCosts.start_story_initial_beat ?? 1) * 10;
+  const startStoryCoinCost = (
+    pricing.actionCosts[
+      imageGenerationMode === 'prompt_only'
+        ? 'start_story_initial_beat_prompt_only'
+        : 'start_story_initial_beat'
+    ] ?? (imageGenerationMode === 'prompt_only' ? 0.5 : 1)
+  ) * 10;
   const isCreatorPlan = pricing.snapshot.creatorControls;
   const showCreatorSettings = isCreatorPlan && setupSettings.creatorCharacterSheetsEnabled;
 
   useEffect(() => {
     getStoryboardSettings()
-      .then(({ freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, authoringWordCap: nextAuthoringWordCap }) => {
+      .then(({
+        freePlusCharacterSheetsEnabled,
+        creatorCharacterSheetsEnabled,
+        storyPromptOnlyModeEnabled,
+        authoringWordCap: nextAuthoringWordCap,
+      }) => {
         setSetupSettings({
           freePlusCharacterSheetsEnabled,
           creatorCharacterSheetsEnabled,
+          storyPromptOnlyModeEnabled,
         });
         setAuthoringWordCap(nextAuthoringWordCap);
       })
@@ -93,6 +109,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         setSetupSettings({
           freePlusCharacterSheetsEnabled: false,
           creatorCharacterSheetsEnabled: false,
+          storyPromptOnlyModeEnabled: false,
         });
         setAuthoringWordCap(500);
       });
@@ -151,6 +168,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
             setGuidanceText(config.authoring.guidanceText || '');
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
+            setImageGenerationMode(config.imageGenerationMode || 'generate');
             setUseCreatorOneKCharacterSheet(
               config.portraitReferences.mode === 'character_sheet' &&
               config.portraitReferences.quality === '1K'
@@ -210,6 +228,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     ageGroup,
     settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
     maxBeats: effectiveMaxBeats,
+    imageGenerationMode,
     visualSettings,
     authoring: authoringMode === 'seeded'
       ? {
@@ -655,6 +674,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                 showCreatorSettings={showCreatorSettings}
                 creatorReferenceQuality={useCreatorOneKCharacterSheet ? '1K' : '0.5K'}
                 onCreatorReferenceQualityChange={(value) => setUseCreatorOneKCharacterSheet(value === '1K')}
+                storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
+                imageGenerationMode={imageGenerationMode}
+                onImageGenerationModeChange={setImageGenerationMode}
                 narrationVoiceConfig={narrationVoiceConfig}
                 narrationVoiceSelection={narrationVoiceSelection}
                 onNarrationVoiceSelectionChange={setNarrationVoiceSelection}

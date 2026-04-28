@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useRef, useEffect, useCallback, type ChangeEvent, type CSSProperties } from 'react';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, AlertTriangle } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import PublishDialog from './PublishDialog';
@@ -14,13 +14,15 @@ import Link from 'next/link';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
 import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
+import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
-import { getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
+import type { StoryBeat } from '@/lib/types/story';
 
 function StoryboardCycler({
   gridUrl,
@@ -159,6 +161,108 @@ function isFallbackImageUrl(url: string | undefined): boolean {
   return url.startsWith('https://picsum.photos/seed/');
 }
 
+const PROMPT_ONLY_ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+const PROMPT_ONLY_MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+const PROMPT_ONLY_TARGET_ASPECT_RATIO = 16 / 9;
+const PROMPT_ONLY_ASPECT_RATIO_TOLERANCE = 0.03;
+
+type PromptOnlyUploadPreview = {
+  dataUrl: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  width: number;
+  height: number;
+  resolutionAdvice: string;
+};
+
+function buildBeatPromptCopyText(beat: StoryBeat): string {
+  return beat.finalImagePromptText?.trim()
+    || beat.storyboardPromptText?.trim()
+    || beat.imagePrompt?.trim()
+    || '';
+}
+
+function buildCharacterPromptCopyItems(beat: StoryBeat): Array<{ key: string; label: string; promptText: string }> {
+  return (beat.storyboardPlan?.portraitTasks ?? [])
+    .map((task, index) => ({
+      key: `${task.characterId}:${index}`,
+      label: task.characterName,
+      promptText: task.finalPromptText?.trim() || task.prompt?.trim() || '',
+    }))
+    .filter((task) => task.promptText);
+}
+
+function hasRequiredPromptOnlyAspectRatio(width: number, height: number): boolean {
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+
+  const ratio = width / height;
+  return Math.abs(ratio - PROMPT_ONLY_TARGET_ASPECT_RATIO) <= PROMPT_ONLY_ASPECT_RATIO_TOLERANCE;
+}
+
+function getPromptOnlyResolutionAdvice(width: number, height: number): string {
+  if (width >= 2048 && height >= 1152) {
+    return 'Strong for larger screens.';
+  }
+  if (width >= 1280 && height >= 720) {
+    return 'Good for smaller screens. For larger screens, 2048x1152 or above is recommended.';
+  }
+  return 'Below the recommended minimum. Use at least 1280x720, and 2048x1152 for larger screens.';
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+        return;
+      }
+      reject(new Error('Could not read the selected image.'));
+    };
+    reader.onerror = () => reject(new Error('Could not read the selected image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve({ width: image.width, height: image.height });
+    image.onerror = () => reject(new Error('Could not inspect the selected image.'));
+    image.src = dataUrl;
+  });
+}
+
+async function validatePromptOnlyImageFile(file: File): Promise<PromptOnlyUploadPreview> {
+  if (!PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof PROMPT_ONLY_ACCEPTED_IMAGE_TYPES)[number])) {
+    throw new Error('Use a JPG, PNG, or WebP image.');
+  }
+
+  if (file.size > PROMPT_ONLY_MAX_UPLOAD_BYTES) {
+    throw new Error('Image must be 3 MB or smaller.');
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const { width, height } = await readImageDimensions(dataUrl);
+
+  if (!hasRequiredPromptOnlyAspectRatio(width, height)) {
+    throw new Error('Image must use a 16:9 aspect ratio.');
+  }
+
+  return {
+    dataUrl,
+    fileName: file.name,
+    fileSize: file.size,
+    mimeType: file.type,
+    width,
+    height,
+    resolutionAdvice: getPromptOnlyResolutionAdvice(width, height),
+  };
+}
+
 type StoryReaderPanel = 'story' | 'branches';
 
 interface StoryRuntimeSettings {
@@ -166,6 +270,7 @@ interface StoryRuntimeSettings {
   cycleMs: number;
   vignetteEnabled: boolean;
   vignetteAmountPercent: number;
+  audioStorylinePublishEnabled: boolean;
   cloudSaveTimeoutMs: number;
   storyAssetSignedUrlSwapEnabled: boolean;
   storyIncrementalAssetSyncEnabled: boolean;
@@ -174,6 +279,9 @@ interface StoryRuntimeSettings {
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  promptOnlyMaxImagesPerBeat: number;
+  promptOnlyImageGalleryCleanupEnabled: boolean;
+  promptOnlyImageGalleryCleanupDays: number;
 }
 
 export default function StoryScreen() {
@@ -199,15 +307,18 @@ export default function StoryScreen() {
   const retryPendingBeatAssetSync = useStoryStore((state) => state.retryPendingBeatAssetSync);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
+  const setPromptOnlyBeatImage = useStoryStore((state) => state.setPromptOnlyBeatImage);
+  const selectPromptOnlyBeatImage = useStoryStore((state) => state.selectPromptOnlyBeatImage);
+  const deletePromptOnlyBeatImage = useStoryStore((state) => state.deletePromptOnlyBeatImage);
+  const permanentlyDeletePromptOnlyBeatImage = useStoryStore((state) => state.permanentlyDeletePromptOnlyBeatImage);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
-
-  const optionsContainerRef = useRef<HTMLDivElement>(null);
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
     vignetteAmountPercent: 100,
+    audioStorylinePublishEnabled: false,
     cloudSaveTimeoutMs: 20000,
     storyAssetSignedUrlSwapEnabled: false,
     storyIncrementalAssetSyncEnabled: false,
@@ -216,6 +327,9 @@ export default function StoryScreen() {
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
+    promptOnlyMaxImagesPerBeat: 3,
+    promptOnlyImageGalleryCleanupEnabled: true,
+    promptOnlyImageGalleryCleanupDays: 7,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -263,7 +377,14 @@ export default function StoryScreen() {
 
   const currentBeat = normalizeBeatMediaFields(currentNode.data);
   const isEnding = currentBeat.isEnding;
-  const continueCoinCost = (pricing.actionCosts.continue_story_new_beat ?? 1) * 10;
+  const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  const continueCoinCost = (
+    pricing.actionCosts[
+      isPromptOnlyStory
+        ? 'continue_story_new_beat_prompt_only'
+        : 'continue_story_new_beat'
+    ] ?? (isPromptOnlyStory ? 0.5 : 1)
+  ) * 10;
   const showCoinHint = pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled;
 
   const hasExistingBranch = (optionId: string) =>
@@ -301,6 +422,10 @@ export default function StoryScreen() {
       cycleSettings={cycleSettings}
       continueCoinCost={continueCoinCost}
       showCoinHint={showCoinHint}
+      setPromptOnlyBeatImage={setPromptOnlyBeatImage}
+      selectPromptOnlyBeatImage={selectPromptOnlyBeatImage}
+      deletePromptOnlyBeatImage={deletePromptOnlyBeatImage}
+      permanentlyDeletePromptOnlyBeatImage={permanentlyDeletePromptOnlyBeatImage}
     />
   );
 }
@@ -332,6 +457,10 @@ function StoryScreenInner({
   cycleSettings,
   continueCoinCost,
   showCoinHint,
+  setPromptOnlyBeatImage,
+  selectPromptOnlyBeatImage,
+  deletePromptOnlyBeatImage,
+  permanentlyDeletePromptOnlyBeatImage,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -358,6 +487,10 @@ function StoryScreenInner({
   cycleSettings: StoryRuntimeSettings;
   continueCoinCost: number;
   showCoinHint: boolean;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => Promise<void>;
+  selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
+  deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
+  permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -373,6 +506,16 @@ function StoryScreenInner({
   const [isCardHovered, setIsCardHovered] = useState(false);
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
+  const [copiedPromptKey, setCopiedPromptKey] = useState<string | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isUploadingPromptOnlyImage, setIsUploadingPromptOnlyImage] = useState(false);
+  const [pendingDeleteStorageKey, setPendingDeleteStorageKey] = useState<string | null>(null);
+  const [isPermanentlyDeletingKey, setIsPermanentlyDeletingKey] = useState<string | null>(null);
+  const [showPromptToolsPopover, setShowPromptToolsPopover] = useState(false);
+  const promptToolsPopoverRef = useRef<HTMLDivElement>(null);
+  const promptToolsToggleRef = useRef<HTMLButtonElement>(null);
   const visibleReaderPanel: StoryReaderPanel = isEnding ? 'story' : activeReaderPanel;
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
     enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
@@ -381,6 +524,7 @@ function StoryScreenInner({
   });
   const thumbRef = useRef<HTMLDivElement>(null);
   const autoMinimizedForLoadingRef = useRef(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -409,17 +553,34 @@ function StoryScreenInner({
 
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
+  const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
   const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || getBeatDisplayImageUrl(normalizedCurrentBeat);
   const imageKey = normalizedCurrentBeat.imageUrl || displayImageUrl;
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
   const showPendingImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'pending';
-  const showFailedImageState = !displayImageUrl && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
+  const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showPendingImageState;
+  const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
-  const canRegenerateImage = !normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed;
+  const canRegenerateImage = !isPromptOnlyStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(normalizedCurrentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
+  const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
+  const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat);
+  const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
+  const canPublishStandardStoryline = Boolean(
+    publishPath?.beats.every((beat) => {
+      const normalizedBeat = normalizeBeatMediaFields(beat);
+      return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl);
+    })
+  );
+  const canPublishAudioStoryline = Boolean(
+    isEnding &&
+    isPromptOnlyStory &&
+    !canPublishStandardStoryline &&
+    cycleSettings.audioStorylinePublishEnabled
+  );
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
   const orderedOptions = currentBeat.canonicalOptionId
     ? [
@@ -503,12 +664,56 @@ function StoryScreenInner({
     }
   }, [isMinimized, stopAutoScroll]);
 
+  useEffect(() => {
+    if (!copiedPromptKey) return;
+    const timeoutId = window.setTimeout(() => setCopiedPromptKey(null), 1800);
+    return () => window.clearTimeout(timeoutId);
+  }, [copiedPromptKey]);
+
+  useEffect(() => {
+    setShowUploadModal(false);
+    setUploadPreview(null);
+    setUploadError(null);
+    setIsUploadingPromptOnlyImage(false);
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = '';
+    }
+  }, [currentNodeId]);
+
   // Auto-save when a new beat is generated
   useEffect(() => {
     if (saveStatus === 'unsaved' && onSave && !isSaving) {
       onSave();
     }
   }, [saveStatus, onSave, isSaving]);
+
+  // Close the prompt-tools popover on click-outside or Escape.
+  useEffect(() => {
+    if (!showPromptToolsPopover) return;
+    const handlePointer = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (promptToolsPopoverRef.current?.contains(target)) return;
+      if (promptToolsToggleRef.current?.contains(target)) return;
+      setShowPromptToolsPopover(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowPromptToolsPopover(false);
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('touchstart', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('touchstart', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [showPromptToolsPopover]);
+
+  // Close the popover when the active beat changes — context shifts to a different beat's prompts.
+  useEffect(() => {
+    setShowPromptToolsPopover(false);
+  }, [currentNodeId]);
 
   // Recovery guard for a save request that is taking longer than expected.
   // The store queues one retry behind the active save instead of launching overlapping uploads.
@@ -520,9 +725,11 @@ function StoryScreenInner({
       if (latest.saveStatus !== 'saving') return;
 
       if (cycleSettings.storyIncrementalAssetSyncEnabled) {
-        useStoryStore.setState({
-          saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
-        });
+        if (!isPromptOnlyStory) {
+          useStoryStore.setState({
+            saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
+          });
+        }
         return;
       }
 
@@ -538,6 +745,7 @@ function StoryScreenInner({
   }, [
     saveStatus,
     onSave,
+    isPromptOnlyStory,
     cycleSettings.cloudSaveTimeoutMs,
     cycleSettings.storyIncrementalAssetSyncEnabled,
     cycleSettings.storyAssetSyncWarningTimeoutMs,
@@ -569,13 +777,104 @@ function StoryScreenInner({
     height: `min(46vh, calc(${cycleSettings.storyUiTextLineCount} * 1lh))`,
   } satisfies CSSProperties;
 
+  const copyPromptText = useCallback(async (key: string, text: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedPromptKey(key);
+    } catch {
+      setCopiedPromptKey(null);
+    }
+  }, []);
+
+  const openUploadModal = useCallback(() => {
+    setShowUploadModal(true);
+    setUploadPreview(null);
+    setUploadError(null);
+    setIsUploadingPromptOnlyImage(false);
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = '';
+    }
+  }, []);
+
+  const handlePromptOnlyFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setUploadError(null);
+    try {
+      const validated = await validatePromptOnlyImageFile(file);
+      setUploadPreview(validated);
+    } catch (error: any) {
+      setUploadPreview(null);
+      setUploadError(error?.message || 'Could not validate the selected image.');
+    } finally {
+      event.target.value = '';
+    }
+  }, []);
+
+  const handlePromptOnlyUpload = useCallback(async () => {
+    if (!uploadPreview) {
+      setUploadError('Choose an image before uploading.');
+      return;
+    }
+
+    setIsUploadingPromptOnlyImage(true);
+    setUploadError(null);
+    try {
+      await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl, {
+        maxImagesPerBeat: cycleSettings.promptOnlyMaxImagesPerBeat,
+      });
+      setShowUploadModal(false);
+      setShowPromptToolsPopover(false);
+      setUploadPreview(null);
+      if (uploadInputRef.current) {
+        uploadInputRef.current.value = '';
+      }
+    } catch (error: any) {
+      setUploadError(error?.message || 'Could not upload this image.');
+    } finally {
+      setIsUploadingPromptOnlyImage(false);
+    }
+  }, [currentNodeId, setPromptOnlyBeatImage, uploadPreview, cycleSettings.promptOnlyMaxImagesPerBeat]);
+
+  const handlePromptOnlyDelete = useCallback(async () => {
+    try {
+      await deletePromptOnlyBeatImage(currentNodeId);
+    } catch {
+      // Keep the current editor state if deletion fails.
+    }
+  }, [currentNodeId, deletePromptOnlyBeatImage]);
+
+  const handleSelectGalleryImage = useCallback(async (storageKey: string) => {
+    try {
+      await selectPromptOnlyBeatImage(currentNodeId, storageKey);
+    } catch {
+      // Selection failures shouldn't break the modal — keep state as-is.
+    }
+  }, [currentNodeId, selectPromptOnlyBeatImage]);
+
+  const handlePermanentDelete = useCallback(async (storageKey: string) => {
+    setIsPermanentlyDeletingKey(storageKey);
+    try {
+      await permanentlyDeletePromptOnlyBeatImage(currentNodeId, storageKey);
+      setPendingDeleteStorageKey(null);
+    } catch (error: any) {
+      setUploadError(error?.message || 'Could not delete this image.');
+    } finally {
+      setIsPermanentlyDeletingKey(null);
+    }
+  }, [currentNodeId, permanentlyDeletePromptOnlyBeatImage]);
+
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
           <motion.div
-            key={displayImageUrl}
+            key={displayImageUrl ?? currentNodeId}
             initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
             animate={isStoryboard ? { opacity: 1 } : { opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
@@ -710,7 +1009,7 @@ function StoryScreenInner({
       {/* Main Content */}
       <main className={`relative z-10 flex-1 flex flex-col px-4 pb-4 pt-1 md:justify-end md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
         <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
-          {(displayImageUrl || showPendingImageState || showFailedImageState) && (
+          {(displayImageUrl || showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
               {isStoryboard ? (
                 <StoryboardCycler
@@ -739,6 +1038,13 @@ function StoryScreenInner({
                     onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                     onError={() => setFailedImageUrl(displayImageUrl)}
                   />
+                </div>
+              ) : showPromptOnlyPlaceholder ? (
+                <div
+                  className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
+                  title="No image for this beat — use the prompt tools to upload one"
+                >
+                  <ImageOff className="h-10 w-10 text-sky-200/80" />
                 </div>
               ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
@@ -805,24 +1111,135 @@ function StoryScreenInner({
             onMouseEnter={() => setIsCardHovered(true)}
             onMouseLeave={() => setIsCardHovered(false)}
           >
-            {/* Minimize/maximize toggle — attached above card */}
-            <button
-              onClick={() => setIsMinimized(!isMinimized)}
-              className="mb-2 hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
-              title={isMinimized ? 'Expand' : 'Minimize'}
-            >
-              {isMinimized ? (
-                <ChevronUp className="w-5 h-5 text-neutral-300" />
-              ) : (
-                <ChevronDown className="w-5 h-5 text-neutral-300" />
+            {/* Card chrome toggles — minimize + prompt-tools popover */}
+            <div className="relative mb-2 flex items-center gap-2 self-end">
+              <button
+                onClick={() => setIsMinimized(!isMinimized)}
+                className="hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
+                title={isMinimized ? 'Expand story' : 'Minimize story'}
+              >
+                {isMinimized ? (
+                  <ChevronUp className="w-5 h-5 text-neutral-300" />
+                ) : (
+                  <ChevronDown className="w-5 h-5 text-neutral-300" />
+                )}
+              </button>
+              {(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0) && (
+                <>
+                  <button
+                    ref={promptToolsToggleRef}
+                    type="button"
+                    onClick={() => setShowPromptToolsPopover((open) => !open)}
+                    aria-expanded={showPromptToolsPopover}
+                    aria-haspopup="dialog"
+                    className={`p-2 rounded-full backdrop-blur-md transition-colors ${
+                      showPromptToolsPopover
+                        ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
+                        : 'bg-white/5 hover:bg-white/10 text-neutral-300'
+                    }`}
+                    title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                  >
+                    <Layers className="w-5 h-5" />
+                  </button>
+                  {showPromptToolsPopover && (
+                    <div
+                      ref={promptToolsPopoverRef}
+                      role="dialog"
+                      aria-label={isPromptOnlyStory ? 'Prompt and image tools' : 'Prompt tools'}
+                      className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-sky-500/20 bg-neutral-950/95 p-5 shadow-2xl backdrop-blur-md"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-sky-200">
+                          {isPromptOnlyStory ? 'Prompt and Image Tools' : 'Prompt Tools'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setShowPromptToolsPopover(false)}
+                          className="rounded-full p-1 text-neutral-400 hover:bg-white/10 hover:text-neutral-100"
+                          title="Close"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <p className="mt-3 text-sm leading-relaxed text-neutral-300">
+                        {isPromptOnlyStory
+                          ? 'This story was generated without images. Copy the exact prompts for external image generation, then upload or replace a 16:9 beat image here.'
+                          : 'Copy the exact prompt text that was sent to the image model for this beat, including any character-sheet prompts stored for continuity.'}
+                      </p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {beatPromptText && (
+                          <button
+                            type="button"
+                            onClick={() => void copyPromptText('beat', beatPromptText)}
+                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
+                            title="Copy this beat's image prompt"
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                            {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
+                          </button>
+                        )}
+                        {isPromptOnlyStory && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPromptToolsPopover(false);
+                              openUploadModal();
+                            }}
+                            className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                            title={displayImageUrl ? 'Replace this beat’s image' : 'Upload a 16:9 image for this beat'}
+                          >
+                            <Upload className="h-3.5 w-3.5" />
+                            {displayImageUrl ? 'Replace Image' : 'Upload Image'}
+                          </button>
+                        )}
+                        {isPromptOnlyStory && displayImageUrl && (
+                          <button
+                            type="button"
+                            onClick={() => void handlePromptOnlyDelete()}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition-colors hover:bg-rose-500/20"
+                            title="Remove the uploaded image for this beat"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete Image
+                          </button>
+                        )}
+                      </div>
+                      {characterPromptItems.length > 0 && (
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {characterPromptItems.map((item) => (
+                            <button
+                              key={item.key}
+                              type="button"
+                              onClick={() => void copyPromptText(item.key, item.promptText)}
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
+                              title={`Copy the ${item.label} character sheet prompt`}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              {copiedPromptKey === item.key ? `Copied ${item.label}` : `Copy ${item.label} Sheet`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
-            </button>
+            </div>
 
           {/* Card + Narration button row */}
           <div className="flex items-end gap-3 w-full md:gap-5">
             {/* Narration + Regenerate image buttons — outside card, left side */}
             {!isMinimized && (
               <div className="shrink-0 pb-3 flex flex-col items-center gap-2 md:pb-4">
+                {/* Missing-image indicator — prompt-only beat without an uploaded image */}
+                {showPromptOnlyPlaceholder && (
+                  <div
+                    className="p-2.5 backdrop-blur-md rounded-full bg-neutral-900/60 border border-sky-500/20 text-sky-300"
+                    title="No image for this beat — open prompt tools to upload one"
+                  >
+                    <ImageOff className="w-5 h-5" />
+                  </div>
+                )}
                 {/* Regenerate image button — only when image is missing */}
                 {canRegenerateImage && (
                   <button
@@ -944,7 +1361,7 @@ function StoryScreenInner({
                           ) : (
                             <div className="flex items-center gap-2 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
                               <Share2 className="w-4 h-4 shrink-0" />
-                              <span>Storyline published!</span>
+                              <span>{canPublishAudioStoryline ? 'Audio story published!' : 'Storyline published!'}</span>
                               <Link
                                 href={`/storyline/${lastPublishResult.storylineId}`}
                                 className="ml-auto flex items-center gap-1 text-emerald-300 hover:text-emerald-200 transition-colors"
@@ -957,7 +1374,7 @@ function StoryScreenInner({
                       )}
 
                       <div className="mt-8 flex flex-wrap gap-3">
-                        {!lastPublishResult && onSave && (
+                        {!lastPublishResult && onSave && canPublishStandardStoryline && (
                           <button
                             onClick={() => setShowPublishDialog(true)}
                             className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2"
@@ -965,6 +1382,20 @@ function StoryScreenInner({
                             <Share2 className="w-4 h-4" />
                             Publish Storyline
                           </button>
+                        )}
+                        {!lastPublishResult && onSave && canPublishAudioStoryline && (
+                          <button
+                            onClick={() => setShowPublishDialog(true)}
+                            className="bg-sky-500/20 text-sky-200 border border-sky-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-sky-500/30 transition-colors flex items-center gap-2"
+                          >
+                            <Share2 className="w-4 h-4" />
+                            Publish as Audio Story
+                          </button>
+                        )}
+                        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
+                          <div className="max-w-xl rounded-2xl border border-amber-500/25 bg-amber-500/10 px-5 py-4 text-sm text-amber-100">
+                            Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
+                          </div>
                         )}
                         {session.explorationMode && (
                           <button
@@ -1128,12 +1559,246 @@ function StoryScreenInner({
         </div>
       </main>
 
+      <AnimatePresence>
+        {showUploadModal && isPromptOnlyStory && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 8 }}
+              className="w-full max-w-2xl rounded-[28px] border border-white/10 bg-neutral-900/95 p-6 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-sky-200">Upload Beat Image</p>
+                  <h3 className="mt-2 text-2xl font-serif text-neutral-100">Add a 16:9 storyboard image</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isUploadingPromptOnlyImage) return;
+                    setShowUploadModal(false);
+                    setUploadPreview(null);
+                    setUploadError(null);
+                  }}
+                  className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
+                  aria-label="Close upload dialog"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {(() => {
+                const gallery = normalizedCurrentBeat.imageGallery ?? [];
+                const cap = cycleSettings.promptOnlyMaxImagesPerBeat;
+                const capReached = gallery.length >= cap;
+                const cleanupDays = cycleSettings.promptOnlyImageGalleryCleanupDays;
+                const cleanupEnabled = cycleSettings.promptOnlyImageGalleryCleanupEnabled;
+                const activeStorageKey = getActiveGalleryStorageKey(normalizedCurrentBeat);
+                return (
+                  <>
+                    {gallery.length > 0 && (
+                      <div className="mt-5">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                            Saved Images ({gallery.length} / {cap})
+                          </p>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-3">
+                          {gallery.map((entry) => {
+                            const isActive = activeStorageKey === entry.storageKey;
+                            const isPendingConfirm = pendingDeleteStorageKey === entry.storageKey;
+                            const isDeleting = isPermanentlyDeletingKey === entry.storageKey;
+                            return (
+                              <div key={entry.storageKey} className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleSelectGalleryImage(entry.storageKey)}
+                                  disabled={isActive || isDeleting}
+                                  className={`group relative block aspect-video w-32 overflow-hidden rounded-xl border transition-colors ${
+                                    isActive
+                                      ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
+                                      : 'border-white/10 hover:border-sky-400/40'
+                                  } ${isDeleting ? 'opacity-50' : ''}`}
+                                  title={isActive ? 'Active beat image' : 'Use this image'}
+                                >
+                                  <Image
+                                    src={entry.url}
+                                    alt="Beat image option"
+                                    fill
+                                    className="object-cover"
+                                    unoptimized
+                                  />
+                                  {isActive && (
+                                    <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                      Active
+                                    </span>
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (isDeleting) return;
+                                    if (isActive) {
+                                      setPendingDeleteStorageKey(entry.storageKey);
+                                    } else {
+                                      void handlePermanentDelete(entry.storageKey);
+                                    }
+                                  }}
+                                  disabled={isDeleting}
+                                  className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                                  title="Permanently delete this image"
+                                >
+                                  {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                                </button>
+                                {isPendingConfirm && (
+                                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
+                                    <p>Permanently delete this active image? The most recent remaining image will become active.</p>
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setPendingDeleteStorageKey(null)}
+                                        className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
+                                      >
+                                        Keep
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => void handlePermanentDelete(entry.storageKey)}
+                                        className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
+                                      >
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {cleanupEnabled && (
+                          <p className="mt-2 text-[11px] text-neutral-500">
+                            Unused images are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                      <p>Accepted formats: JPG, PNG, or WebP.</p>
+                      <p className="mt-1">Maximum file size: 3 MB.</p>
+                      <p className="mt-1">Required aspect ratio: 16:9.</p>
+                      <p className="mt-1">Recommended resolution: 1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.</p>
+                    </div>
+
+                    <div className="mt-5 flex flex-wrap gap-3">
+                      <input
+                        ref={uploadInputRef}
+                        type="file"
+                        accept={PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.join(',')}
+                        onChange={handlePromptOnlyFileSelected}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => uploadInputRef.current?.click()}
+                        disabled={capReached}
+                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                        title={capReached ? `Limit of ${cap} images per beat reached` : undefined}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {uploadPreview ? 'Choose Different Image' : 'Choose Image'}
+                      </button>
+                      {displayImageUrl && (
+                        <button
+                          type="button"
+                          onClick={() => void handlePromptOnlyDelete()}
+                          className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
+                          title="Clear active image (keeps it in the gallery)"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Clear Active
+                        </button>
+                      )}
+                    </div>
+                    {capReached && (
+                      <p className="mt-3 text-xs text-amber-300">
+                        You&apos;ve reached the limit of {cap} image{cap === 1 ? '' : 's'} per beat. Delete one to upload another.
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
+
+              {uploadPreview && (
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                  <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
+                    <Image
+                      src={uploadPreview.dataUrl}
+                      alt="Selected beat upload preview"
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                    <p className="font-medium text-neutral-100">{uploadPreview.fileName}</p>
+                    <p className="mt-2">Format: {uploadPreview.mimeType}</p>
+                    <p className="mt-1">Size: {(uploadPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                    <p className="mt-1">Resolution: {uploadPreview.width}x{uploadPreview.height}</p>
+                    <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
+                    <p className="mt-1 text-sm text-neutral-300">{uploadPreview.resolutionAdvice}</p>
+                  </div>
+                </div>
+              )}
+
+              {uploadError && (
+                <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                  {uploadError}
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isUploadingPromptOnlyImage) return;
+                    setShowUploadModal(false);
+                    setUploadPreview(null);
+                    setUploadError(null);
+                  }}
+                  className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handlePromptOnlyUpload()}
+                  disabled={!uploadPreview || isUploadingPromptOnlyImage}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isUploadingPromptOnlyImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  Upload Image
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Publish Dialog */}
       {isEnding && (
         <PublishDialog
           isOpen={showPublishDialog}
           onClose={() => setShowPublishDialog(false)}
           endingNodeId={session.storyMap.currentNodeId}
+          publishMode={canPublishAudioStoryline ? 'audio_story' : 'standard'}
+          allowMissingImages={canPublishAudioStoryline}
         />
       )}
     </div>

@@ -241,7 +241,9 @@ export default function StorylinePlayer({
   //    OR: admin bypass is on AND current user is the actual admin (server-verified)
   const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
   const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
+  const storylineHasAllBeatImages = currentBeats.every((beat) => Boolean(beat.imageUrl));
   const canDownload = videoDownloadGlobalOn
+    && storylineHasAllBeatImages
     && (adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads));
   const { exportVideo, cancel: cancelExport, isExporting, progress: exportProgress, phase: exportPhase, error: exportError } = useVideoExport();
   const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
@@ -516,7 +518,19 @@ export default function StorylinePlayer({
                 priority
                 unoptimized
               />
-            ) : null}
+            ) : (
+              <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.16),transparent_40%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.96))] px-6 text-center">
+                <div className="max-w-md rounded-3xl border border-white/10 bg-neutral-950/35 px-6 py-5 backdrop-blur-md">
+                  <div className="flex justify-center">
+                    <BookOpen className="h-8 w-8 text-sky-200" />
+                  </div>
+                  <p className="mt-3 text-xs uppercase tracking-[0.22em] text-sky-200">Audio Story</p>
+                  <p className="mt-3 text-sm leading-relaxed text-neutral-300">
+                    This beat was published without a storyboard image. Narration and text continue normally.
+                  </p>
+                </div>
+              </div>
+            )}
             <motion.div
               initial={false}
               animate={{
@@ -654,7 +668,7 @@ export default function StorylinePlayer({
                   </>
                 )}
               </button>
-            ) : (
+            ) : storylineHasAllBeatImages ? (
               <button
                 onClick={() => window.open('/wallet', '_blank')}
                 className="flex items-center gap-1.5 rounded-full bg-white/5 p-2 text-xs font-sans uppercase tracking-widest text-neutral-500 transition-all duration-300 cursor-pointer hover:bg-white/10 hover:text-neutral-400 [&>span]:hidden md:px-2.5 md:py-1.5 md:[&>span]:inline"
@@ -662,6 +676,15 @@ export default function StorylinePlayer({
               >
                 <Lock className="w-3.5 h-3.5" />
                 <span>Export</span>
+              </button>
+            ) : (
+              <button
+                disabled
+                className="flex items-center gap-1.5 rounded-full bg-white/5 p-2 text-xs font-sans uppercase tracking-widest text-neutral-500 transition-all duration-300 cursor-not-allowed [&>span]:hidden md:px-2.5 md:py-1.5 md:[&>span]:inline"
+                title="Video export needs an image on every beat."
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Images Needed</span>
               </button>
             )
           )}
@@ -713,35 +736,43 @@ export default function StorylinePlayer({
         </AnimatePresence>
 
         <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
-          {displayImageUrl && (
-            <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
-              {isStoryboard ? (
-                <StoryboardCycler
-                  key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                  gridUrl={currentBeat.imageUrl!}
-                  audioUrl={currentBeat.audioUrl || undefined}
-                  cycleOverride={cycleSettings.cycleOverride}
-                  cycleMs={cycleSettings.cycleMs}
-                  vignetteEnabled={cycleSettings.vignetteEnabled}
-                  vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
-                  playbackState={playbackState}
-                  imageClassName="mobile-scene-shuttle"
+          <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
+            {isStoryboard ? (
+              <StoryboardCycler
+                key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                gridUrl={currentBeat.imageUrl!}
+                audioUrl={currentBeat.audioUrl || undefined}
+                cycleOverride={cycleSettings.cycleOverride}
+                cycleMs={cycleSettings.cycleMs}
+                vignetteEnabled={cycleSettings.vignetteEnabled}
+                vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+                playbackState={playbackState}
+                imageClassName="mobile-scene-shuttle"
+              />
+            ) : displayImageUrl ? (
+              <div className="mobile-scene-shuttle absolute inset-0">
+                <Image
+                  src={displayImageUrl}
+                  alt={currentBeat.sceneSummary}
+                  fill
+                  className="object-cover"
+                  referrerPolicy="no-referrer"
+                  priority
+                  unoptimized
                 />
-              ) : (
-                <div className="mobile-scene-shuttle absolute inset-0">
-                  <Image
-                    src={displayImageUrl}
-                    alt={currentBeat.sceneSummary}
-                    fill
-                    className="object-cover"
-                    referrerPolicy="no-referrer"
-                    priority
-                    unoptimized
-                  />
+              </div>
+            ) : (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.18),transparent_42%),linear-gradient(180deg,rgba(15,23,42,0.88),rgba(2,6,23,0.96))] px-5 text-center text-neutral-200">
+                <BookOpen className="h-8 w-8 text-sky-200" />
+                <div>
+                  <p className="text-sm uppercase tracking-[0.18em] text-sky-200">Audio Story</p>
+                  <p className="mt-2 text-sm text-neutral-400">
+                    This beat does not have an image yet, so the player is showing the audio-story placeholder instead.
+                  </p>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Story Text Card */}

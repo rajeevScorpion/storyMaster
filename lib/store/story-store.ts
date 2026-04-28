@@ -1,7 +1,18 @@
 import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
-import { composeStoryboardPlan, generateStoryBeat, generateImage, generateCharacterPortrait, materializeSeededBeat, renderStoryboardPlan, type StoryModelOverrides, type ReferenceImage } from '@/app/actions/story-runtime';
+import {
+  buildFinalPortraitPrompt,
+  buildFinalStoryboardImagePrompt,
+  composeStoryboardPlan,
+  generateStoryBeat,
+  generateImage,
+  generateCharacterPortrait,
+  materializeSeededBeat,
+  renderStoryboardPlan,
+  type StoryModelOverrides,
+  type ReferenceImage,
+} from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import {
@@ -13,7 +24,7 @@ import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeS
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, deleteAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import {
@@ -21,6 +32,7 @@ import {
   isBeatRowNotFoundError,
   getBeatPersistedImageUrl,
   hasBeatImpossibleImageState,
+  getActiveGalleryStorageKey,
 } from '@/lib/types/beat-media';
 import {
   createStoryLoadingStage,
@@ -125,6 +137,10 @@ interface StoryState {
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
   retryPendingBeatAssetSync: () => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => Promise<void>;
+  selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
+  deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
+  permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   clearPublishResult: () => void;
   clearError: () => void;
 }
@@ -260,24 +276,37 @@ function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
     .filter((reference): reference is ReferenceImage => Boolean(reference));
 }
 
+function mergeCharacterVisualReferences(
+  beat: StoryBeat,
+  referenceCharacters: Character[]
+): StoryBeat {
+  if (!referenceCharacters.length || !beat.characters.length) {
+    return beat;
+  }
+
+  const referencesById = new Map(referenceCharacters.map((character) => [character.id, character]));
+  const nextCharacters = beat.characters.map((character) => {
+    const reference = referencesById.get(character.id);
+    if (!reference) {
+      return character;
+    }
+
+    return {
+      ...reference,
+      ...character,
+      portraitBase64: character.portraitBase64 || reference.portraitBase64,
+      portraitUrl: character.portraitUrl || reference.portraitUrl,
+    };
+  });
+
+  return {
+    ...beat,
+    characters: nextCharacters,
+  };
+}
+
 function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
-  if (beat.beatNumber === 1) {
-    return collectPortraitReferences(beat.characters);
-  }
-
-  const relevantIds = new Set<string>([
-    ...(beat.newCharacterIds || []),
-    ...(beat.changedCharacterIds || []),
-    ...((beat.storyboardPlan?.portraitTasks || []).map((task) => task.characterId)),
-  ]);
-
-  if (relevantIds.size === 0) {
-    return [];
-  }
-
-  return collectPortraitReferences(
-    beat.characters.filter((character) => relevantIds.has(character.id))
-  );
+  return collectPortraitReferences(beat.characters);
 }
 
 function buildStoryboardReferenceImages(
@@ -290,12 +319,11 @@ function buildStoryboardReferenceImages(
   }
 
   const references: ReferenceImage[] = [];
+  references.push(...portraitReferences);
   const sceneReference = buildReferenceFromValue('scene', previousStoryboardUrl);
   if (sceneReference) {
     references.push(sceneReference);
   }
-
-  references.push(...portraitReferences);
   return references;
 }
 
@@ -572,7 +600,14 @@ function getStoryMapImageSyncSummary(storyMap: StoryMap | null | undefined): {
   );
 }
 
-function deriveSaveWarning(storyMap: StoryMap | null | undefined, queueActive: boolean): string | null {
+function deriveSaveWarning(
+  storyMap: StoryMap | null | undefined,
+  queueActive: boolean,
+  storyConfig?: StoryConfig | null
+): string | null {
+  if (storyConfig && isPromptOnlyStoryConfig(storyConfig)) {
+    return null;
+  }
   const { failedCount, pendingCount, impossibleCount } = getStoryMapImageSyncSummary(storyMap);
   if (impossibleCount > 0) {
     return ASSET_SYNC_REPAIR_MESSAGE;
@@ -600,7 +635,7 @@ function syncSaveUiState(
       : 'idle'
   );
   const nextSaveWarning = partial.saveWarning === undefined
-    ? (nextSaveStatus === 'unsaved' ? null : deriveSaveWarning(nextSession?.storyMap, Boolean(activeBeatAssetSyncPromise)))
+    ? (nextSaveStatus === 'unsaved' ? null : deriveSaveWarning(nextSession?.storyMap, Boolean(activeBeatAssetSyncPromise), nextSession?.storyConfig))
     : partial.saveWarning;
 
   setState({
@@ -864,7 +899,7 @@ async function generatePortraitsForStoryboardPlan(
             };
 
       try {
-        const portrait = await generateCharacterPortrait(
+        const portraitResult = await generateCharacterPortrait(
           character,
           visualStyle,
           taskPortraitReferenceConfig,
@@ -872,8 +907,9 @@ async function generatePortraitsForStoryboardPlan(
           task.prompt,
           costTelemetry
         );
-        character.portraitBase64 = portrait;
-        return { type: 'character' as const, dataUrl: portrait };
+        character.portraitBase64 = portraitResult.imageUrl;
+        task.finalPromptText = portraitResult.finalPromptText;
+        return { type: 'character' as const, dataUrl: portraitResult.imageUrl };
       } catch (error) {
         console.error(`Portrait generation failed for storyboard task ${task.characterId}:`, error);
         return null;
@@ -882,6 +918,44 @@ async function generatePortraitsForStoryboardPlan(
   );
 
   return portraits.filter((portrait): portrait is NonNullable<typeof portrait> => Boolean(portrait));
+}
+
+function assignPortraitPromptTexts(
+  beat: StoryBeat,
+  storyboardPlan: StoryboardPlan,
+  visualStyle: string,
+  portraitReferenceConfig: PortraitReferenceConfig,
+  modelOverrides?: StoryModelOverrides
+) {
+  if (!storyboardPlan.portraitTasks.length) {
+    return;
+  }
+
+  const orderedTasks = sortPortraitTasksForGeneration(beat.characters, storyboardPlan.portraitTasks);
+  const prioritizedSheetTaskIds = resolvePrioritizedSheetTaskIds(orderedTasks, portraitReferenceConfig);
+
+  for (const task of orderedTasks) {
+    const character = beat.characters.find((candidate) => candidate.id === task.characterId);
+    if (!character) {
+      continue;
+    }
+
+    const taskPortraitReferenceConfig =
+      portraitReferenceConfig.mode === 'character_sheet' && prioritizedSheetTaskIds.has(task.characterId)
+        ? portraitReferenceConfig
+        : {
+            mode: 'single_portrait' as const,
+            quality: '0.5K' as const,
+          };
+
+    task.finalPromptText = buildFinalPortraitPrompt(
+      character,
+      visualStyle,
+      taskPortraitReferenceConfig,
+      modelOverrides,
+      task.prompt
+    );
+  }
 }
 
 function sortPortraitTasksForGeneration(
@@ -916,6 +990,10 @@ function isSeededStoryConfig(storyConfig: StoryConfig): boolean {
   return storyConfig.authoring.mode === 'seeded' && Boolean(storyConfig.authoring.seedPlan?.beats.length);
 }
 
+function isPromptOnlyStoryConfig(storyConfig: StoryConfig): boolean {
+  return storyConfig.imageGenerationMode === 'prompt_only';
+}
+
 function getSeedBeatByIndex(storyConfig: StoryConfig, beatIndex: number): SeedBeatOutline | undefined {
   const seedPlan = getSeedPlan(storyConfig);
   return seedPlan?.beats.find((beat) => beat.beatIndex === beatIndex);
@@ -938,6 +1016,25 @@ function withGeneratedOrigin(beat: StoryBeat): StoryBeat {
     ...beat,
     originKind: 'generated',
   };
+}
+
+function getStartStoryActionKey(storyConfig: StoryConfig) {
+  return isPromptOnlyStoryConfig(storyConfig)
+    ? 'start_story_initial_beat_prompt_only' as const
+    : 'start_story_initial_beat' as const;
+}
+
+function getContinueStoryActionKey(storyConfig: StoryConfig) {
+  return isPromptOnlyStoryConfig(storyConfig)
+    ? 'continue_story_new_beat_prompt_only' as const
+    : 'continue_story_new_beat' as const;
+}
+
+function canPublishStoryPathAsStandard(
+  storyMap: StoryMap,
+  endingNodeId: string
+): boolean {
+  return getPathToNode(storyMap, endingNodeId).every((node) => Boolean(node.data.imageUrl));
 }
 
 const LOADING_READER_MESSAGE = 'kissago is weaving the story';
@@ -1238,6 +1335,8 @@ export const useStoryStore = create<StoryState>()(
       startStory: async (prompt: string, config?: StoryConfig) => {
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
         const seededStory = isSeededStoryConfig(storyConfig);
+        const promptOnly = isPromptOnlyStoryConfig(storyConfig);
+        const startStoryActionKey = getStartStoryActionKey(storyConfig);
         const storyPrompt = seededStory
           ? storyConfig.authoring.sourceText?.trim() || prompt
           : prompt;
@@ -1246,7 +1345,7 @@ export const useStoryStore = create<StoryState>()(
         const initialSessionId = uuidv4();
         const rootNodeId = uuidv4();
         const baseCostTelemetry: CostTelemetryContext = {
-          activityKey: 'start_story_initial_beat',
+          activityKey: startStoryActionKey,
           storySessionId: initialSessionId,
           nodeId: rootNodeId,
           beatNumber: 1,
@@ -1277,7 +1376,7 @@ export const useStoryStore = create<StoryState>()(
             'wallet_authorization',
             'Authorize story start',
             () => authorizeCurrentUserBillableAction({
-              actionKey: 'start_story_initial_beat',
+              actionKey: startStoryActionKey,
               idempotencyKey: `start_story:${initialSessionId}`,
               metadata: {
                 language: storyConfig.language,
@@ -1375,7 +1474,7 @@ export const useStoryStore = create<StoryState>()(
           };
 
           setLoadingStage(set, 'start_story', 'beat');
-          const beat = await measureAsyncStep(
+          let beat = await measureAsyncStep(
             timingSteps,
             seededStory ? 'seeded_beat_materialization' : 'story_generation',
             seededStory ? 'Materialize seeded opening beat' : 'Generate opening beat',
@@ -1404,6 +1503,7 @@ export const useStoryStore = create<StoryState>()(
               );
             }
           );
+          beat = mergeCharacterVisualReferences(beat, initialSession.characters || []);
 
           set((state) => ({
             loadingClues: beat.clues,
@@ -1425,9 +1525,10 @@ export const useStoryStore = create<StoryState>()(
             )
           );
           beat.storyboardPlan = storyboardPlan;
+          beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
           beat.isStoryboard = true;
 
-          const portraitRefs = initialSession.enableReferenceImages
+          const portraitRefs = initialSession.enableReferenceImages && !promptOnly
             ? await measureAsyncStep(
                 timingSteps,
                 'portrait_generation',
@@ -1447,7 +1548,16 @@ export const useStoryStore = create<StoryState>()(
                 }
               )
             : [];
-          const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
+          if (promptOnly) {
+            assignPortraitPromptTexts(
+              beat,
+              storyboardPlan,
+              initialSession.visualStyle!,
+              storyConfig.portraitReferences,
+              modelOverrides
+            );
+          }
+          const storyboardPrompt = beat.storyboardPromptText;
 
           // Create storyMap once the canonical visual plan is ready so beat 1 persists
           // portraits, storyboard metadata, and later image continuity anchors together.
@@ -1600,35 +1710,47 @@ export const useStoryStore = create<StoryState>()(
           }
 
           // Step A: Generate portraits first (parallelized) so beat 1 scene can use
-          // them as references — makes portrait the single source of truth from the very first image.
+          // them as references - makes portrait the single source of truth from the very first image.
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
           setLoadingStage(set, 'start_story', 'image');
-          const [imageUrl, narratorVoiceResolution] = await Promise.all([
-            measureAsyncStep(
-              timingSteps,
-              'image_generation',
-              'Render opening storyboard image',
-              () => generateImage(
-                storyboardPrompt,
-                beat.characters,
-                initialSession.visualStyle!,
-                modelOverrides,
-                portraitRefs.length > 0 ? portraitRefs : undefined,
-                beat.beatNumber,
-                costPhase(baseCostTelemetry, 'image_generation', {
-                  referenceCount: portraitRefs.length,
+          const [imageResult, narratorVoiceResolution] = await Promise.all([
+            promptOnly
+              ? Promise.resolve({
+                  imageUrl: '',
+                  finalPromptText: buildFinalStoryboardImagePrompt(
+                    storyboardPrompt,
+                    beat.characters,
+                    initialSession.visualStyle!,
+                    beat.beatNumber,
+                    modelOverrides
+                  ),
                 })
-              ),
-              {
-                referenceCount: portraitRefs.length,
-                beatNumber: beat.beatNumber,
-              }
-            ),
+              : measureAsyncStep(
+                  timingSteps,
+                  'image_generation',
+                  'Render opening storyboard image',
+                  () => generateImage(
+                    storyboardPrompt,
+                    beat.characters,
+                    initialSession.visualStyle!,
+                    modelOverrides,
+                    portraitRefs.length > 0 ? portraitRefs : undefined,
+                    beat.beatNumber,
+                    costPhase(baseCostTelemetry, 'image_generation', {
+                      referenceCount: portraitRefs.length,
+                    })
+                  ),
+                  {
+                    referenceCount: portraitRefs.length,
+                    beatNumber: beat.beatNumber,
+                  }
+                ),
             lockedVoicePromise,
           ]);
 
-          beat.imageUrl = imageUrl;
+          beat.finalImagePromptText = imageResult.finalPromptText;
+          beat.imageUrl = promptOnly ? undefined : imageResult.imageUrl;
 
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
@@ -1652,7 +1774,7 @@ export const useStoryStore = create<StoryState>()(
                 storyId: earlySavedStoryId ?? null,
                 relatedEntityId: rootNodeId,
                 metadata: {
-                  action: 'start_story_initial_beat',
+                  action: startStoryActionKey,
                   storySessionId: initialSessionId,
                   title: resolvedTitle,
                 },
@@ -1668,14 +1790,14 @@ export const useStoryStore = create<StoryState>()(
               ...normalizeBeatMediaFields({
                 ...beat,
                 persistedImageUrl: undefined,
-                imageStatus: 'pending',
+                imageStatus: promptOnly ? 'not_requested' : 'pending',
                 audioStatus: resolvedAudioUrl
                   ? (earlySavedStoryId ? 'ready' : 'not_requested')
                   : storyPrompt.toLowerCase() !== 'mock' && earlySavedStoryId
                   ? 'pending'
                   : 'not_requested',
               }),
-              imageUrl,
+              imageUrl: promptOnly ? undefined : imageResult.imageUrl,
               narrationVoiceId: narratorVoiceResolution.voiceId,
               ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
             },
@@ -1711,14 +1833,34 @@ export const useStoryStore = create<StoryState>()(
             errorAction: null,
             ...audioExtra,
           });
-          if (earlySavedStoryId && earlySavedByUserId) {
+          if (earlySavedStoryId) {
+            const cleanRootNode = {
+              ...storyMap.nodes[rootNodeId],
+              data: {
+                ...storyMap.nodes[rootNodeId].data,
+                imageUrl: storyMap.nodes[rootNodeId].data.imageUrl?.startsWith('data:')
+                  ? undefined
+                  : storyMap.nodes[rootNodeId].data.imageUrl,
+                audioUrl: storyMap.nodes[rootNodeId].data.audioUrl?.startsWith('data:')
+                  ? undefined
+                  : storyMap.nodes[rootNodeId].data.audioUrl,
+                characters: storyMap.nodes[rootNodeId].data.characters.map((character) => ({
+                  ...character,
+                  portraitBase64: undefined,
+                })),
+              },
+            };
+            saveBeatAction(earlySavedStoryId, rootNodeId, cleanRootNode)
+              .catch((err) => console.error('Opening beat save failed:', err));
+          }
+          if (earlySavedStoryId && earlySavedByUserId && imageResult.imageUrl) {
             const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
             if (runtimeSettings.storyIncrementalAssetSyncEnabled) {
               await putPendingBeatImage({
                 storyId: earlySavedStoryId,
                 userId: earlySavedByUserId,
                 nodeId: rootNodeId,
-                imageDataUrl: imageUrl,
+                imageDataUrl: imageResult.imageUrl,
               });
               void retryPendingBeatAssetSyncInternal(earlySavedStoryId);
             }
@@ -1733,6 +1875,7 @@ export const useStoryStore = create<StoryState>()(
               beatNumber: beat.beatNumber,
               storyId: earlySavedStoryId ?? null,
               usedReferencePortraits: portraitRefs.length,
+              promptOnly,
             },
           });
         } catch (error: any) {
@@ -1783,6 +1926,8 @@ export const useStoryStore = create<StoryState>()(
           isSeededStoryConfig(session.storyConfig) && isCanonicalSeedOption(currentNode.data, optionId)
             ? getSeedBeatByIndex(session.storyConfig, currentNode.data.beatNumber + 1)
             : undefined;
+        const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+        const continueStoryActionKey = getContinueStoryActionKey(session.storyConfig);
         const generationStartedAt = nowMs();
         const timingSteps: GenerationTimingStep[] = [];
 
@@ -1797,7 +1942,7 @@ export const useStoryStore = create<StoryState>()(
         const parentId = session.storyMap.currentNodeId;
         const newNodeId = uuidv4();
         const baseCostTelemetry: CostTelemetryContext = {
-          activityKey: 'continue_story_new_beat',
+          activityKey: continueStoryActionKey,
           storySessionId: session.storySessionId,
           storyId: session.savedStoryId ?? null,
           nodeId: newNodeId,
@@ -1834,7 +1979,7 @@ export const useStoryStore = create<StoryState>()(
             'wallet_authorization',
             'Authorize branch continuation',
             () => authorizeCurrentUserBillableAction({
-              actionKey: 'continue_story_new_beat',
+              actionKey: continueStoryActionKey,
               idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,
               relatedNodeId: session.storyMap.currentNodeId,
@@ -1920,7 +2065,7 @@ export const useStoryStore = create<StoryState>()(
           } catch { /* falls back to hardcoded defaults */ }
 
           setLoadingStage(set, 'continue_story', 'beat');
-          const beat = await measureAsyncStep(
+          let beat = await measureAsyncStep(
             timingSteps,
             nextCanonicalSeedBeat ? 'seeded_beat_materialization' : 'story_generation',
             nextCanonicalSeedBeat ? 'Materialize seeded canonical beat' : 'Generate continued beat',
@@ -1950,6 +2095,7 @@ export const useStoryStore = create<StoryState>()(
               isCanonicalSeedPath: Boolean(nextCanonicalSeedBeat),
             }
           );
+          beat = mergeCharacterVisualReferences(beat, sessionForPrompt.characters || []);
 
           set((state) => ({
             loadingClues: beat.clues,
@@ -1970,8 +2116,9 @@ export const useStoryStore = create<StoryState>()(
             )
           );
           beat.storyboardPlan = storyboardPlan;
+          beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
           beat.isStoryboard = true;
-          const portraitRefs = session.enableReferenceImages
+          const portraitRefs = session.enableReferenceImages && !promptOnly
             ? await measureAsyncStep(
                 timingSteps,
                 'portrait_generation',
@@ -1991,7 +2138,16 @@ export const useStoryStore = create<StoryState>()(
                 }
               )
             : [];
-          const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
+          if (promptOnly) {
+            assignPortraitPromptTexts(
+              beat,
+              storyboardPlan,
+              session.visualStyle,
+              session.storyConfig.portraitReferences,
+              modelOverrides
+            );
+          }
+          const storyboardPrompt = beat.storyboardPromptText;
 
           // Track resolved audio URL — if narration finishes before image,
           // the .then() can't update the store (node doesn't exist yet),
@@ -2115,27 +2271,39 @@ export const useStoryStore = create<StoryState>()(
 
           // Block loading on image only
           setLoadingStage(set, 'continue_story', 'image');
-          const imageUrl = await measureAsyncStep(
-            timingSteps,
-            'image_generation',
-            'Render branch storyboard image',
-            () => generateImage(
-              storyboardPrompt,
-              beat.characters,
-              session.visualStyle,
-              modelOverrides,
-              referenceImages.length > 0 ? referenceImages : undefined,
-              beat.beatNumber,
-              costPhase(baseCostTelemetry, 'image_generation', {
-                referenceCount: referenceImages.length,
-              })
-            ),
-            {
-              beatNumber: beat.beatNumber,
-              referenceCount: referenceImages.length,
-            }
-          );
-          beat.imageUrl = imageUrl;
+          const imageResult = promptOnly
+            ? {
+                imageUrl: '',
+                finalPromptText: buildFinalStoryboardImagePrompt(
+                  storyboardPrompt,
+                  beat.characters,
+                  session.visualStyle,
+                  beat.beatNumber,
+                  modelOverrides
+                ),
+              }
+            : await measureAsyncStep(
+                timingSteps,
+                'image_generation',
+                'Render branch storyboard image',
+                () => generateImage(
+                  storyboardPrompt,
+                  beat.characters,
+                  session.visualStyle,
+                  modelOverrides,
+                  referenceImages.length > 0 ? referenceImages : undefined,
+                  beat.beatNumber,
+                  costPhase(baseCostTelemetry, 'image_generation', {
+                    referenceCount: referenceImages.length,
+                  })
+                ),
+                {
+                  beatNumber: beat.beatNumber,
+                  referenceCount: referenceImages.length,
+                }
+              );
+          beat.finalImagePromptText = imageResult.finalPromptText;
+          beat.imageUrl = promptOnly ? undefined : imageResult.imageUrl;
 
           const updatedMap = addChildNode(
             session.storyMap,
@@ -2167,7 +2335,7 @@ export const useStoryStore = create<StoryState>()(
                   narrationVoiceId: voiceForBeat,
                   persistedImageUrl: undefined,
                   ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
-                  imageStatus: 'pending',
+                  imageStatus: promptOnly ? 'not_requested' : 'pending',
                   audioStatus: resolvedAudioUrl
                     ? (session.savedStoryId ? 'ready' : 'not_requested')
                     : session.userPrompt.toLowerCase() !== 'mock' && session.savedStoryId
@@ -2189,7 +2357,7 @@ export const useStoryStore = create<StoryState>()(
                 storyId: session.savedStoryId ?? null,
                 relatedEntityId: newNodeId,
                 metadata: {
-                  action: 'continue_story_new_beat',
+                  action: continueStoryActionKey,
                   optionId,
                   optionLabel: selectedOption.label,
                   parentNodeId: parentId,
@@ -2225,7 +2393,7 @@ export const useStoryStore = create<StoryState>()(
             errorAction: null,
             ...audioExtra,
           });
-          if (session.savedStoryId) {
+          if (session.savedStoryId && imageResult.imageUrl) {
             const uploadUserId = (await resolveCurrentUserId(session.savedByUserId)) ?? undefined;
             const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
             if (uploadUserId && runtimeSettings.storyIncrementalAssetSyncEnabled) {
@@ -2233,7 +2401,7 @@ export const useStoryStore = create<StoryState>()(
                 storyId: session.savedStoryId,
                 userId: uploadUserId,
                 nodeId: newNodeId,
-                imageDataUrl: imageUrl,
+                imageDataUrl: imageResult.imageUrl,
               });
               void retryPendingBeatAssetSyncInternal(session.savedStoryId);
             }
@@ -2250,6 +2418,7 @@ export const useStoryStore = create<StoryState>()(
               optionLabel: selectedOption.label,
               newNodeId,
               usedReferenceImages: referenceImages.length,
+              promptOnly,
             },
           });
 
@@ -2279,7 +2448,7 @@ export const useStoryStore = create<StoryState>()(
               .catch((err) => console.error('Incremental beat save failed:', err));
 
             // Auto-publish if this is an ending beat
-            if (beat.isEnding) {
+            if (beat.isEnding && canPublishStoryPathAsStandard(mergedMap, mergedMap.currentNodeId)) {
               (async () => {
                 const storyPath = getPathToNode(updatedMap, updatedMap.currentNodeId);
 
@@ -2582,10 +2751,12 @@ export const useStoryStore = create<StoryState>()(
           }
 
           const parentNode = node.parentId ? session.storyMap.nodes[node.parentId] : undefined;
-          const beatForRender: StoryBeat = {
+          const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+          let beatForRender: StoryBeat = {
             ...node.data,
             characters: node.data.characters.map((character) => ({ ...character })),
           };
+          beatForRender = mergeCharacterVisualReferences(beatForRender, session.characters);
 
           let storyboardPlan = beatForRender.storyboardPlan;
           if (!storyboardPlan) {
@@ -2599,13 +2770,14 @@ export const useStoryStore = create<StoryState>()(
             );
           }
           beatForRender.storyboardPlan = storyboardPlan;
+          beatForRender.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
           beatForRender.isStoryboard = true;
 
           let portraitReferences = session.enableReferenceImages
             ? collectBeatPortraitReferences(beatForRender)
             : [];
 
-          if (session.enableReferenceImages && portraitReferences.length === 0 && storyboardPlan.portraitTasks.length > 0) {
+          if (!promptOnly && session.enableReferenceImages && portraitReferences.length === 0 && storyboardPlan.portraitTasks.length > 0) {
             portraitReferences = await generatePortraitsForStoryboardPlan(
               beatForRender,
               storyboardPlan,
@@ -2615,25 +2787,45 @@ export const useStoryStore = create<StoryState>()(
               costPhase(baseCostTelemetry, 'portrait_generation')
             );
           }
+          if (promptOnly) {
+            assignPortraitPromptTexts(
+              beatForRender,
+              storyboardPlan,
+              session.visualStyle,
+              session.storyConfig.portraitReferences,
+              modelOverrides
+            );
+          }
 
           const referenceImages = buildStoryboardReferenceImages(
             beatForRender,
             parentNode?.data.imageUrl,
             portraitReferences
           );
-          const storyboardPrompt = renderStoryboardPlan(storyboardPlan);
-
-          const imageUrl = await generateImage(
-            storyboardPrompt,
-            beatForRender.characters,
-            session.visualStyle,
-            modelOverrides,
-            referenceImages.length > 0 ? referenceImages : undefined,
-            beatForRender.beatNumber,
-            costPhase(baseCostTelemetry, 'image_generation', {
-              referenceCount: referenceImages.length,
-            })
-          );
+          const storyboardPrompt = beatForRender.storyboardPromptText;
+          const imageResult = promptOnly
+            ? {
+                imageUrl: '',
+                finalPromptText: buildFinalStoryboardImagePrompt(
+                  storyboardPrompt,
+                  beatForRender.characters,
+                  session.visualStyle,
+                  beatForRender.beatNumber,
+                  modelOverrides
+                ),
+              }
+            : await generateImage(
+                storyboardPrompt,
+                beatForRender.characters,
+                session.visualStyle,
+                modelOverrides,
+                referenceImages.length > 0 ? referenceImages : undefined,
+                beatForRender.beatNumber,
+                costPhase(baseCostTelemetry, 'image_generation', {
+                  referenceCount: referenceImages.length,
+                })
+              );
+          beatForRender.finalImagePromptText = imageResult.finalPromptText;
 
           // Update the node with the new image
           const latestSession = get().session;
@@ -2646,10 +2838,10 @@ export const useStoryStore = create<StoryState>()(
               data: normalizeBeatMediaFields({
                 ...latestSession.storyMap.nodes[nodeId].data,
                 ...beatForRender,
-                imageUrl,
+                imageUrl: promptOnly ? undefined : imageResult.imageUrl,
                 persistedImageUrl: undefined,
                 isStoryboard: true,
-                imageStatus: 'pending',
+                imageStatus: promptOnly ? 'not_requested' : 'pending',
                 imageError: undefined,
               }),
             },
@@ -2667,12 +2859,12 @@ export const useStoryStore = create<StoryState>()(
           const saveUserId = user?.id || updatedSession.savedByUserId;
           const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
 
-          if (saveUserId && updatedSession.savedStoryId && runtimeSettings.storyIncrementalAssetSyncEnabled) {
+          if (saveUserId && updatedSession.savedStoryId && runtimeSettings.storyIncrementalAssetSyncEnabled && imageResult.imageUrl) {
             await putPendingBeatImage({
               storyId: updatedSession.savedStoryId,
               userId: saveUserId,
               nodeId,
-              imageDataUrl: imageUrl,
+              imageDataUrl: imageResult.imageUrl,
             });
             void retryPendingBeatAssetSyncInternal(updatedSession.savedStoryId);
           }
@@ -2930,6 +3122,223 @@ export const useStoryStore = create<StoryState>()(
           await stagePendingBeatImagesForSession(currentSession, userId, currentSession.savedStoryId);
         }
         await retryPendingBeatAssetSyncInternal(currentSession.savedStoryId);
+      },
+
+      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => {
+        const { session } = get();
+        if (!session) return;
+        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) return;
+
+        const previousBeat = normalizeBeatMediaFields(node.data);
+        const cap = Math.max(1, options?.maxImagesPerBeat ?? 3);
+        if ((previousBeat.imageGallery?.length ?? 0) >= cap) {
+          throw new Error(`You can only keep ${cap} images per beat. Delete one before uploading another.`);
+        }
+
+        const storageKeySuffix = `image-${crypto.randomUUID()}.webp`;
+        const uploadedAt = new Date().toISOString();
+
+        if (session.savedStoryId) {
+          const userId = await resolveCurrentUserId(session.savedByUserId);
+          if (userId) {
+            const storageKey = `${userId}/${session.savedStoryId}/${nodeId}/${storageKeySuffix}`;
+
+            // Optimistic local render — surface the chosen image instantly while the
+            // cloud upload runs in the background.
+            const optimisticGallery = [
+              ...(previousBeat.imageGallery ?? []),
+              { url: imageDataUrl, storageKey, uploadedAt },
+            ];
+            updateStoreSaveUi({
+              session: updateSessionBeat(session, nodeId, (beat) => ({
+                ...beat,
+                imageUrl: imageDataUrl,
+                persistedImageUrl: undefined,
+                imageStatus: 'pending',
+                imageError: undefined,
+                imageGallery: optimisticGallery,
+              })),
+              saveStatus: 'saving',
+            });
+
+            try {
+              const uploadedUrl = await uploadAsset('story-assets', storageKey, imageDataUrl);
+              const persistedGallery = optimisticGallery.map((entry) =>
+                entry.storageKey === storageKey ? { ...entry, url: uploadedUrl } : entry
+              );
+              await updateBeatMediaState(session.savedStoryId, nodeId, {
+                imageUrl: uploadedUrl,
+                imageStatus: 'ready',
+                imageError: null,
+                imageGallery: persistedGallery,
+              });
+
+              // Local store keeps the data URL for display because the bucket is
+              // private; the cloud URL only lives on persistedImageUrl + DB and is
+              // re-signed on the next page load.
+              const latestSession = get().session;
+              if (!latestSession) return;
+              updateStoreSaveUi({
+                session: updateSessionBeat(latestSession, nodeId, (beat) => ({
+                  ...beat,
+                  imageUrl: isDataUrl(beat.imageUrl) ? beat.imageUrl : uploadedUrl,
+                  persistedImageUrl: uploadedUrl,
+                  imageStatus: 'ready',
+                  imageError: undefined,
+                  imageGallery: optimisticGallery,
+                })),
+                saveStatus: 'saved',
+              });
+              return;
+            } catch (error) {
+              const latestSession = get().session;
+              if (latestSession) {
+                updateStoreSaveUi({
+                  session: updateSessionBeat(latestSession, nodeId, () => previousBeat),
+                });
+              }
+              throw error;
+            }
+          }
+        }
+
+        // Unsaved local-only fallback — gallery still grows so users see the image
+        // before any cloud sync happens. Storage key is provisional.
+        const provisionalKey = `pending/${nodeId}/${storageKeySuffix}`;
+        updateStoreSaveUi({
+          session: updateSessionBeat(session, nodeId, (beat) => ({
+            ...beat,
+            imageUrl: imageDataUrl,
+            persistedImageUrl: undefined,
+            imageStatus: 'pending',
+            imageError: undefined,
+            imageGallery: [
+              ...(previousBeat.imageGallery ?? []),
+              { url: imageDataUrl, storageKey: provisionalKey, uploadedAt },
+            ],
+          })),
+          saveStatus: 'unsaved',
+        });
+      },
+
+      selectPromptOnlyBeatImage: async (nodeId: string, storageKey: string) => {
+        const { session } = get();
+        if (!session) return;
+        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) return;
+        const beat = normalizeBeatMediaFields(node.data);
+        const target = beat.imageGallery?.find((entry) => entry.storageKey === storageKey);
+        if (!target) return;
+        if (beat.imageUrl === target.url) return;
+
+        if (session.savedStoryId) {
+          await updateBeatMediaState(session.savedStoryId, nodeId, {
+            imageUrl: target.url,
+            imageStatus: 'ready',
+            imageError: null,
+          });
+        }
+
+        const latestSession = get().session;
+        if (!latestSession) return;
+        updateStoreSaveUi({
+          session: updateSessionBeat(latestSession, nodeId, (existing) => ({
+            ...existing,
+            imageUrl: target.url,
+            persistedImageUrl: target.url,
+            imageStatus: 'ready',
+            imageError: undefined,
+          })),
+          saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
+        });
+      },
+
+      deletePromptOnlyBeatImage: async (nodeId: string) => {
+        const { session } = get();
+        if (!session) return;
+        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
+
+        if (session.savedStoryId) {
+          await updateBeatMediaState(session.savedStoryId, nodeId, {
+            imageUrl: null,
+            imageStatus: 'not_requested',
+            imageError: null,
+          });
+        }
+
+        const latestSession = get().session;
+        if (!latestSession) return;
+        updateStoreSaveUi({
+          session: updateSessionBeat(latestSession, nodeId, (beat) => ({
+            ...beat,
+            imageUrl: undefined,
+            persistedImageUrl: undefined,
+            imageStatus: 'not_requested',
+            imageError: undefined,
+          })),
+          saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
+        });
+      },
+
+      permanentlyDeletePromptOnlyBeatImage: async (nodeId: string, storageKey: string) => {
+        const { session } = get();
+        if (!session) return;
+        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) return;
+        const beat = normalizeBeatMediaFields(node.data);
+        const target = beat.imageGallery?.find((entry) => entry.storageKey === storageKey);
+        if (!target) return;
+
+        const remaining = (beat.imageGallery ?? []).filter((entry) => entry.storageKey !== storageKey);
+        // Compare by storage key, not URL — the local store keeps data URLs while DB
+        // holds public URLs and signed URLs are time-limited copies of either.
+        const activeStorageKey = getActiveGalleryStorageKey(beat);
+        const wasActive = activeStorageKey === storageKey;
+        const fallback = wasActive
+          ? [...remaining].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0]
+          : undefined;
+
+        if (!storageKey.startsWith('pending/')) {
+          await deleteAsset('story-assets', storageKey);
+        }
+
+        if (session.savedStoryId) {
+          await updateBeatMediaState(session.savedStoryId, nodeId, {
+            imageGallery: remaining,
+            ...(wasActive
+              ? {
+                  imageUrl: fallback?.url ?? null,
+                  imageStatus: fallback ? 'ready' : 'not_requested',
+                  imageError: null,
+                }
+              : {}),
+          });
+        }
+
+        const latestSession = get().session;
+        if (!latestSession) return;
+        updateStoreSaveUi({
+          session: updateSessionBeat(latestSession, nodeId, (existing) => ({
+            ...existing,
+            imageGallery: remaining,
+            ...(wasActive
+              ? {
+                  imageUrl: fallback?.url,
+                  persistedImageUrl: fallback?.url,
+                  imageStatus: fallback ? 'ready' : 'not_requested',
+                  imageError: undefined,
+                }
+              : {}),
+          })),
+          saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
+        });
       },
 
       clearPublishResult: () => {

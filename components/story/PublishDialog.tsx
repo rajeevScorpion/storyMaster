@@ -14,9 +14,17 @@ interface PublishDialogProps {
   isOpen: boolean;
   onClose: () => void;
   endingNodeId: string;
+  publishMode?: 'standard' | 'audio_story';
+  allowMissingImages?: boolean;
 }
 
-export default function PublishDialog({ isOpen, onClose, endingNodeId }: PublishDialogProps) {
+export default function PublishDialog({
+  isOpen,
+  onClose,
+  endingNodeId,
+  publishMode = 'standard',
+  allowMissingImages = false,
+}: PublishDialogProps) {
   const { user } = useAuth();
   const session = useStoryStore((state) => state.session);
   const [status, setStatus] = useState<'idle' | 'saving' | 'uploading' | 'publishing' | 'done' | 'error'>('idle');
@@ -27,8 +35,25 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
 
   const { storyMap } = session;
   const storylineData = extractStoryline(storyMap, endingNodeId);
+  const hasAllBeatImages = storylineData.beats.every((beat) => Boolean(beat.imageUrl || beat.persistedImageUrl));
+  const canPublish = allowMissingImages || hasAllBeatImages;
+  const dialogTitle = publishMode === 'audio_story' ? 'Publish Audio Story' : 'Publish Storyline';
+  const publishLabel = publishMode === 'audio_story' ? 'Publish Audio Story' : 'Publish Storyline';
+
+  const handleDialogClose = () => {
+    setStatus('idle');
+    setStorylineUrl(null);
+    setErrorMsg(null);
+    onClose();
+  };
 
   const handlePublish = async () => {
+    if (!canPublish) {
+      setErrorMsg('Add an image to every beat before publishing a full storyline.');
+      setStatus('error');
+      return;
+    }
+
     try {
       // Step 1: Save the story first if not yet saved
       let storyId = session.savedStoryId;
@@ -67,14 +92,21 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
         }
       }
 
-      // Step 4: Build beats with storage URLs
+      // Step 4: Build beats with storage URLs.
+      // Drop imageGallery (editor-only, may carry local data URLs from a fresh
+      // upload) and persistedImageUrl (transient local pointer). Anything left
+      // is needed by the storyline player.
       const beatsWithUrls: StoryBeat[] = storylineData.beats.map((beat, i) => {
         const nodeId = storylineData.path[i].id;
         const urls = assetMap[nodeId];
+        const resolvedImageUrl = urls?.imageUrl || beat.imageUrl;
+        const resolvedAudioUrl = urls?.audioUrl || beat.audioUrl;
+        const { imageGallery: _ig, persistedImageUrl: _pi, ...rest } = beat;
+        void _ig; void _pi;
         return {
-          ...beat,
-          imageUrl: urls?.imageUrl || beat.imageUrl,
-          audioUrl: urls?.audioUrl || beat.audioUrl,
+          ...rest,
+          imageUrl: resolvedImageUrl && resolvedImageUrl.startsWith('data:') ? undefined : resolvedImageUrl,
+          audioUrl: resolvedAudioUrl && resolvedAudioUrl.startsWith('data:') ? undefined : resolvedAudioUrl,
         };
       });
 
@@ -111,7 +143,7 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          onClick={status === 'done' || status === 'idle' || status === 'error' ? onClose : undefined}
+          onClick={status === 'done' || status === 'idle' || status === 'error' ? handleDialogClose : undefined}
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -123,9 +155,9 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
           >
             {/* Header */}
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-serif text-neutral-100">Publish Storyline</h2>
+              <h2 className="text-lg font-serif text-neutral-100">{dialogTitle}</h2>
               {(status === 'idle' || status === 'done' || status === 'error') && (
-                <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-full transition-colors">
+                <button onClick={handleDialogClose} className="p-1 hover:bg-white/10 rounded-full transition-colors">
                   <X className="w-4 h-4 text-neutral-400" />
                 </button>
               )}
@@ -135,7 +167,9 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
             {status === 'idle' && (
               <div className="space-y-4">
                 <p className="text-sm text-neutral-400">
-                  This will publish your storyline for everyone to discover and play.
+                  {publishMode === 'audio_story'
+                    ? 'This will publish your story as an audio-first storyline. Missing beat images will show a neutral placeholder in the player.'
+                    : 'This will publish your storyline for everyone to discover and play.'}
                 </p>
                 <div className="bg-white/5 rounded-xl p-3 space-y-1">
                   <p className="text-sm font-medium text-neutral-200">{session.title}</p>
@@ -143,19 +177,27 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
                     {storylineData.beats.length} beats &middot; {storylineData.choices.length} choices
                   </p>
                 </div>
+                {!canPublish && (
+                  <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-3">
+                    <p className="text-sm text-amber-200">
+                      Full storyline publishing needs an image on every beat. Upload the missing beat images first, or use audio-story publishing when it is enabled.
+                    </p>
+                  </div>
+                )}
                 <div className="flex gap-3 justify-end">
                   <button
-                    onClick={onClose}
+                    onClick={handleDialogClose}
                     className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handlePublish}
+                    disabled={!canPublish}
                     className="flex items-center gap-2 px-4 py-2 text-sm bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl hover:bg-emerald-500/30 transition-colors"
                   >
                     <Upload className="w-4 h-4" />
-                    Publish
+                    {publishLabel}
                   </button>
                 </div>
               </div>
@@ -176,7 +218,11 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
                   <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center">
                     <Check className="w-6 h-6 text-emerald-400" />
                   </div>
-                  <p className="text-sm text-neutral-300">Storyline published successfully!</p>
+                  <p className="text-sm text-neutral-300">
+                    {publishMode === 'audio_story'
+                      ? 'Audio story published successfully!'
+                      : 'Storyline published successfully!'}
+                  </p>
                 </div>
                 {storylineUrl && (
                   <a
@@ -188,7 +234,7 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
                   </a>
                 )}
                 <button
-                  onClick={onClose}
+                  onClick={handleDialogClose}
                   className="w-full px-4 py-2 text-sm text-neutral-500 hover:text-neutral-300 transition-colors"
                 >
                   Close
@@ -204,7 +250,7 @@ export default function PublishDialog({ isOpen, onClose, endingNodeId }: Publish
                 </div>
                 <div className="flex gap-3 justify-end">
                   <button
-                    onClick={onClose}
+                    onClick={handleDialogClose}
                     className="px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200 transition-colors"
                   >
                     Close

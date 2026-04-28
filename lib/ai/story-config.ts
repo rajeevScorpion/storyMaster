@@ -102,6 +102,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   ageGroup: 'all_ages',
   settingCountry: 'generic',
   maxBeats: 6,
+  imageGenerationMode: 'generate',
   visualSettings: DEFAULT_VISUAL_SETTINGS,
   authoring: DEFAULT_AUTHORING,
   portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
@@ -185,6 +186,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats: clampMaxBeats(input?.maxBeats),
+    imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
     visualSettings,
     authoring,
     portraitReferences,
@@ -394,6 +396,10 @@ function clampSeedBeatCount(value: number | undefined, fallback: number): number
 function clampMaxBeats(value?: number | null): number {
   if (typeof value !== 'number' || Number.isNaN(value)) return DEFAULT_STORY_CONFIG.maxBeats;
   return Math.min(8, Math.max(3, Math.round(value)));
+}
+
+function normalizeImageGenerationMode(value?: string | null): StoryConfig['imageGenerationMode'] {
+  return value === 'prompt_only' ? 'prompt_only' : DEFAULT_STORY_CONFIG.imageGenerationMode;
 }
 
 function normalizePortraitReferenceMode(value?: string | null): PortraitReferenceMode {

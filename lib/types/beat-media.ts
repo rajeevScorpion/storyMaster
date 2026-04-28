@@ -75,11 +75,18 @@ export function normalizeAudioMediaStatus(
   return DEFAULT_AUDIO_MEDIA_STATUS;
 }
 
+export interface BeatImageGalleryEntryShape {
+  url: string;
+  storageKey: string;
+  uploadedAt: string;
+}
+
 export function normalizeBeatMediaFields<T extends {
   imageUrl?: string;
   persistedImageUrl?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
+  imageGallery?: BeatImageGalleryEntryShape[];
   isStoryboard?: boolean;
   audioUrl?: string;
   audioStatus?: BeatMediaStatus;
@@ -88,6 +95,7 @@ export function normalizeBeatMediaFields<T extends {
   persistedImageUrl?: string;
   imageStatus: BeatMediaStatus;
   imageError?: string;
+  imageGallery: BeatImageGalleryEntryShape[];
   audioStatus: BeatMediaStatus;
   audioError?: string;
 } {
@@ -96,6 +104,7 @@ export function normalizeBeatMediaFields<T extends {
     persistedImageUrl: getBeatPersistedImageUrl(beat),
     imageStatus: normalizeImageMediaStatus(beat.imageStatus, beat.imageUrl, beat.persistedImageUrl, beat.isStoryboard),
     imageError: beat.imageError || undefined,
+    imageGallery: Array.isArray(beat.imageGallery) ? beat.imageGallery : [],
     audioStatus: normalizeAudioMediaStatus(beat.audioStatus, beat.audioUrl),
     audioError: beat.audioError || undefined,
   };
@@ -111,4 +120,41 @@ export function hasBeatImpossibleImageState<T extends {
     normalizeImageMediaStatus(beat.imageStatus, beat.imageUrl, beat.persistedImageUrl, beat.isStoryboard) === 'ready'
     && !getBeatPersistedImageUrl(beat)
   );
+}
+
+/**
+ * Pull the storage key out of a Supabase Storage URL (works for both public and
+ * signed URLs).
+ */
+export function extractStoryAssetStorageKey(url: string | undefined): string | null {
+  if (!url) return null;
+  const publicMarker = '/storage/v1/object/public/story-assets/';
+  const publicIdx = url.indexOf(publicMarker);
+  if (publicIdx !== -1) return url.substring(publicIdx + publicMarker.length);
+  const signedMarker = '/storage/v1/object/sign/story-assets/';
+  const signedIdx = url.indexOf(signedMarker);
+  if (signedIdx !== -1) {
+    const tail = url.substring(signedIdx + signedMarker.length);
+    const qIdx = tail.indexOf('?');
+    return qIdx !== -1 ? tail.substring(0, qIdx) : tail;
+  }
+  return null;
+}
+
+/**
+ * Resolve which storage key from a beat's gallery is currently the active image.
+ * Handles three cases:
+ *   - beat.imageUrl is a data URL → match the gallery entry whose url equals it
+ *   - beat.imageUrl is a public/signed URL → extract the storage key
+ *   - beat has no active image → null
+ */
+export function getActiveGalleryStorageKey<T extends {
+  imageUrl?: string;
+  imageGallery?: Array<{ url: string; storageKey: string }>;
+}>(beat: T): string | null {
+  if (!beat.imageUrl) return null;
+  const fromUrl = extractStoryAssetStorageKey(beat.imageUrl);
+  if (fromUrl) return fromUrl;
+  // Data URL or unrecognized format — fall back to direct URL match against the gallery.
+  return beat.imageGallery?.find((entry) => entry.url === beat.imageUrl)?.storageKey ?? null;
 }

@@ -55,6 +55,20 @@ export async function uploadAsset(
 }
 
 /**
+ * Remove an asset from a Supabase Storage bucket. Silent on errors so callers
+ * can still proceed with local state cleanup if the storage object is already
+ * gone or unreachable.
+ */
+export async function deleteAsset(bucket: string, path: string): Promise<void> {
+  if (!path) return;
+  const supabase = createClient();
+  const { error } = await supabase.storage.from(bucket).remove([path]);
+  if (error) {
+    console.warn(`Storage delete failed for ${bucket}/${path}:`, error.message);
+  }
+}
+
+/**
  * Check if a string is a base64 data URL (not an HTTP URL).
  */
 function isBase64DataUrl(url: string | undefined): boolean {
@@ -215,6 +229,13 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
   for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
     const persistedImageUrl = getBeatPersistedImageUrl(node.data);
     const persistedAudioUrl = getBeatPersistedAudioUrl(node.data);
+    const cleanedGallery = (node.data.imageGallery ?? [])
+      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
+      .map((entry) => ({
+        url: normalizeStorageUrl(entry.url, 'story-assets'),
+        storageKey: entry.storageKey,
+        uploadedAt: entry.uploadedAt,
+      }));
     cloned.nodes[nodeId] = {
       ...node,
       data: {
@@ -222,6 +243,7 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
         imageUrl: persistedImageUrl ? normalizeStorageUrl(persistedImageUrl, 'story-assets') : undefined,
         persistedImageUrl: undefined,
         audioUrl: persistedAudioUrl ? normalizeStorageUrl(persistedAudioUrl, 'story-assets') : undefined,
+        imageGallery: cleanedGallery,
         characters: node.data.characters.map(c => ({
           ...c,
           portraitBase64: undefined,
@@ -338,8 +360,11 @@ export async function signStoryMapAssetUrls(
   bucket = 'story-assets',
   expiresIn = 3600
 ): Promise<StoryMap> {
-  // Collect all paths that need signing
-  const pathEntries: { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string }[] = [];
+  type FieldEntry = { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string };
+  type GalleryEntry = { nodeId: string; galleryIdx: number; path: string };
+
+  const fieldEntries: FieldEntry[] = [];
+  const galleryEntries: GalleryEntry[] = [];
 
   for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
     for (const field of ['imageUrl', 'audioUrl'] as const) {
@@ -347,8 +372,17 @@ export async function signStoryMapAssetUrls(
       if (!url) continue;
       const storagePath = extractStoragePath(url, bucket);
       if (storagePath) {
-        pathEntries.push({ nodeId, field, path: storagePath });
+        fieldEntries.push({ nodeId, field, path: storagePath });
       }
+    }
+    const gallery = node.data.imageGallery;
+    if (Array.isArray(gallery)) {
+      gallery.forEach((entry, idx) => {
+        const path = extractStoragePath(entry.url, bucket);
+        if (path) {
+          galleryEntries.push({ nodeId, galleryIdx: idx, path });
+        }
+      });
     }
   }
 
@@ -359,15 +393,14 @@ export async function signStoryMapAssetUrls(
       const imgPath = extractStoragePath(node.data.imageUrl, bucket);
       if (imgPath) {
         const dir = imgPath.substring(0, imgPath.lastIndexOf('/'));
-        pathEntries.push({ nodeId, field: 'audioUrl', path: `${dir}/audio.wav` });
+        fieldEntries.push({ nodeId, field: 'audioUrl', path: `${dir}/audio.wav` });
       }
     }
   }
 
-  if (pathEntries.length === 0) return storyMap;
+  if (fieldEntries.length === 0 && galleryEntries.length === 0) return storyMap;
 
-  // Batch-create signed URLs
-  const paths = pathEntries.map((e) => e.path);
+  const paths = [...fieldEntries.map((e) => e.path), ...galleryEntries.map((e) => e.path)];
   const { data, error } = await supabase.storage
     .from(bucket)
     .createSignedUrls(paths, expiresIn);
@@ -377,11 +410,10 @@ export async function signStoryMapAssetUrls(
     return storyMap;
   }
 
-  // Build updated nodes
   const cloned: StoryMap = { ...storyMap, nodes: { ...storyMap.nodes } };
 
-  for (let i = 0; i < pathEntries.length; i++) {
-    const entry = pathEntries[i];
+  for (let i = 0; i < fieldEntries.length; i++) {
+    const entry = fieldEntries[i];
     const signed = data[i];
     if (signed.error || !signed.signedUrl) continue;
 
@@ -392,6 +424,22 @@ export async function signStoryMapAssetUrls(
         ...node.data,
         [entry.field]: signed.signedUrl,
       },
+    };
+  }
+
+  for (let i = 0; i < galleryEntries.length; i++) {
+    const entry = galleryEntries[i];
+    const signed = data[fieldEntries.length + i];
+    if (signed.error || !signed.signedUrl) continue;
+
+    const node = cloned.nodes[entry.nodeId];
+    const gallery = node.data.imageGallery ?? [];
+    const updatedGallery = gallery.map((g, idx) =>
+      idx === entry.galleryIdx ? { ...g, url: signed.signedUrl } : g
+    );
+    cloned.nodes[entry.nodeId] = {
+      ...node,
+      data: { ...node.data, imageGallery: updatedGallery },
     };
   }
 

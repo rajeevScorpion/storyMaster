@@ -28,6 +28,13 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageUrl: beat.image_url || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
+    imageGallery: Array.isArray(beat.image_gallery)
+      ? beat.image_gallery.map((entry) => ({
+          url: entry.url,
+          storageKey: entry.storage_key,
+          uploadedAt: entry.uploaded_at,
+        }))
+      : [],
     audioUrl: beat.audio_url || undefined,
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,
@@ -109,6 +116,8 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     newCharacterIds: beat.newCharacterIds || fallback.newCharacterIds,
     changedCharacterIds: beat.changedCharacterIds || fallback.changedCharacterIds,
     storyboardPlan: beat.storyboardPlan || fallback.storyboardPlan,
+    storyboardPromptText: beat.storyboardPromptText || fallback.storyboardPromptText,
+    finalImagePromptText: beat.finalImagePromptText || fallback.finalImagePromptText,
     narrationVoiceId: beat.narrationVoiceId || fallback.narrationVoiceId,
     originKind: beat.originKind || fallback.originKind,
     seedPlanBeatIndex: beat.seedPlanBeatIndex ?? fallback.seedPlanBeatIndex,
@@ -208,6 +217,8 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
+            ...(jsonbNode.data.storyboardPromptText ? { storyboardPromptText: jsonbNode.data.storyboardPromptText } : {}),
+            ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
             ...(jsonbNode.data.canonicalOptionId ? { canonicalOptionId: jsonbNode.data.canonicalOptionId } : {}),
