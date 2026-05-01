@@ -42,6 +42,8 @@ export interface AdminStoryResult {
   genre: string | null;
   status: string;
   is_archived: boolean;
+  is_vertical_story: boolean;
+  aspect_ratio: string;
   cover_image_url: string | null;
   created_at: string;
   updated_at: string;
@@ -55,6 +57,8 @@ export interface AdminStorylineResult {
   author_name: string | null;
   is_public: boolean;
   beat_count: number;
+  is_vertical_story: boolean;
+  aspect_ratio: string;
   like_count: number;
   view_count: number;
   cover_image_url: string | null;
@@ -70,7 +74,7 @@ export async function searchStories(
 
   let q = supabase
     .from('stories')
-    .select('id, title, user_id, genre, status, is_archived, cover_image_url, created_at, updated_at')
+    .select('id, title, user_id, genre, status, is_archived, is_vertical_story, aspect_ratio, cover_image_url, created_at, updated_at')
     .order('created_at', { ascending: false })
     .limit(50);
 
@@ -109,7 +113,7 @@ export async function searchStorylines(
 
   let q = supabase
     .from('storylines')
-    .select('id, story_id, user_id, title, author_name, is_public, beat_count, like_count, view_count, cover_image_url, created_at')
+    .select('id, story_id, user_id, title, author_name, is_public, beat_count, is_vertical_story, aspect_ratio, like_count, view_count, cover_image_url, created_at')
     .order('created_at', { ascending: false })
     .limit(50);
 
@@ -257,6 +261,7 @@ export async function getGlobalSettings(): Promise<{
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   storyPromptOnlyModeEnabled: boolean;
+  verticalStoriesSettingEnabled: boolean;
   audioStorylinePublishEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
@@ -277,7 +282,7 @@ export async function getGlobalSettings(): Promise<{
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -294,6 +299,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('story_prompt_only_mode_enabled', false),
+    getFeatureFlag('vertical_stories_setting_enabled', false),
     getFeatureFlag('audio_storyline_publish_enabled', false),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
@@ -341,6 +347,7 @@ export async function getGlobalSettings(): Promise<{
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     storyPromptOnlyModeEnabled,
+    verticalStoriesSettingEnabled,
     audioStorylinePublishEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,
@@ -470,6 +477,11 @@ export async function setCreatorCharacterSheets(enabled: boolean): Promise<void>
 export async function setStoryPromptOnlyModeEnabled(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('story_prompt_only_mode_enabled', enabled);
+}
+
+export async function setVerticalStoriesSettingEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('vertical_stories_setting_enabled', enabled);
 }
 
 export async function setAudioStorylinePublishEnabled(enabled: boolean): Promise<void> {
@@ -631,6 +643,7 @@ export async function getStoryboardSettings(): Promise<{
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   storyPromptOnlyModeEnabled: boolean;
+  verticalStoriesSettingEnabled: boolean;
   audioStorylinePublishEnabled: boolean;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
@@ -643,7 +656,7 @@ export async function getStoryboardSettings(): Promise<{
   promptOnlyImageGalleryCleanupEnabled: boolean;
   promptOnlyImageGalleryCleanupDays: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -661,6 +674,7 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('story_prompt_only_mode_enabled', false),
+    getFeatureFlag('vertical_stories_setting_enabled', false),
     getFeatureFlag('audio_storyline_publish_enabled', false),
     getFeatureFlag('video_download_enabled'),
     getFeatureFlag('video_download_admin_bypass'),
@@ -702,6 +716,7 @@ export async function getStoryboardSettings(): Promise<{
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     storyPromptOnlyModeEnabled,
+    verticalStoriesSettingEnabled,
     audioStorylinePublishEnabled,
     videoDownloadEnabled,
     videoDownloadAdminBypass,

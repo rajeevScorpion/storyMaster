@@ -143,6 +143,7 @@ export type StoryPalette =
 
 export type StoryDetailLevel = 'simple' | 'balanced' | 'lush';
 export type SourceFidelity = 'preserve_closely' | 'balanced_adaptation' | 'creative_expansion';
+export type StoryAspectRatio = '16:9' | '9:16';
 
 export interface VisualSettings {
   preset: VisualStylePreset;
@@ -169,6 +170,8 @@ export interface StoryConfig {
   maxBeats: number;
   language: StoryLanguage;
   imageGenerationMode: 'generate' | 'prompt_only';
+  isVerticalStory: boolean;
+  aspectRatio: StoryAspectRatio;
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
   portraitReferences: PortraitReferenceConfig;

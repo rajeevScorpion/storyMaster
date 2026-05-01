@@ -103,7 +103,7 @@ export default async function StorylinePage({ params }: PageProps) {
   const likeCount = storyline.like_count ?? 0;
 
   // Load beats via junction table (falls back to JSONB) with fresh signed URLs
-  const { beats, choices } = await loadStorylineWithBeats(id);
+  const { storyline: loadedStoryline, beats, choices } = await loadStorylineWithBeats(id);
 
   return (
     <Suspense>
@@ -111,6 +111,8 @@ export default async function StorylinePage({ params }: PageProps) {
         storylineId={storyline.id}
         storyId={storyline.story_id}
         title={storyline.title}
+        isVerticalStory={loadedStoryline.is_vertical_story === true || loadedStoryline.aspect_ratio === '9:16'}
+        aspectRatio={loadedStoryline.aspect_ratio === '9:16' ? '9:16' : '16:9'}
         beats={beats}
         choices={choices as StorylineChoice[]}
         authorName={storyline.author_name}

@@ -25,6 +25,7 @@ export default function GalleryItemCard({
   onAuthRequired,
 }: GalleryItemCardProps) {
   const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
+  const isVerticalCard = item.isVerticalStory || item.aspectRatio === '9:16';
   const canPreviewStoryboard = item.type === 'storyline' && !!item.coverImageUrl;
   const storyboardPreview = useStoryboardThumbnailPreview(canPreviewStoryboard);
 
@@ -54,12 +55,14 @@ export default function GalleryItemCard({
   };
 
   return (
-    <Link href={href} onClick={handleClick}>
+    <Link href={href} onClick={handleClick} className="block h-full">
       <motion.div
         {...storyboardPreview.previewHandlers}
         whileHover={{ scale: 1.02 }}
         transition={{ duration: 0.2 }}
-        className="relative group rounded-2xl overflow-hidden border border-white/5 hover:border-emerald-500/30 transition-all duration-300 bg-neutral-900 h-full"
+        className={`relative group overflow-hidden rounded-2xl border border-white/5 bg-neutral-900 transition-all duration-300 hover:border-emerald-500/30 ${
+          isVerticalCard ? 'h-full w-full' : 'h-full'
+        }`}
       >
         {!item.coverImageUrl && (
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.22),transparent_42%),linear-gradient(180deg,rgba(38,38,38,0.72),rgba(10,10,10,0.98))]">
@@ -103,10 +106,12 @@ export default function GalleryItemCard({
             className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
               item.type === 'tree'
                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                : isVerticalCard
+                ? 'bg-sky-500/20 text-sky-200 border border-sky-400/30'
                 : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
             }`}
           >
-            {item.type === 'tree' ? 'Explore' : 'Experience'}
+            {item.type === 'tree' ? 'Explore' : isVerticalCard ? 'Vertical' : 'Experience'}
           </span>
         </div>
 

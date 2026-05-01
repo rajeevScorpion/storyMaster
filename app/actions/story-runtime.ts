@@ -1,6 +1,6 @@
 'use client';
 
-import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig } from '@/lib/types/story';
+import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
 import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
 import {
@@ -22,7 +22,15 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { PORTRAIT_MAX_WIDTH, PORTRAIT_MAX_HEIGHT, PORTRAIT_QUALITY, STORYBOARD_MAX_WIDTH, STORYBOARD_MAX_HEIGHT } from '@/lib/constants/media';
+import {
+  PORTRAIT_MAX_WIDTH,
+  PORTRAIT_MAX_HEIGHT,
+  PORTRAIT_QUALITY,
+  STORYBOARD_MAX_WIDTH,
+  STORYBOARD_MAX_HEIGHT,
+  STORYBOARD_VERTICAL_MAX_WIDTH,
+  STORYBOARD_VERTICAL_MAX_HEIGHT,
+} from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import {
@@ -41,6 +49,49 @@ const STORYBOARD_LAYOUT_HARD_REQUIREMENTS = [
   '- If a named character is absent from a panel, omit them instead of cloning them into the composition.',
   '- Preserve one-to-one identity for every named character across all four panels.',
 ].join('\n');
+
+const STORYBOARD_LAYOUT_COMMON_REQUIREMENTS = [
+  '- Panels must touch the thin dark dividers directly; no white, cream, transparent, or empty gutters.',
+  '- Do not add outer padding, matting, margins, rounded frames, poster borders, page borders, or whitespace around the grid.',
+  '- Use only thin dark divider lines between panels; if dividers are visible, they must be black or near-black.',
+  '- Each panel artwork must fill its full quadrant edge-to-edge.',
+  '- Never duplicate a named character unless the story brief explicitly requires multiple copies of that same character.',
+  '- If a named character is absent from a panel, omit them instead of cloning them into the composition.',
+  '- Preserve one-to-one identity for every named character across all four panels.',
+].join('\n');
+
+const VERTICAL_STORY_PROMPT_INSTRUCTION = [
+  'Create the image in vertical portrait orientation, 9:16 aspect ratio, mobile-first composition, suitable for Instagram Reels, Facebook Reels, and YouTube Shorts.',
+  'Keep the subject framed clearly for a phone screen.',
+  'Maintain the existing storyboard-style visual composition unless otherwise specified.',
+].join(' ');
+
+interface StoryboardImagePromptOptions {
+  aspectRatio?: StoryAspectRatio;
+}
+
+function normalizeStoryboardAspectRatio(aspectRatio?: StoryAspectRatio | string | null): StoryAspectRatio {
+  return aspectRatio === '9:16' ? '9:16' : '16:9';
+}
+
+function getStoryboardLayoutHardRequirements(aspectRatio?: StoryAspectRatio | string | null): string {
+  const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
+  if (resolvedAspectRatio === '16:9') {
+    return STORYBOARD_LAYOUT_HARD_REQUIREMENTS;
+  }
+
+  return [
+    'Storyboard layout hard requirements:',
+    '- Output a full-bleed 9:16 vertical portrait image containing exactly four equal panels in a 2x2 storyboard grid.',
+    STORYBOARD_LAYOUT_COMMON_REQUIREMENTS,
+  ].join('\n');
+}
+
+function getStoryboardMaxDimensions(aspectRatio?: StoryAspectRatio | string | null): { width: number; height: number } {
+  return normalizeStoryboardAspectRatio(aspectRatio) === '9:16'
+    ? { width: STORYBOARD_VERTICAL_MAX_WIDTH, height: STORYBOARD_VERTICAL_MAX_HEIGHT }
+    : { width: STORYBOARD_MAX_WIDTH, height: STORYBOARD_MAX_HEIGHT };
+}
 
 function runtimeNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -448,8 +499,10 @@ function buildFallbackStoryboardPlan(
 async function maybeProcessStoryboardImage(
   dataUrl: string,
   settings: StoryboardImageQualitySettings,
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  aspectRatio: StoryAspectRatio = '16:9'
 ): Promise<string> {
+  const dimensions = getStoryboardMaxDimensions(aspectRatio);
   const sanitizedDataUrl = await timeRuntimeStep(
     'story_runtime.generate_image.sanitize_storyboard_grid',
     meta,
@@ -464,6 +517,7 @@ async function maybeProcessStoryboardImage(
       ...meta,
       skipped: true,
       reason: !settings.clientProcessingEnabled ? 'client_processing_disabled' : 'webp_compression_disabled',
+      aspectRatio,
     });
     return sanitizedDataUrl;
   }
@@ -472,14 +526,15 @@ async function maybeProcessStoryboardImage(
     'story_runtime.generate_image.compress',
     {
       ...meta,
-      width: STORYBOARD_MAX_WIDTH,
-      height: STORYBOARD_MAX_HEIGHT,
+      width: dimensions.width,
+      height: dimensions.height,
       webpQualityPercent: settings.webpQualityPercent,
+      aspectRatio,
     },
     () => compressImage(
       sanitizedDataUrl,
-      STORYBOARD_MAX_WIDTH,
-      STORYBOARD_MAX_HEIGHT,
+      dimensions.width,
+      dimensions.height,
       settings.webpQualityPercent / 100
     )
   );
@@ -650,22 +705,30 @@ export function buildFinalStoryboardImagePrompt(
   characters: Character[],
   visualStyle: string,
   beatNumber: number | undefined,
-  modelOverrides?: StoryModelOverrides
+  modelOverrides?: StoryModelOverrides,
+  options?: StoryboardImagePromptOptions
 ): string {
+  const aspectRatio = normalizeStoryboardAspectRatio(options?.aspectRatio);
   const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
   const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
     ? imageTemplateCandidate
     : getDefaultPromptBody('image_generation');
 
-  return [
+  const promptParts = [
     resolvePromptTemplate(imageTemplate, {
       prompt,
       characters: buildPromptCharacterAnchors(characters),
       visualStyle,
       beatNumber,
     }),
-    STORYBOARD_LAYOUT_HARD_REQUIREMENTS,
-  ].join('\n\n');
+  ];
+
+  if (aspectRatio === '9:16') {
+    promptParts.push(VERTICAL_STORY_PROMPT_INSTRUCTION);
+  }
+
+  promptParts.push(getStoryboardLayoutHardRequirements(aspectRatio));
+  return promptParts.join('\n\n');
 }
 
 function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined): string {
@@ -696,15 +759,21 @@ export async function generateImage(
   modelOverrides?: StoryModelOverrides,
   referenceImages?: ReferenceImage[],
   beatNumber?: number,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  aspectRatio: StoryAspectRatio = '16:9'
 ): Promise<GeneratedImageResult> {
+  const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
   const finalImagePrompt = buildFinalStoryboardImagePrompt(
     prompt,
     characters,
     visualStyle,
     beatNumber,
-    modelOverrides
+    modelOverrides,
+    { aspectRatio: resolvedAspectRatio }
   );
+  const fallbackSize = resolvedAspectRatio === '9:16'
+    ? { width: 1080, height: 1920 }
+    : { width: 1920, height: 1080 };
 
   if (
     prompt.includes("Cinematic children's storybook illustration") ||
@@ -712,7 +781,7 @@ export async function generateImage(
   ) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     return {
-      imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`,
+      imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/${fallbackSize.width}/${fallbackSize.height}?blur=4`,
       finalPromptText: finalImagePrompt,
     };
   }
@@ -724,6 +793,7 @@ export async function generateImage(
         beatNumber: beatNumber ?? null,
         characterCount: characters.length,
         referenceCount: referenceImages?.length ?? 0,
+        aspectRatio: resolvedAspectRatio,
       },
       async () => {
         const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
@@ -737,13 +807,14 @@ export async function generateImage(
             beatNumber: beatNumber ?? null,
             referencePartCount: referenceParts.length,
             hasRetryFallback: false,
+            aspectRatio: resolvedAspectRatio,
           },
           () => callGeminiImage({
             task: 'image_generation',
             model: imageModel,
             prompt: finalImagePrompt,
             referenceParts,
-            aspectRatio: '16:9',
+            aspectRatio: resolvedAspectRatio,
             imageSize,
             telemetry: costTelemetry,
           })
@@ -756,7 +827,9 @@ export async function generateImage(
             {
               beatNumber: beatNumber ?? null,
               imageSize,
-            }
+              aspectRatio: resolvedAspectRatio,
+            },
+            resolvedAspectRatio
           );
           return {
             imageUrl,
@@ -765,20 +838,25 @@ export async function generateImage(
         }
 
         if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
-          const retryPrompt = [result.fallbackText, STORYBOARD_LAYOUT_HARD_REQUIREMENTS].join('\n\n');
+          const retryPrompt = [
+            result.fallbackText,
+            ...(resolvedAspectRatio === '9:16' ? [VERTICAL_STORY_PROMPT_INSTRUCTION] : []),
+            getStoryboardLayoutHardRequirements(resolvedAspectRatio),
+          ].join('\n\n');
           const retryResult = await timeRuntimeStep(
             'story_runtime.generate_image.gemini_retry',
             {
               beatNumber: beatNumber ?? null,
               referencePartCount: referenceParts.length,
               hasRetryFallback: true,
+              aspectRatio: resolvedAspectRatio,
             },
             () => callGeminiImage({
               task: 'image_generation',
               model: imageModel,
               prompt: retryPrompt,
               referenceParts,
-              aspectRatio: '16:9',
+              aspectRatio: resolvedAspectRatio,
               imageSize,
               telemetry: costTelemetry,
             })
@@ -791,7 +869,9 @@ export async function generateImage(
                 beatNumber: beatNumber ?? null,
                 imageSize,
                 retry: true,
-              }
+                aspectRatio: resolvedAspectRatio,
+              },
+              resolvedAspectRatio
             );
             return {
               imageUrl,
@@ -806,7 +886,7 @@ export async function generateImage(
   } catch (error) {
     console.error('Image generation failed:', error);
     return {
-      imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/1920/1080?blur=4`,
+      imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/${fallbackSize.width}/${fallbackSize.height}?blur=4`,
       finalPromptText: finalImagePrompt,
     };
   }

@@ -27,6 +27,28 @@ function truncateId(id: string) {
   return id.length > 12 ? `${id.slice(0, 8)}...` : id;
 }
 
+function isVerticalStoryRecord(item: { is_vertical_story?: boolean; aspect_ratio?: string }) {
+  return item.is_vertical_story === true || item.aspect_ratio === '9:16';
+}
+
+function OrientationBadge({ item }: { item: { is_vertical_story?: boolean; aspect_ratio?: string } }) {
+  const isVertical = isVerticalStoryRecord(item);
+  return (
+    <div className="flex flex-col gap-1">
+      <span className={`inline-flex w-fit rounded px-2 py-0.5 text-xs ${
+        isVertical
+          ? 'bg-sky-500/20 text-sky-200'
+          : 'bg-neutral-700/50 text-neutral-400'
+      }`}>
+        {isVertical ? 'Vertical Story' : 'Landscape'}
+      </span>
+      <span className="text-[11px] text-neutral-500">
+        {item.aspect_ratio || (isVertical ? '9:16' : '16:9')} / {String(item.is_vertical_story === true)}
+      </span>
+    </div>
+  );
+}
+
 export default function ContentPage() {
   const [tab, setTab] = useState<Tab>('storylines');
   const [query, setQuery] = useState('');
@@ -288,6 +310,7 @@ function StorylineResults({
             <th className="px-4 py-3 font-medium">Title</th>
             <th className="px-4 py-3 font-medium">Author</th>
             <th className="px-4 py-3 font-medium">Story ID</th>
+            <th className="px-4 py-3 font-medium">Orientation</th>
             <th className="px-4 py-3 font-medium">Public</th>
             <th className="px-4 py-3 font-medium text-right">Beats</th>
             <th className="px-4 py-3 font-medium text-right">Views</th>
@@ -305,6 +328,9 @@ function StorylineResults({
                 <code className="text-xs text-neutral-500 bg-white/5 px-1.5 py-0.5 rounded" title={item.story_id}>
                   {truncateId(item.story_id)}
                 </code>
+              </td>
+              <td className="px-4 py-3">
+                <OrientationBadge item={item} />
               </td>
               <td className="px-4 py-3">
                 <span className={`inline-block px-2 py-0.5 rounded text-xs ${
@@ -366,6 +392,7 @@ function StoryResults({
             <th className="px-4 py-3 font-medium">Title</th>
             <th className="px-4 py-3 font-medium">Author</th>
             <th className="px-4 py-3 font-medium">Genre</th>
+            <th className="px-4 py-3 font-medium">Orientation</th>
             <th className="px-4 py-3 font-medium">Status</th>
             <th className="px-4 py-3 font-medium">Archived</th>
             <th className="px-4 py-3 font-medium">Created</th>
@@ -378,6 +405,9 @@ function StoryResults({
               <td className="px-4 py-3 text-neutral-200 max-w-48 truncate" title={item.title}>{item.title}</td>
               <td className="px-4 py-3 text-neutral-400">{item.author_name || '—'}</td>
               <td className="px-4 py-3 text-neutral-400 capitalize">{item.genre || '—'}</td>
+              <td className="px-4 py-3">
+                <OrientationBadge item={item} />
+              </td>
               <td className="px-4 py-3">
                 <span className={`inline-block px-2 py-0.5 rounded text-xs ${
                   item.status === 'active'

@@ -164,6 +164,8 @@ interface StorylinePlayerProps {
   storylineId: string;
   storyId: string;
   title: string;
+  isVerticalStory?: boolean;
+  aspectRatio?: '16:9' | '9:16';
   beats: StoryBeat[];
   choices: StorylineChoice[];
   authorName: string | null;
@@ -178,6 +180,8 @@ export default function StorylinePlayer({
   storylineId,
   storyId,
   title,
+  isVerticalStory = false,
+  aspectRatio = '16:9',
   beats,
   choices,
   authorName,
@@ -187,6 +191,7 @@ export default function StorylinePlayer({
   likeCount: initialLikeCount = 0,
   isLoggedIn = false,
 }: StorylinePlayerProps) {
+  const isVerticalStoryline = isVerticalStory || aspectRatio === '9:16';
   const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(() => {
     if (typeof window === 'undefined') return 0;
@@ -341,6 +346,7 @@ export default function StorylinePlayer({
   const currentBeat = currentBeats[currentIndex];
   const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
+  const visualKey = displayImageUrl ?? `storyline-${currentIndex}`;
   const {
     scrollRef: storyScrollRef,
     isAutoScrolling,
@@ -485,7 +491,7 @@ export default function StorylinePlayer({
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
           <motion.div
-            key={displayImageUrl ?? `storyline-${currentIndex}`}
+            key={visualKey}
             initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
             animate={isStoryboard ? { opacity: 1, scale: [1, 1.06] } : { opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
@@ -493,10 +499,13 @@ export default function StorylinePlayer({
               opacity: { duration: 1.5, ease: 'easeOut' },
               scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
             }}
-            className="absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none"
+            className={isVerticalStoryline ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
+            <div className={isVerticalStoryline ? 'absolute inset-0 md:scale-110 md:blur-2xl' : 'contents'}>
             {isStoryboard ? (
-              <div className={`absolute inset-0 transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}>
+              <div className={`absolute inset-0 transition-opacity duration-500 ${
+                isVerticalStoryline ? (isMinimized ? 'opacity-95 md:opacity-60' : 'opacity-95 md:opacity-40') : (isMinimized ? 'opacity-60' : 'opacity-40')
+              }`}>
                 <StoryboardCycler
                   key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                   gridUrl={currentBeat.imageUrl!}
@@ -513,7 +522,9 @@ export default function StorylinePlayer({
                 src={displayImageUrl}
                 alt={currentBeat.sceneSummary}
                 fill
-                className={`object-cover transition-opacity duration-500 ${isMinimized ? 'opacity-60' : 'opacity-40'}`}
+                className={`object-cover transition-opacity duration-500 ${
+                  isVerticalStoryline ? (isMinimized ? 'opacity-95 md:opacity-60' : 'opacity-95 md:opacity-40') : (isMinimized ? 'opacity-60' : 'opacity-40')
+                }`}
                 referrerPolicy="no-referrer"
                 priority
                 unoptimized
@@ -528,6 +539,35 @@ export default function StorylinePlayer({
                   <p className="mt-3 text-sm leading-relaxed text-neutral-300">
                     This beat was published without a storyboard image. Narration and text continue normally.
                   </p>
+                </div>
+              </div>
+            )}
+            </div>
+            {isVerticalStoryline && displayImageUrl && (
+              <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
+                <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
+                  {isStoryboard ? (
+                    <StoryboardCycler
+                      key={`vertical-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                      gridUrl={currentBeat.imageUrl!}
+                      audioUrl={currentBeat.audioUrl || undefined}
+                      cycleOverride={cycleSettings.cycleOverride}
+                      cycleMs={cycleSettings.cycleMs}
+                      vignetteEnabled={cycleSettings.vignetteEnabled}
+                      vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+                      playbackState={playbackState}
+                    />
+                  ) : (
+                    <Image
+                      src={displayImageUrl}
+                      alt={currentBeat.sceneSummary}
+                      fill
+                      className="object-cover"
+                      referrerPolicy="no-referrer"
+                      priority
+                      unoptimized
+                    />
+                  )}
                 </div>
               </div>
             )}
@@ -735,7 +775,7 @@ export default function StorylinePlayer({
           )}
         </AnimatePresence>
 
-        <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
+        <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStoryline ? 'hidden' : 'flex'}`}>
           <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
             {isStoryboard ? (
               <StoryboardCycler
@@ -925,21 +965,23 @@ export default function StorylinePlayer({
                 )}
               </button>
 
-              <button
-                onClick={toggleFullscreen}
-                className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
-                  isFullscreen
-                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                    : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
-                }`}
-                title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen landscape'}
-              >
-                {isFullscreen ? (
-                  <Minimize2 className={MOBILE_CONTROL_ICON_CLASS} />
-                ) : (
-                  <Maximize2 className={MOBILE_CONTROL_ICON_CLASS} />
-                )}
-              </button>
+              {!isVerticalStoryline && (
+                <button
+                  onClick={toggleFullscreen}
+                  className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
+                    isFullscreen
+                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                      : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                  title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen landscape'}
+                >
+                  {isFullscreen ? (
+                    <Minimize2 className={MOBILE_CONTROL_ICON_CLASS} />
+                  ) : (
+                    <Maximize2 className={MOBILE_CONTROL_ICON_CLASS} />
+                  )}
+                </button>
+              )}
             </div>
 
             {/* Beat dots — mobile */}

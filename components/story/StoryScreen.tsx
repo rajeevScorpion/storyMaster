@@ -163,7 +163,8 @@ function isFallbackImageUrl(url: string | undefined): boolean {
 
 const PROMPT_ONLY_ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 const PROMPT_ONLY_MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
-const PROMPT_ONLY_TARGET_ASPECT_RATIO = 16 / 9;
+const PROMPT_ONLY_LANDSCAPE_ASPECT_RATIO = 16 / 9;
+const PROMPT_ONLY_VERTICAL_ASPECT_RATIO = 9 / 16;
 const PROMPT_ONLY_ASPECT_RATIO_TOLERANCE = 0.03;
 
 type PromptOnlyUploadPreview = {
@@ -193,16 +194,26 @@ function buildCharacterPromptCopyItems(beat: StoryBeat): Array<{ key: string; la
     .filter((task) => task.promptText);
 }
 
-function hasRequiredPromptOnlyAspectRatio(width: number, height: number): boolean {
+function hasRequiredPromptOnlyAspectRatio(width: number, height: number, targetRatio: number): boolean {
   if (width <= 0 || height <= 0) {
     return false;
   }
 
   const ratio = width / height;
-  return Math.abs(ratio - PROMPT_ONLY_TARGET_ASPECT_RATIO) <= PROMPT_ONLY_ASPECT_RATIO_TOLERANCE;
+  return Math.abs(ratio - targetRatio) <= PROMPT_ONLY_ASPECT_RATIO_TOLERANCE;
 }
 
-function getPromptOnlyResolutionAdvice(width: number, height: number): string {
+function getPromptOnlyResolutionAdvice(width: number, height: number, isVerticalStory: boolean): string {
+  if (isVerticalStory) {
+    if (width >= 1152 && height >= 2048) {
+      return 'Strong for larger phone screens.';
+    }
+    if (width >= 720 && height >= 1280) {
+      return 'Good for smaller phone screens. For larger screens, 1152x2048 or above is recommended.';
+    }
+    return 'Below the recommended minimum. Use at least 720x1280, and 1152x2048 for larger screens.';
+  }
+
   if (width >= 2048 && height >= 1152) {
     return 'Strong for larger screens.';
   }
@@ -236,7 +247,7 @@ function readImageDimensions(dataUrl: string): Promise<{ width: number; height: 
   });
 }
 
-async function validatePromptOnlyImageFile(file: File): Promise<PromptOnlyUploadPreview> {
+async function validatePromptOnlyImageFile(file: File, isVerticalStory: boolean): Promise<PromptOnlyUploadPreview> {
   if (!PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof PROMPT_ONLY_ACCEPTED_IMAGE_TYPES)[number])) {
     throw new Error('Use a JPG, PNG, or WebP image.');
   }
@@ -248,8 +259,10 @@ async function validatePromptOnlyImageFile(file: File): Promise<PromptOnlyUpload
   const dataUrl = await readFileAsDataUrl(file);
   const { width, height } = await readImageDimensions(dataUrl);
 
-  if (!hasRequiredPromptOnlyAspectRatio(width, height)) {
-    throw new Error('Image must use a 16:9 aspect ratio.');
+  const targetRatio = isVerticalStory ? PROMPT_ONLY_VERTICAL_ASPECT_RATIO : PROMPT_ONLY_LANDSCAPE_ASPECT_RATIO;
+  const requiredAspectRatio = isVerticalStory ? '9:16' : '16:9';
+  if (!hasRequiredPromptOnlyAspectRatio(width, height, targetRatio)) {
+    throw new Error(`Image must use a ${requiredAspectRatio} aspect ratio.`);
   }
 
   return {
@@ -259,7 +272,7 @@ async function validatePromptOnlyImageFile(file: File): Promise<PromptOnlyUpload
     mimeType: file.type,
     width,
     height,
-    resolutionAdvice: getPromptOnlyResolutionAdvice(width, height),
+    resolutionAdvice: getPromptOnlyResolutionAdvice(width, height, isVerticalStory),
   };
 }
 
@@ -554,10 +567,12 @@ function StoryScreenInner({
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
   const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || getBeatDisplayImageUrl(normalizedCurrentBeat);
   const imageKey = normalizedCurrentBeat.imageUrl || displayImageUrl;
+  const visualKey = displayImageUrl ?? currentNodeId;
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
   const showPendingImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'pending';
   const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showPendingImageState;
@@ -761,7 +776,9 @@ function StoryScreenInner({
     }
   }, [focusedOptionIndex]);
 
-  const backgroundImageOpacity = isLoading
+  const backgroundImageOpacity = isVerticalStory
+    ? (isLoading ? 'opacity-95 md:opacity-70' : (isMinimized ? 'opacity-90 md:opacity-60' : 'opacity-90 md:opacity-40'))
+    : isLoading
     ? (isMinimized ? 'opacity-85' : 'opacity-70')
     : (isMinimized ? 'opacity-60' : 'opacity-40');
   const backgroundGradientClass = isLoading
@@ -805,7 +822,7 @@ function StoryScreenInner({
 
     setUploadError(null);
     try {
-      const validated = await validatePromptOnlyImageFile(file);
+      const validated = await validatePromptOnlyImageFile(file, isVerticalStory);
       setUploadPreview(validated);
     } catch (error: any) {
       setUploadPreview(null);
@@ -813,7 +830,7 @@ function StoryScreenInner({
     } finally {
       event.target.value = '';
     }
-  }, []);
+  }, [isVerticalStory]);
 
   const handlePromptOnlyUpload = useCallback(async () => {
     if (!uploadPreview) {
@@ -874,7 +891,7 @@ function StoryScreenInner({
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
           <motion.div
-            key={displayImageUrl ?? currentNodeId}
+            key={visualKey}
             initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
             animate={isStoryboard ? { opacity: 1 } : { opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
@@ -882,8 +899,9 @@ function StoryScreenInner({
               opacity: { duration: 1.5, ease: "easeOut" },
               scale: { duration: 20, ease: "easeInOut", repeat: Infinity, repeatType: "reverse" },
             }}
-            className="absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none"
+            className={isVerticalStory ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
+            <div className={isVerticalStory ? 'absolute inset-0 md:scale-110 md:blur-2xl' : 'contents'}>
             {isStoryboard ? (
               <StoryboardCycler
                 key={`${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
@@ -909,6 +927,39 @@ function StoryScreenInner({
                 onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                 onError={() => setFailedImageUrl(displayImageUrl)}
               />
+            )}
+            </div>
+            {isVerticalStory && displayImageUrl && (
+              <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
+                <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
+                  {isStoryboard ? (
+                    <StoryboardCycler
+                      key={`vertical-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+                      gridUrl={normalizedCurrentBeat.imageUrl!}
+                      audioUrl={normalizedCurrentBeat.audioUrl}
+                      cycleOverride={cycleSettings.cycleOverride}
+                      cycleMs={cycleSettings.cycleMs}
+                      vignetteEnabled={cycleSettings.vignetteEnabled}
+                      vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+                      playbackState={playbackState}
+                      onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
+                      onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
+                    />
+                  ) : (
+                    <Image
+                      src={displayImageUrl}
+                      alt={currentBeat.sceneSummary}
+                      fill
+                      className="object-cover"
+                      referrerPolicy="no-referrer"
+                      priority
+                      unoptimized
+                      onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
+                      onError={() => setFailedImageUrl(displayImageUrl)}
+                    />
+                  )}
+                </div>
+              </div>
             )}
             <motion.div
               initial={false}
@@ -1008,7 +1059,7 @@ function StoryScreenInner({
 
       {/* Main Content */}
       <main className={`relative z-10 flex-1 flex flex-col px-4 pb-4 pt-1 md:justify-end md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
-        <div className="flex min-h-0 flex-none items-start justify-center pb-3 md:hidden">
+        <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStory ? 'hidden' : 'flex'}`}>
           {(displayImageUrl || showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
               {isStoryboard ? (
@@ -1576,7 +1627,9 @@ function StoryScreenInner({
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-xs uppercase tracking-[0.24em] text-sky-200">Upload Beat Image</p>
-                  <h3 className="mt-2 text-2xl font-serif text-neutral-100">Add a 16:9 storyboard image</h3>
+                  <h3 className="mt-2 text-2xl font-serif text-neutral-100">
+                    Add a {isVerticalStory ? '9:16' : '16:9'} storyboard image
+                  </h3>
                 </div>
                 <button
                   type="button"
@@ -1620,7 +1673,9 @@ function StoryScreenInner({
                                   type="button"
                                   onClick={() => void handleSelectGalleryImage(entry.storageKey)}
                                   disabled={isActive || isDeleting}
-                                  className={`group relative block aspect-video w-32 overflow-hidden rounded-xl border transition-colors ${
+                                  className={`group relative block overflow-hidden rounded-xl border transition-colors ${
+                                    isVerticalStory ? 'aspect-[9/16] w-20' : 'aspect-video w-32'
+                                  } ${
                                     isActive
                                       ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
                                       : 'border-white/10 hover:border-sky-400/40'
@@ -1692,8 +1747,12 @@ function StoryScreenInner({
                     <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
                       <p>Accepted formats: JPG, PNG, or WebP.</p>
                       <p className="mt-1">Maximum file size: 3 MB.</p>
-                      <p className="mt-1">Required aspect ratio: 16:9.</p>
-                      <p className="mt-1">Recommended resolution: 1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.</p>
+                      <p className="mt-1">Required aspect ratio: {isVerticalStory ? '9:16' : '16:9'}.</p>
+                      <p className="mt-1">
+                        Recommended resolution: {isVerticalStory
+                          ? '720x1280 or above for smaller screens, and 1152x2048 or above for larger screens.'
+                          : '1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.'}
+                      </p>
                     </div>
 
                     <div className="mt-5 flex flex-wrap gap-3">

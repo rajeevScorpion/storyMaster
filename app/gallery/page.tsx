@@ -323,6 +323,13 @@ export default function GalleryPage() {
     gridRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const isVerticalStoriesView = filters.type === 'vertical';
+  const galleryGridClass = isVerticalStoriesView
+    ? 'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6'
+    : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px]';
+  const loadingPlaceholderCount = isVerticalStoriesView ? 12 : PAGE_SIZE;
+  const loadingMorePlaceholderCount = isVerticalStoriesView ? 6 : 4;
+
   return (
     <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       <div
@@ -399,11 +406,13 @@ export default function GalleryPage() {
 
           {/* Grid */}
           {initialGridLoading && items.length === 0 ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px]">
-              {[...Array(PAGE_SIZE)].map((_, i) => (
+            <div className={galleryGridClass}>
+              {[...Array(loadingPlaceholderCount)].map((_, i) => (
                 <div
                   key={i}
-                  className={`rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse ${bentoPattern.has(i) ? 'sm:col-span-2 sm:row-span-2' : ''}`}
+                  className={`rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse ${
+                    isVerticalStoriesView ? 'aspect-[9/16]' : bentoPattern.has(i) ? 'sm:col-span-2 sm:row-span-2' : ''
+                  }`}
                 />
               ))}
             </div>
@@ -413,16 +422,16 @@ export default function GalleryPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px]">
+              <div className={galleryGridClass}>
                 {items.map((item, index) => {
-                  const isBig = bentoPattern.has(index);
+                  const isBig = !isVerticalStoriesView && bentoPattern.has(index);
                   return (
                     <motion.div
                       key={`${item.type}-${item.id}`}
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.4, delay: (index % PAGE_SIZE) * 0.05 }}
-                      className={isBig ? 'sm:col-span-2 sm:row-span-2' : ''}
+                      className={isVerticalStoriesView ? 'aspect-[9/16]' : isBig ? 'sm:col-span-2 sm:row-span-2' : ''}
                     >
                       <GalleryItemCard
                         item={item}
@@ -438,11 +447,13 @@ export default function GalleryPage() {
               </div>
 
               {isLoadingMore && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px] mt-4">
-                  {[...Array(4)].map((_, index) => (
+                <div className={`${galleryGridClass} mt-4`}>
+                  {[...Array(loadingMorePlaceholderCount)].map((_, index) => (
                     <div
                       key={`loading-more-${index}`}
-                      className="rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse"
+                      className={`rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse ${
+                        isVerticalStoriesView ? 'aspect-[9/16]' : ''
+                      }`}
                     />
                   ))}
                 </div>

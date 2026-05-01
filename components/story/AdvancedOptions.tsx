@@ -105,6 +105,9 @@ interface AdvancedOptionsProps {
   storyPromptOnlyModeEnabled?: boolean;
   imageGenerationMode?: 'generate' | 'prompt_only';
   onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
+  verticalStoriesSettingEnabled?: boolean;
+  isVerticalStory?: boolean;
+  onVerticalStoryChange?: (value: boolean) => void;
   narrationVoiceConfig?: NarrationVoiceClientConfig | null;
   narrationVoiceSelection?: {
     genderBucket: NarrationGenderBucket;
@@ -140,6 +143,9 @@ export default function AdvancedOptions({
   storyPromptOnlyModeEnabled = false,
   imageGenerationMode = 'generate',
   onImageGenerationModeChange,
+  verticalStoriesSettingEnabled = false,
+  isVerticalStory = false,
+  onVerticalStoryChange,
   narrationVoiceConfig = null,
   narrationVoiceSelection,
   onNarrationVoiceSelectionChange,
@@ -345,6 +351,43 @@ export default function AdvancedOptions({
                     {imageGenerationMode === 'prompt_only'
                       ? 'Kissago will keep the exact beat prompts ready for copy and manual image upload.'
                       : 'Kissago will continue generating storyboard images automatically for each beat.'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {verticalStoriesSettingEnabled && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h4 className="text-sm font-sans text-neutral-200">Vertical Story / Portrait Story 9:16</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                      Create this story in a mobile-first portrait format suitable for reels and shorts.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onVerticalStoryChange?.(!isVerticalStory)}
+                    className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                      isVerticalStory
+                        ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                        : 'justify-start border-white/10 bg-neutral-800'
+                    }`}
+                    aria-pressed={isVerticalStory}
+                    aria-label="Toggle vertical story format"
+                  >
+                    <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                  </button>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-white/10 bg-neutral-900/60 px-4 py-3">
+                  <p className="text-sm text-neutral-100">
+                    {isVerticalStory ? '9:16 portrait story' : 'Standard 16:9 landscape story'}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                    {isVerticalStory
+                      ? 'Storyboards will be composed and rendered for phone-first portrait viewing.'
+                      : 'Storyboards keep the existing landscape composition and playback.'}
                   </p>
                 </div>
               </div>

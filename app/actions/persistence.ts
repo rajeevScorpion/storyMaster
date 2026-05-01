@@ -106,6 +106,14 @@ function resolvePersistedAudioUrlForSave(
     || (beat.audioStatus === 'ready' ? getBeatPersistedAudioUrl(existingBeat || {}) : undefined);
 }
 
+function getStoryOrientation(config: StorySession['storyConfig']): { isVerticalStory: boolean; aspectRatio: '16:9' | '9:16' } {
+  const normalizedConfig = normalizeStoryConfig(config);
+  return {
+    isVerticalStory: normalizedConfig.isVerticalStory,
+    aspectRatio: normalizedConfig.isVerticalStory ? '9:16' : '16:9',
+  };
+}
+
 function buildStorageObjectPublicUrl(bucket: string, path: string): string {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!supabaseUrl) {
@@ -542,6 +550,7 @@ export async function saveStory(
   }
 
   const cleanMap = stripBase64(storyMapWithUrls, fallbackStoryMap);
+  const storyOrientation = getStoryOrientation(session.storyConfig);
 
   const storyData = {
     user_id: user.id,
@@ -552,6 +561,8 @@ export async function saveStory(
     visual_style: session.visualStyle,
     target_age: session.targetAge,
     story_config: session.storyConfig as unknown as Record<string, unknown>,
+    is_vertical_story: storyOrientation.isVerticalStory,
+    aspect_ratio: storyOrientation.aspectRatio,
     story_map: cleanMap as unknown as Record<string, unknown>,
     characters: sanitizeSessionCharacters(session) as unknown as Record<string, unknown>[],
     setting: session.setting as unknown as Record<string, unknown>,
@@ -733,7 +744,11 @@ export async function loadStory(storyId: string): Promise<StorySession> {
       data: normalizeBeatMediaFields(storyMap.nodes[nodeId].data),
     };
   }
-  const storyConfig = normalizeStoryConfig(story.story_config as any);
+  const storyConfig = normalizeStoryConfig({
+    ...(story.story_config as any),
+    isVerticalStory: story.is_vertical_story,
+    aspectRatio: story.aspect_ratio,
+  });
 
   return {
     storySessionId: story.id,
@@ -1069,6 +1084,23 @@ export async function autoPublishStoryline(
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
+  const { data: sourceStory, error: sourceStoryError } = await supabase
+    .from('stories')
+    .select('story_config, is_vertical_story, aspect_ratio')
+    .eq('id', storyId)
+    .maybeSingle();
+
+  if (sourceStoryError) {
+    throw new Error(`Failed to fetch story orientation: ${sourceStoryError.message}`);
+  }
+
+  const storyConfig = normalizeStoryConfig({
+    ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
+    isVerticalStory: sourceStory?.is_vertical_story,
+    aspectRatio: sourceStory?.aspect_ratio,
+  });
+  const orientation = getStoryOrientation(storyConfig);
+
   // Fetch all beats for the story to walk the path
   const { data: allBeats, error: beatsError } = await supabase
     .from('beats')
@@ -1168,6 +1200,8 @@ export async function autoPublishStoryline(
       title: storyTitle,
       beat_count: nodePath.length,
       cover_image_url: coverImageUrl || null,
+      is_vertical_story: orientation.isVerticalStory,
+      aspect_ratio: orientation.aspectRatio,
       node_path: nodePath,
       beats: legacyBeats as unknown as Record<string, unknown>[],
       choices: choices as unknown as Record<string, unknown>[],
@@ -1455,6 +1489,18 @@ export async function publishStoryline(params: {
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
+  const { data: sourceStory } = await supabase
+    .from('stories')
+    .select('story_config, is_vertical_story, aspect_ratio')
+    .eq('id', params.storyId)
+    .maybeSingle();
+  const storyConfig = normalizeStoryConfig({
+    ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
+    isVerticalStory: sourceStory?.is_vertical_story,
+    aspectRatio: sourceStory?.aspect_ratio,
+  });
+  const orientation = getStoryOrientation(storyConfig);
+
   // Get author name from profile
   const { data: profile } = await supabase
     .from('profiles')
@@ -1473,6 +1519,8 @@ export async function publishStoryline(params: {
       title: params.title,
       beat_count: params.beats.length,
       cover_image_url: params.coverImageUrl,
+      is_vertical_story: orientation.isVerticalStory,
+      aspect_ratio: orientation.aspectRatio,
       node_path: params.nodePath,
       beats: params.beats as unknown as Record<string, unknown>[],
       choices: params.choices as unknown as Record<string, unknown>[],

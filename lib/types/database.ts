@@ -15,6 +15,7 @@ import type {
 } from './pricing';
 import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
 import type { BeatMediaStatus } from './beat-media';
+import type { StoryAspectRatio } from './story';
 
 export interface DbProfile {
   id: string;
@@ -33,6 +34,8 @@ export interface DbStory {
   visual_style: string | null;
   target_age: string | null;
   story_config: Record<string, unknown> | null;
+  is_vertical_story: boolean;
+  aspect_ratio: StoryAspectRatio;
   story_map: Record<string, unknown>;
   characters: Record<string, unknown>[] | null;
   setting: Record<string, unknown> | null;
@@ -55,6 +58,8 @@ export interface DbStoryline {
   title: string;
   beat_count: number;
   cover_image_url: string | null;
+  is_vertical_story: boolean;
+  aspect_ratio: StoryAspectRatio;
   node_path: string[];
   beats: Record<string, unknown>[];
   choices: Record<string, unknown>[];
@@ -74,6 +79,8 @@ export interface GalleryStoryline {
   beat_count: number;
   author_name: string | null;
   story_id: string | null;
+  is_vertical_story: boolean;
+  aspect_ratio: StoryAspectRatio;
   like_count: number;
   view_count: number;
   created_at: string;
@@ -208,6 +215,8 @@ export interface GalleryItem {
   title: string;
   coverImageUrl: string | null;
   coverIsStoryboard: boolean;
+  isVerticalStory: boolean;
+  aspectRatio: StoryAspectRatio;
   authorName: string | null;
   storyId: string;
   beatCount: number | null;
@@ -235,7 +244,7 @@ export interface DbStorylineView {
 
 export interface GalleryFilters {
   search: string;
-  type: 'storylines' | 'trees';
+  type: 'storylines' | 'trees' | 'vertical';
   genre: string;
   ageGroup: string;
   country: string;

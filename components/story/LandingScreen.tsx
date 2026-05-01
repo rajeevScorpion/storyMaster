@@ -65,7 +65,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     freePlusCharacterSheetsEnabled: false,
     creatorCharacterSheetsEnabled: false,
     storyPromptOnlyModeEnabled: false,
+    verticalStoriesSettingEnabled: false,
   });
+  const [isVerticalStory, setIsVerticalStory] = useState(false);
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
   );
@@ -96,13 +98,18 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         freePlusCharacterSheetsEnabled,
         creatorCharacterSheetsEnabled,
         storyPromptOnlyModeEnabled,
+        verticalStoriesSettingEnabled,
         authoringWordCap: nextAuthoringWordCap,
       }) => {
         setSetupSettings({
           freePlusCharacterSheetsEnabled,
           creatorCharacterSheetsEnabled,
           storyPromptOnlyModeEnabled,
+          verticalStoriesSettingEnabled,
         });
+        if (!verticalStoriesSettingEnabled) {
+          setIsVerticalStory(false);
+        }
         setAuthoringWordCap(nextAuthoringWordCap);
       })
       .catch(() => {
@@ -110,7 +117,9 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
           freePlusCharacterSheetsEnabled: false,
           creatorCharacterSheetsEnabled: false,
           storyPromptOnlyModeEnabled: false,
+          verticalStoriesSettingEnabled: false,
         });
+        setIsVerticalStory(false);
         setAuthoringWordCap(500);
       });
   }, []);
@@ -169,6 +178,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || 'generate');
+            setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
             setUseCreatorOneKCharacterSheet(
               config.portraitReferences.mode === 'character_sheet' &&
               config.portraitReferences.quality === '1K'
@@ -223,41 +233,46 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const buildStoryConfig = (
     seedPlan?: SeedPlan,
     voiceConfig: NarrationVoiceClientConfig | null = narrationVoiceConfig
-  ): StoryConfig => ({
-    language,
-    ageGroup,
-    settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
-    maxBeats: effectiveMaxBeats,
-    imageGenerationMode,
-    visualSettings,
-    authoring: authoringMode === 'seeded'
-      ? {
-          mode: 'seeded',
-          workingTitle: workingTitle.trim(),
-          sourceText: sourceText.trim(),
-          guidanceText: guidanceText.trim(),
-          sourceFidelity,
-          ...(seedPlan ? { seedPlan } : {}),
-        }
-      : {
-          mode: 'prompt',
-        },
-    portraitReferences: buildPortraitReferences(),
-    narrationVoice: voiceConfig?.enabled
-      ? {
-          mode: 'user_selected',
-          genderBucket: narrationVoiceSelection.genderBucket,
-          voiceId: narrationVoiceSelection.voiceId || (
-            narrationVoiceSelection.genderBucket === 'male'
-              ? voiceConfig.defaultMaleVoice
-              : voiceConfig.defaultFemaleVoice
-          ),
-          languageCode: voiceConfig.languageCode,
-        }
-      : {
-          mode: 'legacy_auto',
-        },
-  });
+  ): StoryConfig => {
+    const verticalStoryEnabled = setupSettings.verticalStoriesSettingEnabled && isVerticalStory;
+    return {
+      language,
+      ageGroup,
+      settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
+      maxBeats: effectiveMaxBeats,
+      imageGenerationMode,
+      isVerticalStory: verticalStoryEnabled,
+      aspectRatio: verticalStoryEnabled ? '9:16' : '16:9',
+      visualSettings,
+      authoring: authoringMode === 'seeded'
+        ? {
+            mode: 'seeded',
+            workingTitle: workingTitle.trim(),
+            sourceText: sourceText.trim(),
+            guidanceText: guidanceText.trim(),
+            sourceFidelity,
+            ...(seedPlan ? { seedPlan } : {}),
+          }
+        : {
+            mode: 'prompt',
+          },
+      portraitReferences: buildPortraitReferences(),
+      narrationVoice: voiceConfig?.enabled
+        ? {
+            mode: 'user_selected',
+            genderBucket: narrationVoiceSelection.genderBucket,
+            voiceId: narrationVoiceSelection.voiceId || (
+              narrationVoiceSelection.genderBucket === 'male'
+                ? voiceConfig.defaultMaleVoice
+                : voiceConfig.defaultFemaleVoice
+            ),
+            languageCode: voiceConfig.languageCode,
+          }
+        : {
+            mode: 'legacy_auto',
+          },
+    };
+  };
 
   const startConfiguredStory = async (seedPlan?: SeedPlan) => {
     const voiceConfig = narrationVoiceConfig || await getNarrationVoiceSelectionConfig(language).catch(() => null);
@@ -677,6 +692,12 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                 storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
                 imageGenerationMode={imageGenerationMode}
                 onImageGenerationModeChange={setImageGenerationMode}
+                verticalStoriesSettingEnabled={setupSettings.verticalStoriesSettingEnabled}
+                isVerticalStory={isVerticalStory}
+                onVerticalStoryChange={(value) => {
+                  setIsVerticalStory(value);
+                  clearSeedPreview();
+                }}
                 narrationVoiceConfig={narrationVoiceConfig}
                 narrationVoiceSelection={narrationVoiceSelection}
                 onNarrationVoiceSelectionChange={setNarrationVoiceSelection}

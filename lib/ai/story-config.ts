@@ -103,6 +103,8 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   settingCountry: 'generic',
   maxBeats: 6,
   imageGenerationMode: 'generate',
+  isVerticalStory: false,
+  aspectRatio: '16:9',
   visualSettings: DEFAULT_VISUAL_SETTINGS,
   authoring: DEFAULT_AUTHORING,
   portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
@@ -142,6 +144,8 @@ const DETAIL_SUMMARIES: Record<StoryDetailLevel, string> = {
 };
 
 type RawStoryConfig = Partial<StoryConfig> & {
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
   visualSettings?: Partial<VisualSettings> | null;
   authoring?: (Partial<StoryAuthoringConfig> & {
     mode?: string | null;
@@ -180,6 +184,8 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
   const narrationVoice = normalizeNarrationVoiceSelection(input?.narrationVoice);
+  const isVerticalStory = normalizeVerticalStoryFlag(input);
+  const aspectRatio = isVerticalStory ? '9:16' : '16:9';
 
   return {
     language: input?.language || DEFAULT_STORY_CONFIG.language,
@@ -187,6 +193,8 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats: clampMaxBeats(input?.maxBeats),
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
+    isVerticalStory,
+    aspectRatio,
     visualSettings,
     authoring,
     portraitReferences,
@@ -222,6 +230,10 @@ export function isSeedContinueMode(config?: Partial<StoryConfig> | null): boolea
 
 export function isSeededMode(config?: Partial<StoryConfig> | null): boolean {
   return normalizeStoryConfig(config).authoring.mode === 'seeded';
+}
+
+export function isVerticalStoryConfig(config?: Partial<StoryConfig> | null): boolean {
+  return normalizeStoryConfig(config).isVerticalStory;
 }
 
 export function getSeedSourceText(config?: Partial<StoryConfig> | null): string {
@@ -400,6 +412,13 @@ function clampMaxBeats(value?: number | null): number {
 
 function normalizeImageGenerationMode(value?: string | null): StoryConfig['imageGenerationMode'] {
   return value === 'prompt_only' ? 'prompt_only' : DEFAULT_STORY_CONFIG.imageGenerationMode;
+}
+
+function normalizeVerticalStoryFlag(input?: RawStoryConfig | null): boolean {
+  return input?.isVerticalStory === true
+    || input?.is_vertical_story === true
+    || input?.aspectRatio === '9:16'
+    || input?.aspect_ratio === '9:16';
 }
 
 function normalizePortraitReferenceMode(value?: string | null): PortraitReferenceMode {

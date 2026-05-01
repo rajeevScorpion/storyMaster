@@ -14,6 +14,7 @@ const LANGUAGE_OPTIONS = [
 const TYPE_OPTIONS = [
   { value: 'storylines', label: 'Storylines' },
   { value: 'trees', label: 'Story Trees' },
+  { value: 'vertical', label: 'Vertical Stories' },
 ] as const;
 
 const GENRE_OPTIONS = [

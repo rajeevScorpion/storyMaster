@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryPage, GenreSection } from '@/lib/types/database';
+import type { StoryAspectRatio } from '@/lib/types/story';
 
 type LegacyGalleryBeat = {
   imageUrl?: string | null;
@@ -16,8 +17,10 @@ type LegacyGalleryBeat = {
   image_prompt?: string | null;
 };
 
-type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard'> & {
+type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_vertical_story' | 'aspect_ratio'> & {
   cover_is_storyboard?: boolean;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
   node_path?: string[] | null;
   beats?: LegacyGalleryBeat[] | null;
   stories?: {
@@ -51,13 +54,48 @@ function readStoryConfigString(
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
 }
 
+function readStoryConfigBoolean(
+  storyConfig: Record<string, unknown> | null | undefined,
+  key: string
+): boolean {
+  return storyConfig?.[key] === true;
+}
+
+function resolveStoryAspectRatio(
+  row: { is_vertical_story?: boolean | null; aspect_ratio?: string | null },
+  storyConfig?: Record<string, unknown> | null
+): StoryAspectRatio {
+  if (
+    row.is_vertical_story === true ||
+    row.aspect_ratio === '9:16' ||
+    readStoryConfigBoolean(storyConfig, 'isVerticalStory') ||
+    readStoryConfigBoolean(storyConfig, 'is_vertical_story') ||
+    readStoryConfigString(storyConfig, 'aspectRatio') === '9:16' ||
+    readStoryConfigString(storyConfig, 'aspect_ratio') === '9:16'
+  ) {
+    return '9:16';
+  }
+
+  return '16:9';
+}
+
+function resolveIsVerticalStory(
+  row: { is_vertical_story?: boolean | null; aspect_ratio?: string | null },
+  storyConfig?: Record<string, unknown> | null
+): boolean {
+  return resolveStoryAspectRatio(row, storyConfig) === '9:16';
+}
+
 function mapStorylineRow(row: any): GalleryItem {
+  const aspectRatio = resolveStoryAspectRatio(row, row.stories?.story_config);
   return {
     id: row.id,
     type: 'storyline',
     title: row.title,
     coverImageUrl: row.cover_image_url,
     coverIsStoryboard: row.cover_is_storyboard === true,
+    isVerticalStory: resolveIsVerticalStory(row, row.stories?.story_config),
+    aspectRatio,
     authorName: row.author_name,
     storyId: row.story_id ?? row.id,
     beatCount: row.beat_count,
@@ -71,12 +109,15 @@ function mapStorylineRow(row: any): GalleryItem {
 }
 
 function mapTreeRow(row: any): GalleryItem {
+  const aspectRatio = resolveStoryAspectRatio(row, row.story_config);
   return {
     id: row.story_id,
     type: 'tree',
     title: row.title,
     coverImageUrl: row.cover_image_url,
     coverIsStoryboard: false,
+    isVerticalStory: resolveIsVerticalStory(row, row.story_config),
+    aspectRatio,
     authorName: row.author_name,
     storyId: row.story_id,
     beatCount: null,
@@ -328,8 +369,10 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
 
   const { data, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, node_path, like_count, view_count, created_at, beats')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats')
     .eq('is_public', true)
+    .eq('is_vertical_story', false)
+    .neq('aspect_ratio', '9:16')
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -339,7 +382,14 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
   }
 
   const rows = await resolveStorylineCovers((data || []) as StorylineGalleryRow[]);
-  return rows.map(({ beats, node_path, stories, ...storyline }) => storyline);
+  return rows.map(({ beats, node_path, stories, ...storyline }) => {
+    const aspectRatio = resolveStoryAspectRatio(storyline, stories?.story_config);
+    return {
+      ...storyline,
+      is_vertical_story: aspectRatio === '9:16',
+      aspect_ratio: aspectRatio,
+    };
+  });
 }
 
 /**
@@ -351,8 +401,10 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   // Fetch public storylines joined with their parent story for genre
   const { data: rows, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
+    .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
     .eq('is_public', true)
+    .eq('is_vertical_story', false)
+    .neq('aspect_ratio', '9:16')
     .order('created_at', { ascending: false })
     .limit(100);
 
@@ -377,12 +429,15 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
     const items = genreMap.get(genreKey)!;
     if (items.length >= 4) continue;
 
+    const aspectRatio = resolveStoryAspectRatio(row, row.stories?.story_config);
     items.push({
       id: row.id,
       type: 'storyline',
       title: row.title,
       coverImageUrl: row.cover_image_url,
       coverIsStoryboard: row.cover_is_storyboard,
+      isVerticalStory: resolveIsVerticalStory(row, row.stories?.story_config),
+      aspectRatio,
       authorName: row.author_name,
       storyId: row.story_id ?? row.id,
       beatCount: row.beat_count,
@@ -445,8 +500,10 @@ export async function getGalleryItems(
   if (filters.type === 'storylines') {
     let query = supabase
       .from('storylines')
-      .select('id, title, cover_image_url, beat_count, author_name, story_id, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
+      .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
       .eq('is_public', true)
+      .eq('is_vertical_story', false)
+      .neq('aspect_ratio', '9:16')
       .order('created_at', { ascending: false });
 
     if (filters.search) {
@@ -482,10 +539,54 @@ export async function getGalleryItems(
     };
   }
 
-  // 2. Fetch story trees from a DB-backed gallery source
+  // 2. Fetch vertical/portrait storylines as their own gallery lane.
+  if (filters.type === 'vertical') {
+    let query = supabase
+      .from('storylines')
+      .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
+      .eq('is_public', true)
+      .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
+      .order('created_at', { ascending: false });
+
+    if (filters.search) {
+      query = query.ilike('title', `%${filters.search}%`);
+    }
+    if (filters.genre && filters.genre !== 'all') {
+      query = query.ilike('stories.genre', filters.genre);
+    }
+    if (filters.ageGroup && filters.ageGroup !== 'all') {
+      query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
+    }
+    if (filters.country && filters.country !== 'all') {
+      query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
+    }
+    if (filters.language && filters.language !== 'all') {
+      query = query.filter('stories.story_config->>language', 'eq', filters.language);
+    }
+
+    const { data: storylines, count, error } = await query.range(offset, rangeEnd);
+
+    if (error) {
+      throw new Error(`Failed to fetch vertical story gallery items: ${error.message}`);
+    }
+
+    const resolvedRows = await resolveStorylineCovers((storylines || []) as StorylineGalleryRow[]);
+    const items = resolvedRows.map(mapStorylineRow);
+    const total = count ?? 0;
+
+    return {
+      items,
+      total,
+      hasMore: offset + items.length < total,
+    };
+  }
+
+  // 3. Fetch story trees from a DB-backed gallery source
   let query = supabase
     .from('gallery_story_trees')
-    .select('story_id, title, user_prompt, genre, story_config, cover_image_url, author_name, created_at', { count: 'exact' })
+    .select('story_id, title, user_prompt, genre, story_config, cover_image_url, author_name, created_at, is_vertical_story, aspect_ratio', { count: 'exact' })
+    .eq('is_vertical_story', false)
+    .neq('aspect_ratio', '9:16')
     .order('created_at', { ascending: false });
 
   if (filters.search) {

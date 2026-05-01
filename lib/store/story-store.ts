@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildFinalPortraitPrompt,
@@ -994,6 +994,10 @@ function isPromptOnlyStoryConfig(storyConfig: StoryConfig): boolean {
   return storyConfig.imageGenerationMode === 'prompt_only';
 }
 
+function getStoryAspectRatio(storyConfig: StoryConfig): StoryAspectRatio {
+  return storyConfig.isVerticalStory || storyConfig.aspectRatio === '9:16' ? '9:16' : '16:9';
+}
+
 function getSeedBeatByIndex(storyConfig: StoryConfig, beatIndex: number): SeedBeatOutline | undefined {
   const seedPlan = getSeedPlan(storyConfig);
   return seedPlan?.beats.find((beat) => beat.beatIndex === beatIndex);
@@ -1336,6 +1340,7 @@ export const useStoryStore = create<StoryState>()(
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
         const seededStory = isSeededStoryConfig(storyConfig);
         const promptOnly = isPromptOnlyStoryConfig(storyConfig);
+        const storyAspectRatio = getStoryAspectRatio(storyConfig);
         const startStoryActionKey = getStartStoryActionKey(storyConfig);
         const storyPrompt = seededStory
           ? storyConfig.authoring.sourceText?.trim() || prompt
@@ -1723,7 +1728,8 @@ export const useStoryStore = create<StoryState>()(
                     beat.characters,
                     initialSession.visualStyle!,
                     beat.beatNumber,
-                    modelOverrides
+                    modelOverrides,
+                    { aspectRatio: storyAspectRatio }
                   ),
                 })
               : measureAsyncStep(
@@ -1739,7 +1745,8 @@ export const useStoryStore = create<StoryState>()(
                     beat.beatNumber,
                     costPhase(baseCostTelemetry, 'image_generation', {
                       referenceCount: portraitRefs.length,
-                    })
+                    }),
+                    storyAspectRatio
                   ),
                   {
                     referenceCount: portraitRefs.length,
@@ -1927,6 +1934,7 @@ export const useStoryStore = create<StoryState>()(
             ? getSeedBeatByIndex(session.storyConfig, currentNode.data.beatNumber + 1)
             : undefined;
         const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+        const storyAspectRatio = getStoryAspectRatio(session.storyConfig);
         const continueStoryActionKey = getContinueStoryActionKey(session.storyConfig);
         const generationStartedAt = nowMs();
         const timingSteps: GenerationTimingStep[] = [];
@@ -2279,7 +2287,8 @@ export const useStoryStore = create<StoryState>()(
                   beat.characters,
                   session.visualStyle,
                   beat.beatNumber,
-                  modelOverrides
+                  modelOverrides,
+                  { aspectRatio: storyAspectRatio }
                 ),
               }
             : await measureAsyncStep(
@@ -2295,7 +2304,8 @@ export const useStoryStore = create<StoryState>()(
                   beat.beatNumber,
                   costPhase(baseCostTelemetry, 'image_generation', {
                     referenceCount: referenceImages.length,
-                  })
+                  }),
+                  storyAspectRatio
                 ),
                 {
                   beatNumber: beat.beatNumber,
@@ -2752,6 +2762,7 @@ export const useStoryStore = create<StoryState>()(
 
           const parentNode = node.parentId ? session.storyMap.nodes[node.parentId] : undefined;
           const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+          const storyAspectRatio = getStoryAspectRatio(session.storyConfig);
           let beatForRender: StoryBeat = {
             ...node.data,
             characters: node.data.characters.map((character) => ({ ...character })),
@@ -2811,7 +2822,8 @@ export const useStoryStore = create<StoryState>()(
                   beatForRender.characters,
                   session.visualStyle,
                   beatForRender.beatNumber,
-                  modelOverrides
+                  modelOverrides,
+                  { aspectRatio: storyAspectRatio }
                 ),
               }
             : await generateImage(
@@ -2823,7 +2835,8 @@ export const useStoryStore = create<StoryState>()(
                 beatForRender.beatNumber,
                 costPhase(baseCostTelemetry, 'image_generation', {
                   referenceCount: referenceImages.length,
-                })
+                }),
+                storyAspectRatio
               );
           beatForRender.finalImagePromptText = imageResult.finalPromptText;
 

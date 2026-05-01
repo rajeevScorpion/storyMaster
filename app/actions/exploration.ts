@@ -248,7 +248,11 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
       data: normalizeBeatMediaFields(storyMap.nodes[nodeId].data),
     };
   }
-  const storyConfig = normalizeStoryConfig(dbStory.story_config as any);
+  const storyConfig = normalizeStoryConfig({
+    ...(dbStory.story_config as any),
+    isVerticalStory: dbStory.is_vertical_story,
+    aspectRatio: dbStory.aspect_ratio,
+  });
 
   // Track exploration for non-owners
   if (!isOwner) {
@@ -379,6 +383,8 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     title: string;
     beat_count: number;
     cover_image_url: string | null;
+    is_vertical_story: boolean;
+    aspect_ratio: string;
     author_name: string | null;
     is_public: boolean;
     created_at: string;
@@ -393,12 +399,28 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, author_name, is_public, created_at, node_path, beats, choices, stories(story_map)')
+    .select('id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, stories(story_map, story_config, is_vertical_story, aspect_ratio)')
     .eq('id', storylineId)
     .single();
 
   if (slError || !storyline) throw new Error('Storyline not found');
   const fallbackStoryMap = getStoryMapFromStorylineRow(storyline);
+  const sourceStory = (storyline as any).stories as {
+    story_config?: Record<string, unknown> | null;
+    is_vertical_story?: boolean | null;
+    aspect_ratio?: string | null;
+  } | null;
+  const sourceStoryConfig = normalizeStoryConfig({
+    ...(sourceStory?.story_config ?? {}),
+    is_vertical_story: sourceStory?.is_vertical_story,
+    aspect_ratio: sourceStory?.aspect_ratio,
+  });
+  const storylineAspectRatio = storyline.is_vertical_story === true
+    || storyline.aspect_ratio === '9:16'
+    || sourceStoryConfig.isVerticalStory
+    ? '9:16'
+    : '16:9';
+  const storylineIsVertical = storylineAspectRatio === '9:16';
 
   // Try normalized junction first
   const { data: junctionBeats } = await supabase
@@ -459,6 +481,8 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         title: storyline.title,
         beat_count: storyline.beat_count,
         cover_image_url: storyline.cover_image_url,
+        is_vertical_story: storylineIsVertical,
+        aspect_ratio: storylineAspectRatio,
         author_name: storyline.author_name,
         is_public: storyline.is_public,
         created_at: storyline.created_at,
@@ -486,6 +510,8 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       title: storyline.title,
       beat_count: storyline.beat_count,
       cover_image_url: storyline.cover_image_url,
+      is_vertical_story: storylineIsVertical,
+      aspect_ratio: storylineAspectRatio,
       author_name: storyline.author_name,
       is_public: storyline.is_public,
       created_at: storyline.created_at,

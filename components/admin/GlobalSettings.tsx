@@ -46,6 +46,7 @@ import {
   setFreePlusCharacterSheets,
   setCreatorCharacterSheets,
   setStoryPromptOnlyModeEnabled,
+  setVerticalStoriesSettingEnabled,
   setAudioStorylinePublishEnabled,
   setPromptOnlyMaxImagesPerBeat,
   setPromptOnlyImageGalleryCleanupEnabled,
@@ -286,6 +287,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [creatorCharacterSheetsToggling, setCreatorCharacterSheetsToggling] = useState(false);
   const [storyPromptOnlyModeEnabled, setStoryPromptOnlyModeEnabledState] = useState(false);
   const [storyPromptOnlyModeToggling, setStoryPromptOnlyModeToggling] = useState(false);
+  const [verticalStoriesSettingEnabled, setVerticalStoriesSettingEnabledState] = useState(false);
+  const [verticalStoriesSettingToggling, setVerticalStoriesSettingToggling] = useState(false);
   const [audioStorylinePublishEnabled, setAudioStorylinePublishEnabledState] = useState(false);
   const [audioStorylinePublishToggling, setAudioStorylinePublishToggling] = useState(false);
   const [promptOnlyMaxImagesPerBeat, setPromptOnlyMaxImagesPerBeatState] = useState(3);
@@ -362,6 +365,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
         storyPromptOnlyModeEnabled: promptOnlyModeEnabled,
+        verticalStoriesSettingEnabled: verticalStoriesEnabled,
         audioStorylinePublishEnabled: audioPublishEnabled,
         promptOnlyMaxImagesPerBeat: promptOnlyMaxImages,
         promptOnlyImageGalleryCleanupEnabled: promptOnlyCleanupEnabled,
@@ -407,6 +411,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
         setStoryPromptOnlyModeEnabledState(promptOnlyModeEnabled);
+        setVerticalStoriesSettingEnabledState(verticalStoriesEnabled);
         setAudioStorylinePublishEnabledState(audioPublishEnabled);
         setPromptOnlyMaxImagesPerBeatState(promptOnlyMaxImages);
         setPromptOnlyMaxImagesInput(String(promptOnlyMaxImages));
@@ -679,7 +684,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     narration: narrationVoiceSettings
       ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
       : 'Voice settings not loaded',
-    authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview`,
+    authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
@@ -1439,6 +1444,23 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   setStoryPromptOnlyModeEnabledState(next);
                 } finally {
                   setStoryPromptOnlyModeToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Enable Vertical Stories setting for users"
+              description="Show the advanced option for 9:16 portrait stories suitable for reels and shorts."
+              checked={verticalStoriesSettingEnabled}
+              toggling={verticalStoriesSettingToggling}
+              onToggle={async () => {
+                setVerticalStoriesSettingToggling(true);
+                const next = !verticalStoriesSettingEnabled;
+                try {
+                  await setVerticalStoriesSettingEnabled(next);
+                  setVerticalStoriesSettingEnabledState(next);
+                } finally {
+                  setVerticalStoriesSettingToggling(false);
                 }
               }}
             />
