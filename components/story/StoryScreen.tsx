@@ -195,6 +195,8 @@ type CharacterPromptCopyItem = {
   characterId: string;
   characterName: string;
   referenceSheetUrl?: string;
+  referenceSheetStorageKey?: string;
+  referenceSheetGallery: import('@/lib/types/story').CharacterSheetGalleryEntry[];
 };
 
 function buildCharacterPromptCopyItems(
@@ -212,16 +214,12 @@ function buildCharacterPromptCopyItems(
     }
   }
 
-  const referenceLookup = new Map<string, string>();
+  // Gallery + active fields canonically live on session.characters; beat-level
+  // copies only carry the active pointer, so we read the full reference shape
+  // from the roster first and fall back to the beat-level snapshot.
+  const rosterById = new Map<string, import('@/lib/types/story').Character>();
   for (const character of session.characters ?? []) {
-    if (character.referenceSheetUrl) {
-      referenceLookup.set(character.id, character.referenceSheetUrl);
-    }
-  }
-  for (const character of beat.characters ?? []) {
-    if (character.referenceSheetUrl && !referenceLookup.has(character.id)) {
-      referenceLookup.set(character.id, character.referenceSheetUrl);
-    }
+    rosterById.set(character.id, character);
   }
 
   const items: CharacterPromptCopyItem[] = [];
@@ -229,13 +227,19 @@ function buildCharacterPromptCopyItems(
   for (const character of beat.characters ?? []) {
     if (!character.id || seenIds.has(character.id)) continue;
     seenIds.add(character.id);
+    const rosterEntry = rosterById.get(character.id);
+    const activeUrl = rosterEntry?.referenceSheetUrl ?? character.referenceSheetUrl;
+    const activeKey = rosterEntry?.referenceSheetStorageKey ?? character.referenceSheetStorageKey;
+    const gallery = rosterEntry?.referenceSheetGallery ?? character.referenceSheetGallery ?? [];
     items.push({
       key: `${character.id}:${items.length}`,
       label: character.name,
       promptText: promptByCharacterId.get(character.id) ?? '',
       characterId: character.id,
       characterName: character.name,
-      referenceSheetUrl: referenceLookup.get(character.id),
+      referenceSheetUrl: activeUrl,
+      referenceSheetStorageKey: activeKey,
+      referenceSheetGallery: gallery,
     });
   }
 
@@ -387,6 +391,9 @@ interface StoryRuntimeSettings {
   promptOnlyImageGalleryCleanupDays: number;
   characterSheetUploadEnabled: boolean;
   characterSheetUploadMaxBytes: number;
+  characterSheetMaxPerCharacter: number;
+  characterSheetCleanupEnabled: boolean;
+  characterSheetCleanupDays: number;
 }
 
 export default function StoryScreen() {
@@ -417,7 +424,9 @@ export default function StoryScreen() {
   const deletePromptOnlyBeatImage = useStoryStore((state) => state.deletePromptOnlyBeatImage);
   const permanentlyDeletePromptOnlyBeatImage = useStoryStore((state) => state.permanentlyDeletePromptOnlyBeatImage);
   const setCharacterReferenceSheet = useStoryStore((state) => state.setCharacterReferenceSheet);
+  const selectCharacterReferenceSheet = useStoryStore((state) => state.selectCharacterReferenceSheet);
   const deleteCharacterReferenceSheet = useStoryStore((state) => state.deleteCharacterReferenceSheet);
+  const permanentlyDeleteCharacterReferenceSheet = useStoryStore((state) => state.permanentlyDeleteCharacterReferenceSheet);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
@@ -439,6 +448,9 @@ export default function StoryScreen() {
     promptOnlyImageGalleryCleanupDays: 7,
     characterSheetUploadEnabled: true,
     characterSheetUploadMaxBytes: 5 * 1024 * 1024,
+    characterSheetMaxPerCharacter: 3,
+    characterSheetCleanupEnabled: true,
+    characterSheetCleanupDays: 7,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -536,7 +548,9 @@ export default function StoryScreen() {
       deletePromptOnlyBeatImage={deletePromptOnlyBeatImage}
       permanentlyDeletePromptOnlyBeatImage={permanentlyDeletePromptOnlyBeatImage}
       setCharacterReferenceSheet={setCharacterReferenceSheet}
+      selectCharacterReferenceSheet={selectCharacterReferenceSheet}
       deleteCharacterReferenceSheet={deleteCharacterReferenceSheet}
+      permanentlyDeleteCharacterReferenceSheet={permanentlyDeleteCharacterReferenceSheet}
     />
   );
 }
@@ -573,7 +587,9 @@ function StoryScreenInner({
   deletePromptOnlyBeatImage,
   permanentlyDeletePromptOnlyBeatImage,
   setCharacterReferenceSheet,
+  selectCharacterReferenceSheet,
   deleteCharacterReferenceSheet,
+  permanentlyDeleteCharacterReferenceSheet,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -604,8 +620,10 @@ function StoryScreenInner({
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
-  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number }) => Promise<void>;
+  selectCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
+  permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -629,11 +647,13 @@ function StoryScreenInner({
   const [pendingDeleteStorageKey, setPendingDeleteStorageKey] = useState<string | null>(null);
   const [isPermanentlyDeletingKey, setIsPermanentlyDeletingKey] = useState<string | null>(null);
   const [showPromptToolsPopover, setShowPromptToolsPopover] = useState(false);
-  const [characterSheetTarget, setCharacterSheetTarget] = useState<{ characterId: string; characterName: string; existingSheet: boolean } | null>(null);
+  const [characterSheetTarget, setCharacterSheetTarget] = useState<{ characterId: string; characterName: string } | null>(null);
   const [characterSheetPreview, setCharacterSheetPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [characterSheetError, setCharacterSheetError] = useState<string | null>(null);
   const [isUploadingCharacterSheet, setIsUploadingCharacterSheet] = useState(false);
   const [pendingCharacterDeleteId, setPendingCharacterDeleteId] = useState<string | null>(null);
+  const [pendingSheetDeleteKey, setPendingSheetDeleteKey] = useState<string | null>(null);
+  const [permanentlyDeletingSheetKey, setPermanentlyDeletingSheetKey] = useState<string | null>(null);
   const characterSheetInputRef = useRef<HTMLInputElement>(null);
   const visibleReaderPanel: StoryReaderPanel = isEnding ? 'story' : activeReaderPanel;
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
@@ -980,11 +1000,13 @@ function StoryScreenInner({
     }
   }, [currentNodeId, permanentlyDeletePromptOnlyBeatImage]);
 
-  const openCharacterSheetUpload = useCallback((characterId: string, characterName: string, existingSheet: boolean) => {
-    setCharacterSheetTarget({ characterId, characterName, existingSheet });
+  const openCharacterSheetUpload = useCallback((characterId: string, characterName: string) => {
+    setCharacterSheetTarget({ characterId, characterName });
     setCharacterSheetPreview(null);
     setCharacterSheetError(null);
     setIsUploadingCharacterSheet(false);
+    setPendingSheetDeleteKey(null);
+    setPermanentlyDeletingSheetKey(null);
     if (characterSheetInputRef.current) {
       characterSheetInputRef.current.value = '';
     }
@@ -995,6 +1017,8 @@ function StoryScreenInner({
     setCharacterSheetTarget(null);
     setCharacterSheetPreview(null);
     setCharacterSheetError(null);
+    setPendingSheetDeleteKey(null);
+    setPermanentlyDeletingSheetKey(null);
     if (characterSheetInputRef.current) {
       characterSheetInputRef.current.value = '';
     }
@@ -1026,10 +1050,10 @@ function StoryScreenInner({
     setIsUploadingCharacterSheet(true);
     setCharacterSheetError(null);
     try {
-      await setCharacterReferenceSheet(characterSheetTarget.characterId, characterSheetPreview.dataUrl);
-      setCharacterSheetTarget(null);
+      await setCharacterReferenceSheet(characterSheetTarget.characterId, characterSheetPreview.dataUrl, {
+        maxPerCharacter: cycleSettings.characterSheetMaxPerCharacter,
+      });
       setCharacterSheetPreview(null);
-      setShowPromptToolsPopover(false);
       if (characterSheetInputRef.current) {
         characterSheetInputRef.current.value = '';
       }
@@ -1038,18 +1062,38 @@ function StoryScreenInner({
     } finally {
       setIsUploadingCharacterSheet(false);
     }
-  }, [characterSheetTarget, characterSheetPreview, setCharacterReferenceSheet]);
+  }, [characterSheetTarget, characterSheetPreview, setCharacterReferenceSheet, cycleSettings.characterSheetMaxPerCharacter]);
 
-  const handleCharacterSheetDelete = useCallback(async (characterId: string) => {
+  const handleCharacterSheetClearActive = useCallback(async (characterId: string) => {
     setPendingCharacterDeleteId(characterId);
     try {
       await deleteCharacterReferenceSheet(characterId);
     } catch {
-      // Keep the existing reference if delete fails.
+      // Keep the existing reference if clearing fails.
     } finally {
       setPendingCharacterDeleteId(null);
     }
   }, [deleteCharacterReferenceSheet]);
+
+  const handleSelectCharacterSheet = useCallback(async (characterId: string, storageKey: string) => {
+    try {
+      await selectCharacterReferenceSheet(characterId, storageKey);
+    } catch {
+      // Selection failures shouldn't break the modal — keep state as-is.
+    }
+  }, [selectCharacterReferenceSheet]);
+
+  const handlePermanentDeleteCharacterSheet = useCallback(async (characterId: string, storageKey: string) => {
+    setPermanentlyDeletingSheetKey(storageKey);
+    try {
+      await permanentlyDeleteCharacterReferenceSheet(characterId, storageKey);
+      setPendingSheetDeleteKey(null);
+    } catch (error: any) {
+      setCharacterSheetError(error?.message || 'Could not delete this sheet.');
+    } finally {
+      setPermanentlyDeletingSheetKey(null);
+    }
+  }, [permanentlyDeleteCharacterReferenceSheet]);
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -1782,13 +1826,21 @@ function StoryScreenInner({
                     {characterPromptItems.map((item) => {
                       const hasSheet = Boolean(item.referenceSheetUrl);
                       const hasPrompt = Boolean(item.promptText);
-                      const isDeleting = pendingCharacterDeleteId === item.characterId;
+                      const isClearing = pendingCharacterDeleteId === item.characterId;
+                      const savedCount = item.referenceSheetGallery.length;
                       return (
                         <div
                           key={item.key}
                           className="rounded-2xl border border-white/5 bg-neutral-950/40 p-4"
                         >
-                          <p className="text-sm font-medium text-neutral-100">{item.label}</p>
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-medium text-neutral-100">{item.label}</p>
+                            {savedCount > 0 && (
+                              <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+                                {savedCount} saved
+                              </span>
+                            )}
+                          </div>
                           <div className="mt-3 flex flex-wrap items-center gap-2">
                             {hasPrompt && (
                               <button
@@ -1806,26 +1858,26 @@ function StoryScreenInner({
                                 type="button"
                                 onClick={() => {
                                   setShowPromptToolsPopover(false);
-                                  openCharacterSheetUpload(item.characterId, item.characterName, hasSheet);
+                                  openCharacterSheetUpload(item.characterId, item.characterName);
                                 }}
                                 className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                                title={hasSheet
-                                  ? `Replace the uploaded reference sheet for ${item.characterName}`
+                                title={savedCount > 0
+                                  ? `Manage reference sheets for ${item.characterName}`
                                   : `Upload a 1:1 reference sheet for ${item.characterName}`}
                               >
                                 <Upload className="h-3.5 w-3.5" />
-                                {hasSheet ? 'Replace Sheet' : 'Upload Sheet'}
+                                {savedCount > 0 ? 'Manage Sheets' : 'Upload Sheet'}
                               </button>
                             )}
                             {cycleSettings.characterSheetUploadEnabled && hasSheet && (
                               <button
                                 type="button"
-                                onClick={() => void handleCharacterSheetDelete(item.characterId)}
-                                disabled={isDeleting}
+                                onClick={() => void handleCharacterSheetClearActive(item.characterId)}
+                                disabled={isClearing}
                                 className="inline-flex items-center justify-center rounded-full border border-rose-500/25 bg-rose-500/10 p-2 text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                                title={`Remove the uploaded reference sheet for ${item.characterName}`}
+                                title={`Clear the active reference sheet for ${item.characterName} (gallery preserved)`}
                               >
-                                {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                                {isClearing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
                               </button>
                             )}
                           </div>
@@ -2076,119 +2128,238 @@ function StoryScreenInner({
           </motion.div>
         )}
 
-        {characterSheetTarget && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
-          >
+        {characterSheetTarget && (() => {
+          const targetItem = characterPromptItems.find((item) => item.characterId === characterSheetTarget.characterId);
+          const gallery = targetItem?.referenceSheetGallery ?? [];
+          const activeStorageKey = targetItem?.referenceSheetStorageKey;
+          const cap = cycleSettings.characterSheetMaxPerCharacter;
+          const capReached = gallery.length >= cap;
+          const cleanupDays = cycleSettings.characterSheetCleanupDays;
+          const cleanupEnabled = cycleSettings.characterSheetCleanupEnabled;
+          const hasActive = Boolean(targetItem?.referenceSheetUrl);
+          const isClearingActive = pendingCharacterDeleteId === characterSheetTarget.characterId;
+          return (
             <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.98, y: 8 }}
-              className="w-full max-w-2xl rounded-[28px] border border-white/10 bg-neutral-900/95 p-6 shadow-2xl"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-sky-200">
-                    {characterSheetTarget.existingSheet ? 'Replace Character Sheet' : 'Upload Character Sheet'}
-                  </p>
-                  <h3 className="mt-2 text-2xl font-serif text-neutral-100">
-                    {characterSheetTarget.characterName}
-                  </h3>
-                  <p className="mt-1 text-sm text-neutral-400">
-                    Reference sheets persist with this character so future episodes and continuations can reuse them.
-                  </p>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.98, y: 8 }}
+                className="flex max-h-[min(90vh,48rem)] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-neutral-900/95 shadow-2xl"
+              >
+                <div className="flex items-start justify-between gap-4 border-b border-white/5 p-6">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.24em] text-sky-200">
+                      {hasActive ? 'Manage Character Sheets' : 'Upload Character Sheet'}
+                    </p>
+                    <h3 className="mt-2 text-2xl font-serif text-neutral-100">
+                      {characterSheetTarget.characterName}
+                    </h3>
+                    <p className="mt-1 text-sm text-neutral-400">
+                      Reference sheets persist with this character so future episodes and continuations can reuse them.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeCharacterSheetUpload}
+                    className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
+                    aria-label="Close character sheet upload dialog"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={closeCharacterSheetUpload}
-                  className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
-                  aria-label="Close character sheet upload dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
 
-              <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                <p>Accepted formats: JPG, PNG, or WebP.</p>
-                <p className="mt-1">
-                  Maximum file size: {Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.
-                </p>
-                <p className="mt-1">Required aspect ratio: 1:1 (square).</p>
-                <p className="mt-1">
-                  Minimum resolution: {CHARACTER_SHEET_MIN_DIMENSION}x{CHARACTER_SHEET_MIN_DIMENSION}. Recommended: 1024x1024 or above.
-                </p>
-              </div>
+                <div className="flex-1 overflow-y-auto p-6">
+                  {gallery.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                          Saved Sheets ({gallery.length} / {cap})
+                        </p>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-3">
+                        {gallery.map((entry) => {
+                          const isActive = activeStorageKey === entry.storageKey;
+                          const isPendingConfirm = pendingSheetDeleteKey === entry.storageKey;
+                          const isDeleting = permanentlyDeletingSheetKey === entry.storageKey;
+                          return (
+                            <div key={entry.storageKey} className="relative">
+                              <button
+                                type="button"
+                                onClick={() => void handleSelectCharacterSheet(characterSheetTarget.characterId, entry.storageKey)}
+                                disabled={isActive || isDeleting}
+                                className={`group relative block aspect-square w-24 overflow-hidden rounded-xl border transition-colors ${
+                                  isActive
+                                    ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
+                                    : 'border-white/10 hover:border-sky-400/40'
+                                } ${isDeleting ? 'opacity-50' : ''}`}
+                                title={isActive ? 'Active character sheet' : 'Use this sheet'}
+                              >
+                                <Image
+                                  src={entry.url}
+                                  alt={`${characterSheetTarget.characterName} reference sheet`}
+                                  fill
+                                  className="object-cover"
+                                  unoptimized
+                                />
+                                {isActive && (
+                                  <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                    Active
+                                  </span>
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (isDeleting) return;
+                                  if (isActive) {
+                                    setPendingSheetDeleteKey(entry.storageKey);
+                                  } else {
+                                    void handlePermanentDeleteCharacterSheet(characterSheetTarget.characterId, entry.storageKey);
+                                  }
+                                }}
+                                disabled={isDeleting}
+                                className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                                title="Permanently delete this sheet"
+                              >
+                                {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                              </button>
+                              {isPendingConfirm && (
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
+                                  <p>Permanently delete the active sheet? The most recent remaining sheet will become active.</p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setPendingSheetDeleteKey(null)}
+                                      className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
+                                    >
+                                      Keep
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handlePermanentDeleteCharacterSheet(characterSheetTarget.characterId, entry.storageKey)}
+                                      className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {cleanupEnabled && (
+                        <p className="mt-2 text-[11px] text-neutral-500">
+                          Unused sheets are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
+                        </p>
+                      )}
+                    </div>
+                  )}
 
-              <div className="mt-5 flex flex-wrap gap-3">
-                <input
-                  ref={characterSheetInputRef}
-                  type="file"
-                  accept={CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.join(',')}
-                  onChange={handleCharacterSheetFileSelected}
-                  className="hidden"
-                />
-                <button
-                  type="button"
-                  onClick={() => characterSheetInputRef.current?.click()}
-                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10"
-                >
-                  <Upload className="h-4 w-4" />
-                  {characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
-                </button>
-              </div>
+                  <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                    <p>Accepted formats: JPG, PNG, or WebP.</p>
+                    <p className="mt-1">
+                      Maximum file size: {Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.
+                    </p>
+                    <p className="mt-1">Required aspect ratio: 1:1 (square).</p>
+                    <p className="mt-1">
+                      Minimum resolution: {CHARACTER_SHEET_MIN_DIMENSION}x{CHARACTER_SHEET_MIN_DIMENSION}. Recommended: 1024x1024 or above.
+                    </p>
+                  </div>
 
-              {characterSheetPreview && (
-                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                  <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
-                    <Image
-                      src={characterSheetPreview.dataUrl}
-                      alt={`${characterSheetTarget.characterName} reference preview`}
-                      fill
-                      className="object-cover"
-                      unoptimized
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <input
+                      ref={characterSheetInputRef}
+                      type="file"
+                      accept={CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.join(',')}
+                      onChange={handleCharacterSheetFileSelected}
+                      className="hidden"
                     />
+                    <button
+                      type="button"
+                      onClick={() => characterSheetInputRef.current?.click()}
+                      disabled={capReached}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={capReached ? `Limit of ${cap} sheets per character reached` : undefined}
+                    >
+                      <Upload className="h-4 w-4" />
+                      {characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
+                    </button>
+                    {hasActive && (
+                      <button
+                        type="button"
+                        onClick={() => void handleCharacterSheetClearActive(characterSheetTarget.characterId)}
+                        disabled={isClearingActive}
+                        className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Clear the active sheet (gallery preserved)"
+                      >
+                        {isClearingActive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                        Clear Active
+                      </button>
+                    )}
                   </div>
-                  <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                    <p className="font-medium text-neutral-100">{characterSheetPreview.fileName}</p>
-                    <p className="mt-2">Format: {characterSheetPreview.mimeType}</p>
-                    <p className="mt-1">Size: {(characterSheetPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
-                    <p className="mt-1">Resolution: {characterSheetPreview.width}x{characterSheetPreview.height}</p>
-                    <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
-                    <p className="mt-1 text-sm text-neutral-300">{characterSheetPreview.resolutionAdvice}</p>
-                  </div>
-                </div>
-              )}
+                  {capReached && (
+                    <p className="mt-3 text-xs text-amber-300">
+                      You&apos;ve reached the limit of {cap} sheet{cap === 1 ? '' : 's'} per character. Delete one to upload another.
+                    </p>
+                  )}
 
-              {characterSheetError && (
-                <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-                  {characterSheetError}
-                </div>
-              )}
+                  {characterSheetPreview && (
+                    <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                      <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
+                        <Image
+                          src={characterSheetPreview.dataUrl}
+                          alt={`${characterSheetTarget.characterName} reference preview`}
+                          fill
+                          className="object-cover"
+                          unoptimized
+                        />
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                        <p className="font-medium text-neutral-100">{characterSheetPreview.fileName}</p>
+                        <p className="mt-2">Format: {characterSheetPreview.mimeType}</p>
+                        <p className="mt-1">Size: {(characterSheetPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                        <p className="mt-1">Resolution: {characterSheetPreview.width}x{characterSheetPreview.height}</p>
+                        <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
+                        <p className="mt-1 text-sm text-neutral-300">{characterSheetPreview.resolutionAdvice}</p>
+                      </div>
+                    </div>
+                  )}
 
-              <div className="mt-6 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={closeCharacterSheetUpload}
-                  className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleCharacterSheetUpload()}
-                  disabled={!characterSheetPreview || isUploadingCharacterSheet}
-                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isUploadingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                  {characterSheetTarget.existingSheet ? 'Replace Sheet' : 'Upload Sheet'}
-                </button>
-              </div>
+                  {characterSheetError && (
+                    <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                      {characterSheetError}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-3 border-t border-white/5 p-6">
+                  <button
+                    type="button"
+                    onClick={closeCharacterSheetUpload}
+                    className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleCharacterSheetUpload()}
+                    disabled={!characterSheetPreview || isUploadingCharacterSheet || capReached}
+                    className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isUploadingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                    Upload Sheet
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
+          );
+        })()}
       </AnimatePresence>
 
       {/* Publish Dialog */}

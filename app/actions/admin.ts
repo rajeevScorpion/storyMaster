@@ -657,8 +657,11 @@ export async function getStoryboardSettings(): Promise<{
   promptOnlyImageGalleryCleanupDays: number;
   characterSheetUploadEnabled: boolean;
   characterSheetUploadMaxBytes: number;
+  characterSheetMaxPerCharacter: number;
+  characterSheetCleanupEnabled: boolean;
+  characterSheetCleanupDays: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -690,10 +693,15 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
     getFeatureFlag('character_sheet_upload_enabled', true),
     getFeatureFlagValue('character_sheet_upload_max_bytes'),
+    getFeatureFlagValue('character_sheet_max_per_character'),
+    getFeatureFlag('character_sheet_cleanup_enabled', true),
+    getFeatureFlagValue('character_sheet_cleanup_days'),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
   const parsedCharacterSheetMaxBytes = parseInt(characterSheetUploadMaxBytesStr ?? '5242880', 10);
+  const parsedCharacterSheetMaxPerCharacter = parseInt(characterSheetMaxPerCharacterStr ?? '3', 10);
+  const parsedCharacterSheetCleanupDays = parseInt(characterSheetCleanupDaysStr ?? '7', 10);
 
   return {
     cycleOverride,
@@ -737,6 +745,13 @@ export async function getStoryboardSettings(): Promise<{
     characterSheetUploadMaxBytes: Number.isFinite(parsedCharacterSheetMaxBytes)
       ? Math.max(1024 * 1024, Math.min(50 * 1024 * 1024, parsedCharacterSheetMaxBytes))
       : 5 * 1024 * 1024,
+    characterSheetMaxPerCharacter: Number.isFinite(parsedCharacterSheetMaxPerCharacter)
+      ? Math.max(1, Math.min(10, parsedCharacterSheetMaxPerCharacter))
+      : 3,
+    characterSheetCleanupEnabled,
+    characterSheetCleanupDays: Number.isFinite(parsedCharacterSheetCleanupDays)
+      ? Math.max(1, Math.min(90, parsedCharacterSheetCleanupDays))
+      : 7,
   };
 }
 

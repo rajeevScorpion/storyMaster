@@ -2,51 +2,182 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl } from '@/lib/supabase/storage';
-import type { Character, StoryMap } from '@/lib/types/story';
+import type { Character, CharacterSheetGalleryEntry, StoryMap } from '@/lib/types/story';
 
-type ReferenceSheetPayload = {
+type UploadPatch = {
+  kind: 'upload';
   url: string;
   storageKey: string;
   uploadedAt: string;
+  gallery: CharacterSheetGalleryEntry[];
+  cap: number;
 };
 
-function applyReferenceSheet(
-  character: Character,
-  payload: ReferenceSheetPayload | null
-): Character {
-  if (!payload) {
-    const next = { ...character };
-    delete next.referenceSheetUrl;
-    delete next.referenceSheetStorageKey;
-    delete next.referenceSheetUploadedAt;
-    return next;
-  }
-  return {
-    ...character,
-    referenceSheetUrl: normalizeStorageUrl(payload.url, 'story-assets'),
-    referenceSheetStorageKey: payload.storageKey,
-    referenceSheetUploadedAt: payload.uploadedAt,
+type SelectPatch = {
+  kind: 'select';
+  storageKey: string;
+};
+
+type ClearActivePatch = {
+  kind: 'clear-active';
+};
+
+type RemoveEntryPatch = {
+  kind: 'remove-entry';
+  storageKey: string;
+};
+
+type CharacterSheetPatch = UploadPatch | SelectPatch | ClearActivePatch | RemoveEntryPatch;
+
+type PatchOutcome = {
+  activeFields: {
+    referenceSheetUrl?: string;
+    referenceSheetStorageKey?: string;
+    referenceSheetUploadedAt?: string;
   };
+  gallery?: CharacterSheetGalleryEntry[];
+};
+
+function normalizeGalleryEntry(entry: CharacterSheetGalleryEntry): CharacterSheetGalleryEntry {
+  return {
+    url: normalizeStorageUrl(entry.url, 'story-assets'),
+    storageKey: entry.storageKey,
+    uploadedAt: entry.uploadedAt,
+  };
+}
+
+function pickFallbackEntry(entries: CharacterSheetGalleryEntry[]): CharacterSheetGalleryEntry | undefined {
+  if (entries.length === 0) return undefined;
+  return [...entries].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0];
+}
+
+function computeOutcome(character: Character, patch: CharacterSheetPatch): PatchOutcome {
+  const existingGallery = character.referenceSheetGallery ?? [];
+
+  switch (patch.kind) {
+    case 'upload': {
+      if (patch.gallery.length > Math.max(1, patch.cap)) {
+        throw new Error(`You can only keep ${patch.cap} reference sheets per character.`);
+      }
+      const normalizedGallery = patch.gallery.map(normalizeGalleryEntry);
+      return {
+        activeFields: {
+          referenceSheetUrl: normalizeStorageUrl(patch.url, 'story-assets'),
+          referenceSheetStorageKey: patch.storageKey,
+          referenceSheetUploadedAt: patch.uploadedAt,
+        },
+        gallery: normalizedGallery,
+      };
+    }
+
+    case 'select': {
+      const target = existingGallery.find((entry) => entry.storageKey === patch.storageKey);
+      if (!target) {
+        throw new Error('Selected reference sheet was not found in this character\'s gallery.');
+      }
+      return {
+        activeFields: {
+          referenceSheetUrl: normalizeStorageUrl(target.url, 'story-assets'),
+          referenceSheetStorageKey: target.storageKey,
+          referenceSheetUploadedAt: target.uploadedAt,
+        },
+      };
+    }
+
+    case 'clear-active': {
+      return {
+        activeFields: {
+          referenceSheetUrl: undefined,
+          referenceSheetStorageKey: undefined,
+          referenceSheetUploadedAt: undefined,
+        },
+      };
+    }
+
+    case 'remove-entry': {
+      const remaining = existingGallery.filter((entry) => entry.storageKey !== patch.storageKey);
+      const wasActive = character.referenceSheetStorageKey === patch.storageKey;
+      const fallback = wasActive ? pickFallbackEntry(remaining) : undefined;
+      return {
+        activeFields: wasActive
+          ? fallback
+            ? {
+                referenceSheetUrl: normalizeStorageUrl(fallback.url, 'story-assets'),
+                referenceSheetStorageKey: fallback.storageKey,
+                referenceSheetUploadedAt: fallback.uploadedAt,
+              }
+            : {
+                referenceSheetUrl: undefined,
+                referenceSheetStorageKey: undefined,
+                referenceSheetUploadedAt: undefined,
+              }
+          : {},
+        gallery: remaining.map(normalizeGalleryEntry),
+      };
+    }
+  }
+}
+
+function applyOutcomeToCharacter(
+  character: Character,
+  outcome: PatchOutcome,
+  options: { includeGallery: boolean }
+): Character {
+  const next: Character = { ...character };
+
+  // Active fields — explicit undefined values mean "clear".
+  if ('referenceSheetUrl' in outcome.activeFields) {
+    if (outcome.activeFields.referenceSheetUrl) {
+      next.referenceSheetUrl = outcome.activeFields.referenceSheetUrl;
+    } else {
+      delete next.referenceSheetUrl;
+    }
+  }
+  if ('referenceSheetStorageKey' in outcome.activeFields) {
+    if (outcome.activeFields.referenceSheetStorageKey) {
+      next.referenceSheetStorageKey = outcome.activeFields.referenceSheetStorageKey;
+    } else {
+      delete next.referenceSheetStorageKey;
+    }
+  }
+  if ('referenceSheetUploadedAt' in outcome.activeFields) {
+    if (outcome.activeFields.referenceSheetUploadedAt) {
+      next.referenceSheetUploadedAt = outcome.activeFields.referenceSheetUploadedAt;
+    } else {
+      delete next.referenceSheetUploadedAt;
+    }
+  }
+
+  if (options.includeGallery && outcome.gallery !== undefined) {
+    next.referenceSheetGallery = outcome.gallery;
+  }
+
+  return next;
 }
 
 function patchCharacterArray(
   characters: Character[] | null | undefined,
   characterId: string,
-  payload: ReferenceSheetPayload | null
-): { next: Character[]; matched: boolean } {
+  patch: CharacterSheetPatch,
+  options: { includeGallery: boolean }
+): { next: Character[]; matched: boolean; outcome?: PatchOutcome } {
   let matched = false;
+  let outcome: PatchOutcome | undefined;
   const next = (characters ?? []).map((character) => {
     if (character.id !== characterId) return character;
     matched = true;
-    return applyReferenceSheet(character, payload);
+    if (!outcome) {
+      outcome = computeOutcome(character, patch);
+    }
+    return applyOutcomeToCharacter(character, outcome, options);
   });
-  return { next, matched };
+  return { next, matched, outcome };
 }
 
 async function updateCharacterReferenceSheetInternal(
   storyId: string,
   characterId: string,
-  payload: ReferenceSheetPayload | null
+  patch: CharacterSheetPatch
 ): Promise<void> {
   if (!storyId || !characterId) {
     throw new Error('storyId and characterId are required.');
@@ -70,7 +201,8 @@ async function updateCharacterReferenceSheetInternal(
   const rosterResult = patchCharacterArray(
     (story.characters ?? []) as Character[],
     characterId,
-    payload
+    patch,
+    { includeGallery: true }
   );
 
   const rawMap = story.story_map;
@@ -82,7 +214,12 @@ async function updateCharacterReferenceSheetInternal(
   let mapMatched = false;
   const patchedNodes: StoryMap['nodes'] = {};
   for (const [id, node] of Object.entries(storyMap.nodes)) {
-    const beatResult = patchCharacterArray(node.data.characters, characterId, payload);
+    const beatResult = patchCharacterArray(
+      node.data.characters,
+      characterId,
+      patch,
+      { includeGallery: false }
+    );
     if (beatResult.matched) mapMatched = true;
     patchedNodes[id] = {
       ...node,
@@ -127,7 +264,12 @@ async function updateCharacterReferenceSheetInternal(
   }
 
   for (const row of beatRows ?? []) {
-    const beatResult = patchCharacterArray(row.characters as Character[] | null, characterId, payload);
+    const beatResult = patchCharacterArray(
+      row.characters as Character[] | null,
+      characterId,
+      patch,
+      { includeGallery: false }
+    );
     if (!beatResult.matched) continue;
     const { error: beatUpdateError } = await supabase
       .from('beats')
@@ -142,14 +284,47 @@ async function updateCharacterReferenceSheetInternal(
 export async function setCharacterReferenceSheetRecord(
   storyId: string,
   characterId: string,
-  payload: ReferenceSheetPayload
+  payload: {
+    url: string;
+    storageKey: string;
+    uploadedAt: string;
+    gallery: CharacterSheetGalleryEntry[];
+    cap: number;
+  }
 ): Promise<void> {
-  await updateCharacterReferenceSheetInternal(storyId, characterId, payload);
+  await updateCharacterReferenceSheetInternal(storyId, characterId, {
+    kind: 'upload',
+    ...payload,
+  });
+}
+
+export async function selectCharacterReferenceSheetRecord(
+  storyId: string,
+  characterId: string,
+  storageKey: string
+): Promise<void> {
+  await updateCharacterReferenceSheetInternal(storyId, characterId, {
+    kind: 'select',
+    storageKey,
+  });
 }
 
 export async function clearCharacterReferenceSheetRecord(
   storyId: string,
   characterId: string
 ): Promise<void> {
-  await updateCharacterReferenceSheetInternal(storyId, characterId, null);
+  await updateCharacterReferenceSheetInternal(storyId, characterId, {
+    kind: 'clear-active',
+  });
+}
+
+export async function removeCharacterReferenceSheetEntryRecord(
+  storyId: string,
+  characterId: string,
+  storageKey: string
+): Promise<void> {
+  await updateCharacterReferenceSheetInternal(storyId, characterId, {
+    kind: 'remove-entry',
+    storageKey,
+  });
 }

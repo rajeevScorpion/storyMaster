@@ -1,5 +1,11 @@
 import type { BeatMediaStatus } from './beat-media';
 
+export interface CharacterSheetGalleryEntry {
+  url: string;
+  storageKey: string;
+  uploadedAt: string;
+}
+
 export interface Character {
   id: string;
   name: string;
@@ -10,10 +16,13 @@ export interface Character {
   portraitUrl?: string;
   // User-uploaded reference sheet, kept distinct from the auto-generated
   // portrait so the source is preserved and a stable storage key remains
-  // available for future episode/continuation flows.
+  // available for future episode/continuation flows. The gallery is a
+  // cap-bounded history of past uploads (story-level only); the active
+  // pointer fields are propagated to every matching beat character.
   referenceSheetUrl?: string;
   referenceSheetStorageKey?: string;
   referenceSheetUploadedAt?: string;
+  referenceSheetGallery?: CharacterSheetGalleryEntry[];
 }
 
 export interface Option {

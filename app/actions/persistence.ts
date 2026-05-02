@@ -2,7 +2,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
-import { signStoryMapAssetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
+import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
@@ -48,15 +48,25 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
         // Strip portrait base64 + drop any leftover reference-sheet data URLs.
         // The persisted storage URL stays on the character; if the client only
         // had a base64 (unsaved upload), drop it so the JSONB row stays small.
-        characters: node.data.characters.map(c => ({
-          ...c,
-          portraitBase64: undefined,
-          referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
-            ? undefined
-            : c.referenceSheetUrl
-              ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
-              : undefined,
-        })),
+        characters: node.data.characters.map(c => {
+          const cleanedGallery = (c.referenceSheetGallery ?? [])
+            .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
+            .map((entry) => ({
+              url: normalizeStorageUrl(entry.url, 'story-assets'),
+              storageKey: entry.storageKey,
+              uploadedAt: entry.uploadedAt,
+            }));
+          return {
+            ...c,
+            portraitBase64: undefined,
+            referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
+              ? undefined
+              : c.referenceSheetUrl
+                ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
+                : undefined,
+            referenceSheetGallery: cleanedGallery.length > 0 ? cleanedGallery : undefined,
+          };
+        }),
       },
     };
   }
@@ -64,15 +74,25 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
 }
 
 function sanitizeSessionCharacters(session: StorySession): StorySession['characters'] {
-  return (session.characters || []).map((character) => ({
-    ...character,
-    portraitBase64: undefined,
-    referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
-      ? undefined
-      : character.referenceSheetUrl
-        ? normalizeStorageUrl(character.referenceSheetUrl, 'story-assets')
-        : undefined,
-  }));
+  return (session.characters || []).map((character) => {
+    const cleanedGallery = (character.referenceSheetGallery ?? [])
+      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
+      .map((entry) => ({
+        url: normalizeStorageUrl(entry.url, 'story-assets'),
+        storageKey: entry.storageKey,
+        uploadedAt: entry.uploadedAt,
+      }));
+    return {
+      ...character,
+      portraitBase64: undefined,
+      referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
+        ? undefined
+        : character.referenceSheetUrl
+          ? normalizeStorageUrl(character.referenceSheetUrl, 'story-assets')
+          : undefined,
+      referenceSheetGallery: cleanedGallery.length > 0 ? cleanedGallery : undefined,
+    };
+  });
 }
 
 function mergeCharactersWithFallback(
@@ -756,6 +776,10 @@ export async function loadStory(storyId: string): Promise<StorySession> {
       data: normalizeBeatMediaFields(storyMap.nodes[nodeId].data),
     };
   }
+  const signedRosterCharacters = await signCharacterRosterReferenceSheetUrls(
+    supabase,
+    (story.characters ?? []) as unknown as Character[]
+  );
   const storyConfig = normalizeStoryConfig({
     ...(story.story_config as any),
     isVerticalStory: story.is_vertical_story,
@@ -775,7 +799,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     currentBeat: 0,
     maxBeats: storyConfig.maxBeats,
     status: story.status as 'active' | 'completed' | 'error',
-    characters: (story.characters || []) as any,
+    characters: signedRosterCharacters as any,
     setting: (story.setting || { world: 'unknown', timeOfDay: 'unknown', mood: 'unknown' }) as any,
     storyConfig,
     storyMap,

@@ -244,15 +244,25 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
         persistedImageUrl: undefined,
         audioUrl: persistedAudioUrl ? normalizeStorageUrl(persistedAudioUrl, 'story-assets') : undefined,
         imageGallery: cleanedGallery,
-        characters: node.data.characters.map(c => ({
-          ...c,
-          portraitBase64: undefined,
-          referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
-            ? undefined
-            : c.referenceSheetUrl
-              ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
-              : undefined,
-        })),
+        characters: node.data.characters.map(c => {
+          const cleanedGallery = (c.referenceSheetGallery ?? [])
+            .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
+            .map((entry) => ({
+              url: normalizeStorageUrl(entry.url, 'story-assets'),
+              storageKey: entry.storageKey,
+              uploadedAt: entry.uploadedAt,
+            }));
+          return {
+            ...c,
+            portraitBase64: undefined,
+            referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
+              ? undefined
+              : c.referenceSheetUrl
+                ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
+                : undefined,
+            referenceSheetGallery: cleanedGallery.length > 0 ? cleanedGallery : undefined,
+          };
+        }),
       },
     };
   }
@@ -368,10 +378,12 @@ export async function signStoryMapAssetUrls(
   type FieldEntry = { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string };
   type GalleryEntry = { nodeId: string; galleryIdx: number; path: string };
   type CharacterSheetEntry = { nodeId: string; characterIdx: number; path: string };
+  type CharacterSheetGalleryEntry = { nodeId: string; characterIdx: number; galleryIdx: number; path: string };
 
   const fieldEntries: FieldEntry[] = [];
   const galleryEntries: GalleryEntry[] = [];
   const characterSheetEntries: CharacterSheetEntry[] = [];
+  const characterSheetGalleryEntries: CharacterSheetGalleryEntry[] = [];
 
   for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
     for (const field of ['imageUrl', 'audioUrl'] as const) {
@@ -392,11 +404,18 @@ export async function signStoryMapAssetUrls(
       });
     }
     (node.data.characters ?? []).forEach((character, idx) => {
-      if (!character.referenceSheetUrl) return;
-      const path = extractStoragePath(character.referenceSheetUrl, bucket);
-      if (path) {
-        characterSheetEntries.push({ nodeId, characterIdx: idx, path });
+      if (character.referenceSheetUrl) {
+        const path = extractStoragePath(character.referenceSheetUrl, bucket);
+        if (path) {
+          characterSheetEntries.push({ nodeId, characterIdx: idx, path });
+        }
       }
+      (character.referenceSheetGallery ?? []).forEach((entry, galleryIdx) => {
+        const path = extractStoragePath(entry.url, bucket);
+        if (path) {
+          characterSheetGalleryEntries.push({ nodeId, characterIdx: idx, galleryIdx, path });
+        }
+      });
     });
   }
 
@@ -415,7 +434,8 @@ export async function signStoryMapAssetUrls(
   if (
     fieldEntries.length === 0 &&
     galleryEntries.length === 0 &&
-    characterSheetEntries.length === 0
+    characterSheetEntries.length === 0 &&
+    characterSheetGalleryEntries.length === 0
   ) {
     return storyMap;
   }
@@ -424,6 +444,7 @@ export async function signStoryMapAssetUrls(
     ...fieldEntries.map((e) => e.path),
     ...galleryEntries.map((e) => e.path),
     ...characterSheetEntries.map((e) => e.path),
+    ...characterSheetGalleryEntries.map((e) => e.path),
   ];
   const { data, error } = await supabase.storage
     .from(bucket)
@@ -483,6 +504,110 @@ export async function signStoryMapAssetUrls(
     cloned.nodes[entry.nodeId] = {
       ...node,
       data: { ...node.data, characters: updatedCharacters },
+    };
+  }
+
+  const characterSheetGalleryOffset =
+    characterSheetOffset + characterSheetEntries.length;
+  for (let i = 0; i < characterSheetGalleryEntries.length; i++) {
+    const entry = characterSheetGalleryEntries[i];
+    const signed = data[characterSheetGalleryOffset + i];
+    if (signed.error || !signed.signedUrl) continue;
+
+    const node = cloned.nodes[entry.nodeId];
+    const characters = node.data.characters ?? [];
+    const updatedCharacters = characters.map((character, idx) => {
+      if (idx !== entry.characterIdx) return character;
+      const updatedGallery = (character.referenceSheetGallery ?? []).map((g, gIdx) =>
+        gIdx === entry.galleryIdx ? { ...g, url: signed.signedUrl } : g
+      );
+      return { ...character, referenceSheetGallery: updatedGallery };
+    });
+    cloned.nodes[entry.nodeId] = {
+      ...node,
+      data: { ...node.data, characters: updatedCharacters },
+    };
+  }
+
+  return cloned;
+}
+
+/**
+ * Replace Supabase Storage public URLs on a story-level Character[] roster
+ * with signed URLs. Covers both the active referenceSheetUrl pointer and
+ * every entry in referenceSheetGallery. Used at load time by `loadStory`,
+ * since `signStoryMapAssetUrls` only walks `storyMap.nodes` and the gallery
+ * lives canonically on `stories.characters`.
+ */
+export async function signCharacterRosterReferenceSheetUrls<T extends import('@/lib/types/story').Character>(
+  supabase: SupabaseClient,
+  characters: T[] | undefined | null,
+  bucket = 'story-assets',
+  expiresIn = 3600
+): Promise<T[]> {
+  if (!characters || characters.length === 0) return characters ?? [];
+
+  type ActiveEntry = { characterIdx: number; path: string };
+  type GalleryEntry = { characterIdx: number; galleryIdx: number; path: string };
+
+  const activeEntries: ActiveEntry[] = [];
+  const galleryEntries: GalleryEntry[] = [];
+
+  characters.forEach((character, idx) => {
+    if (character.referenceSheetUrl) {
+      const path = extractStoragePath(character.referenceSheetUrl, bucket);
+      if (path) activeEntries.push({ characterIdx: idx, path });
+    }
+    (character.referenceSheetGallery ?? []).forEach((entry, galleryIdx) => {
+      const path = extractStoragePath(entry.url, bucket);
+      if (path) galleryEntries.push({ characterIdx: idx, galleryIdx, path });
+    });
+  });
+
+  if (activeEntries.length === 0 && galleryEntries.length === 0) return characters;
+
+  const paths = [
+    ...activeEntries.map((e) => e.path),
+    ...galleryEntries.map((e) => e.path),
+  ];
+  const { data, error } = await supabase.storage
+    .from(bucket)
+    .createSignedUrls(paths, expiresIn);
+
+  if (error || !data) {
+    console.error('Failed to create signed URLs for character roster:', error);
+    return characters;
+  }
+
+  const cloned = characters.map((character) => ({
+    ...character,
+    referenceSheetGallery: character.referenceSheetGallery
+      ? [...character.referenceSheetGallery]
+      : character.referenceSheetGallery,
+  }));
+
+  for (let i = 0; i < activeEntries.length; i++) {
+    const entry = activeEntries[i];
+    const signed = data[i];
+    if (signed.error || !signed.signedUrl) continue;
+    cloned[entry.characterIdx] = {
+      ...cloned[entry.characterIdx],
+      referenceSheetUrl: signed.signedUrl,
+    };
+  }
+
+  const galleryOffset = activeEntries.length;
+  for (let i = 0; i < galleryEntries.length; i++) {
+    const entry = galleryEntries[i];
+    const signed = data[galleryOffset + i];
+    if (signed.error || !signed.signedUrl) continue;
+    const character = cloned[entry.characterIdx];
+    const gallery = character.referenceSheetGallery ?? [];
+    cloned[entry.characterIdx] = {
+      ...character,
+      referenceSheetGallery: gallery.map((g, gIdx) =>
+        gIdx === entry.galleryIdx ? { ...g, url: signed.signedUrl } : g
+      ),
     };
   }
 
