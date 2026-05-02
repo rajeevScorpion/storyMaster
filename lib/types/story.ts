@@ -8,6 +8,12 @@ export interface Character {
   personalitySummary: string;
   portraitBase64?: string;
   portraitUrl?: string;
+  // User-uploaded reference sheet, kept distinct from the auto-generated
+  // portrait so the source is preserved and a stable storage key remains
+  // available for future episode/continuation flows.
+  referenceSheetUrl?: string;
+  referenceSheetStorageKey?: string;
+  referenceSheetUploadedAt?: string;
 }
 
 export interface Option {

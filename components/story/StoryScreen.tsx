@@ -22,7 +22,7 @@ import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
-import type { StoryBeat } from '@/lib/types/story';
+import type { StoryBeat, StorySession } from '@/lib/types/story';
 
 function StoryboardCycler({
   gridUrl,
@@ -167,6 +167,10 @@ const PROMPT_ONLY_LANDSCAPE_ASPECT_RATIO = 16 / 9;
 const PROMPT_ONLY_VERTICAL_ASPECT_RATIO = 9 / 16;
 const PROMPT_ONLY_ASPECT_RATIO_TOLERANCE = 0.03;
 
+const CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+const CHARACTER_SHEET_SQUARE_ASPECT_RATIO = 1;
+const CHARACTER_SHEET_MIN_DIMENSION = 512;
+
 type PromptOnlyUploadPreview = {
   dataUrl: string;
   fileName: string;
@@ -184,14 +188,58 @@ function buildBeatPromptCopyText(beat: StoryBeat): string {
     || '';
 }
 
-function buildCharacterPromptCopyItems(beat: StoryBeat): Array<{ key: string; label: string; promptText: string }> {
-  return (beat.storyboardPlan?.portraitTasks ?? [])
-    .map((task, index) => ({
-      key: `${task.characterId}:${index}`,
-      label: task.characterName,
-      promptText: task.finalPromptText?.trim() || task.prompt?.trim() || '',
-    }))
-    .filter((task) => task.promptText);
+type CharacterPromptCopyItem = {
+  key: string;
+  label: string;
+  promptText: string;
+  characterId: string;
+  characterName: string;
+  referenceSheetUrl?: string;
+};
+
+function buildCharacterPromptCopyItems(
+  beat: StoryBeat,
+  session: StorySession
+): CharacterPromptCopyItem[] {
+  // Portrait tasks are only emitted for new / visually-changed characters in
+  // this beat, so they tell us which characters have a "Copy Sheet" prompt
+  // available. Every other on-screen character still gets an Upload entry.
+  const promptByCharacterId = new Map<string, string>();
+  for (const task of beat.storyboardPlan?.portraitTasks ?? []) {
+    const text = task.finalPromptText?.trim() || task.prompt?.trim() || '';
+    if (text) {
+      promptByCharacterId.set(task.characterId, text);
+    }
+  }
+
+  const referenceLookup = new Map<string, string>();
+  for (const character of session.characters ?? []) {
+    if (character.referenceSheetUrl) {
+      referenceLookup.set(character.id, character.referenceSheetUrl);
+    }
+  }
+  for (const character of beat.characters ?? []) {
+    if (character.referenceSheetUrl && !referenceLookup.has(character.id)) {
+      referenceLookup.set(character.id, character.referenceSheetUrl);
+    }
+  }
+
+  const items: CharacterPromptCopyItem[] = [];
+  const seenIds = new Set<string>();
+  for (const character of beat.characters ?? []) {
+    if (!character.id || seenIds.has(character.id)) continue;
+    seenIds.add(character.id);
+    items.push({
+      key: `${character.id}:${items.length}`,
+      label: character.name,
+      promptText: promptByCharacterId.get(character.id) ?? '',
+      characterId: character.id,
+      characterName: character.name,
+      referenceSheetUrl: referenceLookup.get(character.id),
+    });
+  }
+
+  return items;
 }
 
 function hasRequiredPromptOnlyAspectRatio(width: number, height: number, targetRatio: number): boolean {
@@ -247,6 +295,48 @@ function readImageDimensions(dataUrl: string): Promise<{ width: number; height: 
   });
 }
 
+function getCharacterSheetResolutionAdvice(width: number, height: number): string {
+  const min = Math.min(width, height);
+  if (min >= 1024) {
+    return 'Strong reference resolution.';
+  }
+  if (min >= CHARACTER_SHEET_MIN_DIMENSION) {
+    return 'Acceptable, but 1024x1024 or above gives better continuity.';
+  }
+  return `Below the recommended minimum. Use at least ${CHARACTER_SHEET_MIN_DIMENSION}x${CHARACTER_SHEET_MIN_DIMENSION}.`;
+}
+
+async function validateCharacterSheetUpload(file: File, maxBytes: number): Promise<PromptOnlyUploadPreview> {
+  if (!CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES)[number])) {
+    throw new Error('Use a JPG, PNG, or WebP image.');
+  }
+
+  if (file.size > maxBytes) {
+    const limitMb = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
+    throw new Error(`Image must be ${limitMb} MB or smaller.`);
+  }
+
+  const dataUrl = await readFileAsDataUrl(file);
+  const { width, height } = await readImageDimensions(dataUrl);
+
+  if (!hasRequiredPromptOnlyAspectRatio(width, height, CHARACTER_SHEET_SQUARE_ASPECT_RATIO)) {
+    throw new Error('Character sheets must use a 1:1 aspect ratio.');
+  }
+  if (Math.min(width, height) < CHARACTER_SHEET_MIN_DIMENSION) {
+    throw new Error(`Image must be at least ${CHARACTER_SHEET_MIN_DIMENSION}x${CHARACTER_SHEET_MIN_DIMENSION}.`);
+  }
+
+  return {
+    dataUrl,
+    fileName: file.name,
+    fileSize: file.size,
+    mimeType: file.type,
+    width,
+    height,
+    resolutionAdvice: getCharacterSheetResolutionAdvice(width, height),
+  };
+}
+
 async function validatePromptOnlyImageFile(file: File, isVerticalStory: boolean): Promise<PromptOnlyUploadPreview> {
   if (!PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof PROMPT_ONLY_ACCEPTED_IMAGE_TYPES)[number])) {
     throw new Error('Use a JPG, PNG, or WebP image.');
@@ -295,6 +385,8 @@ interface StoryRuntimeSettings {
   promptOnlyMaxImagesPerBeat: number;
   promptOnlyImageGalleryCleanupEnabled: boolean;
   promptOnlyImageGalleryCleanupDays: number;
+  characterSheetUploadEnabled: boolean;
+  characterSheetUploadMaxBytes: number;
 }
 
 export default function StoryScreen() {
@@ -324,6 +416,8 @@ export default function StoryScreen() {
   const selectPromptOnlyBeatImage = useStoryStore((state) => state.selectPromptOnlyBeatImage);
   const deletePromptOnlyBeatImage = useStoryStore((state) => state.deletePromptOnlyBeatImage);
   const permanentlyDeletePromptOnlyBeatImage = useStoryStore((state) => state.permanentlyDeletePromptOnlyBeatImage);
+  const setCharacterReferenceSheet = useStoryStore((state) => state.setCharacterReferenceSheet);
+  const deleteCharacterReferenceSheet = useStoryStore((state) => state.deleteCharacterReferenceSheet);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
@@ -343,6 +437,8 @@ export default function StoryScreen() {
     promptOnlyMaxImagesPerBeat: 3,
     promptOnlyImageGalleryCleanupEnabled: true,
     promptOnlyImageGalleryCleanupDays: 7,
+    characterSheetUploadEnabled: true,
+    characterSheetUploadMaxBytes: 5 * 1024 * 1024,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -439,6 +535,8 @@ export default function StoryScreen() {
       selectPromptOnlyBeatImage={selectPromptOnlyBeatImage}
       deletePromptOnlyBeatImage={deletePromptOnlyBeatImage}
       permanentlyDeletePromptOnlyBeatImage={permanentlyDeletePromptOnlyBeatImage}
+      setCharacterReferenceSheet={setCharacterReferenceSheet}
+      deleteCharacterReferenceSheet={deleteCharacterReferenceSheet}
     />
   );
 }
@@ -474,6 +572,8 @@ function StoryScreenInner({
   selectPromptOnlyBeatImage,
   deletePromptOnlyBeatImage,
   permanentlyDeletePromptOnlyBeatImage,
+  setCharacterReferenceSheet,
+  deleteCharacterReferenceSheet,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -504,6 +604,8 @@ function StoryScreenInner({
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string) => Promise<void>;
+  deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
 }) {
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
@@ -527,8 +629,12 @@ function StoryScreenInner({
   const [pendingDeleteStorageKey, setPendingDeleteStorageKey] = useState<string | null>(null);
   const [isPermanentlyDeletingKey, setIsPermanentlyDeletingKey] = useState<string | null>(null);
   const [showPromptToolsPopover, setShowPromptToolsPopover] = useState(false);
-  const promptToolsPopoverRef = useRef<HTMLDivElement>(null);
-  const promptToolsToggleRef = useRef<HTMLButtonElement>(null);
+  const [characterSheetTarget, setCharacterSheetTarget] = useState<{ characterId: string; characterName: string; existingSheet: boolean } | null>(null);
+  const [characterSheetPreview, setCharacterSheetPreview] = useState<PromptOnlyUploadPreview | null>(null);
+  const [characterSheetError, setCharacterSheetError] = useState<string | null>(null);
+  const [isUploadingCharacterSheet, setIsUploadingCharacterSheet] = useState(false);
+  const [pendingCharacterDeleteId, setPendingCharacterDeleteId] = useState<string | null>(null);
+  const characterSheetInputRef = useRef<HTMLInputElement>(null);
   const visibleReaderPanel: StoryReaderPanel = isEnding ? 'story' : activeReaderPanel;
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
     enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
@@ -582,7 +688,7 @@ function StoryScreenInner({
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(normalizedCurrentBeat.audioUrl, currentNodeId);
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
-  const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat);
+  const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat, session);
   const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
   const canPublishStandardStoryline = Boolean(
     publishPath?.beats.every((beat) => {
@@ -702,25 +808,14 @@ function StoryScreenInner({
     }
   }, [saveStatus, onSave, isSaving]);
 
-  // Close the prompt-tools popover on click-outside or Escape.
+  // Close the prompt-tools modal on Escape — backdrop clicks are handled inline on the overlay.
   useEffect(() => {
     if (!showPromptToolsPopover) return;
-    const handlePointer = (event: MouseEvent | TouchEvent) => {
-      const target = event.target as Node | null;
-      if (!target) return;
-      if (promptToolsPopoverRef.current?.contains(target)) return;
-      if (promptToolsToggleRef.current?.contains(target)) return;
-      setShowPromptToolsPopover(false);
-    };
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setShowPromptToolsPopover(false);
     };
-    document.addEventListener('mousedown', handlePointer);
-    document.addEventListener('touchstart', handlePointer);
     document.addEventListener('keydown', handleKey);
     return () => {
-      document.removeEventListener('mousedown', handlePointer);
-      document.removeEventListener('touchstart', handlePointer);
       document.removeEventListener('keydown', handleKey);
     };
   }, [showPromptToolsPopover]);
@@ -884,6 +979,77 @@ function StoryScreenInner({
       setIsPermanentlyDeletingKey(null);
     }
   }, [currentNodeId, permanentlyDeletePromptOnlyBeatImage]);
+
+  const openCharacterSheetUpload = useCallback((characterId: string, characterName: string, existingSheet: boolean) => {
+    setCharacterSheetTarget({ characterId, characterName, existingSheet });
+    setCharacterSheetPreview(null);
+    setCharacterSheetError(null);
+    setIsUploadingCharacterSheet(false);
+    if (characterSheetInputRef.current) {
+      characterSheetInputRef.current.value = '';
+    }
+  }, []);
+
+  const closeCharacterSheetUpload = useCallback(() => {
+    if (isUploadingCharacterSheet) return;
+    setCharacterSheetTarget(null);
+    setCharacterSheetPreview(null);
+    setCharacterSheetError(null);
+    if (characterSheetInputRef.current) {
+      characterSheetInputRef.current.value = '';
+    }
+  }, [isUploadingCharacterSheet]);
+
+  const handleCharacterSheetFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setCharacterSheetError(null);
+    try {
+      const validated = await validateCharacterSheetUpload(file, cycleSettings.characterSheetUploadMaxBytes);
+      setCharacterSheetPreview(validated);
+    } catch (error: any) {
+      setCharacterSheetPreview(null);
+      setCharacterSheetError(error?.message || 'Could not validate the selected image.');
+    } finally {
+      event.target.value = '';
+    }
+  }, [cycleSettings.characterSheetUploadMaxBytes]);
+
+  const handleCharacterSheetUpload = useCallback(async () => {
+    if (!characterSheetTarget) return;
+    if (!characterSheetPreview) {
+      setCharacterSheetError('Choose an image before uploading.');
+      return;
+    }
+
+    setIsUploadingCharacterSheet(true);
+    setCharacterSheetError(null);
+    try {
+      await setCharacterReferenceSheet(characterSheetTarget.characterId, characterSheetPreview.dataUrl);
+      setCharacterSheetTarget(null);
+      setCharacterSheetPreview(null);
+      setShowPromptToolsPopover(false);
+      if (characterSheetInputRef.current) {
+        characterSheetInputRef.current.value = '';
+      }
+    } catch (error: any) {
+      setCharacterSheetError(error?.message || 'Could not upload this character sheet.');
+    } finally {
+      setIsUploadingCharacterSheet(false);
+    }
+  }, [characterSheetTarget, characterSheetPreview, setCharacterReferenceSheet]);
+
+  const handleCharacterSheetDelete = useCallback(async (characterId: string) => {
+    setPendingCharacterDeleteId(characterId);
+    try {
+      await deleteCharacterReferenceSheet(characterId);
+    } catch {
+      // Keep the existing reference if delete fails.
+    } finally {
+      setPendingCharacterDeleteId(null);
+    }
+  }, [deleteCharacterReferenceSheet]);
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -1178,7 +1344,6 @@ function StoryScreenInner({
               {(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0) && (
                 <>
                   <button
-                    ref={promptToolsToggleRef}
                     type="button"
                     onClick={() => setShowPromptToolsPopover((open) => !open)}
                     aria-expanded={showPromptToolsPopover}
@@ -1192,87 +1357,6 @@ function StoryScreenInner({
                   >
                     <Layers className="w-5 h-5" />
                   </button>
-                  {showPromptToolsPopover && (
-                    <div
-                      ref={promptToolsPopoverRef}
-                      role="dialog"
-                      aria-label={isPromptOnlyStory ? 'Prompt and image tools' : 'Prompt tools'}
-                      className="absolute right-0 top-full z-30 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-sky-500/20 bg-neutral-950/95 p-5 shadow-2xl backdrop-blur-md"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-sky-200">
-                          {isPromptOnlyStory ? 'Prompt and Image Tools' : 'Prompt Tools'}
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => setShowPromptToolsPopover(false)}
-                          className="rounded-full p-1 text-neutral-400 hover:bg-white/10 hover:text-neutral-100"
-                          title="Close"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                      <p className="mt-3 text-sm leading-relaxed text-neutral-300">
-                        {isPromptOnlyStory
-                          ? 'This story was generated without images. Copy the exact prompts for external image generation, then upload or replace a 16:9 beat image here.'
-                          : 'Copy the exact prompt text that was sent to the image model for this beat, including any character-sheet prompts stored for continuity.'}
-                      </p>
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {beatPromptText && (
-                          <button
-                            type="button"
-                            onClick={() => void copyPromptText('beat', beatPromptText)}
-                            className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
-                            title="Copy this beat's image prompt"
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                            {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
-                          </button>
-                        )}
-                        {isPromptOnlyStory && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setShowPromptToolsPopover(false);
-                              openUploadModal();
-                            }}
-                            className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                            title={displayImageUrl ? 'Replace this beat’s image' : 'Upload a 16:9 image for this beat'}
-                          >
-                            <Upload className="h-3.5 w-3.5" />
-                            {displayImageUrl ? 'Replace Image' : 'Upload Image'}
-                          </button>
-                        )}
-                        {isPromptOnlyStory && displayImageUrl && (
-                          <button
-                            type="button"
-                            onClick={() => void handlePromptOnlyDelete()}
-                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition-colors hover:bg-rose-500/20"
-                            title="Remove the uploaded image for this beat"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete Image
-                          </button>
-                        )}
-                      </div>
-                      {characterPromptItems.length > 0 && (
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {characterPromptItems.map((item) => (
-                            <button
-                              key={item.key}
-                              type="button"
-                              onClick={() => void copyPromptText(item.key, item.promptText)}
-                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
-                              title={`Copy the ${item.label} character sheet prompt`}
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                              {copiedPromptKey === item.key ? `Copied ${item.label}` : `Copy ${item.label} Sheet`}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </>
               )}
             </div>
@@ -1611,6 +1695,149 @@ function StoryScreenInner({
       </main>
 
       <AnimatePresence>
+        {showPromptToolsPopover && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                setShowPromptToolsPopover(false);
+              }
+            }}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 8 }}
+              role="dialog"
+              aria-label={isPromptOnlyStory ? 'Prompt and image tools' : 'Prompt tools'}
+              className="flex max-h-[min(85vh,40rem)] w-full max-w-xl flex-col rounded-[28px] border border-sky-500/20 bg-neutral-900/95 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-white/5 px-6 pb-4 pt-6">
+                <div>
+                  <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-sky-200">
+                    {isPromptOnlyStory ? 'Prompt and Image Tools' : 'Prompt Tools'}
+                  </p>
+                  <p className="mt-2 text-sm leading-relaxed text-neutral-300">
+                    {isPromptOnlyStory
+                      ? `This story was generated without images. Copy the exact prompts for external image generation, then upload or replace a ${isVerticalStory ? '9:16' : '16:9'} beat image here.`
+                      : 'Copy the exact prompt text that was sent to the image model for this beat, including any character-sheet prompts stored for continuity.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPromptToolsPopover(false)}
+                  className="rounded-full p-1 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
+                  title="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+                <div className="flex flex-wrap gap-2">
+                  {beatPromptText && (
+                    <button
+                      type="button"
+                      onClick={() => void copyPromptText('beat', beatPromptText)}
+                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
+                      title="Copy this beat's image prompt"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                      {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
+                    </button>
+                  )}
+                  {isPromptOnlyStory && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPromptToolsPopover(false);
+                        openUploadModal();
+                      }}
+                      className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                      title={displayImageUrl ? 'Replace this beat’s image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      {displayImageUrl ? 'Replace Image' : 'Upload Image'}
+                    </button>
+                  )}
+                  {isPromptOnlyStory && displayImageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => void handlePromptOnlyDelete()}
+                      className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition-colors hover:bg-rose-500/20"
+                      title="Remove the uploaded image for this beat"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete Image
+                    </button>
+                  )}
+                </div>
+                {characterPromptItems.length > 0 && (
+                  <div className="mt-6 flex flex-col gap-4">
+                    <p className="text-[11px] font-sans uppercase tracking-[0.18em] text-neutral-400">
+                      Characters in this beat
+                    </p>
+                    {characterPromptItems.map((item) => {
+                      const hasSheet = Boolean(item.referenceSheetUrl);
+                      const hasPrompt = Boolean(item.promptText);
+                      const isDeleting = pendingCharacterDeleteId === item.characterId;
+                      return (
+                        <div
+                          key={item.key}
+                          className="rounded-2xl border border-white/5 bg-neutral-950/40 p-4"
+                        >
+                          <p className="text-sm font-medium text-neutral-100">{item.label}</p>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {hasPrompt && (
+                              <button
+                                type="button"
+                                onClick={() => void copyPromptText(item.key, item.promptText)}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
+                                title={`Copy the ${item.label} character sheet prompt`}
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                                {copiedPromptKey === item.key ? 'Copied Sheet' : 'Copy Sheet'}
+                              </button>
+                            )}
+                            {cycleSettings.characterSheetUploadEnabled && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowPromptToolsPopover(false);
+                                  openCharacterSheetUpload(item.characterId, item.characterName, hasSheet);
+                                }}
+                                className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                                title={hasSheet
+                                  ? `Replace the uploaded reference sheet for ${item.characterName}`
+                                  : `Upload a 1:1 reference sheet for ${item.characterName}`}
+                              >
+                                <Upload className="h-3.5 w-3.5" />
+                                {hasSheet ? 'Replace Sheet' : 'Upload Sheet'}
+                              </button>
+                            )}
+                            {cycleSettings.characterSheetUploadEnabled && hasSheet && (
+                              <button
+                                type="button"
+                                onClick={() => void handleCharacterSheetDelete(item.characterId)}
+                                disabled={isDeleting}
+                                className="inline-flex items-center justify-center rounded-full border border-rose-500/25 bg-rose-500/10 p-2 text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                title={`Remove the uploaded reference sheet for ${item.characterName}`}
+                              >
+                                {isDeleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
         {showUploadModal && isPromptOnlyStory && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -1843,6 +2070,120 @@ function StoryScreenInner({
                 >
                   {isUploadingPromptOnlyImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                   Upload Image
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {characterSheetTarget && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.98, y: 8 }}
+              className="w-full max-w-2xl rounded-[28px] border border-white/10 bg-neutral-900/95 p-6 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-sky-200">
+                    {characterSheetTarget.existingSheet ? 'Replace Character Sheet' : 'Upload Character Sheet'}
+                  </p>
+                  <h3 className="mt-2 text-2xl font-serif text-neutral-100">
+                    {characterSheetTarget.characterName}
+                  </h3>
+                  <p className="mt-1 text-sm text-neutral-400">
+                    Reference sheets persist with this character so future episodes and continuations can reuse them.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeCharacterSheetUpload}
+                  className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
+                  aria-label="Close character sheet upload dialog"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                <p>Accepted formats: JPG, PNG, or WebP.</p>
+                <p className="mt-1">
+                  Maximum file size: {Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.
+                </p>
+                <p className="mt-1">Required aspect ratio: 1:1 (square).</p>
+                <p className="mt-1">
+                  Minimum resolution: {CHARACTER_SHEET_MIN_DIMENSION}x{CHARACTER_SHEET_MIN_DIMENSION}. Recommended: 1024x1024 or above.
+                </p>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-3">
+                <input
+                  ref={characterSheetInputRef}
+                  type="file"
+                  accept={CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.join(',')}
+                  onChange={handleCharacterSheetFileSelected}
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => characterSheetInputRef.current?.click()}
+                  className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10"
+                >
+                  <Upload className="h-4 w-4" />
+                  {characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
+                </button>
+              </div>
+
+              {characterSheetPreview && (
+                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                  <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
+                    <Image
+                      src={characterSheetPreview.dataUrl}
+                      alt={`${characterSheetTarget.characterName} reference preview`}
+                      fill
+                      className="object-cover"
+                      unoptimized
+                    />
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                    <p className="font-medium text-neutral-100">{characterSheetPreview.fileName}</p>
+                    <p className="mt-2">Format: {characterSheetPreview.mimeType}</p>
+                    <p className="mt-1">Size: {(characterSheetPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                    <p className="mt-1">Resolution: {characterSheetPreview.width}x{characterSheetPreview.height}</p>
+                    <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
+                    <p className="mt-1 text-sm text-neutral-300">{characterSheetPreview.resolutionAdvice}</p>
+                  </div>
+                </div>
+              )}
+
+              {characterSheetError && (
+                <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                  {characterSheetError}
+                </div>
+              )}
+
+              <div className="mt-6 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeCharacterSheetUpload}
+                  className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCharacterSheetUpload()}
+                  disabled={!characterSheetPreview || isUploadingCharacterSheet}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isUploadingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                  {characterSheetTarget.existingSheet ? 'Replace Sheet' : 'Upload Sheet'}
                 </button>
               </div>
             </motion.div>

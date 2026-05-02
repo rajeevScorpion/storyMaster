@@ -23,6 +23,7 @@ import {
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
+import { setCharacterReferenceSheetRecord, clearCharacterReferenceSheetRecord } from '@/app/actions/character-assets';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, deleteAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
@@ -141,6 +142,8 @@ interface StoryState {
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string) => Promise<void>;
+  deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   clearPublishResult: () => void;
   clearError: () => void;
 }
@@ -546,6 +549,47 @@ function updateSessionBeat(
   updater: (beat: StoryBeat) => StoryBeat
 ): StorySession {
   return deriveSessionFields(session, updateStoryMapBeat(session.storyMap, nodeId, updater));
+}
+
+function slugifyCharacterName(name: string): string {
+  const trimmed = (name || '').toLowerCase().trim();
+  const slug = trimmed.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return slug || 'character';
+}
+
+function applyCharacterPatchEverywhere(
+  session: StorySession,
+  characterId: string,
+  patcher: (character: Character) => Character
+): StorySession {
+  const nextCharacters = (session.characters ?? []).map((character) =>
+    character.id === characterId ? patcher(character) : character
+  );
+
+  const nextNodes: StoryMap['nodes'] = {};
+  for (const [id, node] of Object.entries(session.storyMap.nodes)) {
+    const beatCharacters = node.data.characters ?? [];
+    let touched = false;
+    const patchedBeatCharacters = beatCharacters.map((character) => {
+      if (character.id !== characterId) return character;
+      touched = true;
+      return patcher(character);
+    });
+    nextNodes[id] = touched
+      ? {
+          ...node,
+          data: {
+            ...node.data,
+            characters: patchedBeatCharacters,
+          },
+        }
+      : node;
+  }
+
+  return deriveSessionFields(
+    { ...session, characters: nextCharacters },
+    { ...session.storyMap, nodes: nextNodes }
+  );
 }
 
 function shouldStageBeatImage(beat: StoryBeat): boolean {
@@ -3352,6 +3396,141 @@ export const useStoryStore = create<StoryState>()(
           })),
           saveStatus: session.savedStoryId ? 'saved' : 'unsaved',
         });
+      },
+
+      setCharacterReferenceSheet: async (characterId: string, imageDataUrl: string) => {
+        const { session } = get();
+        if (!session) return;
+
+        const findCharacter = (s: StorySession): Character | undefined => {
+          const fromRoster = s.characters?.find((c) => c.id === characterId);
+          if (fromRoster) return fromRoster;
+          for (const node of Object.values(s.storyMap.nodes)) {
+            const fromBeat = node.data.characters?.find((c) => c.id === characterId);
+            if (fromBeat) return fromBeat;
+          }
+          return undefined;
+        };
+
+        const character = findCharacter(session);
+        if (!character) {
+          throw new Error('Could not locate character to attach reference sheet.');
+        }
+
+        const previousSnapshot = applyCharacterPatchEverywhere(session, characterId, (existing) => ({ ...existing }));
+
+        const uploadedAt = new Date().toISOString();
+        const slug = slugifyCharacterName(character.name);
+        const storageKeySuffix = `character-sheets/${slug}_${characterId}.webp`;
+
+        if (session.savedStoryId) {
+          const userId = await resolveCurrentUserId(session.savedByUserId);
+          if (userId) {
+            const storageKey = `${userId}/${session.savedStoryId}/${storageKeySuffix}`;
+
+            updateStoreSaveUi({
+              session: applyCharacterPatchEverywhere(session, characterId, (existing) => ({
+                ...existing,
+                referenceSheetUrl: imageDataUrl,
+                referenceSheetStorageKey: storageKey,
+                referenceSheetUploadedAt: uploadedAt,
+              })),
+              saveStatus: 'saving',
+            });
+
+            try {
+              const uploadedUrl = await uploadAsset('story-assets', storageKey, imageDataUrl);
+              await setCharacterReferenceSheetRecord(session.savedStoryId, characterId, {
+                url: uploadedUrl,
+                storageKey,
+                uploadedAt,
+              });
+
+              const latestSession = get().session;
+              if (!latestSession) return;
+              updateStoreSaveUi({
+                session: applyCharacterPatchEverywhere(latestSession, characterId, (existing) => ({
+                  ...existing,
+                  // Keep the data URL locally for immediate render — bucket is private,
+                  // signed URLs are restored on next load via the existing swap pipeline.
+                  referenceSheetUrl: imageDataUrl,
+                  referenceSheetStorageKey: storageKey,
+                  referenceSheetUploadedAt: uploadedAt,
+                })),
+                saveStatus: 'saved',
+              });
+              return;
+            } catch (error) {
+              const latestSession = get().session;
+              if (latestSession) {
+                updateStoreSaveUi({
+                  session: previousSnapshot,
+                });
+              }
+              throw error;
+            }
+          }
+        }
+
+        // Unsaved local-only fallback — keep the data URL, leave storage key empty so
+        // a later cloud save knows this still needs uploading.
+        updateStoreSaveUi({
+          session: applyCharacterPatchEverywhere(session, characterId, (existing) => ({
+            ...existing,
+            referenceSheetUrl: imageDataUrl,
+            referenceSheetStorageKey: undefined,
+            referenceSheetUploadedAt: uploadedAt,
+          })),
+          saveStatus: 'unsaved',
+        });
+      },
+
+      deleteCharacterReferenceSheet: async (characterId: string) => {
+        const { session } = get();
+        if (!session) return;
+
+        let storageKey: string | undefined;
+        for (const character of session.characters ?? []) {
+          if (character.id === characterId) {
+            storageKey = character.referenceSheetStorageKey;
+            break;
+          }
+        }
+        if (!storageKey) {
+          for (const node of Object.values(session.storyMap.nodes)) {
+            const match = node.data.characters?.find((c) => c.id === characterId);
+            if (match?.referenceSheetStorageKey) {
+              storageKey = match.referenceSheetStorageKey;
+              break;
+            }
+          }
+        }
+
+        const previousSnapshot = applyCharacterPatchEverywhere(session, characterId, (existing) => ({ ...existing }));
+
+        updateStoreSaveUi({
+          session: applyCharacterPatchEverywhere(session, characterId, (existing) => {
+            const next = { ...existing };
+            delete next.referenceSheetUrl;
+            delete next.referenceSheetStorageKey;
+            delete next.referenceSheetUploadedAt;
+            return next;
+          }),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+        });
+
+        try {
+          if (storageKey) {
+            await deleteAsset('story-assets', storageKey);
+          }
+          if (session.savedStoryId) {
+            await clearCharacterReferenceSheetRecord(session.savedStoryId, characterId);
+            updateStoreSaveUi({ saveStatus: 'saved' });
+          }
+        } catch (error) {
+          updateStoreSaveUi({ session: previousSnapshot });
+          throw error;
+        }
       },
 
       clearPublishResult: () => {

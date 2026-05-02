@@ -71,7 +71,11 @@ export function sanitizeCharactersForPrompt(characters: Character[] | undefined 
     type: character.type,
     appearanceSummary: truncateText(character.appearanceSummary || '', CHARACTER_APPEARANCE_MAX_LENGTH),
     personalitySummary: truncateText(character.personalitySummary || '', CHARACTER_PERSONALITY_MAX_LENGTH),
-    hasReferencePortrait: Boolean(character.portraitBase64 || character.portraitUrl),
+    hasReferencePortrait: Boolean(
+      character.portraitBase64 ||
+      character.portraitUrl ||
+      character.referenceSheetUrl
+    ),
   }));
 }
 
@@ -267,6 +271,7 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
         hasReferencePortrait: Boolean(
           character.portraitBase64 ||
           character.portraitUrl ||
+          character.referenceSheetUrl ||
           existing?.hasReferencePortrait
         ),
       });
@@ -283,7 +288,11 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
         personalitySummary: truncateText(character.personalitySummary || '', CHARACTER_PERSONALITY_MAX_LENGTH),
         introducedAtBeat: sessionState?.currentBeat || 1,
         seenInBeats: uniqueNumbers([sessionState?.currentBeat || 1]),
-        hasReferencePortrait: Boolean(character.portraitBase64 || character.portraitUrl),
+        hasReferencePortrait: Boolean(
+          character.portraitBase64 ||
+          character.portraitUrl ||
+          character.referenceSheetUrl
+        ),
       });
     }
   }
