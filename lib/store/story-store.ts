@@ -3448,12 +3448,16 @@ export const useStoryStore = create<StoryState>()(
 
               const latestSession = get().session;
               if (!latestSession) return;
+              // Swap the optimistic data URL for the persisted storage URL — keeping
+              // the base64 around would balloon every subsequent server-action save
+              // past the 10 MB body cap. The bucket is private, so the URL won't
+              // render until signStoryMapAssetUrls re-signs it on the next load,
+              // but the character-sheet UI is text-only ("Replace Sheet"), so no
+              // visible regression in the current session.
               updateStoreSaveUi({
                 session: applyCharacterPatchEverywhere(latestSession, characterId, (existing) => ({
                   ...existing,
-                  // Keep the data URL locally for immediate render — bucket is private,
-                  // signed URLs are restored on next load via the existing swap pipeline.
-                  referenceSheetUrl: imageDataUrl,
+                  referenceSheetUrl: uploadedUrl,
                   referenceSheetStorageKey: storageKey,
                   referenceSheetUploadedAt: uploadedAt,
                 })),

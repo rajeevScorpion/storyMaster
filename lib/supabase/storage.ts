@@ -247,6 +247,11 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
         characters: node.data.characters.map(c => ({
           ...c,
           portraitBase64: undefined,
+          referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
+            ? undefined
+            : c.referenceSheetUrl
+              ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
+              : undefined,
         })),
       },
     };
@@ -362,9 +367,11 @@ export async function signStoryMapAssetUrls(
 ): Promise<StoryMap> {
   type FieldEntry = { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string };
   type GalleryEntry = { nodeId: string; galleryIdx: number; path: string };
+  type CharacterSheetEntry = { nodeId: string; characterIdx: number; path: string };
 
   const fieldEntries: FieldEntry[] = [];
   const galleryEntries: GalleryEntry[] = [];
+  const characterSheetEntries: CharacterSheetEntry[] = [];
 
   for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
     for (const field of ['imageUrl', 'audioUrl'] as const) {
@@ -384,6 +391,13 @@ export async function signStoryMapAssetUrls(
         }
       });
     }
+    (node.data.characters ?? []).forEach((character, idx) => {
+      if (!character.referenceSheetUrl) return;
+      const path = extractStoragePath(character.referenceSheetUrl, bucket);
+      if (path) {
+        characterSheetEntries.push({ nodeId, characterIdx: idx, path });
+      }
+    });
   }
 
   // Infer audio path from image path when audioUrl is missing but imageUrl exists.
@@ -398,9 +412,19 @@ export async function signStoryMapAssetUrls(
     }
   }
 
-  if (fieldEntries.length === 0 && galleryEntries.length === 0) return storyMap;
+  if (
+    fieldEntries.length === 0 &&
+    galleryEntries.length === 0 &&
+    characterSheetEntries.length === 0
+  ) {
+    return storyMap;
+  }
 
-  const paths = [...fieldEntries.map((e) => e.path), ...galleryEntries.map((e) => e.path)];
+  const paths = [
+    ...fieldEntries.map((e) => e.path),
+    ...galleryEntries.map((e) => e.path),
+    ...characterSheetEntries.map((e) => e.path),
+  ];
   const { data, error } = await supabase.storage
     .from(bucket)
     .createSignedUrls(paths, expiresIn);
@@ -440,6 +464,25 @@ export async function signStoryMapAssetUrls(
     cloned.nodes[entry.nodeId] = {
       ...node,
       data: { ...node.data, imageGallery: updatedGallery },
+    };
+  }
+
+  const characterSheetOffset = fieldEntries.length + galleryEntries.length;
+  for (let i = 0; i < characterSheetEntries.length; i++) {
+    const entry = characterSheetEntries[i];
+    const signed = data[characterSheetOffset + i];
+    if (signed.error || !signed.signedUrl) continue;
+
+    const node = cloned.nodes[entry.nodeId];
+    const characters = node.data.characters ?? [];
+    const updatedCharacters = characters.map((character, idx) =>
+      idx === entry.characterIdx
+        ? { ...character, referenceSheetUrl: signed.signedUrl }
+        : character
+    );
+    cloned.nodes[entry.nodeId] = {
+      ...node,
+      data: { ...node.data, characters: updatedCharacters },
     };
   }
 

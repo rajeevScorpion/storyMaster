@@ -45,10 +45,17 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
           ? normalizeStorageUrl(persistedAudioUrl, 'story-assets')
           : undefined,
         imageGallery: cleanedGallery,
-        // Strip portrait base64 from characters — portraitUrl is preserved
+        // Strip portrait base64 + drop any leftover reference-sheet data URLs.
+        // The persisted storage URL stays on the character; if the client only
+        // had a base64 (unsaved upload), drop it so the JSONB row stays small.
         characters: node.data.characters.map(c => ({
           ...c,
           portraitBase64: undefined,
+          referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
+            ? undefined
+            : c.referenceSheetUrl
+              ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
+              : undefined,
         })),
       },
     };
@@ -60,6 +67,11 @@ function sanitizeSessionCharacters(session: StorySession): StorySession['charact
   return (session.characters || []).map((character) => ({
     ...character,
     portraitBase64: undefined,
+    referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
+      ? undefined
+      : character.referenceSheetUrl
+        ? normalizeStorageUrl(character.referenceSheetUrl, 'story-assets')
+        : undefined,
   }));
 }
 
