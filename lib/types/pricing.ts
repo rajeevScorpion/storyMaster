@@ -246,10 +246,37 @@ export const PRICING_RUNTIME_SETTING_DEFINITIONS: readonly PricingRuntimeSetting
   },
 ] as const;
 
+export const VIDEO_EXPORT_VERTICAL_RESOLUTIONS = ['720x1280', '1080x1920'] as const;
+export type VideoExportVerticalResolution = (typeof VIDEO_EXPORT_VERTICAL_RESOLUTIONS)[number];
+
+export const VIDEO_EXPORT_WATERMARK_MODES = ['auto', 'always', 'hidden'] as const;
+export type VideoExportWatermarkMode = (typeof VIDEO_EXPORT_WATERMARK_MODES)[number];
+
+export const VIDEO_EXPORT_WATERMARK_POSITIONS = ['top-left', 'top-right'] as const;
+export type VideoExportWatermarkPosition = (typeof VIDEO_EXPORT_WATERMARK_POSITIONS)[number];
+
+export const VIDEO_EXPORT_WATERMARK_SIZES = ['small', 'medium', 'large'] as const;
+export type VideoExportWatermarkSize = (typeof VIDEO_EXPORT_WATERMARK_SIZES)[number];
+
+export interface VideoExportPreset {
+  verticalResolution: VideoExportVerticalResolution;
+  watermarkMode: VideoExportWatermarkMode;
+  watermarkPosition: VideoExportWatermarkPosition;
+  watermarkSize: VideoExportWatermarkSize;
+}
+
+export const DEFAULT_VIDEO_EXPORT_PRESET: VideoExportPreset = {
+  verticalResolution: '720x1280',
+  watermarkMode: 'auto',
+  watermarkPosition: 'top-left',
+  watermarkSize: 'medium',
+};
+
 export interface PricingPlanFeatureFlags {
   canAccessDownloads?: boolean;
   canAccessUnbrandedExports?: boolean;
   creatorControls?: boolean;
+  videoExportPreset?: Partial<VideoExportPreset> | null;
 }
 
 export interface BeatAvailability {
@@ -296,6 +323,7 @@ export interface EffectivePricingSnapshot {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  videoExportPreset: VideoExportPreset;
   availablePromoBeats: number;
   availableSubscriptionBeats: number;
   availableTopupBeats: number;
@@ -326,6 +354,7 @@ export interface PricingPlanOfferCard {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  videoExportPreset: VideoExportPreset;
   isCurrentPlan: boolean;
 }
 
@@ -346,6 +375,38 @@ export interface PricingWalletActivityItem {
   subtitle: string;
   coinsDelta: number;
   occurredAt: string;
+}
+
+function isStringArrayValue<T extends string>(value: unknown, options: readonly T[]): value is T {
+  return typeof value === 'string' && options.includes(value as T);
+}
+
+export function normalizeVideoExportPreset(value: unknown): VideoExportPreset {
+  const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+
+  return {
+    verticalResolution: isStringArrayValue(input.verticalResolution, VIDEO_EXPORT_VERTICAL_RESOLUTIONS)
+      ? input.verticalResolution
+      : DEFAULT_VIDEO_EXPORT_PRESET.verticalResolution,
+    watermarkMode: isStringArrayValue(input.watermarkMode, VIDEO_EXPORT_WATERMARK_MODES)
+      ? input.watermarkMode
+      : DEFAULT_VIDEO_EXPORT_PRESET.watermarkMode,
+    watermarkPosition: isStringArrayValue(input.watermarkPosition, VIDEO_EXPORT_WATERMARK_POSITIONS)
+      ? input.watermarkPosition
+      : DEFAULT_VIDEO_EXPORT_PRESET.watermarkPosition,
+    watermarkSize: isStringArrayValue(input.watermarkSize, VIDEO_EXPORT_WATERMARK_SIZES)
+      ? input.watermarkSize
+      : DEFAULT_VIDEO_EXPORT_PRESET.watermarkSize,
+  };
+}
+
+export function resolveVideoExportWatermarkVisibility(
+  preset: VideoExportPreset,
+  canAccessUnbrandedExports: boolean
+): boolean {
+  if (preset.watermarkMode === 'always') return true;
+  if (preset.watermarkMode === 'hidden') return false;
+  return !canAccessUnbrandedExports;
 }
 
 export interface PricingWalletPageData {

@@ -11,6 +11,7 @@ import type {
 import {
   BILLING_PROVIDERS,
   PRICING_RUNTIME_SETTING_DEFINITIONS,
+  normalizeVideoExportPreset,
   type BillingInterval,
   type BillingProvider,
   type EffectivePricingSnapshot,
@@ -155,6 +156,7 @@ function buildEffectivePricingSnapshotWithControls(
     canAccessDownloads: Boolean(selectedPlan.feature_flags_json?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(selectedPlan.feature_flags_json?.canAccessUnbrandedExports ?? false),
     creatorControls: Boolean(selectedPlan.feature_flags_json?.creatorControls ?? false),
+    videoExportPreset: normalizeVideoExportPreset(selectedPlan.feature_flags_json?.videoExportPreset),
     availablePromoBeats: walletAvailability.promo,
     availableSubscriptionBeats: walletAvailability.subscription,
     availableTopupBeats: walletAvailability.topup,
@@ -189,6 +191,7 @@ function buildFallbackFreeSnapshot(
     canAccessDownloads: false,
     canAccessUnbrandedExports: false,
     creatorControls: false,
+    videoExportPreset: normalizeVideoExportPreset(null),
     availablePromoBeats: 0,
     availableSubscriptionBeats: 0,
     availableTopupBeats: 0,

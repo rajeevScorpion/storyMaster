@@ -1577,12 +1577,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
             <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Video Export</h2>
             <p className="text-xs text-neutral-400 -mt-2">
-              Master toggle for storyline video download. When enabled, per-plan access is controlled via the Downloads toggle in Pricing Studio.
+              Master toggle for storyline video download. When enabled, per-plan access is controlled via the Downloads toggle in Pricing Studio, and plan-specific watermark and vertical export presets are managed there too.
             </p>
 
             <ToggleRow
               label="Enable Video Download"
-              description="Allow users to export published storylines as MP4 video files. Which plans can download is set in Pricing → Plans → Downloads."
+              description="Allow users to export published storylines as MP4 video files. Which plans can download is set in Pricing → Plans → Downloads, and export branding is configured per plan in Pricing Studio."
               checked={videoDownloadEnabled}
               toggling={videoDownloadToggling}
               onToggle={async () => {

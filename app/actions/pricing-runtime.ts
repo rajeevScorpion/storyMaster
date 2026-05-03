@@ -25,7 +25,7 @@ import type {
   PricingPlanOfferCard,
   PricingTopupOfferCard,
 } from '@/lib/types/pricing';
-import { COINS_PER_BEAT, PRICING_RUNTIME_SETTING_DEFINITIONS } from '@/lib/types/pricing';
+import { COINS_PER_BEAT, PRICING_RUNTIME_SETTING_DEFINITIONS, normalizeVideoExportPreset } from '@/lib/types/pricing';
 
 interface RuntimeFlagRow {
   flag_key: string;
@@ -313,6 +313,7 @@ function buildPlanOffers(
       canAccessDownloads: Boolean(plan.feature_flags_json?.canAccessDownloads ?? false),
       canAccessUnbrandedExports: Boolean(plan.feature_flags_json?.canAccessUnbrandedExports ?? false),
       creatorControls: Boolean(plan.feature_flags_json?.creatorControls ?? false),
+      videoExportPreset: normalizeVideoExportPreset(plan.feature_flags_json?.videoExportPreset),
       isCurrentPlan: plan.plan_key === currentPlanKey,
     };
   });

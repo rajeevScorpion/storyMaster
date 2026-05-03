@@ -58,6 +58,7 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
+import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 
@@ -250,6 +251,11 @@ export default function StorylinePlayer({
   const canDownload = videoDownloadGlobalOn
     && storylineHasAllBeatImages
     && (adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads));
+  const videoExportPreset = pricing.snapshot.videoExportPreset;
+  const showVideoWatermark = resolveVideoExportWatermarkVisibility(
+    videoExportPreset,
+    pricing.snapshot.canAccessUnbrandedExports
+  );
   const { exportVideo, cancel: cancelExport, isExporting, progress: exportProgress, phase: exportPhase, error: exportError } = useVideoExport();
   const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
 
@@ -671,7 +677,11 @@ export default function StorylinePlayer({
                       window.open('/wallet', '_blank');
                       return;
                     }
-                    const ok = await exportVideo(currentBeats, title);
+                    const ok = await exportVideo(currentBeats, title, {
+                      aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
+                      videoExportPreset,
+                      showWatermark: showVideoWatermark,
+                    });
                     if (auth.status === 'allowed' && auth.reservationId) {
                       if (ok) {
                         await finalizeCurrentUserBillableAction({ reservationId: auth.reservationId, storylineId });
@@ -680,7 +690,11 @@ export default function StorylinePlayer({
                       }
                     }
                   } else {
-                    await exportVideo(currentBeats, title);
+                    await exportVideo(currentBeats, title, {
+                      aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
+                      videoExportPreset,
+                      showWatermark: showVideoWatermark,
+                    });
                   }
                 }}
                 disabled={isExporting}

@@ -40,15 +40,25 @@ import {
   BILLING_INTERVALS,
   BILLING_PROVIDERS,
   COINS_PER_BEAT,
+  DEFAULT_VIDEO_EXPORT_PRESET,
   PLAN_KEYS,
   PRICING_MARKET_KEYS,
   PROMOTION_MARKET_SCOPES,
+  VIDEO_EXPORT_VERTICAL_RESOLUTIONS,
+  VIDEO_EXPORT_WATERMARK_MODES,
+  VIDEO_EXPORT_WATERMARK_POSITIONS,
+  VIDEO_EXPORT_WATERMARK_SIZES,
   type BillingInterval,
   type BillingProvider,
   type PlanKey,
   type PricingCatalogStatus,
   type PricingMarketKey,
   type PromotionMarketScope,
+  type VideoExportVerticalResolution,
+  type VideoExportWatermarkMode,
+  type VideoExportWatermarkPosition,
+  type VideoExportWatermarkSize,
+  normalizeVideoExportPreset,
 } from '@/lib/types/pricing';
 
 type PlanEditorState = {
@@ -60,6 +70,10 @@ type PlanEditorState = {
   canAccessDownloads: boolean;
   canAccessUnbrandedExports: boolean;
   creatorControls: boolean;
+  videoExportVerticalResolution: VideoExportVerticalResolution;
+  videoExportWatermarkMode: VideoExportWatermarkMode;
+  videoExportWatermarkPosition: VideoExportWatermarkPosition;
+  videoExportWatermarkSize: VideoExportWatermarkSize;
   provider: BillingProvider | '';
   currencyCode: string;
   priceMinor: number;
@@ -116,6 +130,20 @@ export type PricingStudioSection =
 const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100';
 const TOPUP_PACK_KEYS = ['beats_25', 'beats_80', 'beats_200'] as const;
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
+const VIDEO_EXPORT_WATERMARK_MODE_LABELS: Record<VideoExportWatermarkMode, string> = {
+  auto: 'Auto',
+  always: 'Always show',
+  hidden: 'Hide',
+};
+const VIDEO_EXPORT_WATERMARK_POSITION_LABELS: Record<VideoExportWatermarkPosition, string> = {
+  'top-left': 'Top left',
+  'top-right': 'Top right',
+};
+const VIDEO_EXPORT_WATERMARK_SIZE_LABELS: Record<VideoExportWatermarkSize, string> = {
+  small: 'Small',
+  medium: 'Medium',
+  large: 'Large',
+};
 
 const PRICING_WORKSPACE_LINKS: Array<{
   section: PricingStudioSection | 'audit';
@@ -311,6 +339,10 @@ function defaultPlanEditor(planKey: PlanKey, market: PricingMarketKey): PlanEdit
     canAccessDownloads: planKey === 'studio',
     canAccessUnbrandedExports: planKey === 'studio',
     creatorControls: planKey === 'studio',
+    videoExportVerticalResolution: DEFAULT_VIDEO_EXPORT_PRESET.verticalResolution,
+    videoExportWatermarkMode: DEFAULT_VIDEO_EXPORT_PRESET.watermarkMode,
+    videoExportWatermarkPosition: DEFAULT_VIDEO_EXPORT_PRESET.watermarkPosition,
+    videoExportWatermarkSize: DEFAULT_VIDEO_EXPORT_PRESET.watermarkSize,
     provider: planKey === 'free' ? '' : defaultProviderForMarket(market),
     currencyCode: defaultCurrencyForMarket(market),
     priceMinor: 0,
@@ -674,6 +706,80 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               <ToggleBox label="Unbranded Exports" checked={planEditor.canAccessUnbrandedExports} onToggle={() => setPlanEditor((current) => ({ ...current, canAccessUnbrandedExports: !current.canAccessUnbrandedExports }))} />
             </div>
 
+            <div className="mt-4 rounded-xl border border-white/10 bg-neutral-950/40 p-4">
+              <div className="mb-3">
+                <h3 className="text-sm font-medium text-neutral-100">Video Export Branding</h3>
+                <p className="mt-1 text-xs text-neutral-400">
+                  Downloads unlock export access for the plan. These controls decide vertical export size and whether the Kissago watermark is shown on landscape and vertical renders.
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Auto watermark follows the plan&apos;s Unbranded Exports entitlement: plans with unbranded exports hide it, and other plans keep it visible.
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <SelectField label="Vertical Resolution">
+                  <select
+                    value={planEditor.videoExportVerticalResolution}
+                    onChange={(event) => setPlanEditor((current) => ({
+                      ...current,
+                      videoExportVerticalResolution: event.target.value as VideoExportVerticalResolution,
+                    }))}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+                  >
+                    {VIDEO_EXPORT_VERTICAL_RESOLUTIONS.map((value) => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </SelectField>
+
+                <SelectField label="Watermark Visibility">
+                  <select
+                    value={planEditor.videoExportWatermarkMode}
+                    onChange={(event) => setPlanEditor((current) => ({
+                      ...current,
+                      videoExportWatermarkMode: event.target.value as VideoExportWatermarkMode,
+                    }))}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+                  >
+                    {VIDEO_EXPORT_WATERMARK_MODES.map((value) => (
+                      <option key={value} value={value}>{VIDEO_EXPORT_WATERMARK_MODE_LABELS[value]}</option>
+                    ))}
+                  </select>
+                </SelectField>
+
+                <SelectField label="Watermark Position">
+                  <select
+                    value={planEditor.videoExportWatermarkPosition}
+                    onChange={(event) => setPlanEditor((current) => ({
+                      ...current,
+                      videoExportWatermarkPosition: event.target.value as VideoExportWatermarkPosition,
+                    }))}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+                  >
+                    {VIDEO_EXPORT_WATERMARK_POSITIONS.map((value) => (
+                      <option key={value} value={value}>{VIDEO_EXPORT_WATERMARK_POSITION_LABELS[value]}</option>
+                    ))}
+                  </select>
+                </SelectField>
+
+                <SelectField label="Watermark Size">
+                  <select
+                    value={planEditor.videoExportWatermarkSize}
+                    onChange={(event) => setPlanEditor((current) => ({
+                      ...current,
+                      videoExportWatermarkSize: event.target.value as VideoExportWatermarkSize,
+                    }))}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+                  >
+                    {VIDEO_EXPORT_WATERMARK_SIZES.map((value) => (
+                      <option key={value} value={value}>{VIDEO_EXPORT_WATERMARK_SIZE_LABELS[value]}</option>
+                    ))}
+                  </select>
+                </SelectField>
+              </div>
+            </div>
+
             <div className="mt-5 flex flex-wrap gap-3">
               <ActionButton
                 busy={busyKey === 'plan:save'}
@@ -692,6 +798,12 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                       canAccessDownloads: planEditor.canAccessDownloads,
                       canAccessUnbrandedExports: planEditor.canAccessUnbrandedExports,
                       creatorControls: planEditor.creatorControls,
+                      videoExportPreset: {
+                        verticalResolution: planEditor.videoExportVerticalResolution,
+                        watermarkMode: planEditor.videoExportWatermarkMode,
+                        watermarkPosition: planEditor.videoExportWatermarkPosition,
+                        watermarkSize: planEditor.videoExportWatermarkSize,
+                      },
                     },
                     provider: planEditor.provider || null,
                     billingInterval: selectedPlanInterval,
@@ -1185,6 +1297,7 @@ function buildPlanEditor(
   );
   const source = draft ?? published;
   const fallback = defaultPlanEditor(planKey, market);
+  const videoExportPreset = normalizeVideoExportPreset(record?.plan.feature_flags_json?.videoExportPreset);
 
   return {
     name: record?.plan.name ?? fallback.name,
@@ -1195,6 +1308,10 @@ function buildPlanEditor(
     canAccessDownloads: Boolean(record?.plan.feature_flags_json?.canAccessDownloads ?? fallback.canAccessDownloads),
     canAccessUnbrandedExports: Boolean(record?.plan.feature_flags_json?.canAccessUnbrandedExports ?? fallback.canAccessUnbrandedExports),
     creatorControls: Boolean(record?.plan.feature_flags_json?.creatorControls ?? fallback.creatorControls),
+    videoExportVerticalResolution: videoExportPreset.verticalResolution,
+    videoExportWatermarkMode: videoExportPreset.watermarkMode,
+    videoExportWatermarkPosition: videoExportPreset.watermarkPosition,
+    videoExportWatermarkSize: videoExportPreset.watermarkSize,
     provider: (source?.provider ?? fallback.provider) as BillingProvider | '',
     currencyCode: source?.currency_code ?? fallback.currencyCode,
     priceMinor: source?.price_minor ?? fallback.priceMinor,

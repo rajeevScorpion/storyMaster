@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { PRICING_RUNTIME_REFRESH_EVENT } from '@/lib/pricing/runtime-events';
-import type { PricingMarketKey, PricingRuntimeContext } from '@/lib/types/pricing';
+import { DEFAULT_VIDEO_EXPORT_PRESET, type PricingMarketKey, type PricingRuntimeContext } from '@/lib/types/pricing';
 
 interface PricingRuntimeContextValue {
   data: PricingRuntimeContext;
@@ -65,6 +65,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     canAccessDownloads: false,
     canAccessUnbrandedExports: false,
     creatorControls: false,
+    videoExportPreset: DEFAULT_VIDEO_EXPORT_PRESET,
     availablePromoBeats: 0,
     availableSubscriptionBeats: 0,
     availableTopupBeats: 0,

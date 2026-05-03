@@ -35,6 +35,7 @@ import {
   type PricingRuntimeSettingDefinition,
   type PricingRuntimeSettingKind,
   type PromotionMarketScope,
+  normalizeVideoExportPreset,
 } from '@/lib/types/pricing';
 
 type JsonRecord = Record<string, unknown>;
@@ -908,6 +909,15 @@ function normalizeAuditPage(value: number | null | undefined): number {
   return Math.max(1, Math.floor(value));
 }
 
+function normalizePricingPlanFeatureFlags(input?: PricingPlanFeatureFlags | null): PricingPlanFeatureFlags {
+  return {
+    canAccessDownloads: Boolean(input?.canAccessDownloads ?? false),
+    canAccessUnbrandedExports: Boolean(input?.canAccessUnbrandedExports ?? false),
+    creatorControls: Boolean(input?.creatorControls ?? false),
+    videoExportPreset: normalizeVideoExportPreset(input?.videoExportPreset),
+  };
+}
+
 function normalizeAuditPageSize(value: number | null | undefined): number {
   if (!value || !Number.isFinite(value)) return 25;
   return Math.min(100, Math.max(1, Math.floor(value)));
@@ -953,7 +963,7 @@ async function upsertPricingPlanBase(supabase: AdminClient, input: SavePricingPl
       is_active: input.isActive,
       is_public: input.isPublic,
       description: normalizeText(input.description),
-      feature_flags_json: input.featureFlags ?? {},
+      feature_flags_json: normalizePricingPlanFeatureFlags(input.featureFlags),
       updated_at: new Date().toISOString(),
     }, { onConflict: 'plan_key' })
     .select('*')
