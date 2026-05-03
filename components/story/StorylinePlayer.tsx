@@ -593,18 +593,19 @@ export default function StorylinePlayer({
       {/* Header */}
       <header className="relative z-20 shrink-0 bg-gradient-to-b from-neutral-950/80 to-transparent px-4 pb-2 pt-4 md:p-6">
         <div className="flex items-center justify-between gap-3">
-        <div className="flex shrink-0 items-center gap-4">
-          {/* Kissago branding — matches main page style */}
-          <KissagoLogo fixed={false} />
-          <div className="hidden md:block">
-            <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
-            {authorName && (
-              <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
-            )}
+          <div className="flex shrink-0 items-center gap-4">
+            {/* Kissago branding — matches main page style */}
+            <KissagoLogo fixed={false} onClick={resetStory} />
+            <div className="hidden md:block">
+              <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
+              {authorName && (
+                <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="flex min-w-0 items-center gap-2 overflow-x-auto pl-1 text-sm font-sans uppercase tracking-widest text-neutral-400 scrollbar-none [&>*]:shrink-0 md:gap-3 md:overflow-visible md:pl-0">
-          <span className="shrink-0 text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
+          <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+            <div className="flex min-w-0 items-center gap-2 overflow-x-auto pl-1 text-sm font-sans uppercase tracking-widest text-neutral-400 scrollbar-none [&>*]:shrink-0 md:gap-3 md:overflow-visible md:pl-0">
+              <span className="shrink-0 text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
 
           {/* Save to profile button — logged-in only */}
           {isLoggedIn && (
@@ -758,10 +759,11 @@ export default function StorylinePlayer({
               <Compass className="w-4 h-4" />
             </Link>
           )}
+          </div>
 
 
           {/* User menu — logged-in only */}
-          <div className="shrink-0">
+          <div className="relative z-30 shrink-0">
             <UserMenu onMyStories={() => setShowMyStories(true)} />
           </div>
         </div>

@@ -20,6 +20,7 @@ function HomeContent() {
   const error = useStoryStore((state) => state.error);
   const errorAction = useStoryStore((state) => state.errorAction);
   const clearError = useStoryStore((state) => state.clearError);
+  const resetStory = useStoryStore((state) => state.resetStory);
   const { user, openAuthDialog } = useAuth();
   const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
@@ -55,10 +56,16 @@ function HomeContent() {
     startStory(prompt, config);
   };
 
+  const handleLogoClick = () => {
+    if (!session) return;
+    hasRedirected.current = false;
+    resetStory();
+  };
+
   return (
     <main className="min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {/* Kissago logo — fixed top-left across all views */}
-      <KissagoLogo />
+      <KissagoLogo onClick={handleLogoClick} />
 
 
       {/* User menu — fixed top-right across all views */}

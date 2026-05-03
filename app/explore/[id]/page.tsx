@@ -18,6 +18,7 @@ export default function ExplorePage() {
   const { user, isLoading: authLoading, openAuthDialog } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
   const hasRequestedAuthRef = useRef(false);
+  const isNavigatingHomeRef = useRef(false);
 
   const session = useStoryStore((s) => s.session);
   const isLoading = useStoryStore((s) => s.isLoading);
@@ -25,9 +26,11 @@ export default function ExplorePage() {
   const errorAction = useStoryStore((s) => s.errorAction);
   const clearError = useStoryStore((s) => s.clearError);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
+  const resetStory = useStoryStore((s) => s.resetStory);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
 
   useEffect(() => {
+    if (isNavigatingHomeRef.current) return;
     if (authLoading) return;
 
     if (!user) {
@@ -45,6 +48,11 @@ export default function ExplorePage() {
       exploreStoryTree(storyId);
     }
   }, [storyId, user, authLoading, session, exploreStoryTree, openAuthDialog]);
+
+  const handleLogoClick = () => {
+    isNavigatingHomeRef.current = true;
+    resetStory();
+  };
 
   if (error && !hasMatchingSession) {
     return (
@@ -66,7 +74,7 @@ export default function ExplorePage() {
   return (
     <div className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
       {/* Kissago logo — fixed top-left */}
-      <KissagoLogo />
+      <KissagoLogo onClick={handleLogoClick} />
 
 
       {/* User menu — fixed top-right */}
