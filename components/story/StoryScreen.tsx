@@ -162,7 +162,8 @@ function isFallbackImageUrl(url: string | undefined): boolean {
 }
 
 const PROMPT_ONLY_ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
-const PROMPT_ONLY_MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+const PROMPT_ONLY_MAX_UPLOAD_MB = 5;
+const PROMPT_ONLY_MAX_UPLOAD_BYTES = PROMPT_ONLY_MAX_UPLOAD_MB * 1024 * 1024;
 const PROMPT_ONLY_LANDSCAPE_ASPECT_RATIO = 16 / 9;
 const PROMPT_ONLY_VERTICAL_ASPECT_RATIO = 9 / 16;
 const PROMPT_ONLY_ASPECT_RATIO_TOLERANCE = 0.03;
@@ -347,7 +348,7 @@ async function validatePromptOnlyImageFile(file: File, isVerticalStory: boolean)
   }
 
   if (file.size > PROMPT_ONLY_MAX_UPLOAD_BYTES) {
-    throw new Error('Image must be 3 MB or smaller.');
+    throw new Error(`Image must be ${PROMPT_ONLY_MAX_UPLOAD_MB} MB or smaller.`);
   }
 
   const dataUrl = await readFileAsDataUrl(file);
@@ -2025,7 +2026,7 @@ function StoryScreenInner({
 
                     <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
                       <p>Accepted formats: JPG, PNG, or WebP.</p>
-                      <p className="mt-1">Maximum file size: 3 MB.</p>
+                      <p className="mt-1">Maximum file size: {PROMPT_ONLY_MAX_UPLOAD_MB} MB.</p>
                       <p className="mt-1">Required aspect ratio: {isVerticalStory ? '9:16' : '16:9'}.</p>
                       <p className="mt-1">
                         Recommended resolution: {isVerticalStory
