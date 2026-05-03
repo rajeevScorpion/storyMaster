@@ -6,9 +6,9 @@ import { X, Upload, Check, Loader2, ExternalLink } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { useStoryStore } from '@/lib/store/story-store';
 import { extractStoryline } from '@/lib/utils/storyline';
-import { uploadNodeAssets, uploadCoverImage, extractStoragePath } from '@/lib/supabase/storage';
+import { uploadNodeAssets, uploadCoverImage, extractStoragePath, stripBase64FromStoryMap } from '@/lib/supabase/storage';
 import { publishStoryline, saveStory, copyCoverToPublicBucket } from '@/app/actions/persistence';
-import type { StoryBeat } from '@/lib/types/story';
+import type { Character, StoryBeat, StoryMap, StorySession } from '@/lib/types/story';
 
 interface PublishDialogProps {
   isOpen: boolean;
@@ -16,6 +16,46 @@ interface PublishDialogProps {
   endingNodeId: string;
   publishMode?: 'standard' | 'audio_story';
   allowMissingImages?: boolean;
+}
+
+function sanitizeCharactersForPersistence(characters: Character[]): Character[] {
+  return characters.map((character) => {
+    const cleanedGallery = (character.referenceSheetGallery ?? [])
+      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'));
+
+    return {
+      ...character,
+      portraitBase64: undefined,
+      referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
+        ? undefined
+        : character.referenceSheetUrl,
+      referenceSheetGallery: cleanedGallery.length > 0 ? cleanedGallery : undefined,
+    };
+  });
+}
+
+function buildPersistableSessionSnapshot(session: StorySession, storyMap: StoryMap): StorySession {
+  return {
+    ...session,
+    characters: sanitizeCharactersForPersistence(session.characters),
+    beats: [],
+    storyMap,
+  };
+}
+
+function sanitizeBeatForPublish(beat: StoryBeat): StoryBeat {
+  const { imageGallery: _imageGallery, persistedImageUrl: _persistedImageUrl, ...rest } = beat;
+  void _imageGallery;
+  void _persistedImageUrl;
+
+  return {
+    ...rest,
+    characters: sanitizeCharactersForPersistence(beat.characters),
+    imageGallery: [],
+    persistedImageUrl: undefined,
+    imageUrl: beat.imageUrl?.startsWith('data:') ? undefined : beat.imageUrl,
+    audioUrl: beat.audioUrl?.startsWith('data:') ? undefined : beat.audioUrl,
+  };
 }
 
 export default function PublishDialog({
@@ -59,7 +99,9 @@ export default function PublishDialog({
       let storyId = session.savedStoryId;
       if (!storyId) {
         setStatus('saving');
-        const result = await saveStory(session, storyMap);
+        const compactStoryMap = stripBase64FromStoryMap(storyMap);
+        const persistableSession = buildPersistableSessionSnapshot(session, compactStoryMap);
+        const result = await saveStory(persistableSession, compactStoryMap);
         storyId = result.storyId;
         // Update local session with savedStoryId
         useStoryStore.setState((state) => ({
@@ -101,10 +143,9 @@ export default function PublishDialog({
         const urls = assetMap[nodeId];
         const resolvedImageUrl = urls?.imageUrl || beat.imageUrl;
         const resolvedAudioUrl = urls?.audioUrl || beat.audioUrl;
-        const { imageGallery: _ig, persistedImageUrl: _pi, ...rest } = beat;
-        void _ig; void _pi;
+        const sanitizedBeat = sanitizeBeatForPublish(beat);
         return {
-          ...rest,
+          ...sanitizedBeat,
           imageUrl: resolvedImageUrl && resolvedImageUrl.startsWith('data:') ? undefined : resolvedImageUrl,
           audioUrl: resolvedAudioUrl && resolvedAudioUrl.startsWith('data:') ? undefined : resolvedAudioUrl,
         };

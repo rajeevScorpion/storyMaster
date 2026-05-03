@@ -47,8 +47,9 @@ const nextConfig: NextConfig = {
   },
   experimental: {
     serverActions: {
-      bodySizeLimit: '10mb',
+      bodySizeLimit: '20mb',
     },
+    middlewareClientMaxBodySize: '20mb',
   },
   output: 'standalone',
   transpilePackages: ['motion'],
