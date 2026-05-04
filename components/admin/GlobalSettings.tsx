@@ -33,6 +33,8 @@ import {
   setStoryLoadingReaderScrollSpeed,
   setStoryUiTextLineCount,
   setStoryUiAutoScroll,
+  setStorylineChoiceFlashEnabled,
+  setStorylineChoiceFlashMs,
   setTextTimeout,
   setImageTimeout,
   setTtsTimeout,
@@ -281,6 +283,11 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [storyUiTextLineCountSaving, setStoryUiTextLineCountSaving] = useState(false);
   const [storyUiAutoScrollEnabled, setStoryUiAutoScrollEnabledState] = useState(true);
   const [storyUiAutoScrollToggling, setStoryUiAutoScrollToggling] = useState(false);
+  const [storylineChoiceFlashEnabled, setStorylineChoiceFlashEnabledState] = useState(true);
+  const [storylineChoiceFlashToggling, setStorylineChoiceFlashToggling] = useState(false);
+  const [storylineChoiceFlashMs, setStorylineChoiceFlashMsState] = useState(3000);
+  const [storylineChoiceFlashInput, setStorylineChoiceFlashInput] = useState('3');
+  const [storylineChoiceFlashSaving, setStorylineChoiceFlashSaving] = useState(false);
   const [freePlusCharacterSheetsEnabled, setFreePlusCharacterSheetsEnabledState] = useState(false);
   const [freePlusCharacterSheetsToggling, setFreePlusCharacterSheetsToggling] = useState(false);
   const [creatorCharacterSheetsEnabled, setCreatorCharacterSheetsEnabledState] = useState(false);
@@ -362,6 +369,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         loadingReaderScrollSpeedPxPerSecond: readerScrollSpeed,
         storyUiTextLineCount: uiTextLineCount,
         storyUiAutoScrollEnabled: uiAutoScrollEnabled,
+        storylineChoiceFlashEnabled: choiceFlashEnabled,
+        storylineChoiceFlashMs: choiceFlashMs,
         freePlusCharacterSheetsEnabled: fpSheets,
         creatorCharacterSheetsEnabled: creatorSheets,
         storyPromptOnlyModeEnabled: promptOnlyModeEnabled,
@@ -408,6 +417,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setStoryUiTextLineCountState(uiTextLineCount);
         setStoryUiTextLineCountInput(String(uiTextLineCount));
         setStoryUiAutoScrollEnabledState(uiAutoScrollEnabled);
+        setStorylineChoiceFlashEnabledState(choiceFlashEnabled);
+        setStorylineChoiceFlashMsState(choiceFlashMs);
+        setStorylineChoiceFlashInput(String(choiceFlashMs / 1000));
         setFreePlusCharacterSheetsEnabledState(fpSheets);
         setCreatorCharacterSheetsEnabledState(creatorSheets);
         setStoryPromptOnlyModeEnabledState(promptOnlyModeEnabled);
@@ -598,6 +610,20 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
+  async function handleStorylineChoiceFlashSave() {
+    const seconds = storylineChoiceFlashInput.trim() === '' ? NaN : Number(storylineChoiceFlashInput);
+    if (!Number.isFinite(seconds) || seconds < 0.5 || seconds > 30) return;
+    const ms = Math.round(seconds * 1000);
+    setStorylineChoiceFlashSaving(true);
+    try {
+      await setStorylineChoiceFlashMs(ms);
+      setStorylineChoiceFlashMsState(ms);
+      setStorylineChoiceFlashInput(String(ms / 1000));
+    } finally {
+      setStorylineChoiceFlashSaving(false);
+    }
+  }
+
   async function handleTimeoutSave(
     inputVal: string,
     minSec: number,
@@ -671,6 +697,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const parsedLoadingReaderAnticipationSec = parseInt(loadingReaderAnticipationInput, 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedInput, 10);
   const parsedStoryUiTextLineCount = parseInt(storyUiTextLineCountInput, 10);
+  const parsedStorylineChoiceFlashSec = storylineChoiceFlashInput.trim() === ''
+    ? NaN
+    : Number(storylineChoiceFlashInput);
+  const parsedStorylineChoiceFlashMs = Number.isFinite(parsedStorylineChoiceFlashSec)
+    ? Math.round(parsedStorylineChoiceFlashSec * 1000)
+    : NaN;
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
   const parsedPreviewSeedPlanPriceCoins = previewSeedPlanPriceCoinsInput.trim() === ''
     ? NaN
@@ -682,7 +714,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const sectionMeta = GLOBAL_SETTINGS_LINKS.find((item) => item.section === section) ?? GLOBAL_SETTINGS_LINKS[0];
   const overviewSummaries: Record<Exclude<GlobalSettingsSection, 'overview'>, string> = {
     storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
-    reader: `${storyUiTextLineCount} text lines, loader reveal ${formatToggleSummary(loadingReaderStoryTextEnabled).toLowerCase()}`,
+    reader: `${storyUiTextLineCount} text lines, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
     narration: narrationVoiceSettings
       ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
       : 'Voice settings not loaded',
@@ -1027,6 +1059,63 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 }
               }}
             />
+
+            <ToggleRow
+              label="Storyline Branch Choice Flash"
+              description="Show the selected branch choice before the resulting beat plays in published storyline playback."
+              checked={storylineChoiceFlashEnabled}
+              toggling={storylineChoiceFlashToggling}
+              onToggle={async () => {
+                setStorylineChoiceFlashToggling(true);
+                const next = !storylineChoiceFlashEnabled;
+                try {
+                  await setStorylineChoiceFlashEnabled(next);
+                  setStorylineChoiceFlashEnabledState(next);
+                } finally {
+                  setStorylineChoiceFlashToggling(false);
+                }
+              }}
+            />
+
+            <div className={`rounded-xl border border-white/10 bg-neutral-900/60 p-4 ${storylineChoiceFlashEnabled ? '' : 'opacity-60'}`}>
+              <p className="text-sm font-medium text-neutral-100 mb-1">Branch Choice Flash Duration</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Seconds to show the selected branch choice before the next beat starts. Default: 3s.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0.5}
+                  max={30}
+                  step={0.5}
+                  value={storylineChoiceFlashInput}
+                  disabled={!storylineChoiceFlashEnabled}
+                  onChange={(e) => setStorylineChoiceFlashInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:cursor-not-allowed"
+                  placeholder="3"
+                />
+                <span className="text-xs text-neutral-500">s</span>
+                <button
+                  onClick={handleStorylineChoiceFlashSave}
+                  disabled={
+                    !storylineChoiceFlashEnabled ||
+                    storylineChoiceFlashSaving ||
+                    !Number.isFinite(parsedStorylineChoiceFlashSec) ||
+                    parsedStorylineChoiceFlashSec < 0.5 ||
+                    parsedStorylineChoiceFlashSec > 30
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {storylineChoiceFlashSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {storylineChoiceFlashMs !== parsedStorylineChoiceFlashMs && parsedStorylineChoiceFlashSec >= 0.5 && parsedStorylineChoiceFlashSec <= 30 && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+              {Number.isFinite(parsedStorylineChoiceFlashSec) && (parsedStorylineChoiceFlashSec < 0.5 || parsedStorylineChoiceFlashSec > 30) && (
+                <p className="mt-3 text-xs text-amber-400">Use a value from 0.5 to 30 seconds.</p>
+              )}
+            </div>
           </div>
           )}
 

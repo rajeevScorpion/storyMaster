@@ -61,6 +61,7 @@ import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/st
 import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
+const CHOICE_TRANSITION_FADE_MS = 600;
 
 function StoryboardCycler({
   gridUrl,
@@ -204,6 +205,7 @@ export default function StorylinePlayer({
     return 0;
   });
   const [showChoice, setShowChoice] = useState(false);
+  const [transitionChoice, setTransitionChoice] = useState<StorylineChoice | null>(null);
   const [autoPlay, setAutoPlay] = useState(true);
   const [autoReplay, setAutoReplay] = useState(false);
   const [isSaved, setIsSaved] = useState(initialSaved);
@@ -223,6 +225,8 @@ export default function StorylinePlayer({
     loadingReaderScrollSpeedPxPerSecond: number;
     storyUiTextLineCount: number;
     storyUiAutoScrollEnabled: boolean;
+    storylineChoiceFlashEnabled: boolean;
+    storylineChoiceFlashMs: number;
     videoDownloadEnabled: boolean;
     videoDownloadAdminBypass: boolean;
   }>({
@@ -233,6 +237,8 @@ export default function StorylinePlayer({
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
+    storylineChoiceFlashEnabled: true,
+    storylineChoiceFlashMs: 3000,
     videoDownloadEnabled: false,
     videoDownloadAdminBypass: false,
   });
@@ -240,6 +246,8 @@ export default function StorylinePlayer({
   const router = useRouter();
   const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
+  const choiceHoldTimerRef = useRef<number | null>(null);
+  const choiceAdvanceTimerRef = useRef<number | null>(null);
   const { data: pricing } = usePricingRuntime();
   // Video download gating:
   // 1. Global master toggle must be ON (admin Global Settings)
@@ -359,7 +367,7 @@ export default function StorylinePlayer({
     toggleAutoScroll,
     stopAutoScroll,
   } = useStoryAutoScroll<HTMLDivElement>({
-    enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && !showChoice,
+    enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized,
     resetKey: currentIndex,
     pxPerSecond: cycleSettings.loadingReaderScrollSpeedPxPerSecond,
   });
@@ -378,40 +386,86 @@ export default function StorylinePlayer({
     ? 'Finalizing file'
     : 'Exporting video';
 
-  // Get the choice that led to the current beat
-  const currentChoice = currentIndex > 0 ? choices[currentIndex - 1] : null;
-
-  const goNext = useCallback(() => {
-    if (isLast) return;
-
-    // Show choice transition briefly before advancing
-    if (choices[currentIndex]) {
-      setShowChoice(true);
-      setTimeout(() => {
-        setShowChoice(false);
-        setCurrentIndex((i) => i + 1);
-      }, 1500);
-    } else {
-      setCurrentIndex((i) => i + 1);
-    }
-  }, [currentIndex, isLast, choices]);
-
-  const goPrev = useCallback(() => {
-    if (isFirst) return;
-    setShowChoice(false);
-    setCurrentIndex((i) => i - 1);
-  }, [isFirst]);
-
   const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio, volume, setVolume } = useAudioPlayer(
     currentBeat.audioUrl || undefined,
     `storyline-${currentIndex}`
   );
 
+  const clearChoiceTransitionTimers = useCallback(() => {
+    if (choiceHoldTimerRef.current) {
+      window.clearTimeout(choiceHoldTimerRef.current);
+      choiceHoldTimerRef.current = null;
+    }
+    if (choiceAdvanceTimerRef.current) {
+      window.clearTimeout(choiceAdvanceTimerRef.current);
+      choiceAdvanceTimerRef.current = null;
+    }
+  }, []);
+
+  const clearChoiceTransition = useCallback(() => {
+    clearChoiceTransitionTimers();
+    setShowChoice(false);
+    setTransitionChoice(null);
+  }, [clearChoiceTransitionTimers]);
+
+  const goNext = useCallback(() => {
+    if (isLast || showChoice) return;
+
+    const nextChoice = choices[currentIndex];
+    const advanceToNextBeat = () => setCurrentIndex((i) => Math.min(i + 1, currentBeats.length - 1));
+
+    if (cycleSettings.storylineChoiceFlashEnabled && nextChoice) {
+      stopAudio();
+      clearChoiceTransitionTimers();
+      setTransitionChoice(nextChoice);
+      setShowChoice(true);
+      choiceHoldTimerRef.current = window.setTimeout(() => {
+        setShowChoice(false);
+        choiceHoldTimerRef.current = null;
+        choiceAdvanceTimerRef.current = window.setTimeout(() => {
+          setTransitionChoice(null);
+          choiceAdvanceTimerRef.current = null;
+          advanceToNextBeat();
+        }, CHOICE_TRANSITION_FADE_MS);
+      }, Math.max(500, cycleSettings.storylineChoiceFlashMs));
+      return;
+    }
+
+    clearChoiceTransition();
+    advanceToNextBeat();
+  }, [
+    clearChoiceTransition,
+    clearChoiceTransitionTimers,
+    currentBeats.length,
+    currentIndex,
+    cycleSettings.storylineChoiceFlashEnabled,
+    cycleSettings.storylineChoiceFlashMs,
+    isLast,
+    choices,
+    showChoice,
+    stopAudio,
+  ]);
+
+  const goPrev = useCallback(() => {
+    if (isFirst) return;
+    stopAudio();
+    clearChoiceTransition();
+    setCurrentIndex((i) => i - 1);
+  }, [clearChoiceTransition, isFirst, stopAudio]);
+
+  const jumpToBeat = useCallback((index: number) => {
+    if (index === currentIndex) return;
+    stopAudio();
+    clearChoiceTransition();
+    setCurrentIndex(index);
+  }, [clearChoiceTransition, currentIndex, stopAudio]);
+
   const replay = useCallback(() => {
     stopAudio();
+    clearChoiceTransition();
     setShowEndModal(false);
     setCurrentIndex(0);
-  }, [stopAudio]);
+  }, [clearChoiceTransition, stopAudio]);
 
   // Auto-play narration when beat changes and autoPlay is on
   const prevIndexRef = useRef(currentIndex);
@@ -453,10 +507,16 @@ export default function StorylinePlayer({
   }, [isLast, currentBeat.isEnding, currentBeat.audioUrl]);
 
   useEffect(() => {
-    if (isMinimized || showChoice) {
+    if (isMinimized) {
       stopAutoScroll();
     }
-  }, [isMinimized, showChoice, stopAutoScroll]);
+  }, [isMinimized, stopAutoScroll]);
+
+  useEffect(() => {
+    return () => {
+      clearChoiceTransitionTimers();
+    };
+  }, [clearChoiceTransitionTimers]);
 
   // Keyboard navigation
   const volumeRef = useRef(volume);
@@ -784,13 +844,6 @@ export default function StorylinePlayer({
         onPanEnd={onPanEnd}
         style={{ x: dragX }}
       >
-        {/* Choice Transition */}
-        <AnimatePresence>
-          {showChoice && currentChoice && (
-            <ChoiceTransition optionLabel={currentChoice.optionLabel} />
-          )}
-        </AnimatePresence>
-
         <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStoryline ? 'hidden' : 'flex'}`}>
           <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
             {isStoryboard ? (
@@ -834,7 +887,7 @@ export default function StorylinePlayer({
         {/* Story Text Card */}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-end md:flex-none">
           <AnimatePresence mode="wait">
-            {!showChoice && !isMinimized && (
+            {!isMinimized && (
               <motion.div
                 key={currentIndex}
                 initial={{ opacity: 0, y: 20 }}
@@ -871,6 +924,16 @@ export default function StorylinePlayer({
           </AnimatePresence>
         </div>
 
+        <AnimatePresence>
+          {showChoice && transitionChoice && cycleSettings.storylineChoiceFlashEnabled && (
+            <ChoiceTransition
+              key={`${currentIndex}:${transitionChoice.optionLabel}`}
+              optionLabel={transitionChoice.optionLabel}
+              className="mb-3 md:mb-4"
+            />
+          )}
+        </AnimatePresence>
+
         {/* Navigation Controls */}
         <div className="mb-0 mt-3 space-y-3 md:mb-4 md:mt-6 md:space-y-0">
           {/* Mobile Row 1: Prev/Next buttons — right-aligned, above controls */}
@@ -884,7 +947,7 @@ export default function StorylinePlayer({
             </button>
             <button
               onClick={goNext}
-              disabled={isLast}
+              disabled={isLast || showChoice}
               className="p-2.5 rounded-full bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <ChevronRight className="w-5 h-5" />
@@ -1005,7 +1068,7 @@ export default function StorylinePlayer({
               {currentBeats.map((_, i) => (
                 <button
                   key={i}
-                  onClick={() => setCurrentIndex(i)}
+                  onClick={() => jumpToBeat(i)}
                   title={`Beat ${i + 1}`}
                   className={`rounded-full transition-all duration-200 cursor-pointer ${
                     i === currentIndex
@@ -1130,7 +1193,7 @@ export default function StorylinePlayer({
                 {currentBeats.map((_, i) => (
                   <button
                     key={i}
-                    onClick={() => setCurrentIndex(i)}
+                    onClick={() => jumpToBeat(i)}
                     title={`Beat ${i + 1}`}
                     className={`rounded-full transition-all duration-200 cursor-pointer hover:scale-[2] ${
                       i === currentIndex
@@ -1147,7 +1210,7 @@ export default function StorylinePlayer({
             {/* Next */}
             <button
               onClick={goNext}
-              disabled={isLast}
+              disabled={isLast || showChoice}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
               <span className="text-sm font-sans">Next</span>

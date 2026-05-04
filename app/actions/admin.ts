@@ -258,6 +258,8 @@ export async function getGlobalSettings(): Promise<{
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  storylineChoiceFlashEnabled: boolean;
+  storylineChoiceFlashMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
   storyPromptOnlyModeEnabled: boolean;
@@ -282,7 +284,7 @@ export async function getGlobalSettings(): Promise<{
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -296,6 +298,8 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlagValue('story_ui_text_line_count'),
     getFeatureFlag('story_ui_auto_scroll_enabled', true),
+    getFeatureFlag('storyline_choice_flash_enabled', true),
+    getFeatureFlagValue('storyline_choice_flash_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
     getFeatureFlag('story_prompt_only_mode_enabled', false),
@@ -321,6 +325,7 @@ export async function getGlobalSettings(): Promise<{
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
+  const parsedStorylineChoiceFlashMs = parseInt(storylineChoiceFlashMsStr ?? '3000', 10);
 
   return {
     cycleOverride,
@@ -344,6 +349,10 @@ export async function getGlobalSettings(): Promise<{
       : 24,
     storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
     storyUiAutoScrollEnabled,
+    storylineChoiceFlashEnabled,
+    storylineChoiceFlashMs: Number.isFinite(parsedStorylineChoiceFlashMs)
+      ? Math.max(500, Math.min(30000, parsedStorylineChoiceFlashMs))
+      : 3000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
     storyPromptOnlyModeEnabled,
@@ -462,6 +471,19 @@ export async function setStoryUiTextLineCount(lines: number): Promise<void> {
 export async function setStoryUiAutoScroll(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('story_ui_auto_scroll_enabled', enabled);
+}
+
+export async function setStorylineChoiceFlashEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('storyline_choice_flash_enabled', enabled);
+}
+
+export async function setStorylineChoiceFlashMs(ms: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isFinite(ms) || ms < 500 || ms > 30000) {
+    throw new Error('Storyline choice flash duration must be between 0.5 and 30 seconds.');
+  }
+  await setFeatureFlagValue('storyline_choice_flash_ms', String(Math.round(ms)));
 }
 
 export async function setFreePlusCharacterSheets(enabled: boolean): Promise<void> {
@@ -639,6 +661,8 @@ export async function getStoryboardSettings(): Promise<{
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  storylineChoiceFlashEnabled: boolean;
+  storylineChoiceFlashMs: number;
   cloudSaveTimeoutMs: number;
   freePlusCharacterSheetsEnabled: boolean;
   creatorCharacterSheetsEnabled: boolean;
@@ -661,7 +685,7 @@ export async function getStoryboardSettings(): Promise<{
   characterSheetCleanupEnabled: boolean;
   characterSheetCleanupDays: number;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -675,6 +699,8 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlagValue('story_ui_text_line_count'),
     getFeatureFlag('story_ui_auto_scroll_enabled', true),
+    getFeatureFlag('storyline_choice_flash_enabled', true),
+    getFeatureFlagValue('storyline_choice_flash_ms'),
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
     getFeatureFlag('character_sheet_enabled_creator'),
@@ -699,6 +725,7 @@ export async function getStoryboardSettings(): Promise<{
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
+  const parsedStorylineChoiceFlashMs = parseInt(storylineChoiceFlashMsStr ?? '3000', 10);
   const parsedCharacterSheetMaxBytes = parseInt(characterSheetUploadMaxBytesStr ?? '5242880', 10);
   const parsedCharacterSheetMaxPerCharacter = parseInt(characterSheetMaxPerCharacterStr ?? '3', 10);
   const parsedCharacterSheetCleanupDays = parseInt(characterSheetCleanupDaysStr ?? '7', 10);
@@ -725,6 +752,10 @@ export async function getStoryboardSettings(): Promise<{
       : 24,
     storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
     storyUiAutoScrollEnabled,
+    storylineChoiceFlashEnabled,
+    storylineChoiceFlashMs: Number.isFinite(parsedStorylineChoiceFlashMs)
+      ? Math.max(500, Math.min(30000, parsedStorylineChoiceFlashMs))
+      : 3000,
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     freePlusCharacterSheetsEnabled,
     creatorCharacterSheetsEnabled,
