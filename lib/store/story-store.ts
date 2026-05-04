@@ -1137,6 +1137,18 @@ function canPublishStoryPathAsStandard(
 
 const LOADING_READER_MESSAGE = 'kissago is weaving the story';
 
+function formatSelectedOptionForPrompt(option: Option): string {
+  const label = option.label.trim();
+  const intent = option.intent?.trim() || '';
+  return intent ? `Label: ${label}\nIntent: ${intent}` : `Label: ${label}`;
+}
+
+function formatChoiceHistoryOption(option: Option): string {
+  const label = option.label.trim();
+  const intent = option.intent?.trim() || '';
+  return intent ? `${label} (intent: ${intent})` : label;
+}
+
 function createInitialLoadingReader({
   flow,
   selectedOptionLabel = null,
@@ -2139,9 +2151,10 @@ export const useStoryStore = create<StoryState>()(
         try {
           // Build session state for Gemini with linear path beats
           const beatsForPrompt = getBeatsToNode(session.storyMap, session.storyMap.currentNodeId);
+          const selectedOptionPrompt = formatSelectedOptionForPrompt(selectedOption);
           const choiceHistoryForPrompt = [
             ...getChoiceHistoryToNode(session.storyMap, session.storyMap.currentNodeId),
-            selectedOption.label,
+            formatChoiceHistoryOption(selectedOption),
           ];
           const sessionForPrompt: Partial<StorySession> = {
             ...session,
@@ -2185,7 +2198,7 @@ export const useStoryStore = create<StoryState>()(
                 await generateStoryBeat(
                   session.userPrompt,
                   sessionForPrompt,
-                  selectedOption.label,
+                  selectedOptionPrompt,
                   modelOverrides,
                   costPhase(baseCostTelemetry, 'story_generation')
                 )
@@ -2194,6 +2207,7 @@ export const useStoryStore = create<StoryState>()(
             {
               selectedOptionId: optionId,
               selectedOptionLabel: selectedOption.label,
+              selectedOptionIntent: selectedOption.intent,
               isCanonicalSeedPath: Boolean(nextCanonicalSeedBeat),
             }
           );

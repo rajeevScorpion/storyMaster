@@ -107,6 +107,13 @@ Beat pacing and story length rules:
 - At the penultimate beat, begin wrapping up narrative threads and steering toward resolution.
 - Beat 1 establishes characters and world. Middle beats deepen conflict and relationships.
 
+Branch bridge rules:
+- On every beat after beat 1, the storyText must visibly enact, restate, or naturally continue the User Selected Option before showing its consequence.
+- If the selected option is a question, request, challenge, confession, or dialogue choice, include that spoken moment or a natural paraphrase of it before another character answers or reacts.
+- Do not begin the beat only with an answer, explanation, reaction, or consequence that depends on the selected option being remembered outside the prose.
+- The storyText must remain readable and continuous even if the selected option label is not displayed separately in the UI.
+- Weave the selected option into the scene naturally. Do not write UI language such as "You chose" or "the selected option".
+
 Continuity rules:
 - Treat {{storyState}} as the highest source of truth.
 - If there is a conflict between invention and runtime state, follow the runtime state.
@@ -501,7 +508,7 @@ Requirements:
 - No text, labels, or watermarks`;
 
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
-  story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience.',
+  story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
@@ -521,7 +528,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'userPrompt', label: 'User Prompt', description: 'Original story request from the user.', required: true },
       { key: 'storyConfig', label: 'Story Config', description: 'Formatted story configuration and beat pacing context.', required: true },
       { key: 'storyState', label: 'Story State', description: 'Compact story bible snapshot used for continuity.', required: true },
-      { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label, or blank on the first beat.', required: true },
+      { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label and intent, or blank on the first beat.', required: true },
     ],
     defaultPrompt: STORY_GENERATION_PROMPT_DEFAULT,
   },

@@ -32,6 +32,10 @@ Core behavior rules:
 
 Narrative design rules:
 - The user's choice must clearly shape what happens next.
+- The next beat's storyText must visibly enact, restate, or naturally continue the selected choice before showing its consequence.
+- If the selected choice is a question or dialogue moment, include the question or a natural paraphrase before another character answers.
+- Do not begin only with an answer, explanation, reaction, or consequence that depends on the selected choice being remembered outside the prose.
+- The beat must remain readable even if the choice label is not displayed separately in the UI.
 - The story should feel authored, not chaotic.
 - Each paragraph should create a visible moment that can be illustrated.
 - Endings should feel earned.
