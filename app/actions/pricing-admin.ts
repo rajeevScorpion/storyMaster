@@ -42,6 +42,8 @@ type JsonRecord = Record<string, unknown>;
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
+const LEGACY_TOPUP_PACK_KEYS = ['beats_25', 'beats_80', 'beats_200'] as const;
+
 export interface PricingAdminRuntimeSetting {
   key: PricingRuntimeFlagKey;
   kind: PricingRuntimeSettingKind;
@@ -104,7 +106,8 @@ export interface SavePricingPlanDraftInput {
 }
 
 export interface SavePricingTopupDraftInput {
-  packKey: string;
+  topupId?: string | null;
+  packKey?: string | null;
   name: string;
   provider: BillingProvider;
   currencyCode: string;
@@ -114,6 +117,17 @@ export interface SavePricingTopupDraftInput {
   providerProductRef?: string | null;
   providerPriceRef?: string | null;
   extensions?: JsonRecord;
+}
+
+export interface SavePricingTopupDraftResult {
+  state: PricingAdminState;
+  topupId: string;
+  packKey: string;
+}
+
+export interface ArchiveLegacyTopupPacksResult {
+  state: PricingAdminState;
+  archivedCount: number;
 }
 
 export interface SavePricingActionCostInput {
@@ -427,32 +441,76 @@ export async function archivePricingPlanVersion(versionId: string, reason?: stri
   return getPricingAdminStateInternal(supabase);
 }
 
-export async function savePricingTopupDraft(input: SavePricingTopupDraftInput): Promise<PricingAdminState> {
+export async function savePricingTopupDraft(input: SavePricingTopupDraftInput): Promise<SavePricingTopupDraftResult> {
   const { user } = await verifyAdmin();
-  validateTopupDraftInput(input);
+  const normalizedInput = validateTopupDraftInput(input);
 
   const supabase = createAdminClient();
-  const existingDraft = await getTopupByStatus(
-    supabase,
-    input.packKey.trim(),
-    input.pricingMarketKey,
-    input.currencyCode,
-    'draft'
-  );
+  const timestamp = new Date().toISOString();
+
+  let existingDraft: DbPricingTopupPack | null = null;
+  let packKey = normalizedInput.packKey;
+
+  if (normalizedInput.topupId) {
+    existingDraft = await getTopupById(supabase, normalizedInput.topupId);
+    if (!existingDraft) {
+      throw new Error('Pricing top-up draft not found');
+    }
+    if (existingDraft.status !== 'draft') {
+      throw new Error('Only draft top-up packs can be updated');
+    }
+    packKey = existingDraft.pack_key;
+  } else if (packKey) {
+    existingDraft = await getTopupByStatus(
+      supabase,
+      packKey,
+      normalizedInput.pricingMarketKey,
+      normalizedInput.currencyCode,
+      'draft'
+    );
+  } else {
+    packKey = buildGeneratedTopupPackKey(normalizedInput.beatAmount);
+    const [matchingDraft, matchingPublished] = await Promise.all([
+      getTopupByStatus(
+        supabase,
+        packKey,
+        normalizedInput.pricingMarketKey,
+        normalizedInput.currencyCode,
+        'draft'
+      ),
+      getTopupByStatus(
+        supabase,
+        packKey,
+        normalizedInput.pricingMarketKey,
+        normalizedInput.currencyCode,
+        'published'
+      ),
+    ]);
+
+    if (matchingDraft || matchingPublished) {
+      throw new Error(
+        `A coin pack for ${buildTopupPackDisplayName(normalizedInput.beatAmount)} already exists in this market and currency`
+      );
+    }
+  }
+
+  if (!packKey) {
+    throw new Error('Pack key is required');
+  }
 
   const payload = {
-    pack_key: input.packKey.trim(),
+    pack_key: packKey,
     status: 'draft',
-    provider: input.provider,
-    name: input.name.trim(),
-    currency_code: input.currencyCode.trim().toUpperCase(),
-    pricing_market_key: input.pricingMarketKey,
-    price_minor: input.priceMinor,
-    beat_amount: input.beatAmount,
-    provider_product_ref: normalizeText(input.providerProductRef),
-    provider_price_ref: normalizeText(input.providerPriceRef),
-    extensions_json: input.extensions ?? {},
-    updated_at: new Date().toISOString(),
+    provider: normalizedInput.provider,
+    name: normalizeTopupPackName(normalizedInput.name, normalizedInput.beatAmount),
+    currency_code: normalizedInput.currencyCode,
+    pricing_market_key: normalizedInput.pricingMarketKey,
+    price_minor: normalizedInput.priceMinor,
+    beat_amount: normalizedInput.beatAmount,
+    provider_product_ref: normalizeText(normalizedInput.providerProductRef),
+    provider_price_ref: normalizeText(normalizedInput.providerPriceRef),
+    extensions_json: normalizedInput.extensions ?? {},
+    updated_at: timestamp,
     published_at: null,
     published_by: null,
   };
@@ -492,7 +550,11 @@ export async function savePricingTopupDraft(input: SavePricingTopupDraftInput): 
     afterJson: topup,
   });
 
-  return getPricingAdminStateInternal(supabase);
+  return {
+    state: await getPricingAdminStateInternal(supabase),
+    topupId: topup.id,
+    packKey: topup.pack_key,
+  };
 }
 
 export async function publishPricingTopupPack(packId: string, reason?: string): Promise<PricingAdminState> {
@@ -609,6 +671,64 @@ export async function archivePricingTopupPack(packId: string, reason?: string): 
   });
 
   return getPricingAdminStateInternal(supabase);
+}
+
+export async function archiveLegacyTopupPacks(
+  pricingMarketKey: PricingMarketKey,
+  reason?: string
+): Promise<ArchiveLegacyTopupPacksResult> {
+  const { user } = await verifyAdmin();
+  assertEnum(pricingMarketKey, PRICING_MARKET_KEYS, 'Pricing market');
+
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('pricing_topup_packs')
+    .select('*')
+    .in('pack_key', [...LEGACY_TOPUP_PACK_KEYS])
+    .eq('pricing_market_key', pricingMarketKey)
+    .neq('status', 'archived');
+
+  throwIfQueryFailed(error, 'Failed to load legacy top-up packs');
+
+  const legacyPacks = (data ?? []) as DbPricingTopupPack[];
+  if (legacyPacks.length === 0) {
+    return {
+      state: await getPricingAdminStateInternal(supabase),
+      archivedCount: 0,
+    };
+  }
+
+  const timestamp = new Date().toISOString();
+  const { data: archivedData, error: archiveError } = await supabase
+    .from('pricing_topup_packs')
+    .update({
+      status: 'archived',
+      updated_at: timestamp,
+    })
+    .in('id', legacyPacks.map((pack) => pack.id))
+    .select('*');
+
+  throwIfQueryFailed(archiveError, 'Failed to archive legacy top-up packs');
+
+  const archivedPacks = (archivedData ?? []) as DbPricingTopupPack[];
+  const beforeById = new Map(legacyPacks.map((pack) => [pack.id, pack] as const));
+
+  for (const pack of archivedPacks) {
+    await insertPricingAudit(supabase, {
+      entityType: 'topup_pack',
+      entityId: pack.id,
+      actionType: 'archive',
+      performedBy: user.id,
+      beforeJson: beforeById.get(pack.id) ?? null,
+      afterJson: pack,
+      reason,
+    });
+  }
+
+  return {
+    state: await getPricingAdminStateInternal(supabase),
+    archivedCount: archivedPacks.length,
+  };
 }
 
 export async function savePricingActionCost(input: SavePricingActionCostInput): Promise<PricingAdminState> {
@@ -1129,13 +1249,42 @@ function validatePlanDraftInput(input: SavePricingPlanDraftInput): void {
   }
 }
 
-function validateTopupDraftInput(input: SavePricingTopupDraftInput): void {
-  if (!input.packKey.trim()) throw new Error('Pack key is required');
-  if (!input.name.trim()) throw new Error('Pack name is required');
+function validateTopupDraftInput(input: SavePricingTopupDraftInput): {
+  topupId: string | null;
+  packKey: string | null;
+  name: string;
+  provider: BillingProvider;
+  currencyCode: string;
+  pricingMarketKey: PricingMarketKey;
+  priceMinor: number;
+  beatAmount: number;
+  providerProductRef?: string | null;
+  providerPriceRef?: string | null;
+  extensions?: JsonRecord;
+} {
   assertEnum(input.provider, BILLING_PROVIDERS, 'Billing provider');
   assertEnum(input.pricingMarketKey, PRICING_MARKET_KEYS, 'Pricing market');
   assertInteger(input.priceMinor, 'Price', 0);
   assertInteger(input.beatAmount, 'Beat amount', 1);
+
+  const normalizedCurrencyCode = input.currencyCode.trim().toUpperCase();
+  if (!normalizedCurrencyCode) {
+    throw new Error('Currency is required');
+  }
+
+  return {
+    topupId: normalizeText(input.topupId),
+    packKey: normalizeText(input.packKey),
+    name: input.name,
+    provider: input.provider,
+    currencyCode: normalizedCurrencyCode,
+    pricingMarketKey: input.pricingMarketKey,
+    priceMinor: input.priceMinor,
+    beatAmount: input.beatAmount,
+    providerProductRef: input.providerProductRef,
+    providerPriceRef: input.providerPriceRef,
+    extensions: input.extensions,
+  };
 }
 
 function validateActionCostInput(input: SavePricingActionCostInput): number {
@@ -1201,6 +1350,31 @@ function assertNumber(value: number, label: string, min: number): void {
   if (!Number.isFinite(value) || value < min) {
     throw new Error(`${label} must be greater than or equal to ${min}`);
   }
+}
+
+function buildGeneratedTopupPackKey(beatAmount: number): string {
+  return `coins_${beatAmount * COINS_PER_BEAT}`;
+}
+
+function buildTopupPackDisplayName(beatAmount: number): string {
+  return `${formatWholeNumber(beatAmount * COINS_PER_BEAT)} Coins`;
+}
+
+function isGeneratedTopupPackName(value: string): boolean {
+  const normalized = value.trim();
+  return /^\d[\d,]*\s+coins$/i.test(normalized) || /^\d+\s+beats$/i.test(normalized);
+}
+
+function normalizeTopupPackName(name: string, beatAmount: number): string {
+  const normalized = name.trim();
+  if (!normalized || isGeneratedTopupPackName(normalized)) {
+    return buildTopupPackDisplayName(beatAmount);
+  }
+  return normalized;
+}
+
+function formatWholeNumber(value: number): string {
+  return new Intl.NumberFormat('en-US').format(value);
 }
 
 function normalizeText(value?: string | null): string | null {

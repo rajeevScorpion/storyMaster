@@ -18,6 +18,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import {
+  archiveLegacyTopupPacks,
   archivePricingPlanVersion,
   archivePricingPromotion,
   archivePricingTopupPack,
@@ -35,7 +36,7 @@ import {
   updatePricingRuntimeSettings,
   type PricingAdminState,
 } from '@/app/actions/pricing-admin';
-import type { DbPricingPromotion } from '@/lib/types/database';
+import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
 import {
   BILLING_INTERVALS,
   BILLING_PROVIDERS,
@@ -86,6 +87,8 @@ type PlanEditorState = {
 };
 
 type TopupEditorState = {
+  topupId: string | null;
+  packKey: string | null;
   name: string;
   provider: BillingProvider;
   currencyCode: string;
@@ -93,6 +96,15 @@ type TopupEditorState = {
   coinAmount: number;
   providerProductRef: string;
   providerPriceRef: string;
+};
+
+type TopupCatalogEntry = {
+  packKey: string;
+  current: DbPricingTopupPack;
+  draft: DbPricingTopupPack | null;
+  published: DbPricingTopupPack | null;
+  coinAmount: number;
+  label: string;
 };
 
 type PromotionEditorState = {
@@ -128,8 +140,8 @@ export type PricingStudioSection =
   | 'recovery-tools';
 
 const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100';
-const TOPUP_PACK_KEYS = ['beats_25', 'beats_80', 'beats_200'] as const;
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
+const LEGACY_TOPUP_PACK_KEYS = new Set(['beats_25', 'beats_80', 'beats_200']);
 const VIDEO_EXPORT_WATERMARK_MODE_LABELS: Record<VideoExportWatermarkMode, string> = {
   auto: 'Auto',
   always: 'Always show',
@@ -260,6 +272,19 @@ function parseActionCoinCost(value: string) {
   return parsed;
 }
 
+function coinAmountToWholeBeats(value: number, label: string) {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${label} must be greater than 0 coins.`);
+  }
+
+  const beatAmount = value / COINS_PER_BEAT;
+  if (!Number.isInteger(beatAmount)) {
+    throw new Error(`${label} must be in increments of ${COINS_PER_BEAT} coins.`);
+  }
+
+  return beatAmount;
+}
+
 function formatWholeNumber(value: number) {
   return new Intl.NumberFormat('en-US').format(value);
 }
@@ -292,18 +317,20 @@ function formatRuntimeDefaultValue(key: string, defaultValue: string | null, def
   return String(beatsToCoins(parsed));
 }
 
-function getDefaultPackNameFromKey(packKey: string) {
-  const match = /^beats_(\d+)$/.exec(packKey);
-  if (!match) return packKey.replaceAll('_', ' ');
-  return `${formatWholeNumber(beatsToCoins(Number(match[1])))} Coins`;
+function buildGeneratedPackName(coinAmount: number) {
+  return `${formatWholeNumber(coinAmount)} Coins`;
 }
 
-function normalizePackName(name: string | null | undefined, packKey: string, beatAmount: number) {
-  if (!name?.trim()) return getDefaultPackNameFromKey(packKey);
-  if (/^\d+\s+beats$/i.test(name.trim())) {
-    return `${formatWholeNumber(beatsToCoins(beatAmount))} Coins`;
+function isGeneratedPackName(name: string) {
+  const normalized = name.trim();
+  return /^\d[\d,]*\s+coins$/i.test(normalized) || /^\d+\s+beats$/i.test(normalized);
+}
+
+function normalizePackName(name: string | null | undefined, beatAmount: number) {
+  if (!name?.trim() || isGeneratedPackName(name)) {
+    return buildGeneratedPackName(beatsToCoins(beatAmount));
   }
-  return name;
+  return name.trim();
 }
 
 function formatPlanVariantValue(variant: PricingAdminState['plans'][number]['versions'][number] | null) {
@@ -314,6 +341,44 @@ function formatPlanVariantValue(variant: PricingAdminState['plans'][number]['ver
 function formatTopupVariantValue(variant: PricingAdminState['topupPacks'][number] | null) {
   if (!variant) return 'Missing';
   return `${variant.currency_code} ${variant.price_minor} · ${formatWholeNumber(beatsToCoins(variant.beat_amount))} coins`;
+}
+
+function buildTopupCatalogEntries(
+  topupPacks: DbPricingTopupPack[],
+  market: PricingMarketKey
+): TopupCatalogEntry[] {
+  const grouped = new Map<string, { draft: DbPricingTopupPack | null; published: DbPricingTopupPack | null }>();
+
+  for (const pack of topupPacks) {
+    if (pack.pricing_market_key !== market || pack.status === 'archived') {
+      continue;
+    }
+
+    const current = grouped.get(pack.pack_key) ?? { draft: null, published: null };
+    if (pack.status === 'draft') {
+      current.draft = pack;
+    } else if (pack.status === 'published') {
+      current.published = pack;
+    }
+    grouped.set(pack.pack_key, current);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([packKey, variants]) => {
+      const current = variants.draft ?? variants.published;
+      if (!current) return null;
+
+      return {
+        packKey,
+        current,
+        draft: variants.draft,
+        published: variants.published,
+        coinAmount: beatsToCoins(current.beat_amount),
+        label: normalizePackName(current.name, current.beat_amount),
+      };
+    })
+    .filter((entry): entry is TopupCatalogEntry => entry !== null)
+    .sort((left, right) => left.coinAmount - right.coinAmount || left.label.localeCompare(right.label));
 }
 
 function toLocalDateTimeValue(value: string | null | undefined) {
@@ -372,11 +437,13 @@ function defaultPlanEditor(planKey: PlanKey, market: PricingMarketKey): PlanEdit
 
 function defaultTopupEditor(market: PricingMarketKey): TopupEditorState {
   return {
-    name: getDefaultPackNameFromKey('beats_25'),
+    topupId: null,
+    packKey: null,
+    name: '',
     provider: defaultProviderForMarket(market),
     currencyCode: defaultCurrencyForMarket(market),
     priceMinor: 0,
-    coinAmount: beatsToCoins(25),
+    coinAmount: 0,
     providerProductRef: '',
     providerPriceRef: '',
   };
@@ -409,8 +476,9 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
   const [selectedPlanInterval, setSelectedPlanInterval] = useState<BillingInterval>('monthly');
   const [planEditor, setPlanEditor] = useState<PlanEditorState>(defaultPlanEditor('free', 'ROW'));
 
-  const [selectedTopupKey, setSelectedTopupKey] = useState('beats_25');
   const [selectedTopupMarket, setSelectedTopupMarket] = useState<PricingMarketKey>('ROW');
+  const [selectedTopupRecordId, setSelectedTopupRecordId] = useState<string | null>(null);
+  const [isCreatingTopup, setIsCreatingTopup] = useState(false);
   const [topupEditor, setTopupEditor] = useState<TopupEditorState>(defaultTopupEditor('ROW'));
 
   const [actionCostDrafts, setActionCostDrafts] = useState<Record<string, ActionCostDraft>>({});
@@ -445,10 +513,42 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     setPlanEditor(buildPlanEditor(state, selectedPlanKey, selectedPlanMarket, selectedPlanInterval));
   }, [state, selectedPlanKey, selectedPlanMarket, selectedPlanInterval]);
 
+  const topupCatalogEntries = useMemo(
+    () => buildTopupCatalogEntries(state?.topupPacks ?? [], selectedTopupMarket),
+    [state, selectedTopupMarket]
+  );
+
+  const selectedTopupEntry = useMemo(() => {
+    if (!selectedTopupRecordId) return null;
+    return topupCatalogEntries.find((entry) =>
+      entry.current.id === selectedTopupRecordId ||
+      entry.draft?.id === selectedTopupRecordId ||
+      entry.published?.id === selectedTopupRecordId
+    ) ?? null;
+  }, [selectedTopupRecordId, topupCatalogEntries]);
+
   useEffect(() => {
     if (!state) return;
-    setTopupEditor(buildTopupEditor(state, selectedTopupKey, selectedTopupMarket));
-  }, [state, selectedTopupKey, selectedTopupMarket]);
+    if (isCreatingTopup) {
+      setTopupEditor(defaultTopupEditor(selectedTopupMarket));
+      return;
+    }
+
+    if (selectedTopupEntry) {
+      setTopupEditor(buildTopupEditor(selectedTopupEntry, selectedTopupMarket));
+      return;
+    }
+
+    const firstEntry = topupCatalogEntries[0] ?? null;
+    if (firstEntry && selectedTopupRecordId !== firstEntry.current.id) {
+      setSelectedTopupRecordId(firstEntry.current.id);
+      return;
+    }
+
+    if (!firstEntry) {
+      setTopupEditor(defaultTopupEditor(selectedTopupMarket));
+    }
+  }, [isCreatingTopup, selectedTopupEntry, selectedTopupMarket, selectedTopupRecordId, state, topupCatalogEntries]);
 
   const currentPlanDraft = useMemo(() => {
     const record = state?.plans.find((item) => item.plan.plan_key === selectedPlanKey);
@@ -471,20 +571,20 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
   }, [state, selectedPlanInterval, selectedPlanKey, selectedPlanMarket]);
 
   const currentTopupDraft = useMemo(() => {
-    return state?.topupPacks.find((pack) =>
-      pack.pack_key === selectedTopupKey &&
-      pack.pricing_market_key === selectedTopupMarket &&
-      pack.status === 'draft'
-    ) ?? null;
-  }, [state, selectedTopupKey, selectedTopupMarket]);
+    return selectedTopupEntry?.draft ?? null;
+  }, [selectedTopupEntry]);
 
   const currentTopupPublished = useMemo(() => {
-    return state?.topupPacks.find((pack) =>
-      pack.pack_key === selectedTopupKey &&
+    return selectedTopupEntry?.published ?? null;
+  }, [selectedTopupEntry]);
+
+  const hasLegacyTopupPacks = useMemo(() => {
+    return state?.topupPacks.some((pack) =>
       pack.pricing_market_key === selectedTopupMarket &&
-      pack.status === 'published'
-    ) ?? null;
-  }, [state, selectedTopupKey, selectedTopupMarket]);
+      pack.status !== 'archived' &&
+      LEGACY_TOPUP_PACK_KEYS.has(pack.pack_key)
+    ) ?? false;
+  }, [selectedTopupMarket, state]);
 
   async function refreshState() {
     setLoading(true);
@@ -507,6 +607,29 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     setRuntimeDrafts(Object.fromEntries(
       next.runtimeSettings.map((row) => [row.key, { enabled: row.enabled, value: storedValueToEditorValue(row.key, row.value) }])
     ));
+  }
+
+  function startNewTopupDraft() {
+    setIsCreatingTopup(true);
+    setSelectedTopupRecordId(null);
+    setTopupEditor(defaultTopupEditor(selectedTopupMarket));
+  }
+
+  function updateTopupCoinAmount(value: string) {
+    const nextCoinAmount = Number(value);
+
+    setTopupEditor((current) => {
+      const coinAmount = Number.isFinite(nextCoinAmount) ? nextCoinAmount : 0;
+      const nextName = !current.name.trim() || isGeneratedPackName(current.name)
+        ? (coinAmount > 0 ? buildGeneratedPackName(coinAmount) : '')
+        : current.name;
+
+      return {
+        ...current,
+        coinAmount,
+        name: nextName,
+      };
+    });
   }
 
   async function runMutation<T>(
@@ -875,18 +998,63 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
       <SectionCard title="Top-up Packs" description="Manage one-time coin packs by market." icon={Coins}>
         <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
           <div className="space-y-4 rounded-xl border border-white/10 bg-neutral-900/50 p-4">
+            <button
+              type="button"
+              onClick={startNewTopupDraft}
+              disabled={busyKey !== null}
+              className="w-full rounded-lg border border-dashed border-white/15 px-3 py-2 text-sm text-neutral-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+            >
+              New pack
+            </button>
             <SelectField label="Pack">
-              <select value={selectedTopupKey} onChange={(event) => setSelectedTopupKey(event.target.value)} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                {TOPUP_PACK_KEYS.map((key) => <option key={key} value={key}>{getPackOptionLabel(state, key, selectedTopupMarket)}</option>)}
+              <select
+                value={isCreatingTopup ? 'new' : (selectedTopupRecordId ?? '')}
+                onChange={(event) => {
+                  if (event.target.value === 'new') {
+                    startNewTopupDraft();
+                    return;
+                  }
+
+                  setIsCreatingTopup(false);
+                  setSelectedTopupRecordId(event.target.value);
+                }}
+                className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+              >
+                <option value="new">New pack</option>
+                {topupCatalogEntries.map((entry) => (
+                  <option key={entry.current.id} value={entry.current.id}>{entry.label}</option>
+                ))}
               </select>
             </SelectField>
             <SelectField label="Market">
-              <select value={selectedTopupMarket} onChange={(event) => setSelectedTopupMarket(event.target.value as PricingMarketKey)} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+              <select
+                value={selectedTopupMarket}
+                onChange={(event) => setSelectedTopupMarket(event.target.value as PricingMarketKey)}
+                className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+              >
                 {PRICING_MARKET_KEYS.map((key) => <option key={key} value={key}>{key}</option>)}
               </select>
             </SelectField>
             <VariantStatus title="Draft" value={formatTopupVariantValue(currentTopupDraft)} />
             <VariantStatus title="Published" value={formatTopupVariantValue(currentTopupPublished)} />
+            <ActionButton
+              busy={busyKey === `topup:legacy:${selectedTopupMarket}`}
+              disabled={!hasLegacyTopupPacks}
+              label="Archive Legacy Packs"
+              icon={Archive}
+              tone="secondary"
+              onClick={() => void runMutation(
+                `topup:legacy:${selectedTopupMarket}`,
+                () => archiveLegacyTopupPacks(selectedTopupMarket),
+                (result) => {
+                  hydrateState(result.state);
+                  setIsCreatingTopup(false);
+                },
+                (result) => result.archivedCount > 0
+                  ? `Archived ${result.archivedCount} legacy pack variants for ${selectedTopupMarket}`
+                  : `No legacy packs were active for ${selectedTopupMarket}`
+              )}
+            />
           </div>
 
           <div className="rounded-xl border border-white/10 bg-neutral-900/50 p-4">
@@ -899,7 +1067,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               </SelectField>
               <InputField label="Currency"><input value={topupEditor.currencyCode} onChange={(event) => setTopupEditor((current) => ({ ...current, currencyCode: event.target.value.toUpperCase() }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Price (minor units)"><input type="number" value={topupEditor.priceMinor} onChange={(event) => setTopupEditor((current) => ({ ...current, priceMinor: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
-              <InputField label="Coin Amount"><input type="number" step="10" value={topupEditor.coinAmount} onChange={(event) => setTopupEditor((current) => ({ ...current, coinAmount: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
+              <InputField label="Coin Amount"><input type="number" min="0" step="10" value={topupEditor.coinAmount} onChange={(event) => updateTopupCoinAmount(event.target.value)} className={INPUT_CLASS} /></InputField>
               <InputField label="Provider Product Ref"><input value={topupEditor.providerProductRef} onChange={(event) => setTopupEditor((current) => ({ ...current, providerProductRef: event.target.value }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Provider Price Ref"><input value={topupEditor.providerPriceRef} onChange={(event) => setTopupEditor((current) => ({ ...current, providerPriceRef: event.target.value }))} className={INPUT_CLASS} /></InputField>
             </div>
@@ -912,18 +1080,23 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                 onClick={() => void runMutation(
                   'topup:save',
                   () => savePricingTopupDraft({
-                    packKey: selectedTopupKey,
+                    topupId: topupEditor.topupId,
+                    packKey: topupEditor.packKey,
                     name: topupEditor.name,
                     provider: topupEditor.provider,
                     currencyCode: topupEditor.currencyCode,
                     pricingMarketKey: selectedTopupMarket,
                     priceMinor: topupEditor.priceMinor,
-                    beatAmount: coinsToBeats(topupEditor.coinAmount),
+                    beatAmount: coinAmountToWholeBeats(topupEditor.coinAmount, 'Coin amount'),
                     providerProductRef: topupEditor.providerProductRef,
                     providerPriceRef: topupEditor.providerPriceRef,
                   }),
-                  hydrateState,
-                  `${selectedTopupKey} draft saved`
+                  (result) => {
+                    hydrateState(result.state);
+                    setIsCreatingTopup(false);
+                    setSelectedTopupRecordId(result.topupId);
+                  },
+                  'Top-up draft saved'
                 )}
               />
               <ActionButton
@@ -935,7 +1108,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                   'topup:publish',
                   () => publishPricingTopupPack(currentTopupDraft.id),
                   hydrateState,
-                  `${selectedTopupKey} draft published`
+                  'Top-up draft published'
                 )}
               />
               <ActionButton
@@ -951,7 +1124,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                     'topup:archive',
                     () => archivePricingTopupPack(target.id),
                     hydrateState,
-                    `${selectedTopupKey} variant archived`
+                    'Top-up variant archived'
                   );
                 }}
               />
@@ -1344,17 +1517,16 @@ function buildPlanEditor(
 }
 
 function buildTopupEditor(
-  state: PricingAdminState,
-  packKey: string,
+  entry: TopupCatalogEntry | null,
   market: PricingMarketKey
 ): TopupEditorState {
-  const draft = state.topupPacks.find((pack) => pack.pack_key === packKey && pack.pricing_market_key === market && pack.status === 'draft');
-  const published = state.topupPacks.find((pack) => pack.pack_key === packKey && pack.pricing_market_key === market && pack.status === 'published');
-  const source = draft ?? published;
+  const source = entry?.draft ?? entry?.published ?? null;
   const fallback = defaultTopupEditor(market);
 
   return {
-    name: normalizePackName(source?.name, packKey, source?.beat_amount ?? coinsToBeats(fallback.coinAmount)),
+    topupId: entry?.draft?.id ?? null,
+    packKey: entry?.packKey ?? null,
+    name: source ? normalizePackName(source.name, source.beat_amount) : fallback.name,
     provider: (source?.provider ?? fallback.provider) as BillingProvider,
     currencyCode: source?.currency_code ?? fallback.currencyCode,
     priceMinor: source?.price_minor ?? fallback.priceMinor,
@@ -1362,17 +1534,6 @@ function buildTopupEditor(
     providerProductRef: source?.provider_product_ref ?? '',
     providerPriceRef: source?.provider_price_ref ?? '',
   };
-}
-
-function getPackOptionLabel(
-  state: PricingAdminState,
-  packKey: string,
-  market: PricingMarketKey
-) {
-  const draft = state.topupPacks.find((pack) => pack.pack_key === packKey && pack.pricing_market_key === market && pack.status === 'draft');
-  const published = state.topupPacks.find((pack) => pack.pack_key === packKey && pack.pricing_market_key === market && pack.status === 'published');
-  const source = draft ?? published;
-  return normalizePackName(source?.name, packKey, source?.beat_amount ?? coinsToBeats(0));
 }
 
 function buildPromotionEditor(promotion: DbPricingPromotion): PromotionEditorState {
