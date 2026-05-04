@@ -109,6 +109,15 @@ interface CachedPricingGlobals {
 const PRICING_GLOBAL_CACHE_TTL_MS = 5_000;
 let cachedPricingGlobals: CachedPricingGlobals | null = null;
 
+function beatsToCoins(value: number): number {
+  return Number((value * COINS_PER_BEAT).toFixed(2));
+}
+
+function asBeatAmount(value: number | string | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function enforcementNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
@@ -254,8 +263,8 @@ export async function authorizeBillableAction(input: {
     },
     async () => {
       const actionCost = await loadActionCost(input.actionKey);
-      const beatCost = actionCost?.beat_cost ?? 0;
-      const coinCost = beatCost * COINS_PER_BEAT;
+      const beatCost = asBeatAmount(actionCost?.beat_cost);
+      const coinCost = beatsToCoins(beatCost);
 
       if (!input.userId) {
         return {
@@ -315,13 +324,13 @@ export async function authorizeBillableAction(input: {
           beatCost,
           coinCost,
           availableBeats: state.snapshot.availableTotalBeats,
-          availableCoins: state.snapshot.availableTotalBeats * COINS_PER_BEAT,
+          availableCoins: beatsToCoins(state.snapshot.availableTotalBeats),
           expiresAt: null,
         };
       }
 
       const availableBeats = state.snapshot.availableTotalBeats;
-      const availableCoins = availableBeats * COINS_PER_BEAT;
+      const availableCoins = beatsToCoins(availableBeats);
 
       if (!state.controls.pricingHardEnforcementEnabled) {
         if (state.controls.pricingShadowMeteringEnabled) {
@@ -399,8 +408,8 @@ export async function authorizeBillableAction(input: {
         reservationId: row.reservation_id,
         beatCost,
         coinCost,
-        availableBeats: row.available_beats,
-        availableCoins: row.available_beats * COINS_PER_BEAT,
+        availableBeats: asBeatAmount(row.available_beats),
+        availableCoins: beatsToCoins(asBeatAmount(row.available_beats)),
         expiresAt,
       };
     }
@@ -430,8 +439,8 @@ export async function finalizeBillableAction(input: {
   return {
     reservationId: input.reservationId,
     usageEventId: row.usage_event_id,
-    beatCost: row.finalized_beat_cost,
-    coinCost: row.finalized_beat_cost * COINS_PER_BEAT,
+    beatCost: asBeatAmount(row.finalized_beat_cost),
+    coinCost: beatsToCoins(asBeatAmount(row.finalized_beat_cost)),
   };
 }
 

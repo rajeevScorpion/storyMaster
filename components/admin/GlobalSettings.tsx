@@ -629,8 +629,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   }
 
   async function handlePreviewSeedPlanPriceSave() {
-    const coins = parseInt(previewSeedPlanPriceCoinsInput, 10);
-    if (!Number.isFinite(coins) || coins < 0 || coins % 10 !== 0) return;
+    const coins = previewSeedPlanPriceCoinsInput.trim() === '' ? NaN : Number(previewSeedPlanPriceCoinsInput);
+    if (!Number.isFinite(coins) || coins < 0 || !Number.isInteger(coins)) return;
     setPreviewSeedPlanPriceCoinsSaving(true);
     try {
       await setPreviewSeedPlanPriceCoins(coins);
@@ -672,7 +672,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedInput, 10);
   const parsedStoryUiTextLineCount = parseInt(storyUiTextLineCountInput, 10);
   const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
-  const parsedPreviewSeedPlanPriceCoins = parseInt(previewSeedPlanPriceCoinsInput, 10);
+  const parsedPreviewSeedPlanPriceCoins = previewSeedPlanPriceCoinsInput.trim() === ''
+    ? NaN
+    : Number(previewSeedPlanPriceCoinsInput);
   const parsedPromptOnlyMaxImages = parseInt(promptOnlyMaxImagesInput, 10);
   const parsedPromptOnlyGalleryCleanupDays = parseInt(promptOnlyGalleryCleanupDaysInput, 10);
   const parsedNarrationMaleVoices = parseNarrationVoiceInput(narrationMaleVoiceInput);
@@ -1397,13 +1399,13 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
             <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
               <p className="text-sm font-medium text-neutral-100 mb-1">Seed preview price</p>
               <p className="text-xs text-neutral-400 mb-3">
-                Preview is text-only. Set 0 to keep it free, or charge in multiples of 10 coins so it stays aligned with beat-based wallet billing.
+                Preview is text-only. Set 0 to keep it free, or charge any whole-coin amount.
               </p>
               <div className="flex items-center gap-3">
                 <input
                   type="number"
                   min={0}
-                  step={10}
+                  step={1}
                   value={previewSeedPlanPriceCoinsInput}
                   onChange={(e) => setPreviewSeedPlanPriceCoinsInput(e.target.value)}
                   className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -1416,7 +1418,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                     previewSeedPlanPriceCoinsSaving ||
                     !Number.isFinite(parsedPreviewSeedPlanPriceCoins) ||
                     parsedPreviewSeedPlanPriceCoins < 0 ||
-                    parsedPreviewSeedPlanPriceCoins % 10 !== 0
+                    !Number.isInteger(parsedPreviewSeedPlanPriceCoins)
                   }
                   className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
                 >
@@ -1426,8 +1428,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   <span className="text-xs text-amber-400">Unsaved</span>
                 )}
               </div>
-              {Number.isFinite(parsedPreviewSeedPlanPriceCoins) && parsedPreviewSeedPlanPriceCoins % 10 !== 0 && (
-                <p className="mt-3 text-xs text-amber-400">Use multiples of 10 coins.</p>
+              {Number.isFinite(parsedPreviewSeedPlanPriceCoins) && !Number.isInteger(parsedPreviewSeedPlanPriceCoins) && (
+                <p className="mt-3 text-xs text-amber-400">Use whole coins.</p>
               )}
             </div>
 

@@ -73,6 +73,10 @@ function formatBeatCount(value: number) {
   return `${value.toLocaleString()} story beat${value === 1 ? '' : 's'}`;
 }
 
+function beatsToCoins(value: number) {
+  return Number((value * COINS_PER_BEAT).toFixed(2));
+}
+
 function buildPlanFeatures(
   offer: PricingPlanOfferCard,
   walletData: Pick<PricingWalletPageData, 'freePlusCharacterSheetsEnabled' | 'creatorCharacterSheetsEnabled'> | null
@@ -336,13 +340,13 @@ export default function WalletPage() {
 
   const showAllowancePreview =
     !pricingData.userId || !pricingData.controls.pricingSnapshotEnabled;
-  const totalCoins = pricingData.snapshot.availableTotalBeats * COINS_PER_BEAT;
-  const monthlyAllowanceCoins = pricingData.snapshot.monthlyIncludedBeats * COINS_PER_BEAT;
+  const totalCoins = beatsToCoins(pricingData.snapshot.availableTotalBeats);
+  const monthlyAllowanceCoins = beatsToCoins(pricingData.snapshot.monthlyIncludedBeats);
   const displayHeadlineCoins = showAllowancePreview ? monthlyAllowanceCoins : totalCoins;
-  const subscriptionCoins = pricingData.snapshot.availableSubscriptionBeats * COINS_PER_BEAT;
+  const subscriptionCoins = beatsToCoins(pricingData.snapshot.availableSubscriptionBeats);
   const displaySubscriptionCoins = showAllowancePreview ? monthlyAllowanceCoins : subscriptionCoins;
-  const topupCoins = pricingData.snapshot.availableTopupBeats * COINS_PER_BEAT;
-  const bonusCoins = pricingData.snapshot.availablePromoBeats * COINS_PER_BEAT;
+  const topupCoins = beatsToCoins(pricingData.snapshot.availableTopupBeats);
+  const bonusCoins = beatsToCoins(pricingData.snapshot.availablePromoBeats);
 
   const offers = walletData?.planOffers ?? [];
   const topups = walletData?.topupOffers ?? [];

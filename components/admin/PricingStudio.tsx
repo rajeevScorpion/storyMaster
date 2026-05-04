@@ -238,11 +238,26 @@ function SectionCard({
 }
 
 function beatsToCoins(value: number) {
-  return value * COINS_PER_BEAT;
+  return Number((value * COINS_PER_BEAT).toFixed(2));
 }
 
 function coinsToBeats(value: number) {
   return Math.max(0, Math.round(value / COINS_PER_BEAT));
+}
+
+function coinsToActionBeats(value: number) {
+  return Math.max(0, Number((value / COINS_PER_BEAT).toFixed(2)));
+}
+
+function parseActionCoinCost(value: string) {
+  const parsed = value.trim() === '' ? NaN : Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error('Action cost must be 0 or more coins.');
+  }
+  if (!Number.isInteger(parsed)) {
+    throw new Error('Action cost must be a whole number of coins.');
+  }
+  return parsed;
 }
 
 function formatWholeNumber(value: number) {
@@ -957,7 +972,8 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                 <div className="mt-4 flex items-center gap-3">
                   <input
                     type="number"
-                    step="10"
+                    min="0"
+                    step="1"
                     value={draft.coinCost}
                     onChange={(event) => setActionCostDrafts((current) => ({
                       ...current,
@@ -984,13 +1000,16 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                     icon={Save}
                     onClick={() => void runMutation(
                       `action:${action.action_key}`,
-                      () => savePricingActionCost({
-                        actionKey: action.action_key,
-                        beatCost: coinsToBeats(Number(draft.coinCost) || 0),
-                        isActive: draft.isActive,
-                        effectiveFrom: action.effective_from,
-                        effectiveTo: action.effective_to,
-                      }),
+                      () => {
+                        const coinCost = parseActionCoinCost(draft.coinCost);
+                        return savePricingActionCost({
+                          actionKey: action.action_key,
+                          beatCost: coinsToActionBeats(coinCost),
+                          isActive: draft.isActive,
+                          effectiveFrom: action.effective_from,
+                          effectiveTo: action.effective_to,
+                        });
+                      },
                       hydrateState,
                       `${action.action_key} updated`
                     )}

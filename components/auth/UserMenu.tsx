@@ -13,6 +13,10 @@ interface UserMenuProps {
   onMyStories?: () => void;
 }
 
+function beatsToCoins(value: number) {
+  return Number((value * COINS_PER_BEAT).toFixed(2));
+}
+
 export default function UserMenu({ onMyStories }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
   const { data: pricing, isLoading: pricingLoading } = usePricingRuntime();
@@ -54,8 +58,8 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
 
   const avatarUrl = user.user_metadata?.avatar_url;
   const displayName = user.user_metadata?.full_name || user.email || 'User';
-  const totalCoins = pricing.snapshot.availableTotalBeats * COINS_PER_BEAT;
-  const monthlyAllowanceCoins = pricing.snapshot.monthlyIncludedBeats * COINS_PER_BEAT;
+  const totalCoins = beatsToCoins(pricing.snapshot.availableTotalBeats);
+  const monthlyAllowanceCoins = beatsToCoins(pricing.snapshot.monthlyIncludedBeats);
   const showAllowancePreview = !pricing.controls.pricingSnapshotEnabled;
   const displayCoins = showAllowancePreview ? monthlyAllowanceCoins : totalCoins;
   const refillLabel = pricing.snapshot.nextResetAt

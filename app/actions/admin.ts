@@ -602,13 +602,13 @@ export async function setPreviewSeedPlanPriceCoins(coins: number): Promise<void>
   if (!Number.isFinite(coins) || coins < 0) {
     throw new Error('Preview price must be 0 or more.');
   }
-  if (coins % COINS_PER_BEAT !== 0) {
-    throw new Error(`Preview price must be set in multiples of ${COINS_PER_BEAT} coins.`);
+  if (!Number.isInteger(coins)) {
+    throw new Error('Preview price must be a whole number of coins.');
   }
 
   await savePricingActionCost({
     actionKey: 'preview_seed_plan',
-    beatCost: Math.round(coins / COINS_PER_BEAT),
+    beatCost: Number((coins / COINS_PER_BEAT).toFixed(2)),
     isActive: true,
   });
 }
@@ -770,7 +770,7 @@ async function getPreviewSeedPlanPriceCoins(): Promise<number> {
   }
 
   const beatCost = (data?.[0] as { beat_cost?: number } | undefined)?.beat_cost ?? 0;
-  return beatCost * COINS_PER_BEAT;
+  return Number((beatCost * COINS_PER_BEAT).toFixed(2));
 }
 
 export async function adminDeleteStory(storyId: string): Promise<void> {

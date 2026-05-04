@@ -613,7 +613,7 @@ export async function archivePricingTopupPack(packId: string, reason?: string): 
 
 export async function savePricingActionCost(input: SavePricingActionCostInput): Promise<PricingAdminState> {
   const { user } = await verifyAdmin();
-  validateActionCostInput(input);
+  const beatCost = validateActionCostInput(input);
 
   const supabase = createAdminClient();
   const existing = await getActionCostByKey(supabase, input.actionKey);
@@ -623,7 +623,7 @@ export async function savePricingActionCost(input: SavePricingActionCostInput): 
     .from('pricing_action_costs')
     .upsert({
       action_key: input.actionKey.trim(),
-      beat_cost: input.beatCost,
+      beat_cost: beatCost,
       is_active: input.isActive,
       effective_from: input.effectiveFrom ?? timestamp,
       effective_to: input.effectiveTo ?? null,
@@ -1138,9 +1138,17 @@ function validateTopupDraftInput(input: SavePricingTopupDraftInput): void {
   assertInteger(input.beatAmount, 'Beat amount', 1);
 }
 
-function validateActionCostInput(input: SavePricingActionCostInput): void {
+function validateActionCostInput(input: SavePricingActionCostInput): number {
   if (!input.actionKey.trim()) throw new Error('Action key is required');
-  assertInteger(input.beatCost, 'Beat cost', 0);
+  assertNumber(input.beatCost, 'Beat cost', 0);
+
+  const coinCost = input.beatCost * COINS_PER_BEAT;
+  const roundedCoinCost = Math.round(coinCost);
+  if (Math.abs(coinCost - roundedCoinCost) > 0.000001) {
+    throw new Error('Action cost must be a whole number of coins');
+  }
+
+  return Number((roundedCoinCost / COINS_PER_BEAT).toFixed(2));
 }
 
 function validatePromotionInput(input: SavePricingPromotionInput): void {

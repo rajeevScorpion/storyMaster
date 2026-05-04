@@ -340,7 +340,7 @@ function buildWalletActivity(
     kind: 'grant',
     title: getGrantTitle(grant.source_type),
     subtitle: getGrantSubtitle(grant.source_type),
-    coinsDelta: beatsToCoins(grant.beats_total),
+    coinsDelta: beatsToCoins(asBeatAmount(grant.beats_total)),
     occurredAt: grant.granted_at,
   }));
 
@@ -349,7 +349,7 @@ function buildWalletActivity(
     kind: 'spend',
     title: getSpendTitle(event.action_key),
     subtitle: 'Used while creating in Kissago',
-    coinsDelta: -beatsToCoins(event.beat_cost),
+    coinsDelta: -beatsToCoins(asBeatAmount(event.beat_cost)),
     occurredAt: event.created_at,
   }));
 
@@ -423,7 +423,12 @@ function getSpendTitle(actionKey: string): string {
 }
 
 function beatsToCoins(value: number): number {
-  return value * COINS_PER_BEAT;
+  return Number((value * COINS_PER_BEAT).toFixed(2));
+}
+
+function asBeatAmount(value: number | string | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 async function loadActionCosts(
@@ -449,7 +454,7 @@ async function loadActionCosts(
     const startsAt = new Date(row.effective_from).getTime();
     const endsAt = row.effective_to ? new Date(row.effective_to).getTime() : Number.POSITIVE_INFINITY;
     if (startsAt <= now && now < endsAt) {
-      costs.set(row.action_key, row.beat_cost);
+      costs.set(row.action_key, asBeatAmount(row.beat_cost));
     }
   }
 

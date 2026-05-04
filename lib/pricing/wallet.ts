@@ -13,6 +13,11 @@ const SUBSCRIPTION_LIKE_SOURCE_TYPES = new Set<BeatGrantSourceType>([
   'free_allowance',
 ]);
 
+function asBeatAmount(value: number | string | null | undefined): number {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 export interface WalletAvailability extends BeatAvailability {
   pendingReserved: number;
 }
@@ -28,7 +33,7 @@ export function computeWalletAvailability(
         return totals;
       }
 
-      const remaining = grant.beats_remaining;
+      const remaining = asBeatAmount(grant.beats_remaining);
       if (remaining <= 0) {
         return totals;
       }
@@ -53,14 +58,14 @@ export function computeWalletAvailability(
     if (!isPendingReservation(reservation, now)) {
       return sum;
     }
-    return sum + reservation.requested_beat_cost;
+    return sum + asBeatAmount(reservation.requested_beat_cost);
   }, 0);
 
   return applyPendingReservationHold(baseAvailability, pendingReserved);
 }
 
 export function isGrantSpendable(grant: DbBeatGrant, now: Date = new Date()): boolean {
-  if (grant.beats_remaining <= 0) {
+  if (asBeatAmount(grant.beats_remaining) <= 0) {
     return false;
   }
 
