@@ -68,8 +68,71 @@ type DiagnosticImageProbe = {
   error: string | null;
 };
 
+const STORYLINE_UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+
 function cleanString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeOriginForDiagnostics(value: string | null | undefined): string | null {
+  const raw = cleanString(value);
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+      url.protocol = 'https:';
+    }
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function isLocalDiagnosticsOrigin(value: string | null): boolean {
+  if (!value) return false;
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+function extractStorylineIdInput(value: string): { storylineId: string; inputOrigin: string | null } {
+  const trimmed = value.trim();
+  let inputOrigin: string | null = null;
+
+  try {
+    const parsed = new URL(trimmed);
+    inputOrigin = normalizeOriginForDiagnostics(parsed.origin);
+  } catch {
+    inputOrigin = null;
+  }
+
+  const match = trimmed.match(STORYLINE_UUID_PATTERN);
+  if (!match) {
+    throw new Error('Enter a published storyline UUID or a URL containing /storyline/{uuid}.');
+  }
+
+  return {
+    storylineId: match[0],
+    inputOrigin,
+  };
+}
+
+function resolveDiagnosticsOrigin(inputOrigin: string | null, fallbackOrigin?: string | null): string | null {
+  const fallback = normalizeOriginForDiagnostics(fallbackOrigin);
+  const appOrigin = normalizeOriginForDiagnostics(process.env.APP_URL);
+  const publicOrigin = normalizeOriginForDiagnostics(process.env.NEXT_PUBLIC_APP_URL);
+
+  if (inputOrigin && !isLocalDiagnosticsOrigin(inputOrigin)) return inputOrigin;
+  if (fallback && !isLocalDiagnosticsOrigin(fallback)) return fallback;
+  if (appOrigin && !isLocalDiagnosticsOrigin(appOrigin)) return appOrigin;
+  if (publicOrigin && !isLocalDiagnosticsOrigin(publicOrigin)) return publicOrigin;
+  return inputOrigin ?? fallback ?? appOrigin ?? publicOrigin;
 }
 
 function shareCoverUpdate(asset: ProcessedStorylineAsset): StorylineAssetUpdate {
@@ -589,7 +652,7 @@ async function inspectRawMetadata(shareUrl: string | null): Promise<{
   }
 }
 
-export async function getStorylineShareCoverDiagnostics(storylineId: string): Promise<{
+export async function getStorylineShareCoverDiagnostics(storylineInput: string, options: { origin?: string | null } = {}): Promise<{
   bucket: Awaited<ReturnType<typeof verifyPublicStorylineBucket>>;
   storyline: StorylineShareCoverRow | null;
   resolved: ReturnType<typeof resolveStorylineShareCover>;
@@ -614,6 +677,7 @@ export async function getStorylineShareCoverDiagnostics(storylineId: string): Pr
     throw new Error('Forbidden');
   }
 
+  const { storylineId, inputOrigin } = extractStorylineIdInput(storylineInput);
   const admin = createAdminClient();
   const { data, error: rowError } = await admin
     .from('storylines')
@@ -623,7 +687,7 @@ export async function getStorylineShareCoverDiagnostics(storylineId: string): Pr
   if (rowError) throw new Error(`Failed to load storyline: ${rowError.message}`);
 
   const storyline = data as StorylineShareCoverRow | null;
-  const origin = cleanString(process.env.APP_URL) ?? cleanString(process.env.NEXT_PUBLIC_APP_URL);
+  const origin = resolveDiagnosticsOrigin(inputOrigin, options.origin);
   const shareUrl = origin ? new URL(`/storyline/${storylineId}`, origin).toString() : null;
   const resolved = resolveStorylineShareCover(storyline, { origin });
   const imageProbe = await probeImageUrl(resolved.url);

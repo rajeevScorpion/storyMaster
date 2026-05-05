@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { headers } from 'next/headers';
 
 import { getStorylineShareCoverDiagnostics } from '@/app/actions/storyline-covers';
 
@@ -25,10 +26,36 @@ function Field({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function normalizePageOrigin(host: string | null, proto: string | null): string | null {
+  if (!host) return null;
+  try {
+    const url = new URL(`${proto || 'https'}://${host.split(',')[0]?.trim()}`);
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+      url.protocol = 'https:';
+    }
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
 export default async function ShareCoverDiagnosticsPage({ searchParams }: ShareCoverDiagnosticsPageProps) {
   const params = await searchParams;
   const id = params.id?.trim() || '';
-  const diagnostics = id ? await getStorylineShareCoverDiagnostics(id) : null;
+  const headerStore = await headers();
+  const origin = normalizePageOrigin(
+    headerStore.get('x-forwarded-host') ?? headerStore.get('host'),
+    (headerStore.get('x-forwarded-proto') ?? 'https').split(',')[0]?.trim()
+  );
+  let diagnostics: Awaited<ReturnType<typeof getStorylineShareCoverDiagnostics>> | null = null;
+  let diagnosticsError: string | null = null;
+  if (id) {
+    try {
+      diagnostics = await getStorylineShareCoverDiagnostics(id, { origin });
+    } catch (error) {
+      diagnosticsError = error instanceof Error ? error.message : 'Could not inspect this storyline.';
+    }
+  }
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -43,13 +70,19 @@ export default async function ShareCoverDiagnosticsPage({ searchParams }: ShareC
         <input
           name="id"
           defaultValue={id}
-          placeholder="Published storyline id"
+          placeholder="Published storyline ID or URL"
           className="min-w-0 flex-1 rounded-xl border border-white/10 bg-neutral-950 px-4 py-3 text-sm text-neutral-100 outline-none focus:border-emerald-400/60"
         />
         <button className="rounded-xl border border-emerald-500/30 bg-emerald-500/20 px-5 py-3 text-sm text-emerald-200 transition-colors hover:bg-emerald-500/30">
           Inspect
         </button>
       </form>
+
+      {diagnosticsError && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+          {diagnosticsError}
+        </div>
+      )}
 
       {diagnostics && (
         <>
