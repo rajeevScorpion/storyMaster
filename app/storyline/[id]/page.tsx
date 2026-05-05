@@ -18,25 +18,42 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-async function getRequestOrigin(): Promise<string | null> {
-  const configuredOrigin = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL;
-  if (configuredOrigin) return configuredOrigin.replace(/\/$/, '');
-
-  const headerStore = await headers();
-  const host = headerStore.get('x-forwarded-host') ?? headerStore.get('host');
-  if (!host) return null;
-
-  const proto = (headerStore.get('x-forwarded-proto') ?? 'https').split(',')[0]?.trim() || 'https';
-  const origin = `${proto}://${host.split(',')[0]?.trim()}`;
+function normalizeOriginValue(value: string | null | undefined): string | null {
+  if (!value?.trim()) return null;
   try {
-    const url = new URL(origin);
+    const url = new URL(value.trim());
     if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
       url.protocol = 'https:';
     }
+    url.pathname = '';
+    url.search = '';
+    url.hash = '';
     return url.toString().replace(/\/$/, '');
   } catch {
     return null;
   }
+}
+
+function isLocalOrigin(value: string | null): boolean {
+  if (!value) return false;
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+async function getRequestOrigin(): Promise<string | null> {
+  const headerStore = await headers();
+  const host = headerStore.get('x-forwarded-host') ?? headerStore.get('host');
+  const proto = (headerStore.get('x-forwarded-proto') ?? 'https').split(',')[0]?.trim() || 'https';
+  const headerOrigin = host ? normalizeOriginValue(`${proto}://${host.split(',')[0]?.trim()}`) : null;
+  const configuredOrigin = normalizeOriginValue(process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL);
+
+  if (headerOrigin && !isLocalOrigin(headerOrigin)) return headerOrigin;
+  if (configuredOrigin && !isLocalOrigin(configuredOrigin)) return configuredOrigin;
+  return headerOrigin ?? configuredOrigin;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {

@@ -117,23 +117,39 @@ function truncateForSvg(value: string, max = 64): string {
   return `${normalized.slice(0, max - 1).trim()}...`;
 }
 
-function normalizeOrigin(origin?: string | null): string {
-  const configured = cleanString(process.env.APP_URL) ?? cleanString(process.env.NEXT_PUBLIC_APP_URL) ?? origin;
-  const fallback = 'https://kissago.app';
-  const raw = cleanString(configured) ?? fallback;
-
+function normalizeOriginValue(value?: string | null): string | null {
+  const raw = cleanString(value);
+  if (!raw) return null;
   try {
     const url = new URL(raw);
     if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
       url.protocol = 'https:';
     }
-    url.pathname = url.pathname.replace(/\/$/, '');
+    url.pathname = '';
     url.search = '';
     url.hash = '';
     return url.toString().replace(/\/$/, '');
   } catch {
-    return fallback;
+    return null;
   }
+}
+
+function isLocalOrigin(value: string | null): boolean {
+  if (!value) return false;
+  try {
+    const hostname = new URL(value).hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+function normalizeOrigin(origin?: string | null): string {
+  const provided = normalizeOriginValue(origin);
+  const configured = normalizeOriginValue(process.env.APP_URL) ?? normalizeOriginValue(process.env.NEXT_PUBLIC_APP_URL);
+  if (provided && !isLocalOrigin(provided)) return provided;
+  if (configured && !isLocalOrigin(configured)) return configured;
+  return provided ?? configured ?? 'https://kissago.app';
 }
 
 function createVersion(seed?: string | null): string {
