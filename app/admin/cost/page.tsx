@@ -42,6 +42,9 @@ function activityLabel(key: string) {
     preview_seed_plan: 'Seed preview',
     regenerate_image: 'Image regen',
     regenerate_narration: 'Narration regen',
+    generate_social_share_cover: 'Share cover',
+    generate_audio_story_cover: 'Audio cover',
+    generate_reel_thumbnail: 'Reel thumb',
   };
   return labels[key] || key.replaceAll('_', ' ');
 }

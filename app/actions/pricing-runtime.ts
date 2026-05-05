@@ -415,6 +415,12 @@ function getSpendTitle(actionKey: string): string {
       return 'Regenerated an image';
     case 'regenerate_narration':
       return 'Regenerated narration';
+    case 'generate_social_share_cover':
+      return 'Generated a share cover';
+    case 'generate_audio_story_cover':
+      return 'Generated an audio story cover';
+    case 'generate_reel_thumbnail':
+      return 'Generated a reel thumbnail';
     case 'export_video_future':
       return 'Exported a video';
     default:

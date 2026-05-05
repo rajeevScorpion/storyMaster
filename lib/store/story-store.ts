@@ -1136,6 +1136,7 @@ function canPublishStoryPathAsStandard(
 }
 
 const LOADING_READER_MESSAGE = 'kissago is weaving the story';
+const EXPLICIT_PUBLISH_COVER_SETUP_REQUIRED = true;
 
 function formatSelectedOptionForPrompt(option: Option): string {
   const label = option.label.trim();
@@ -2565,8 +2566,9 @@ export const useStoryStore = create<StoryState>()(
               }))
               .catch((err) => console.error('Incremental beat save failed:', err));
 
-            // Auto-publish if this is an ending beat
-            if (beat.isEnding && canPublishStoryPathAsStandard(mergedMap, mergedMap.currentNodeId)) {
+            // Publishing now stays explicit so creators can prepare the
+            // dedicated share cover before the storyline goes public.
+            if (!EXPLICIT_PUBLISH_COVER_SETUP_REQUIRED && beat.isEnding && canPublishStoryPathAsStandard(mergedMap, mergedMap.currentNodeId)) {
               (async () => {
                 const storyPath = getPathToNode(updatedMap, updatedMap.currentNodeId);
 
@@ -2584,11 +2586,11 @@ export const useStoryStore = create<StoryState>()(
                     const supabase = createBrowserClient();
                     const { data: { user } } = await supabase.auth.getUser();
                     if (!user) return null;
-                    return uploadCoverImage(user.id, session.savedStoryId!, imageData);
+                    return uploadCoverImage(user.id, session!.savedStoryId!, imageData);
                   }
                   if (extractStoragePath(imageData, 'story-assets')) {
                     // Private-bucket URL — copy to public bucket via server action
-                    return copyCoverToPublicBucket(session.savedStoryId!, imageData);
+                    return copyCoverToPublicBucket(session!.savedStoryId!, imageData);
                   }
                   if (extractStoragePath(imageData, 'public-storylines')) {
                     // Already in public bucket
@@ -2614,20 +2616,20 @@ export const useStoryStore = create<StoryState>()(
                   if (treeCoverData && treeCoverNode !== storylineCoverNode) {
                     const treeCoverUrl = await resolvePublicCoverUrl(treeCoverData, 'tree-cover.webp');
                     if (treeCoverUrl) {
-                      await setStoryCoverImage(session.savedStoryId!, treeCoverUrl);
+                      await setStoryCoverImage(session!.savedStoryId!, treeCoverUrl);
                     }
                   } else if (coverImageUrl) {
                     // Single-beat story: use same cover for tree
-                    await setStoryCoverImage(session.savedStoryId!, coverImageUrl);
+                    await setStoryCoverImage(session!.savedStoryId!, coverImageUrl);
                   }
                 } catch (err) {
                   console.error('Tree cover upload failed:', err);
                 }
 
                 return autoPublishStoryline(
-                  session.savedStoryId!,
+                  session!.savedStoryId!,
                   updatedMap.currentNodeId,
-                  session.title,
+                  session!.title,
                   coverImageUrl
                 );
               })()

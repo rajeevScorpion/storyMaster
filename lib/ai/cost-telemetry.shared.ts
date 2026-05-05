@@ -8,7 +8,10 @@ export type CostActivityKey =
   | 'continue_story_new_beat_prompt_only'
   | 'preview_seed_plan'
   | 'regenerate_image'
-  | 'regenerate_narration';
+  | 'regenerate_narration'
+  | 'generate_social_share_cover'
+  | 'generate_audio_story_cover'
+  | 'generate_reel_thumbnail';
 
 export interface CostTelemetryContext {
   activityKey: CostActivityKey;

@@ -6,6 +6,7 @@ import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, normalize
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
+import type { StorylineFormat, StorylineOrientation, StorylineShareCoverSource, StorylineVisualMode } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
 import {
   normalizeBeatMediaFields,
@@ -15,6 +16,7 @@ import {
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -143,6 +145,22 @@ function getStoryOrientation(config: StorySession['storyConfig']): { isVerticalS
   return {
     isVerticalStory: normalizedConfig.isVerticalStory,
     aspectRatio: normalizedConfig.isVerticalStory ? '9:16' : '16:9',
+  };
+}
+
+function getStorylinePublishModes(
+  config: StorySession['storyConfig'],
+  publishMode: 'standard' | 'audio_story' = 'standard'
+): {
+  storyFormat: StorylineFormat;
+  storyVisualMode: StorylineVisualMode;
+  orientation: StorylineOrientation;
+} {
+  const normalizedConfig = normalizeStoryConfig(config);
+  return {
+    storyFormat: publishMode === 'audio_story' ? 'audio_story' : 'visual_story',
+    storyVisualMode: normalizedConfig.imageGenerationMode === 'prompt_only' ? 'without_images' : 'with_images',
+    orientation: normalizedConfig.isVerticalStory || normalizedConfig.aspectRatio === '9:16' ? 'portrait' : 'landscape',
   };
 }
 
@@ -1136,6 +1154,7 @@ export async function autoPublishStoryline(
     aspectRatio: sourceStory?.aspect_ratio,
   });
   const orientation = getStoryOrientation(storyConfig);
+  const publishModes = getStorylinePublishModes(storyConfig, 'standard');
 
   // Fetch all beats for the story to walk the path
   const { data: allBeats, error: beatsError } = await supabase
@@ -1238,6 +1257,9 @@ export async function autoPublishStoryline(
       cover_image_url: coverImageUrl || null,
       is_vertical_story: orientation.isVerticalStory,
       aspect_ratio: orientation.aspectRatio,
+      story_format: publishModes.storyFormat,
+      story_visual_mode: publishModes.storyVisualMode,
+      orientation: publishModes.orientation,
       node_path: nodePath,
       beats: legacyBeats as unknown as Record<string, unknown>[],
       choices: choices as unknown as Record<string, unknown>[],
@@ -1296,6 +1318,19 @@ export async function autoPublishStoryline(
       { user_id: user.id, storyline_id: storyline.id },
       { onConflict: 'user_id,storyline_id' }
     );
+
+  await finalizeStorylineShareAssets({
+    storylineId: storyline.id,
+    storyId,
+    userId: user.id,
+    title: storyTitle,
+    authorName: profile?.display_name || 'Anonymous',
+    coverImageUrl: coverImageUrl || null,
+    beats: legacyBeats as unknown as StoryBeat[],
+    storyFormat: publishModes.storyFormat,
+    storyVisualMode: publishModes.storyVisualMode,
+    orientation: publishModes.orientation,
+  });
 
   return { alreadyPublished: false, storylineId: storyline.id };
 }
@@ -1520,6 +1555,17 @@ export async function publishStoryline(params: {
   choices: StorylineChoice[];
   nodePath: string[];
   coverImageUrl: string | null;
+  publishMode?: 'standard' | 'audio_story';
+  shareCoverDataUrl?: string | null;
+  youtubeThumbnailDataUrl?: string | null;
+  reelThumbnailDataUrl?: string | null;
+  shareCoverSource?: StorylineShareCoverSource | null;
+  youtubeThumbnailSource?: StorylineShareCoverSource | null;
+  reelThumbnailSource?: StorylineShareCoverSource | null;
+  socialCoverPrompt?: string | null;
+  youtubeThumbnailPrompt?: string | null;
+  reelThumbnailPrompt?: string | null;
+  audioCoverPrompt?: string | null;
 }): Promise<{ storylineId: string }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -1536,6 +1582,15 @@ export async function publishStoryline(params: {
     aspectRatio: sourceStory?.aspect_ratio,
   });
   const orientation = getStoryOrientation(storyConfig);
+  const publishModes = getStorylinePublishModes(storyConfig, params.publishMode ?? 'standard');
+
+  if (
+    publishModes.storyFormat === 'audio_story' &&
+    !params.shareCoverDataUrl &&
+    !params.youtubeThumbnailDataUrl
+  ) {
+    throw new Error('Audio stories need a cover image before publishing.');
+  }
 
   // Get author name from profile
   const { data: profile } = await supabase
@@ -1557,6 +1612,13 @@ export async function publishStoryline(params: {
       cover_image_url: params.coverImageUrl,
       is_vertical_story: orientation.isVerticalStory,
       aspect_ratio: orientation.aspectRatio,
+      story_format: publishModes.storyFormat,
+      story_visual_mode: publishModes.storyVisualMode,
+      orientation: publishModes.orientation,
+      social_cover_prompt: params.socialCoverPrompt ?? null,
+      youtube_thumbnail_prompt: params.youtubeThumbnailPrompt ?? null,
+      reel_thumbnail_prompt: params.reelThumbnailPrompt ?? null,
+      audio_cover_prompt: params.audioCoverPrompt ?? null,
       node_path: params.nodePath,
       beats: params.beats as unknown as Record<string, unknown>[],
       choices: params.choices as unknown as Record<string, unknown>[],
@@ -1583,6 +1645,28 @@ export async function publishStoryline(params: {
             { user_id: user.id, storyline_id: dup.id },
             { onConflict: 'user_id,storyline_id' }
           );
+        await finalizeStorylineShareAssets({
+          storylineId: dup.id,
+          storyId: params.storyId,
+          userId: user.id,
+          title: params.title,
+          authorName: profile?.display_name || 'Anonymous',
+          coverImageUrl: params.coverImageUrl,
+          beats: params.beats,
+          storyFormat: publishModes.storyFormat,
+          storyVisualMode: publishModes.storyVisualMode,
+          orientation: publishModes.orientation,
+          shareCoverDataUrl: params.shareCoverDataUrl ?? null,
+          youtubeThumbnailDataUrl: params.youtubeThumbnailDataUrl ?? null,
+          reelThumbnailDataUrl: params.reelThumbnailDataUrl ?? null,
+          shareCoverSource: params.shareCoverSource ?? null,
+          youtubeThumbnailSource: params.youtubeThumbnailSource ?? null,
+          reelThumbnailSource: params.reelThumbnailSource ?? null,
+          socialCoverPrompt: params.socialCoverPrompt ?? null,
+          youtubeThumbnailPrompt: params.youtubeThumbnailPrompt ?? null,
+          reelThumbnailPrompt: params.reelThumbnailPrompt ?? null,
+          audioCoverPrompt: params.audioCoverPrompt ?? null,
+        });
         return { storylineId: dup.id };
       }
     }
@@ -1597,6 +1681,29 @@ export async function publishStoryline(params: {
       { user_id: user.id, storyline_id: data.id },
       { onConflict: 'user_id,storyline_id' }
     );
+
+  await finalizeStorylineShareAssets({
+    storylineId: data.id,
+    storyId: params.storyId,
+    userId: user.id,
+    title: params.title,
+    authorName: profile?.display_name || 'Anonymous',
+    coverImageUrl: params.coverImageUrl,
+    beats: params.beats,
+    storyFormat: publishModes.storyFormat,
+    storyVisualMode: publishModes.storyVisualMode,
+    orientation: publishModes.orientation,
+    shareCoverDataUrl: params.shareCoverDataUrl ?? null,
+    youtubeThumbnailDataUrl: params.youtubeThumbnailDataUrl ?? null,
+    reelThumbnailDataUrl: params.reelThumbnailDataUrl ?? null,
+    shareCoverSource: params.shareCoverSource ?? null,
+    youtubeThumbnailSource: params.youtubeThumbnailSource ?? null,
+    reelThumbnailSource: params.reelThumbnailSource ?? null,
+    socialCoverPrompt: params.socialCoverPrompt ?? null,
+    youtubeThumbnailPrompt: params.youtubeThumbnailPrompt ?? null,
+    reelThumbnailPrompt: params.reelThumbnailPrompt ?? null,
+    audioCoverPrompt: params.audioCoverPrompt ?? null,
+  });
 
   return { storylineId: data.id };
 }

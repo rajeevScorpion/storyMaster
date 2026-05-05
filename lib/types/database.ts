@@ -17,6 +17,18 @@ import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/t
 import type { BeatMediaStatus } from './beat-media';
 import type { StoryAspectRatio } from './story';
 
+export type StorylineShareCoverSource =
+  | 'custom_generated'
+  | 'uploaded'
+  | 'fallback_beat'
+  | 'branded_default'
+  | 'migrated_existing';
+
+export type StorylineShareCoverStatus = 'missing' | 'generating' | 'ready' | 'failed';
+export type StorylineFormat = 'visual_story' | 'audio_story';
+export type StorylineVisualMode = 'with_images' | 'without_images';
+export type StorylineOrientation = 'landscape' | 'portrait';
+
 export interface DbProfile {
   id: string;
   display_name: string | null;
@@ -68,6 +80,37 @@ export interface DbStoryline {
   path_hash: string | null;
   like_count: number;
   view_count: number;
+  share_cover_url: string | null;
+  share_cover_source: StorylineShareCoverSource | null;
+  share_cover_status: StorylineShareCoverStatus;
+  share_cover_width: number | null;
+  share_cover_height: number | null;
+  share_cover_mime_type: string | null;
+  share_cover_updated_at: string | null;
+  share_cover_version: string | null;
+  youtube_thumbnail_url: string | null;
+  youtube_thumbnail_source: StorylineShareCoverSource | null;
+  youtube_thumbnail_status: StorylineShareCoverStatus;
+  youtube_thumbnail_width: number | null;
+  youtube_thumbnail_height: number | null;
+  youtube_thumbnail_mime_type: string | null;
+  youtube_thumbnail_updated_at: string | null;
+  youtube_thumbnail_version: string | null;
+  reel_thumbnail_url: string | null;
+  reel_thumbnail_source: StorylineShareCoverSource | null;
+  reel_thumbnail_status: StorylineShareCoverStatus;
+  reel_thumbnail_width: number | null;
+  reel_thumbnail_height: number | null;
+  reel_thumbnail_mime_type: string | null;
+  reel_thumbnail_updated_at: string | null;
+  reel_thumbnail_version: string | null;
+  social_cover_prompt: string | null;
+  youtube_thumbnail_prompt: string | null;
+  reel_thumbnail_prompt: string | null;
+  audio_cover_prompt: string | null;
+  story_format: StorylineFormat;
+  story_visual_mode: StorylineVisualMode;
+  orientation: StorylineOrientation;
   created_at: string;
 }
 

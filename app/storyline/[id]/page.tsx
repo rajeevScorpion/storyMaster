@@ -8,10 +8,9 @@ import StorylinePreview from '@/components/story/StorylinePreview';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import type { Metadata } from 'next';
 import {
-  getAbsoluteStorylineCoverImageUrl,
-  getStorylineCoverImagePath,
-  resolveStorylineCoverMetadata,
-} from '@/lib/story/storyline-cover';
+  resolveStorylineShareCover,
+  type StorylineShareCoverRow,
+} from '@/lib/story/share-cover';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +27,16 @@ async function getRequestOrigin(): Promise<string | null> {
   if (!host) return null;
 
   const proto = (headerStore.get('x-forwarded-proto') ?? 'https').split(',')[0]?.trim() || 'https';
-  return `${proto}://${host.split(',')[0]?.trim()}`;
+  const origin = `${proto}://${host.split(',')[0]?.trim()}`;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+      url.protocol = 'https:';
+    }
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -37,8 +45,33 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   const { data: storyline } = await supabase
     .from('storylines')
-    .select('title, author_name, cover_image_url, is_vertical_story, aspect_ratio')
+    .select(`
+      id,
+      title,
+      author_name,
+      cover_image_url,
+      is_vertical_story,
+      aspect_ratio,
+      share_cover_url,
+      share_cover_source,
+      share_cover_status,
+      share_cover_width,
+      share_cover_height,
+      share_cover_mime_type,
+      share_cover_version,
+      youtube_thumbnail_url,
+      youtube_thumbnail_source,
+      youtube_thumbnail_status,
+      youtube_thumbnail_width,
+      youtube_thumbnail_height,
+      youtube_thumbnail_mime_type,
+      youtube_thumbnail_version,
+      story_format,
+      story_visual_mode,
+      orientation
+    `)
     .eq('id', id)
+    .eq('is_public', true)
     .single();
 
   if (!storyline) return { title: 'Storyline - Kissago' };
@@ -46,35 +79,38 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const description = storyline.author_name
     ? `A storyline by ${storyline.author_name} on Kissago`
     : 'An interactive storyline on Kissago';
-  const coverMetadata = await resolveStorylineCoverMetadata(id);
-  const coverSource = coverMetadata?.source ?? null;
-  const origin = coverSource ? await getRequestOrigin() : null;
-  const coverImageUrl = coverSource && origin
-    ? getAbsoluteStorylineCoverImageUrl(id, origin, coverSource.version)
-    : null;
-  const isVertical = coverMetadata?.isVertical
-    ?? (storyline.is_vertical_story === true || storyline.aspect_ratio === '9:16');
-  const imageSize = isVertical
-    ? { width: 1080, height: 1920 }
-    : { width: 1200, height: 630 };
-  const openGraphImages = coverImageUrl
-    ? [{ url: coverImageUrl, ...imageSize, alt: storyline.title }]
-    : undefined;
+  const origin = await getRequestOrigin();
+  const canonicalUrl = origin ? new URL(`/storyline/${id}`, origin).toString() : undefined;
+  const cover = resolveStorylineShareCover(storyline as StorylineShareCoverRow, { origin });
+  const pageTitle = `${storyline.title} - Kissago`;
 
   return {
-    title: `${storyline.title} - Kissago`,
+    ...(origin ? { metadataBase: new URL(origin) } : {}),
+    title: pageTitle,
     description,
+    alternates: canonicalUrl ? { canonical: canonicalUrl } : undefined,
     openGraph: {
       title: storyline.title,
       description,
       type: 'article',
-      ...(openGraphImages && { images: openGraphImages }),
+      url: canonicalUrl,
+      images: [{
+        url: cover.url,
+        secureUrl: cover.url,
+        width: 1200,
+        height: 630,
+        type: cover.mimeType,
+        alt: storyline.title,
+      }],
     },
     twitter: {
       card: 'summary_large_image',
       title: storyline.title,
       description,
-      ...(coverImageUrl && { images: [coverImageUrl] }),
+      images: [{
+        url: cover.url,
+        alt: storyline.title,
+      }],
     },
   };
 }
@@ -99,17 +135,12 @@ export default async function StorylinePage({ params }: PageProps) {
 
   // Unauthenticated users see a preview with sign-in CTA
   if (!user) {
-    const coverMetadata = await resolveStorylineCoverMetadata(id);
-    const previewCoverImageUrl = coverMetadata?.source
-      ? getStorylineCoverImagePath(id, coverMetadata.source.version)
-      : storyline.cover_image_url;
-
     return (
       <StorylinePreview
         storylineId={storyline.id}
         title={storyline.title}
         authorName={storyline.author_name}
-        coverImageUrl={previewCoverImageUrl}
+        coverImageUrl={storyline.cover_image_url}
         beatCount={storyline.beat_count}
       />
     );

@@ -69,9 +69,9 @@ export default function BackfillPage() {
 
         <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-5">
           <div>
-            <h2 className="text-lg font-medium text-neutral-100">Backfill Missing Covers</h2>
+            <h2 className="text-lg font-medium text-neutral-100">Repair Social Share Covers</h2>
             <p className="mt-1 text-sm text-neutral-400">
-              Copies beat images from `story-assets` to `public-storylines` for storylines and trees with missing thumbnails.
+              Processes existing beat/default images into dedicated 1200x630 public share covers for published storylines.
             </p>
           </div>
           <button
@@ -79,7 +79,7 @@ export default function BackfillPage() {
             disabled={coverStatus === 'running'}
             className="w-full rounded-xl border border-emerald-500/30 bg-emerald-500/20 px-4 py-3 text-emerald-300 transition-colors hover:bg-emerald-500/30 disabled:opacity-50"
           >
-            {coverStatus === 'running' ? 'Running...' : 'Run Cover Backfill'}
+            {coverStatus === 'running' ? 'Running...' : 'Run Share Cover Repair'}
           </button>
           {coverResult && (
             <pre className={`rounded-xl p-4 text-sm whitespace-pre-wrap ${coverStatus === 'error' ? 'bg-red-500/10 text-red-300' : 'bg-black/30 text-neutral-300'}`}>

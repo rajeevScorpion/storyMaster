@@ -43,6 +43,9 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     preview_seed_plan: 0,
     regenerate_image: 1,
     regenerate_narration: 1,
+    generate_social_share_cover: 1,
+    generate_audio_story_cover: 1,
+    generate_reel_thumbnail: 1,
     export_video_future: 5,
   },
   snapshot: {

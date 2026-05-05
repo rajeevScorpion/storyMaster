@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { backfillMissingCovers } from '@/app/actions/persistence';
+import { repairPublishedStorylineShareCovers } from '@/app/actions/storyline-covers';
 
 export async function POST() {
   const supabase = await createClient();
@@ -16,7 +16,7 @@ export async function POST() {
   }
 
   try {
-    const result = await backfillMissingCovers();
+    const result = await repairPublishedStorylineShareCovers({ limit: 100 });
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
