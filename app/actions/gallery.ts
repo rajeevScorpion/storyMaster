@@ -46,6 +46,12 @@ type StoryMapFlagStoryRow = {
   story_map: Record<string, unknown> | null;
 };
 
+type BeatCoverImageRow = {
+  story_id: string;
+  node_id: string;
+  image_url: string | null;
+};
+
 function readStoryConfigString(
   storyConfig: Record<string, unknown> | null | undefined,
   key: string
@@ -163,6 +169,73 @@ function getPreferredStorylineCoverUrl(row: StorylineGalleryRow): string | null 
   }
 
   return getLegacyCoverUrl(row);
+}
+
+function getStorylineCoverNodeId(row: StorylineGalleryRow): string | null {
+  const nodePath = Array.isArray(row.node_path) ? row.node_path : [];
+  return nodePath[1] ?? nodePath[0] ?? null;
+}
+
+async function resolveCurrentBeatCoverUrls<T extends StorylineGalleryRow>(
+  rows: T[]
+): Promise<T[]> {
+  const targets = rows
+    .map((row, index) => ({
+      index,
+      storyId: row.story_id,
+      nodeId: getStorylineCoverNodeId(row),
+      hasCover: Boolean(getPreferredStorylineCoverUrl(row)),
+    }))
+    .filter((target): target is { index: number; storyId: string; nodeId: string; hasCover: boolean } =>
+      !target.hasCover
+      && typeof target.storyId === 'string'
+      && target.storyId.length > 0
+      && typeof target.nodeId === 'string'
+      && target.nodeId.length > 0
+    );
+
+  if (targets.length === 0) return rows;
+
+  try {
+    const admin = createAdminClient();
+    const storyIds = Array.from(new Set(targets.map((target) => target.storyId)));
+    const nodeIds = Array.from(new Set(targets.map((target) => target.nodeId)));
+    const { data, error } = await admin
+      .from('beats')
+      .select('story_id, node_id, image_url')
+      .in('story_id', storyIds)
+      .in('node_id', nodeIds);
+
+    if (error || !data) {
+      console.error('Failed to fetch gallery current beat cover URLs:', error?.message);
+      return rows;
+    }
+
+    const imageUrlByStoryAndNode = new Map<string, string>();
+    for (const beat of data as BeatCoverImageRow[]) {
+      if (beat.image_url && beat.image_url.trim().length > 0) {
+        imageUrlByStoryAndNode.set(`${beat.story_id}:${beat.node_id}`, beat.image_url);
+      }
+    }
+
+    if (imageUrlByStoryAndNode.size === 0) return rows;
+
+    const nextRows = [...rows];
+    for (const target of targets) {
+      const imageUrl = imageUrlByStoryAndNode.get(`${target.storyId}:${target.nodeId}`);
+      if (imageUrl) {
+        nextRows[target.index] = {
+          ...nextRows[target.index],
+          cover_image_url: imageUrl,
+        };
+      }
+    }
+
+    return nextRows;
+  } catch (error) {
+    console.error('Failed to resolve gallery current beat cover URLs:', error);
+    return rows;
+  }
 }
 
 async function resolveNormalizedCoverStoryboardFlags<T extends StorylineGalleryRow & { cover_is_storyboard: boolean }>(
@@ -313,7 +386,8 @@ async function resolveStorylineCovers<T extends StorylineGalleryRow>(
 ): Promise<Array<T & { cover_is_storyboard: boolean }>> {
   if (rows.length === 0) return [];
 
-  const resolvedWithFallbackFlags = rows.map((row) => ({
+  const rowsWithCurrentBeatCovers = await resolveCurrentBeatCoverUrls(rows);
+  const resolvedWithFallbackFlags = rowsWithCurrentBeatCovers.map((row) => ({
     ...row,
     cover_image_url: getPreferredStorylineCoverUrl(row),
     cover_is_storyboard: getLegacyCoverIsStoryboard(row),

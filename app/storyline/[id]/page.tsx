@@ -2,15 +2,33 @@ import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
 import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { notFound } from 'next/navigation';
+import { headers } from 'next/headers';
 import StorylinePlayer from '@/components/story/StorylinePlayer';
 import StorylinePreview from '@/components/story/StorylinePreview';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import type { Metadata } from 'next';
+import {
+  getAbsoluteStorylineCoverImageUrl,
+  getStorylineCoverImagePath,
+  resolveStorylineCoverMetadata,
+} from '@/lib/story/storyline-cover';
 
 export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ id: string }>;
+}
+
+async function getRequestOrigin(): Promise<string | null> {
+  const configuredOrigin = process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL;
+  if (configuredOrigin) return configuredOrigin.replace(/\/$/, '');
+
+  const headerStore = await headers();
+  const host = headerStore.get('x-forwarded-host') ?? headerStore.get('host');
+  if (!host) return null;
+
+  const proto = (headerStore.get('x-forwarded-proto') ?? 'https').split(',')[0]?.trim() || 'https';
+  return `${proto}://${host.split(',')[0]?.trim()}`;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -19,33 +37,44 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   const { data: storyline } = await supabase
     .from('storylines')
-    .select('title, author_name, cover_image_url')
+    .select('title, author_name, cover_image_url, is_vertical_story, aspect_ratio')
     .eq('id', id)
     .single();
 
-  if (!storyline) return { title: 'Storyline — Kissago' };
+  if (!storyline) return { title: 'Storyline - Kissago' };
 
   const description = storyline.author_name
     ? `A storyline by ${storyline.author_name} on Kissago`
     : 'An interactive storyline on Kissago';
+  const coverMetadata = await resolveStorylineCoverMetadata(id);
+  const coverSource = coverMetadata?.source ?? null;
+  const origin = coverSource ? await getRequestOrigin() : null;
+  const coverImageUrl = coverSource && origin
+    ? getAbsoluteStorylineCoverImageUrl(id, origin, coverSource.version)
+    : null;
+  const isVertical = coverMetadata?.isVertical
+    ?? (storyline.is_vertical_story === true || storyline.aspect_ratio === '9:16');
+  const imageSize = isVertical
+    ? { width: 1080, height: 1920 }
+    : { width: 1200, height: 630 };
+  const openGraphImages = coverImageUrl
+    ? [{ url: coverImageUrl, ...imageSize, alt: storyline.title }]
+    : undefined;
 
   return {
-    title: `${storyline.title} — Kissago`,
+    title: `${storyline.title} - Kissago`,
     description,
     openGraph: {
       title: storyline.title,
       description,
-      ...(storyline.cover_image_url && {
-        images: [{ url: storyline.cover_image_url, width: 1200, height: 630 }],
-      }),
+      type: 'article',
+      ...(openGraphImages && { images: openGraphImages }),
     },
     twitter: {
       card: 'summary_large_image',
       title: storyline.title,
       description,
-      ...(storyline.cover_image_url && {
-        images: [storyline.cover_image_url],
-      }),
+      ...(coverImageUrl && { images: [coverImageUrl] }),
     },
   };
 }
@@ -70,12 +99,17 @@ export default async function StorylinePage({ params }: PageProps) {
 
   // Unauthenticated users see a preview with sign-in CTA
   if (!user) {
+    const coverMetadata = await resolveStorylineCoverMetadata(id);
+    const previewCoverImageUrl = coverMetadata?.source
+      ? getStorylineCoverImagePath(id, coverMetadata.source.version)
+      : storyline.cover_image_url;
+
     return (
       <StorylinePreview
         storylineId={storyline.id}
         title={storyline.title}
         authorName={storyline.author_name}
-        coverImageUrl={storyline.cover_image_url}
+        coverImageUrl={previewCoverImageUrl}
         beatCount={storyline.beat_count}
       />
     );
