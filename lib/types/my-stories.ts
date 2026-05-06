@@ -27,6 +27,7 @@ export interface SavedStorylineItem {
   id: string;
   storyline_id: string;
   saved_at: string;
+  is_owner: boolean;
   storyline: {
     id: string;
     title: string;

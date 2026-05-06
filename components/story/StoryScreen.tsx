@@ -9,6 +9,7 @@ import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, 
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import PublishDialog from './PublishDialog';
+import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
 import NarrationButton from './NarrationButton';
@@ -637,6 +638,7 @@ function StoryScreenInner({
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
+  const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
   const [isCardHovered, setIsCardHovered] = useState(false);
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
@@ -1531,23 +1533,39 @@ function StoryScreenInner({
                             <div className="flex items-center gap-2 text-sm text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-4 py-3">
                               <Check className="w-4 h-4 shrink-0" />
                               <span>This path is already published.</span>
-                              <Link
-                                href={`/storyline/${lastPublishResult.storylineId}`}
-                                className="ml-auto flex items-center gap-1 text-indigo-300 hover:text-indigo-200 transition-colors"
-                              >
-                                View <ExternalLink className="w-3 h-3" />
-                              </Link>
+                              <div className="ml-auto flex items-center gap-3">
+                                <Link
+                                  href={`/storyline/${lastPublishResult.storylineId}`}
+                                  className="flex items-center gap-1 text-indigo-300 hover:text-indigo-200 transition-colors"
+                                >
+                                  View <ExternalLink className="w-3 h-3" />
+                                </Link>
+                                <button
+                                  onClick={() => setManagedStorylineId(lastPublishResult.storylineId)}
+                                  className="flex items-center gap-1 text-indigo-300 hover:text-indigo-200 transition-colors"
+                                >
+                                  Manage Cover <ImageIcon className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
                           ) : (
                             <div className="flex items-center gap-2 text-sm text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
                               <Share2 className="w-4 h-4 shrink-0" />
                               <span>{canPublishAudioStoryline ? 'Audio story published!' : 'Storyline published!'}</span>
-                              <Link
-                                href={`/storyline/${lastPublishResult.storylineId}`}
-                                className="ml-auto flex items-center gap-1 text-emerald-300 hover:text-emerald-200 transition-colors"
-                              >
-                                View <ExternalLink className="w-3 h-3" />
-                              </Link>
+                              <div className="ml-auto flex items-center gap-3">
+                                <Link
+                                  href={`/storyline/${lastPublishResult.storylineId}`}
+                                  className="flex items-center gap-1 text-emerald-300 hover:text-emerald-200 transition-colors"
+                                >
+                                  View <ExternalLink className="w-3 h-3" />
+                                </Link>
+                                <button
+                                  onClick={() => setManagedStorylineId(lastPublishResult.storylineId)}
+                                  className="flex items-center gap-1 text-emerald-300 hover:text-emerald-200 transition-colors"
+                                >
+                                  Manage Cover <ImageIcon className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -2373,6 +2391,12 @@ function StoryScreenInner({
           allowMissingImages={canPublishAudioStoryline}
         />
       )}
+
+      <ManageStorylineCoverDialog
+        isOpen={Boolean(managedStorylineId)}
+        storylineId={managedStorylineId}
+        onClose={() => setManagedStorylineId(null)}
+      />
     </div>
   );
 }

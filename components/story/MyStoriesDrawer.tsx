@@ -3,11 +3,13 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2 } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import Link from 'next/link';
 import type { TabId } from '@/lib/types/my-stories';
+
+import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 
 interface MyStoriesDrawerProps {
   isOpen: boolean;
@@ -24,6 +26,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>('my-stories');
   const [actionId, setActionId] = useState<string | null>(null);
+  const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
 
   const stories = useMyStoriesStore((s) => s.stories);
   const exploredStories = useMyStoriesStore((s) => s.exploredStories);
@@ -35,6 +38,12 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   useEffect(() => {
     if (isOpen) fetchTab(activeTab);
   }, [isOpen, activeTab, fetchTab]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setManagedStorylineId(null);
+    }
+  }, [isOpen]);
 
   const isLoading = loading[activeTab];
 
@@ -256,7 +265,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         animate={{ opacity: 1, y: 0 }}
         className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
       >
-        <div className="p-5 pr-20">
+        <div className="p-5 pr-32">
           <Link
             href={`/storyline/${item.storyline_id}`}
             onClick={() => {
@@ -293,7 +302,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         </div>
 
         {/* Action buttons */}
-        <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+        <div className="touch-visible absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
           <Link
             href={`/storyline/${item.storyline_id}`}
             onClick={() => {
@@ -327,6 +336,18 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
           >
             <Share2 className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
           </button>
+          {item.is_owner && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setManagedStorylineId(item.storyline_id);
+              }}
+              className="p-2 hover:bg-sky-500/10 rounded-full transition-all"
+              title="Manage cover"
+            >
+              <ImageIcon className="w-4 h-4 text-neutral-600 hover:text-sky-300 transition-colors" />
+            </button>
+          )}
           <button
             onClick={(e) => { e.stopPropagation(); handleUnsaveStoryline(item.storyline_id); }}
             disabled={actionId === item.storyline_id}
@@ -415,6 +436,12 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
               )}
             </div>
           </motion.div>
+
+          <ManageStorylineCoverDialog
+            isOpen={Boolean(managedStorylineId)}
+            storylineId={managedStorylineId}
+            onClose={() => setManagedStorylineId(null)}
+          />
         </>
       )}
     </AnimatePresence>

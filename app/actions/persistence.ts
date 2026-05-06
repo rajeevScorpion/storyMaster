@@ -1499,6 +1499,7 @@ export async function listSavedStorylines(): Promise<Array<{
   id: string;
   storyline_id: string;
   saved_at: string;
+  is_owner: boolean;
   storyline: {
     id: string;
     title: string;
@@ -1524,7 +1525,8 @@ export async function listSavedStorylines(): Promise<Array<{
         beat_count,
         cover_image_url,
         author_name,
-        story_id
+        story_id,
+        user_id
       )
     `)
     .eq('user_id', user.id)
@@ -1536,6 +1538,7 @@ export async function listSavedStorylines(): Promise<Array<{
     id: row.id,
     storyline_id: row.storyline_id,
     saved_at: row.saved_at,
+    is_owner: row.storylines?.user_id === user.id,
     storyline: row.storylines,
   }));
 }

@@ -17,7 +17,12 @@ import {
   type ProcessedStorylineAsset,
   type StorylineShareCoverRow,
 } from '@/lib/story/share-cover';
+import {
+  buildStoryCoverPromptInputFromPublishedStoryline,
+  generateStoryCoverPrompt,
+} from '@/lib/story/cover-prompts';
 import type {
+  DbStory,
   StorylineFormat,
   StorylineOrientation,
   StorylineShareCoverSource,
@@ -66,6 +71,54 @@ type DiagnosticImageProbe = {
   contentType: string | null;
   contentLength: string | null;
   error: string | null;
+};
+
+export type PublishedStorylineCoverEditorState = {
+  storylineId: string;
+  storylineUrl: string;
+  storyId: string;
+  title: string;
+  authorName: string | null;
+  beatCount: number;
+  storyFormat: StorylineFormat;
+  storyVisualMode: StorylineVisualMode;
+  orientation: StorylineOrientation;
+  isVerticalStory: boolean;
+  socialCoverPrompt: string;
+  youtubeThumbnailPrompt: string;
+  reelThumbnailPrompt: string;
+  audioCoverPrompt: string;
+  shareCoverUrl: string | null;
+  shareCoverWidth: number | null;
+  shareCoverHeight: number | null;
+  shareCoverMimeType: string | null;
+  shareCoverUpdatedAt: string | null;
+  youtubeThumbnailUrl: string | null;
+  youtubeThumbnailWidth: number | null;
+  youtubeThumbnailHeight: number | null;
+  youtubeThumbnailMimeType: string | null;
+  youtubeThumbnailUpdatedAt: string | null;
+  reelThumbnailUrl: string | null;
+  reelThumbnailWidth: number | null;
+  reelThumbnailHeight: number | null;
+  reelThumbnailMimeType: string | null;
+  reelThumbnailUpdatedAt: string | null;
+};
+
+type PublishedStorylineCoverEditorRow = StorylineShareCoverRow & {
+  user_id: string;
+  story_id: string;
+  title: string;
+  author_name: string | null;
+  beat_count?: number | null;
+  beats?: StoryBeat[] | null;
+  social_cover_prompt?: string | null;
+  youtube_thumbnail_prompt?: string | null;
+  reel_thumbnail_prompt?: string | null;
+  audio_cover_prompt?: string | null;
+  story_format: StorylineFormat;
+  story_visual_mode: StorylineVisualMode;
+  orientation: StorylineOrientation;
 };
 
 const STORYLINE_UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
@@ -133,6 +186,170 @@ function resolveDiagnosticsOrigin(inputOrigin: string | null, fallbackOrigin?: s
   if (appOrigin && !isLocalDiagnosticsOrigin(appOrigin)) return appOrigin;
   if (publicOrigin && !isLocalDiagnosticsOrigin(publicOrigin)) return publicOrigin;
   return inputOrigin ?? fallback ?? appOrigin ?? publicOrigin;
+}
+
+function buildPublishedStorylinePromptFields(
+  storyline: PublishedStorylineCoverEditorRow,
+  story: Pick<
+    DbStory,
+    'title' | 'user_prompt' | 'genre' | 'tone' | 'visual_style' | 'target_age' | 'story_config' | 'setting' | 'narrator_voice' | 'narration_voice_mode' | 'narration_language_code'
+  >
+): Pick<PublishedStorylineCoverEditorState, 'socialCoverPrompt' | 'youtubeThumbnailPrompt' | 'reelThumbnailPrompt' | 'audioCoverPrompt'> {
+  const promptInput = buildStoryCoverPromptInputFromPublishedStoryline({
+    story,
+    storyline: {
+      title: storyline.title,
+      story_format: storyline.story_format,
+      orientation: storyline.orientation,
+      beats: Array.isArray(storyline.beats) ? storyline.beats : [],
+    },
+  });
+
+  return {
+    socialCoverPrompt: cleanString(storyline.social_cover_prompt)
+      ?? generateStoryCoverPrompt(promptInput, { variant: 'social' }),
+    youtubeThumbnailPrompt: cleanString(storyline.youtube_thumbnail_prompt)
+      ?? generateStoryCoverPrompt(promptInput, { variant: 'youtube' }),
+    reelThumbnailPrompt: cleanString(storyline.reel_thumbnail_prompt)
+      ?? generateStoryCoverPrompt(promptInput, { variant: 'reel' }),
+    audioCoverPrompt: cleanString(storyline.audio_cover_prompt)
+      ?? generateStoryCoverPrompt(promptInput, { variant: 'audio' }),
+  };
+}
+
+async function loadOwnedPublishedStorylineForCoverEditor(storylineId: string, userId: string): Promise<{
+  storyline: PublishedStorylineCoverEditorRow;
+  story: Pick<
+    DbStory,
+    'title' | 'user_prompt' | 'genre' | 'tone' | 'visual_style' | 'target_age' | 'story_config' | 'setting' | 'narrator_voice' | 'narration_voice_mode' | 'narration_language_code'
+  >;
+}> {
+  const admin = createAdminClient();
+  const { data: storylineData, error: storylineError } = await admin
+    .from('storylines')
+    .select(`
+      id,
+      user_id,
+      story_id,
+      title,
+      author_name,
+      beat_count,
+      beats,
+      share_cover_url,
+      share_cover_source,
+      share_cover_status,
+      share_cover_width,
+      share_cover_height,
+      share_cover_mime_type,
+      share_cover_updated_at,
+      share_cover_version,
+      youtube_thumbnail_url,
+      youtube_thumbnail_source,
+      youtube_thumbnail_status,
+      youtube_thumbnail_width,
+      youtube_thumbnail_height,
+      youtube_thumbnail_mime_type,
+      youtube_thumbnail_updated_at,
+      youtube_thumbnail_version,
+      reel_thumbnail_url,
+      reel_thumbnail_source,
+      reel_thumbnail_status,
+      reel_thumbnail_width,
+      reel_thumbnail_height,
+      reel_thumbnail_mime_type,
+      reel_thumbnail_updated_at,
+      reel_thumbnail_version,
+      social_cover_prompt,
+      youtube_thumbnail_prompt,
+      reel_thumbnail_prompt,
+      audio_cover_prompt,
+      story_format,
+      story_visual_mode,
+      orientation
+    `)
+    .eq('id', storylineId)
+    .maybeSingle();
+
+  if (storylineError) {
+    throw new Error(`Failed to load storyline cover state: ${storylineError.message}`);
+  }
+
+  const storyline = storylineData as PublishedStorylineCoverEditorRow | null;
+  if (!storyline || storyline.user_id !== userId) {
+    throw new Error('You do not have permission to manage this storyline cover.');
+  }
+
+  const { data: storyData, error: storyError } = await admin
+    .from('stories')
+    .select(`
+      title,
+      user_prompt,
+      genre,
+      tone,
+      visual_style,
+      target_age,
+      story_config,
+      setting,
+      narrator_voice,
+      narration_voice_mode,
+      narration_language_code
+    `)
+    .eq('id', storyline.story_id)
+    .maybeSingle();
+
+  if (storyError) {
+    throw new Error(`Failed to load source story metadata: ${storyError.message}`);
+  }
+
+  return {
+    storyline,
+    story: (storyData ?? {}) as Pick<
+      DbStory,
+      'title' | 'user_prompt' | 'genre' | 'tone' | 'visual_style' | 'target_age' | 'story_config' | 'setting' | 'narrator_voice' | 'narration_voice_mode' | 'narration_language_code'
+    >,
+  };
+}
+
+function buildPublishedStorylineCoverEditorState(
+  storyline: PublishedStorylineCoverEditorRow,
+  story: Pick<
+    DbStory,
+    'title' | 'user_prompt' | 'genre' | 'tone' | 'visual_style' | 'target_age' | 'story_config' | 'setting' | 'narrator_voice' | 'narration_voice_mode' | 'narration_language_code'
+  >
+): PublishedStorylineCoverEditorState {
+  const prompts = buildPublishedStorylinePromptFields(storyline, story);
+
+  return {
+    storylineId: storyline.id,
+    storylineUrl: `/storyline/${storyline.id}`,
+    storyId: storyline.story_id,
+    title: storyline.title,
+    authorName: storyline.author_name ?? null,
+    beatCount: storyline.beat_count ?? (Array.isArray(storyline.beats) ? storyline.beats.length : 0),
+    storyFormat: storyline.story_format,
+    storyVisualMode: storyline.story_visual_mode,
+    orientation: storyline.orientation,
+    isVerticalStory: storyline.orientation === 'portrait',
+    socialCoverPrompt: prompts.socialCoverPrompt,
+    youtubeThumbnailPrompt: prompts.youtubeThumbnailPrompt,
+    reelThumbnailPrompt: prompts.reelThumbnailPrompt,
+    audioCoverPrompt: prompts.audioCoverPrompt,
+    shareCoverUrl: cleanString(storyline.share_cover_url),
+    shareCoverWidth: storyline.share_cover_width ?? null,
+    shareCoverHeight: storyline.share_cover_height ?? null,
+    shareCoverMimeType: cleanString(storyline.share_cover_mime_type),
+    shareCoverUpdatedAt: cleanString(storyline.share_cover_updated_at),
+    youtubeThumbnailUrl: cleanString(storyline.youtube_thumbnail_url),
+    youtubeThumbnailWidth: storyline.youtube_thumbnail_width ?? null,
+    youtubeThumbnailHeight: storyline.youtube_thumbnail_height ?? null,
+    youtubeThumbnailMimeType: cleanString(storyline.youtube_thumbnail_mime_type),
+    youtubeThumbnailUpdatedAt: cleanString(storyline.youtube_thumbnail_updated_at),
+    reelThumbnailUrl: cleanString(storyline.reel_thumbnail_url),
+    reelThumbnailWidth: storyline.reel_thumbnail_width ?? null,
+    reelThumbnailHeight: storyline.reel_thumbnail_height ?? null,
+    reelThumbnailMimeType: cleanString(storyline.reel_thumbnail_mime_type),
+    reelThumbnailUpdatedAt: cleanString(storyline.reel_thumbnail_updated_at),
+  };
 }
 
 function shareCoverUpdate(asset: ProcessedStorylineAsset): StorylineAssetUpdate {
@@ -365,6 +582,109 @@ export async function finalizeStorylineShareAssets(
       });
     }
   }
+}
+
+export async function getPublishedStorylineCoverEditorState(
+  storylineId: string
+): Promise<PublishedStorylineCoverEditorState> {
+  const supabase = await createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) {
+    throw new Error('Sign in to manage this storyline cover.');
+  }
+
+  const { storyline, story } = await loadOwnedPublishedStorylineForCoverEditor(storylineId, user.id);
+  return buildPublishedStorylineCoverEditorState(storyline, story);
+}
+
+export async function updatePublishedStorylineShareAssets(input: {
+  storylineId: string;
+  shareCoverDataUrl?: string | null;
+  youtubeThumbnailDataUrl?: string | null;
+  reelThumbnailDataUrl?: string | null;
+  shareCoverSource?: StorylineShareCoverSource | null;
+  youtubeThumbnailSource?: StorylineShareCoverSource | null;
+  reelThumbnailSource?: StorylineShareCoverSource | null;
+  socialCoverPrompt?: string | null;
+  youtubeThumbnailPrompt?: string | null;
+  reelThumbnailPrompt?: string | null;
+  audioCoverPrompt?: string | null;
+}): Promise<PublishedStorylineCoverEditorState> {
+  const supabase = await createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) {
+    throw new Error('Sign in to manage this storyline cover.');
+  }
+
+  const { storyline, story } = await loadOwnedPublishedStorylineForCoverEditor(input.storylineId, user.id);
+  const fallbackPrompts = buildPublishedStorylinePromptFields(storyline, story);
+
+  const updatePatch: StorylineAssetUpdate = {};
+  const admin = createAdminClient();
+
+  if (input.youtubeThumbnailDataUrl) {
+    const youtubeAsset = await processAndUploadStorylineAsset({
+      supabase: admin,
+      userId: user.id,
+      storylineId: storyline.id,
+      kind: 'youtube_thumbnail',
+      source: input.youtubeThumbnailSource ?? 'uploaded',
+      sourceUrlOrDataUrl: input.youtubeThumbnailDataUrl,
+      versionSeed: `${storyline.id}:youtube-update:${Date.now()}`,
+    });
+    Object.assign(updatePatch, youtubeThumbnailUpdate(youtubeAsset));
+
+    const derivedShareAsset = await processAndUploadStorylineAsset({
+      supabase: admin,
+      userId: user.id,
+      storylineId: storyline.id,
+      kind: 'share_cover',
+      source: input.youtubeThumbnailSource ?? 'uploaded',
+      sourceUrlOrDataUrl: input.youtubeThumbnailDataUrl,
+      versionSeed: `${storyline.id}:youtube-derived-share-update:${Date.now()}`,
+    });
+    Object.assign(updatePatch, shareCoverUpdate(derivedShareAsset));
+  } else if (input.shareCoverDataUrl) {
+    const shareAsset = await processAndUploadStorylineAsset({
+      supabase: admin,
+      userId: user.id,
+      storylineId: storyline.id,
+      kind: 'share_cover',
+      source: input.shareCoverSource ?? 'uploaded',
+      sourceUrlOrDataUrl: input.shareCoverDataUrl,
+      versionSeed: `${storyline.id}:share-update:${Date.now()}`,
+    });
+    Object.assign(updatePatch, shareCoverUpdate(shareAsset));
+  }
+
+  if (input.reelThumbnailDataUrl) {
+    const reelAsset = await processAndUploadStorylineAsset({
+      supabase: admin,
+      userId: user.id,
+      storylineId: storyline.id,
+      kind: 'reel_thumbnail',
+      source: input.reelThumbnailSource ?? 'uploaded',
+      sourceUrlOrDataUrl: input.reelThumbnailDataUrl,
+      versionSeed: `${storyline.id}:reel-update:${Date.now()}`,
+    });
+    Object.assign(updatePatch, reelThumbnailUpdate(reelAsset));
+  }
+
+  if (Object.keys(updatePatch).length === 0) {
+    return buildPublishedStorylineCoverEditorState(storyline, story);
+  }
+
+  Object.assign(updatePatch, {
+    social_cover_prompt: input.socialCoverPrompt ?? fallbackPrompts.socialCoverPrompt,
+    youtube_thumbnail_prompt: input.youtubeThumbnailPrompt ?? fallbackPrompts.youtubeThumbnailPrompt,
+    reel_thumbnail_prompt: input.reelThumbnailPrompt ?? fallbackPrompts.reelThumbnailPrompt,
+    audio_cover_prompt: input.audioCoverPrompt ?? fallbackPrompts.audioCoverPrompt,
+  });
+
+  await updateStorylineCoverFields(admin, storyline.id, updatePatch);
+
+  const refreshed = await loadOwnedPublishedStorylineForCoverEditor(storyline.id, user.id);
+  return buildPublishedStorylineCoverEditorState(refreshed.storyline, refreshed.story);
 }
 
 function coverGenerationActionKey(kind: 'social' | 'youtube' | 'reel' | 'audio'): PricingActionKey {

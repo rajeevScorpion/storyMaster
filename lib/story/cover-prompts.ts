@@ -1,3 +1,4 @@
+import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import type { StoryBeat, StorySession } from '@/lib/types/story';
 import type { StorylineFormat, StorylineOrientation } from '@/lib/types/database';
 
@@ -18,6 +19,28 @@ export type StoryCoverPromptInput = {
   characters?: Array<{ name?: string; type?: string; appearanceSummary?: string; personalitySummary?: string }>;
   beats?: Array<Pick<StoryBeat, 'title' | 'sceneSummary' | 'storyText' | 'characters'>>;
   narrationMood?: string | null;
+};
+
+type PublishedStoryCoverPromptSource = {
+  story: {
+    title?: string | null;
+    user_prompt?: string | null;
+    genre?: string | null;
+    tone?: string | null;
+    visual_style?: string | null;
+    target_age?: string | null;
+    story_config?: Record<string, unknown> | null;
+    setting?: Record<string, unknown> | null;
+    narrator_voice?: string | null;
+    narration_voice_mode?: string | null;
+    narration_language_code?: string | null;
+  };
+  storyline: {
+    title?: string | null;
+    story_format?: StorylineFormat | null;
+    orientation?: StorylineOrientation | null;
+    beats?: StoryBeat[] | null;
+  };
 };
 
 function compact(value: unknown, maxLength = 260): string {
@@ -56,6 +79,27 @@ function buildKeySceneLine(beats?: StoryCoverPromptInput['beats']): string {
   return scenes.length ? scenes.join(' ') : 'Infer key scenes from the title, premise, and mood.';
 }
 
+function buildPromptCharactersFromPublishedBeats(beats: StoryBeat[]): StoryCoverPromptInput['characters'] {
+  const registry = new Map<string, NonNullable<StoryCoverPromptInput['characters']>[number]>();
+
+  for (const beat of beats) {
+    for (const character of beat.characters ?? []) {
+      const key = character.id || character.name;
+      if (!key) continue;
+      if (!registry.has(key)) {
+        registry.set(key, {
+          name: character.name,
+          type: character.type,
+          appearanceSummary: character.appearanceSummary,
+          personalitySummary: character.personalitySummary,
+        });
+      }
+    }
+  }
+
+  return Array.from(registry.values());
+}
+
 export function buildStoryCoverPromptInputFromSession(
   session: StorySession,
   beats: StoryBeat[],
@@ -76,6 +120,32 @@ export function buildStoryCoverPromptInputFromSession(
     characters: session.characters,
     beats,
     narrationMood: session.narratorVoice || session.narrationVoiceMode || session.tone,
+  };
+}
+
+export function buildStoryCoverPromptInputFromPublishedStoryline(
+  source: PublishedStoryCoverPromptSource
+): StoryCoverPromptInput {
+  const storyConfig = normalizeStoryConfig(source.story.story_config);
+  const beats = Array.isArray(source.storyline.beats) ? source.storyline.beats : [];
+  const storySetting = source.story.setting as { world?: string } | null | undefined;
+
+  return {
+    title: source.story.title || source.storyline.title || 'Untitled Story',
+    userPrompt: source.story.user_prompt ?? null,
+    genre: source.story.genre ?? null,
+    tone: source.story.tone ?? null,
+    targetAge: source.story.target_age || storyConfig.ageGroup,
+    language: storyConfig.language,
+    visualStyle: source.story.visual_style ?? null,
+    setting: storySetting?.world || storyConfig.settingCountry,
+    summary: beats.map((beat) => compact(beat.storyText, 140)).filter(Boolean).join(' '),
+    storyFormat: source.storyline.story_format ?? 'visual_story',
+    orientation: source.storyline.orientation
+      ?? (storyConfig.isVerticalStory || storyConfig.aspectRatio === '9:16' ? 'portrait' : 'landscape'),
+    characters: buildPromptCharactersFromPublishedBeats(beats),
+    beats,
+    narrationMood: source.story.narrator_voice || source.story.narration_voice_mode || source.story.tone || null,
   };
 }
 
