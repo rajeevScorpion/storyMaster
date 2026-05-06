@@ -21,6 +21,7 @@ import {
   buildStoryCoverPromptInputFromPublishedStoryline,
   generateStoryCoverPrompt,
 } from '@/lib/story/cover-prompts';
+import { getStoredStorylineClassificationPatch } from '@/lib/story/publish-modes';
 import type {
   DbStory,
   StorylineFormat,
@@ -299,6 +300,24 @@ async function loadOwnedPublishedStorylineForCoverEditor(storylineId: string, us
 
   if (storyError) {
     throw new Error(`Failed to load source story metadata: ${storyError.message}`);
+  }
+
+  const classificationPatch = getStoredStorylineClassificationPatch({
+    storyFormat: storyline.story_format,
+    storyVisualMode: storyline.story_visual_mode,
+    beats: Array.isArray(storyline.beats) ? storyline.beats : [],
+  });
+
+  if (Object.keys(classificationPatch).length > 0) {
+    const { error: classificationError } = await admin
+      .from('storylines')
+      .update(classificationPatch)
+      .eq('id', storyline.id);
+
+    if (!classificationError) {
+      storyline.story_format = classificationPatch.story_format ?? storyline.story_format;
+      storyline.story_visual_mode = classificationPatch.story_visual_mode ?? storyline.story_visual_mode;
+    }
   }
 
   return {

@@ -395,66 +395,77 @@ export default function StorylineCoverEditorForm({
         )}
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => void copyPrompt(primaryCoverVariant, primaryCoverPrompt)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            {copiedPrompt === primaryCoverVariant
-              ? 'Copied'
-              : storyFormat === 'audio_story'
-                ? 'Copy Audio Cover Prompt'
-                : 'Copy Social Cover Prompt'}
-          </button>
-          <button
-            type="button"
-            onClick={() => shareCoverInputRef.current?.click()}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            Upload Share Cover
-          </button>
-          <button
-            type="button"
-            onClick={() => void generateCover(primaryCoverVariant)}
-            disabled={Boolean(generatingCover) || submitBusy}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {generatingCover === primaryCoverVariant
-              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              : <WandSparkles className="h-3.5 w-3.5" />}
-            {storyFormat === 'audio_story'
-              ? `Generate Cover (${audioCoverCoinCost.toLocaleString()} coins)`
-              : `Generate Cover (${socialCoverCoinCost.toLocaleString()} coins)`}
-          </button>
-          <button
-            type="button"
-            onClick={() => void copyPrompt('youtube', youtubeThumbnailPrompt)}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
-          >
-            <Copy className="h-3.5 w-3.5" />
-            {copiedPrompt === 'youtube' ? 'Copied' : 'Copy YouTube Prompt'}
-          </button>
-          <button
-            type="button"
-            onClick={() => youtubeInputRef.current?.click()}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
-          >
-            <Upload className="h-3.5 w-3.5" />
-            Upload YouTube Thumbnail
-          </button>
-          <button
-            type="button"
-            onClick={() => void generateCover('youtube')}
-            disabled={Boolean(generatingCover) || submitBusy}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {generatingCover === 'youtube'
-              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              : <WandSparkles className="h-3.5 w-3.5" />}
-            Generate YouTube Thumbnail ({socialCoverCoinCost.toLocaleString()} coins)
-          </button>
+          <div className="grid gap-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500">
+              {storyFormat === 'audio_story' ? 'Sharing Cover' : 'Social Cover'}
+            </p>
+            <button
+              type="button"
+              onClick={() => void copyPrompt(primaryCoverVariant, primaryCoverPrompt)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {copiedPrompt === primaryCoverVariant
+                ? 'Copied'
+                : storyFormat === 'audio_story'
+                  ? 'Copy Audio Cover Prompt'
+                  : 'Copy Social Cover Prompt'}
+            </button>
+            <button
+              type="button"
+              onClick={() => shareCoverInputRef.current?.click()}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Upload Share Cover
+            </button>
+            <button
+              type="button"
+              onClick={() => void generateCover(primaryCoverVariant)}
+              disabled={Boolean(generatingCover) || submitBusy}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {generatingCover === primaryCoverVariant
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <WandSparkles className="h-3.5 w-3.5" />}
+              {storyFormat === 'audio_story'
+                ? `Generate Cover (${audioCoverCoinCost.toLocaleString()} coins)`
+                : `Generate Cover (${socialCoverCoinCost.toLocaleString()} coins)`}
+            </button>
+          </div>
+
+          <div className="grid gap-3">
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-neutral-500">
+              YouTube Thumbnail
+            </p>
+            <button
+              type="button"
+              onClick={() => void copyPrompt('youtube', youtubeThumbnailPrompt)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {copiedPrompt === 'youtube' ? 'Copied' : 'Copy YouTube Prompt'}
+            </button>
+            <button
+              type="button"
+              onClick={() => youtubeInputRef.current?.click()}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
+            >
+              <Upload className="h-3.5 w-3.5" />
+              Upload YouTube Thumbnail
+            </button>
+            <button
+              type="button"
+              onClick={() => void generateCover('youtube')}
+              disabled={Boolean(generatingCover) || submitBusy}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {generatingCover === 'youtube'
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <WandSparkles className="h-3.5 w-3.5" />}
+              Generate YouTube Thumbnail ({socialCoverCoinCost.toLocaleString()} coins)
+            </button>
+          </div>
         </div>
 
         {isVerticalStory && (

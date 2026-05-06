@@ -6,7 +6,7 @@ import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, normalize
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
-import type { StorylineFormat, StorylineOrientation, StorylineShareCoverSource, StorylineVisualMode } from '@/lib/types/database';
+import type { StorylineShareCoverSource } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
 import {
   normalizeBeatMediaFields,
@@ -17,6 +17,7 @@ import {
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -145,22 +146,6 @@ function getStoryOrientation(config: StorySession['storyConfig']): { isVerticalS
   return {
     isVerticalStory: normalizedConfig.isVerticalStory,
     aspectRatio: normalizedConfig.isVerticalStory ? '9:16' : '16:9',
-  };
-}
-
-function getStorylinePublishModes(
-  config: StorySession['storyConfig'],
-  publishMode: 'standard' | 'audio_story' = 'standard'
-): {
-  storyFormat: StorylineFormat;
-  storyVisualMode: StorylineVisualMode;
-  orientation: StorylineOrientation;
-} {
-  const normalizedConfig = normalizeStoryConfig(config);
-  return {
-    storyFormat: publishMode === 'audio_story' ? 'audio_story' : 'visual_story',
-    storyVisualMode: normalizedConfig.imageGenerationMode === 'prompt_only' ? 'without_images' : 'with_images',
-    orientation: normalizedConfig.isVerticalStory || normalizedConfig.aspectRatio === '9:16' ? 'portrait' : 'landscape',
   };
 }
 
@@ -1154,7 +1139,6 @@ export async function autoPublishStoryline(
     aspectRatio: sourceStory?.aspect_ratio,
   });
   const orientation = getStoryOrientation(storyConfig);
-  const publishModes = getStorylinePublishModes(storyConfig, 'standard');
 
   // Fetch all beats for the story to walk the path
   const { data: allBeats, error: beatsError } = await supabase
@@ -1246,6 +1230,7 @@ export async function autoPublishStoryline(
     seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
     canonicalOptionId: b.canonical_option_id || undefined,
   }));
+  const publishModes = getStorylinePublishModes(storyConfig, 'standard', legacyBeats);
 
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
@@ -1585,7 +1570,7 @@ export async function publishStoryline(params: {
     aspectRatio: sourceStory?.aspect_ratio,
   });
   const orientation = getStoryOrientation(storyConfig);
-  const publishModes = getStorylinePublishModes(storyConfig, params.publishMode ?? 'standard');
+  const publishModes = getStorylinePublishModes(storyConfig, params.publishMode ?? 'standard', params.beats);
 
   if (
     publishModes.storyFormat === 'audio_story' &&
