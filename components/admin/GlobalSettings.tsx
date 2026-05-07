@@ -7,6 +7,7 @@ import {
   Brush,
   Clock3,
   FileText,
+  ImageIcon,
   Loader2,
   Mic2,
   RefreshCcw,
@@ -55,6 +56,7 @@ import {
   setPromptOnlyImageGalleryCleanupDays,
   setVideoDownload,
   setVideoDownloadAdminBypass,
+  saveImageUploadOptimizationSettings,
 } from '@/app/actions/admin';
 import { generateNarrationVoiceSamples, getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
 import {
@@ -68,6 +70,10 @@ import {
   MIN_STORY_UI_TEXT_LINE_COUNT,
   type StoryboardImageSize,
 } from '@/lib/types/storyboard-settings';
+import {
+  DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS,
+  type ImageUploadOptimizationSettings,
+} from '@/lib/media/imageUploadOptimization';
 
 export type GlobalSettingsSection =
   | 'overview'
@@ -76,6 +82,7 @@ export type GlobalSettingsSection =
   | 'narration'
   | 'authoring'
   | 'characters'
+  | 'media'
   | 'video-export'
   | 'generation'
   | 'pages';
@@ -132,6 +139,13 @@ const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
     href: '/admin/settings/characters',
     description: 'Character sheet availability for Free, Plus, and Creator workflows.',
     icon: UserRound,
+  },
+  {
+    section: 'media',
+    label: 'Image uploads',
+    href: '/admin/settings/media',
+    description: 'Client-side upload compression, raw limits, optimized size limits, and rollback controls.',
+    icon: ImageIcon,
   },
   {
     section: 'video-export',
@@ -348,6 +362,14 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [narrationVoiceSaving, setNarrationVoiceSaving] = useState(false);
   const [narrationVoiceGenerating, setNarrationVoiceGenerating] = useState(false);
   const [narrationVoiceWarnings, setNarrationVoiceWarnings] = useState<string[]>([]);
+  const [imageUploadSettings, setImageUploadSettings] = useState<ImageUploadOptimizationSettings>(
+    DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS
+  );
+  const [imageUploadDraft, setImageUploadDraft] = useState<ImageUploadOptimizationSettings>(
+    DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS
+  );
+  const [imageUploadSaving, setImageUploadSaving] = useState(false);
+  const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(null);
 
   useEffect(() => {
     getGlobalSettings()
@@ -391,6 +413,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         storyAssetSyncWarningTimeoutMs: assetSyncWarningTimeoutMs,
         authoringWordCap: awc,
         previewSeedPlanPriceCoins: previewPriceCoins,
+        imageUploadOptimizationSettings: nextImageUploadSettings,
         narrationVoiceSettings: nextNarrationVoiceSettings,
         narrationVoiceSampleStatuses: nextNarrationVoiceSampleStatuses,
       }) => {
@@ -449,6 +472,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setAuthoringWordCapInput(String(awc));
         setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
         setPreviewSeedPlanPriceCoinsInput(String(previewPriceCoins));
+        setImageUploadSettings(nextImageUploadSettings);
+        setImageUploadDraft(nextImageUploadSettings);
         setNarrationVoiceSettingsState(nextNarrationVoiceSettings);
         setNarrationMaleVoiceInput(voicesToMultilineText(nextNarrationVoiceSettings.maleVoiceList));
         setNarrationFemaleVoiceInput(voicesToMultilineText(nextNarrationVoiceSettings.femaleVoiceList));
@@ -690,6 +715,26 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
+  function updateImageUploadDraft(patch: Partial<ImageUploadOptimizationSettings>) {
+    setImageUploadDraft((current) => ({ ...current, ...patch }));
+    setImageUploadMessage(null);
+  }
+
+  async function handleImageUploadSettingsSave() {
+    setImageUploadSaving(true);
+    setImageUploadMessage(null);
+    try {
+      const saved = await saveImageUploadOptimizationSettings(imageUploadDraft);
+      setImageUploadSettings(saved);
+      setImageUploadDraft(saved);
+      setImageUploadMessage('Image upload optimization settings saved.');
+    } catch (error: any) {
+      setImageUploadMessage(error?.message || 'Failed to save image upload optimization settings.');
+    } finally {
+      setImageUploadSaving(false);
+    }
+  }
+
   const parsedMs = parseInt(cycleMsInput, 10);
   const parsedVignetteAmountPercent = parseInt(vignetteAmountInput, 10);
   const parsedStoryboardWebpQualityPercent = parseInt(storyboardWebpQualityInput, 10);
@@ -720,10 +765,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       : 'Voice settings not loaded',
     authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
+    media: `Compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}, final limit ${imageUploadSettings.finalUploadLimitMB} MB`,
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
     pages: 'Managed rollout pages, footer controls, and route guards',
   };
+  const imageUploadHasUnsavedChanges = JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -1661,6 +1708,94 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 )}
               </div>
             </div>
+          </div>
+          )}
+
+          {section === 'media' && (
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Image Upload Optimization</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Browser-side optimization runs before storage upload and can be disabled instantly if a device/browser issue appears.
+            </p>
+
+            <ToggleRow
+              label="Enable client-side compression"
+              description="Master rollback switch for all uploaded visual assets. Turning this off restores the old upload path as closely as possible."
+              checked={imageUploadDraft.clientSideCompressionEnabled}
+              toggling={false}
+              onToggle={() => updateImageUploadDraft({ clientSideCompressionEnabled: !imageUploadDraft.clientSideCompressionEnabled })}
+            />
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {([
+                ['compressBeatImages', 'Uploaded beat images'],
+                ['compressStoryboardImages', 'Storyboard / beat images'],
+                ['compressCoverImages', 'Story covers and thumbnails'],
+                ['compressSocialCoverImages', 'Social share covers'],
+                ['compressCharacterRefs', 'Character references'],
+                ['showCompressionStatsToUser', 'Show optimization stats'],
+                ['allowOriginalUploadIfCompressionFailsAndWithinLimit', 'Allow safe original fallback'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <span className="text-sm text-neutral-100">{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(imageUploadDraft[key])}
+                    onChange={(event) => updateImageUploadDraft({ [key]: event.target.checked })}
+                    className="h-4 w-4 accent-emerald-500"
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {([
+                ['defaultWebpQuality', 'Default WebP quality', 0.1, 1, 0.01],
+                ['characterRefWebpQuality', 'Character reference quality', 0.1, 1, 0.01],
+                ['rawSelectedFileLimitMB', 'Raw selected file limit', 1, 50, 1],
+                ['finalUploadLimitMB', 'Final upload limit', 1, 20, 1],
+                ['maxLandscapeWidth', 'Max landscape width', 320, 4096, 1],
+                ['maxLandscapeHeight', 'Max landscape height', 320, 4096, 1],
+                ['maxVerticalWidth', 'Max vertical width', 320, 4096, 1],
+                ['maxVerticalHeight', 'Max vertical height', 320, 4096, 1],
+                ['maxCharacterRefDimension', 'Max character ref dimension', 512, 4096, 1],
+              ] as const).map(([key, label, min, max, step]) => (
+                <div key={key} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <p className="text-sm font-medium text-neutral-100 mb-2">{label}</p>
+                  <input
+                    type="number"
+                    min={min}
+                    max={max}
+                    step={step}
+                    value={imageUploadDraft[key]}
+                    onChange={(event) => updateImageUploadDraft({ [key]: Number(event.target.value) })}
+                    className="w-32 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-xs leading-relaxed text-neutral-400">
+                Output format is WebP. Character references use higher quality and are only resized when they exceed the configured dimension.
+              </p>
+              <div className="flex items-center gap-3">
+                {imageUploadHasUnsavedChanges && <span className="text-xs text-amber-400">Unsaved</span>}
+                <button
+                  onClick={handleImageUploadSettingsSave}
+                  disabled={imageUploadSaving || !imageUploadHasUnsavedChanges}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {imageUploadSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+              </div>
+            </div>
+
+            {imageUploadMessage && (
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 px-4 py-3 text-sm text-neutral-300">
+                {imageUploadMessage}
+              </div>
+            )}
           </div>
           )}
 

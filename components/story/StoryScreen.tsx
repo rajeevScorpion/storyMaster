@@ -24,6 +24,18 @@ import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import type { StoryBeat, StorySession } from '@/lib/types/story';
+import {
+  blobToDataUrl,
+  compressImageFile,
+  formatFileSize,
+  getUploadFileExtension,
+} from '@/lib/media/clientImageCompression';
+import {
+  DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS,
+  getAssetTypeCompressionEnabled,
+  type ImageCompressionMetadata,
+  type ImageUploadOptimizationSettings,
+} from '@/lib/media/imageUploadOptimization';
 
 function StoryboardCycler({
   gridUrl,
@@ -175,12 +187,19 @@ const CHARACTER_SHEET_MIN_DIMENSION = 512;
 
 type PromptOnlyUploadPreview = {
   dataUrl: string;
+  previewUrl: string;
+  previewObjectUrl?: string;
   fileName: string;
   fileSize: number;
   mimeType: string;
+  storageExtension: string;
   width: number;
   height: number;
   resolutionAdvice: string;
+  originalFileName?: string;
+  originalFileSize?: number;
+  optimizationMetadata?: ImageCompressionMetadata;
+  optimizationWarning?: string;
 };
 
 type PromptToolsModalState =
@@ -318,62 +337,162 @@ function getCharacterSheetResolutionAdvice(width: number, height: number): strin
   return `Below the recommended minimum. Use at least ${CHARACTER_SHEET_MIN_DIMENSION}x${CHARACTER_SHEET_MIN_DIMENSION}.`;
 }
 
-async function validateCharacterSheetUpload(file: File, maxBytes: number): Promise<PromptOnlyUploadPreview> {
+function revokeUploadPreview(preview: PromptOnlyUploadPreview | null) {
+  if (preview?.previewObjectUrl) {
+    URL.revokeObjectURL(preview.previewObjectUrl);
+  }
+}
+
+function buildCompressionStatsText(
+  metadata: ImageCompressionMetadata | undefined,
+  settings: ImageUploadOptimizationSettings
+): string | null {
+  if (!metadata || !settings.showCompressionStatsToUser) return null;
+  if (!metadata.compressionApplied) {
+    return metadata.skippedReason === 'already_optimized_webp'
+      ? 'Image is already optimized.'
+      : null;
+  }
+  return `Image optimized successfully. Original: ${formatFileSize(metadata.originalSizeBytes)}. Optimized: ${formatFileSize(metadata.optimizedSizeBytes)}.`;
+}
+
+async function validateCharacterSheetUpload(
+  file: File,
+  maxBytes: number,
+  optimizationSettings: ImageUploadOptimizationSettings
+): Promise<PromptOnlyUploadPreview> {
   if (!CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES)[number])) {
     throw new Error('Use a JPG, PNG, or WebP image.');
   }
 
-  if (file.size > maxBytes) {
+  const compressionEnabled = getAssetTypeCompressionEnabled('character_reference', optimizationSettings);
+  if (!compressionEnabled && file.size > maxBytes) {
     const limitMb = Math.max(1, Math.round(maxBytes / (1024 * 1024)));
     throw new Error(`Image must be ${limitMb} MB or smaller.`);
   }
 
-  const dataUrl = await readFileAsDataUrl(file);
-  const { width, height } = await readImageDimensions(dataUrl);
+  if (!compressionEnabled) {
+    const dataUrl = await readFileAsDataUrl(file);
+    const { width, height } = await readImageDimensions(dataUrl);
 
+    if (!hasRequiredPromptOnlyAspectRatio(width, height, CHARACTER_SHEET_SQUARE_ASPECT_RATIO)) {
+      throw new Error('Character sheets must use a 1:1 aspect ratio.');
+    }
+    if (Math.min(width, height) < CHARACTER_SHEET_MIN_DIMENSION) {
+      throw new Error(`Image must be at least ${CHARACTER_SHEET_MIN_DIMENSION}x${CHARACTER_SHEET_MIN_DIMENSION}.`);
+    }
+
+    return {
+      dataUrl,
+      previewUrl: dataUrl,
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type,
+      storageExtension: getUploadFileExtension(file),
+      width,
+      height,
+      resolutionAdvice: getCharacterSheetResolutionAdvice(width, height),
+    };
+  }
+
+  const result = await compressImageFile(file, {
+    assetType: 'character_reference',
+    settings: optimizationSettings,
+    orientation: 'square',
+  });
+  const width = result.metadata.outputWidth;
+  const height = result.metadata.outputHeight;
   if (!hasRequiredPromptOnlyAspectRatio(width, height, CHARACTER_SHEET_SQUARE_ASPECT_RATIO)) {
+    URL.revokeObjectURL(result.previewUrl);
     throw new Error('Character sheets must use a 1:1 aspect ratio.');
   }
   if (Math.min(width, height) < CHARACTER_SHEET_MIN_DIMENSION) {
+    URL.revokeObjectURL(result.previewUrl);
     throw new Error(`Image must be at least ${CHARACTER_SHEET_MIN_DIMENSION}x${CHARACTER_SHEET_MIN_DIMENSION}.`);
   }
-
+  const dataUrl = await blobToDataUrl(result.file);
   return {
     dataUrl,
-    fileName: file.name,
-    fileSize: file.size,
-    mimeType: file.type,
+    previewUrl: result.previewUrl,
+    previewObjectUrl: result.previewUrl,
+    fileName: result.file.name,
+    fileSize: result.file.size,
+    mimeType: result.file.type,
+    storageExtension: getUploadFileExtension(result.file),
     width,
     height,
+    originalFileName: file.name,
+    originalFileSize: file.size,
+    optimizationMetadata: result.metadata,
+    optimizationWarning: result.warningMessage ?? buildCompressionStatsText(result.metadata, optimizationSettings) ?? undefined,
     resolutionAdvice: getCharacterSheetResolutionAdvice(width, height),
   };
 }
 
-async function validatePromptOnlyImageFile(file: File, isVerticalStory: boolean): Promise<PromptOnlyUploadPreview> {
+async function validatePromptOnlyImageFile(
+  file: File,
+  isVerticalStory: boolean,
+  optimizationSettings: ImageUploadOptimizationSettings
+): Promise<PromptOnlyUploadPreview> {
   if (!PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof PROMPT_ONLY_ACCEPTED_IMAGE_TYPES)[number])) {
     throw new Error('Use a JPG, PNG, or WebP image.');
   }
 
-  if (file.size > PROMPT_ONLY_MAX_UPLOAD_BYTES) {
+  const compressionEnabled = getAssetTypeCompressionEnabled('storyboard_image', optimizationSettings);
+  if (!compressionEnabled && file.size > PROMPT_ONLY_MAX_UPLOAD_BYTES) {
     throw new Error(`Image must be ${PROMPT_ONLY_MAX_UPLOAD_MB} MB or smaller.`);
   }
 
-  const dataUrl = await readFileAsDataUrl(file);
-  const { width, height } = await readImageDimensions(dataUrl);
-
   const targetRatio = isVerticalStory ? PROMPT_ONLY_VERTICAL_ASPECT_RATIO : PROMPT_ONLY_LANDSCAPE_ASPECT_RATIO;
   const requiredAspectRatio = isVerticalStory ? '9:16' : '16:9';
-  if (!hasRequiredPromptOnlyAspectRatio(width, height, targetRatio)) {
-    throw new Error(`Image must use a ${requiredAspectRatio} aspect ratio.`);
+
+  if (!compressionEnabled) {
+    const dataUrl = await readFileAsDataUrl(file);
+    const { width, height } = await readImageDimensions(dataUrl);
+
+    if (!hasRequiredPromptOnlyAspectRatio(width, height, targetRatio)) {
+      throw new Error(`Image must use a ${requiredAspectRatio} aspect ratio.`);
+    }
+
+    return {
+      dataUrl,
+      previewUrl: dataUrl,
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type,
+      storageExtension: getUploadFileExtension(file),
+      width,
+      height,
+      resolutionAdvice: getPromptOnlyResolutionAdvice(width, height, isVerticalStory),
+    };
   }
 
+  const result = await compressImageFile(file, {
+    assetType: 'storyboard_image',
+    settings: optimizationSettings,
+    orientation: isVerticalStory ? 'portrait' : 'landscape',
+  });
+  const width = result.metadata.outputWidth;
+  const height = result.metadata.outputHeight;
+  if (!hasRequiredPromptOnlyAspectRatio(width, height, targetRatio)) {
+    URL.revokeObjectURL(result.previewUrl);
+    throw new Error(`Image must use a ${requiredAspectRatio} aspect ratio.`);
+  }
+  const dataUrl = await blobToDataUrl(result.file);
   return {
     dataUrl,
-    fileName: file.name,
-    fileSize: file.size,
-    mimeType: file.type,
+    previewUrl: result.previewUrl,
+    previewObjectUrl: result.previewUrl,
+    fileName: result.file.name,
+    fileSize: result.file.size,
+    mimeType: result.file.type,
+    storageExtension: getUploadFileExtension(result.file),
     width,
     height,
+    originalFileName: file.name,
+    originalFileSize: file.size,
+    optimizationMetadata: result.metadata,
+    optimizationWarning: result.warningMessage ?? buildCompressionStatsText(result.metadata, optimizationSettings) ?? undefined,
     resolutionAdvice: getPromptOnlyResolutionAdvice(width, height, isVerticalStory),
   };
 }
@@ -402,6 +521,7 @@ interface StoryRuntimeSettings {
   characterSheetMaxPerCharacter: number;
   characterSheetCleanupEnabled: boolean;
   characterSheetCleanupDays: number;
+  imageUploadOptimizationSettings: ImageUploadOptimizationSettings;
 }
 
 export default function StoryScreen() {
@@ -459,6 +579,7 @@ export default function StoryScreen() {
     characterSheetMaxPerCharacter: 3,
     characterSheetCleanupEnabled: true,
     characterSheetCleanupDays: 7,
+    imageUploadOptimizationSettings: DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS,
   });
 
   // Fetch storyboard cycle settings once on mount
@@ -624,11 +745,11 @@ function StoryScreenInner({
   cycleSettings: StoryRuntimeSettings;
   continueCoinCost: number;
   showCoinHint: boolean;
-  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
-  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number }) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
@@ -655,11 +776,13 @@ function StoryScreenInner({
   const [promptToolsSuccess, setPromptToolsSuccess] = useState<string | null>(null);
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isOptimizingPromptOnlyImage, setIsOptimizingPromptOnlyImage] = useState(false);
   const [isUploadingPromptOnlyImage, setIsUploadingPromptOnlyImage] = useState(false);
   const [pendingDeleteStorageKey, setPendingDeleteStorageKey] = useState<string | null>(null);
   const [isPermanentlyDeletingKey, setIsPermanentlyDeletingKey] = useState<string | null>(null);
   const [characterSheetPreview, setCharacterSheetPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [characterSheetError, setCharacterSheetError] = useState<string | null>(null);
+  const [isOptimizingCharacterSheet, setIsOptimizingCharacterSheet] = useState(false);
   const [isUploadingCharacterSheet, setIsUploadingCharacterSheet] = useState(false);
   const [pendingCharacterDeleteId, setPendingCharacterDeleteId] = useState<string | null>(null);
   const [pendingSheetDeleteKey, setPendingSheetDeleteKey] = useState<string | null>(null);
@@ -699,6 +822,14 @@ function StoryScreenInner({
       thumb.style.height = `${thumbH}%`;
     }
   }, [scrollRef]);
+
+  useEffect(() => {
+    return () => revokeUploadPreview(uploadPreview);
+  }, [uploadPreview]);
+
+  useEffect(() => {
+    return () => revokeUploadPreview(characterSheetPreview);
+  }, [characterSheetPreview]);
 
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
@@ -927,8 +1058,12 @@ function StoryScreenInner({
   } satisfies CSSProperties;
 
   const resetBeatUploadState = useCallback(() => {
-    setUploadPreview(null);
+    setUploadPreview((prev) => {
+      revokeUploadPreview(prev);
+      return null;
+    });
     setUploadError(null);
+    setIsOptimizingPromptOnlyImage(false);
     setIsUploadingPromptOnlyImage(false);
     setPendingDeleteStorageKey(null);
     setIsPermanentlyDeletingKey(null);
@@ -938,8 +1073,12 @@ function StoryScreenInner({
   }, []);
 
   const resetCharacterUploadState = useCallback(() => {
-    setCharacterSheetPreview(null);
+    setCharacterSheetPreview((prev) => {
+      revokeUploadPreview(prev);
+      return null;
+    });
     setCharacterSheetError(null);
+    setIsOptimizingCharacterSheet(false);
     setIsUploadingCharacterSheet(false);
     setPendingCharacterDeleteId(null);
     setPendingSheetDeleteKey(null);
@@ -957,7 +1096,7 @@ function StoryScreenInner({
   }, []);
 
   const closePromptToolsModal = useCallback(() => {
-    if (isUploadingPromptOnlyImage || isUploadingCharacterSheet) return;
+    if (isUploadingPromptOnlyImage || isUploadingCharacterSheet || isOptimizingPromptOnlyImage || isOptimizingCharacterSheet) return;
 
     setPromptToolsModalState({ view: 'closed' });
     setIsPromptToolsHelpOpen(false);
@@ -965,7 +1104,14 @@ function StoryScreenInner({
     setPromptToolsSuccess(null);
     resetBeatUploadState();
     resetCharacterUploadState();
-  }, [isUploadingCharacterSheet, isUploadingPromptOnlyImage, resetBeatUploadState, resetCharacterUploadState]);
+  }, [
+    isOptimizingCharacterSheet,
+    isOptimizingPromptOnlyImage,
+    isUploadingCharacterSheet,
+    isUploadingPromptOnlyImage,
+    resetBeatUploadState,
+    resetCharacterUploadState,
+  ]);
 
   // Close the prompt-tools modal on Escape only from the overview state.
   useEffect(() => {
@@ -1015,16 +1161,28 @@ function StoryScreenInner({
     }
 
     setUploadError(null);
+    setIsOptimizingPromptOnlyImage(true);
     try {
-      const validated = await validatePromptOnlyImageFile(file, isVerticalStory);
-      setUploadPreview(validated);
+      const validated = await validatePromptOnlyImageFile(
+        file,
+        isVerticalStory,
+        cycleSettings.imageUploadOptimizationSettings
+      );
+      setUploadPreview((prev) => {
+        revokeUploadPreview(prev);
+        return validated;
+      });
     } catch (error: any) {
-      setUploadPreview(null);
+      setUploadPreview((prev) => {
+        revokeUploadPreview(prev);
+        return null;
+      });
       setUploadError(error?.message || 'Could not validate the selected image.');
     } finally {
+      setIsOptimizingPromptOnlyImage(false);
       event.target.value = '';
     }
-  }, [isVerticalStory]);
+  }, [cycleSettings.imageUploadOptimizationSettings, isVerticalStory]);
 
   const handlePromptOnlyUpload = useCallback(async () => {
     if (!uploadPreview) {
@@ -1037,6 +1195,8 @@ function StoryScreenInner({
     try {
       await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl, {
         maxImagesPerBeat: cycleSettings.promptOnlyMaxImagesPerBeat,
+        optimizationMetadata: uploadPreview.optimizationMetadata,
+        storageExtension: uploadPreview.storageExtension,
       });
       resetBeatUploadState();
       setPromptToolsSuccess('Beat image saved.');
@@ -1089,16 +1249,28 @@ function StoryScreenInner({
     if (!file) return;
 
     setCharacterSheetError(null);
+    setIsOptimizingCharacterSheet(true);
     try {
-      const validated = await validateCharacterSheetUpload(file, cycleSettings.characterSheetUploadMaxBytes);
-      setCharacterSheetPreview(validated);
+      const validated = await validateCharacterSheetUpload(
+        file,
+        cycleSettings.characterSheetUploadMaxBytes,
+        cycleSettings.imageUploadOptimizationSettings
+      );
+      setCharacterSheetPreview((prev) => {
+        revokeUploadPreview(prev);
+        return validated;
+      });
     } catch (error: any) {
-      setCharacterSheetPreview(null);
+      setCharacterSheetPreview((prev) => {
+        revokeUploadPreview(prev);
+        return null;
+      });
       setCharacterSheetError(error?.message || 'Could not validate the selected image.');
     } finally {
+      setIsOptimizingCharacterSheet(false);
       event.target.value = '';
     }
-  }, [cycleSettings.characterSheetUploadMaxBytes]);
+  }, [cycleSettings.characterSheetUploadMaxBytes, cycleSettings.imageUploadOptimizationSettings]);
 
   const handleCharacterSheetUpload = useCallback(async () => {
     if (!activeCharacterSheetTarget) return;
@@ -1112,6 +1284,8 @@ function StoryScreenInner({
     try {
       await setCharacterReferenceSheet(activeCharacterSheetTarget.characterId, characterSheetPreview.dataUrl, {
         maxPerCharacter: cycleSettings.characterSheetMaxPerCharacter,
+        optimizationMetadata: characterSheetPreview.optimizationMetadata,
+        storageExtension: characterSheetPreview.storageExtension,
       });
       resetCharacterUploadState();
       setPromptToolsSuccess(`${activeCharacterSheetTarget.characterName} sheet saved.`);
@@ -1903,7 +2077,7 @@ function StoryScreenInner({
                   <button
                     type="button"
                     onClick={closePromptToolsModal}
-                    disabled={isUploadingPromptOnlyImage || isUploadingCharacterSheet}
+                    disabled={isUploadingPromptOnlyImage || isUploadingCharacterSheet || isOptimizingPromptOnlyImage || isOptimizingCharacterSheet}
                     className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
                     aria-label="Close prompt tools dialog"
                     title="Close"
@@ -2072,6 +2246,8 @@ function StoryScreenInner({
                   const cleanupDays = cycleSettings.promptOnlyImageGalleryCleanupDays;
                   const cleanupEnabled = cycleSettings.promptOnlyImageGalleryCleanupEnabled;
                   const activeStorageKey = getActiveGalleryStorageKey(normalizedCurrentBeat);
+                  const optimizationSettings = cycleSettings.imageUploadOptimizationSettings;
+                  const compressionEnabled = getAssetTypeCompressionEnabled('storyboard_image', optimizationSettings);
 
                   return (
                     <>
@@ -2166,7 +2342,11 @@ function StoryScreenInner({
 
                       <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
                         <p>Accepted formats: JPG, PNG, or WebP.</p>
-                        <p className="mt-1">Maximum file size: {PROMPT_ONLY_MAX_UPLOAD_MB} MB.</p>
+                        <p className="mt-1">
+                          {compressionEnabled
+                            ? `Raw file can be up to ${optimizationSettings.rawSelectedFileLimitMB} MB. Optimized upload limit: ${optimizationSettings.finalUploadLimitMB} MB.`
+                            : `Maximum file size: ${PROMPT_ONLY_MAX_UPLOAD_MB} MB.`}
+                        </p>
                         <p className="mt-1">Required aspect ratio: {isVerticalStory ? '9:16' : '16:9'}.</p>
                         <p className="mt-1">
                           Recommended resolution: {isVerticalStory
@@ -2186,12 +2366,12 @@ function StoryScreenInner({
                         <button
                           type="button"
                           onClick={() => uploadInputRef.current?.click()}
-                          disabled={capReached}
+                          disabled={capReached || isOptimizingPromptOnlyImage}
                           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                           title={capReached ? `Limit of ${cap} images per beat reached` : undefined}
                         >
                           <Upload className="h-4 w-4" />
-                          {uploadPreview ? 'Choose Different Image' : 'Choose Image'}
+                          {isOptimizingPromptOnlyImage ? 'Optimizing...' : uploadPreview ? 'Choose Different Image' : 'Choose Image'}
                         </button>
                         {displayImageUrl && (
                           <button
@@ -2212,11 +2392,18 @@ function StoryScreenInner({
                         </p>
                       )}
 
+                      {isOptimizingPromptOnlyImage && (
+                        <div className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Optimizing image for faster upload...
+                        </div>
+                      )}
+
                       {uploadPreview && (
                         <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
                           <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
                             <Image
-                              src={uploadPreview.dataUrl}
+                              src={uploadPreview.previewUrl}
                               alt="Selected beat upload preview"
                               fill
                               className="object-cover"
@@ -2227,7 +2414,13 @@ function StoryScreenInner({
                             <p className="font-medium text-neutral-100">{uploadPreview.fileName}</p>
                             <p className="mt-2">Format: {uploadPreview.mimeType}</p>
                             <p className="mt-1">Size: {(uploadPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                            {uploadPreview.originalFileSize && uploadPreview.originalFileSize !== uploadPreview.fileSize && (
+                              <p className="mt-1">Original: {formatFileSize(uploadPreview.originalFileSize)}</p>
+                            )}
                             <p className="mt-1">Resolution: {uploadPreview.width}x{uploadPreview.height}</p>
+                            {uploadPreview.optimizationWarning && (
+                              <p className="mt-3 text-sm text-emerald-300">{uploadPreview.optimizationWarning}</p>
+                            )}
                             <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
                             <p className="mt-1 text-sm text-neutral-300">{uploadPreview.resolutionAdvice}</p>
                           </div>
@@ -2249,6 +2442,8 @@ function StoryScreenInner({
                   const cleanupDays = cycleSettings.characterSheetCleanupDays;
                   const cleanupEnabled = cycleSettings.characterSheetCleanupEnabled;
                   const isClearingActive = pendingCharacterDeleteId === activeCharacterSheetTarget.characterId;
+                  const optimizationSettings = cycleSettings.imageUploadOptimizationSettings;
+                  const compressionEnabled = getAssetTypeCompressionEnabled('character_reference', optimizationSettings);
 
                   return (
                     <>
@@ -2343,7 +2538,9 @@ function StoryScreenInner({
                       <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
                         <p>Accepted formats: JPG, PNG, or WebP.</p>
                         <p className="mt-1">
-                          Maximum file size: {Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.
+                          {compressionEnabled
+                            ? `Raw file can be up to ${optimizationSettings.rawSelectedFileLimitMB} MB. Optimized upload limit: ${optimizationSettings.finalUploadLimitMB} MB.`
+                            : `Maximum file size: ${Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.`}
                         </p>
                         <p className="mt-1">Required aspect ratio: 1:1 (square).</p>
                         <p className="mt-1">
@@ -2362,12 +2559,12 @@ function StoryScreenInner({
                         <button
                           type="button"
                           onClick={() => characterSheetInputRef.current?.click()}
-                          disabled={capReached}
+                          disabled={capReached || isOptimizingCharacterSheet}
                           className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                           title={capReached ? `Limit of ${cap} sheets per character reached` : undefined}
                         >
                           <Upload className="h-4 w-4" />
-                          {characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
+                          {isOptimizingCharacterSheet ? 'Optimizing...' : characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
                         </button>
                         {activeCharacterHasSheet && (
                           <button
@@ -2389,11 +2586,18 @@ function StoryScreenInner({
                         </p>
                       )}
 
+                      {isOptimizingCharacterSheet && (
+                        <div className="mt-5 inline-flex items-center gap-2 rounded-2xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Optimizing image for faster upload...
+                        </div>
+                      )}
+
                       {characterSheetPreview && (
                         <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                           <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
                             <Image
-                              src={characterSheetPreview.dataUrl}
+                              src={characterSheetPreview.previewUrl}
                               alt={`${activeCharacterSheetTarget.characterName} reference preview`}
                               fill
                               className="object-cover"
@@ -2404,7 +2608,13 @@ function StoryScreenInner({
                             <p className="font-medium text-neutral-100">{characterSheetPreview.fileName}</p>
                             <p className="mt-2">Format: {characterSheetPreview.mimeType}</p>
                             <p className="mt-1">Size: {(characterSheetPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                            {characterSheetPreview.originalFileSize && characterSheetPreview.originalFileSize !== characterSheetPreview.fileSize && (
+                              <p className="mt-1">Original: {formatFileSize(characterSheetPreview.originalFileSize)}</p>
+                            )}
                             <p className="mt-1">Resolution: {characterSheetPreview.width}x{characterSheetPreview.height}</p>
+                            {characterSheetPreview.optimizationWarning && (
+                              <p className="mt-3 text-sm text-emerald-300">{characterSheetPreview.optimizationWarning}</p>
+                            )}
                             <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
                             <p className="mt-1 text-sm text-neutral-300">{characterSheetPreview.resolutionAdvice}</p>
                           </div>
@@ -2429,7 +2639,7 @@ function StoryScreenInner({
                     <button
                       type="button"
                       onClick={returnToPromptToolsOverview}
-                      disabled={isUploadingPromptOnlyImage}
+                      disabled={isUploadingPromptOnlyImage || isOptimizingPromptOnlyImage}
                       className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Back
@@ -2437,10 +2647,10 @@ function StoryScreenInner({
                     <button
                       type="button"
                       onClick={() => void handlePromptOnlyUpload()}
-                      disabled={!uploadPreview || isUploadingPromptOnlyImage || capReached}
+                      disabled={!uploadPreview || isUploadingPromptOnlyImage || isOptimizingPromptOnlyImage || capReached}
                       className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {isUploadingPromptOnlyImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                      {isUploadingPromptOnlyImage || isOptimizingPromptOnlyImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                       Upload Image
                     </button>
                   </div>
@@ -2455,7 +2665,7 @@ function StoryScreenInner({
                     <button
                       type="button"
                       onClick={returnToPromptToolsOverview}
-                      disabled={isUploadingCharacterSheet}
+                      disabled={isUploadingCharacterSheet || isOptimizingCharacterSheet}
                       className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Back
@@ -2463,10 +2673,10 @@ function StoryScreenInner({
                     <button
                       type="button"
                       onClick={() => void handleCharacterSheetUpload()}
-                      disabled={!characterSheetPreview || isUploadingCharacterSheet || capReached}
+                      disabled={!characterSheetPreview || isUploadingCharacterSheet || isOptimizingCharacterSheet || capReached}
                       className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {isUploadingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                      {isUploadingCharacterSheet || isOptimizingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
                       Upload Sheet
                     </button>
                   </div>

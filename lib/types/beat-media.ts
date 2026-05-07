@@ -79,6 +79,7 @@ export interface BeatImageGalleryEntryShape {
   url: string;
   storageKey: string;
   uploadedAt: string;
+  optimizationMetadata?: import('@/lib/media/imageUploadOptimization').ImageCompressionMetadata;
 }
 
 export function normalizeBeatMediaFields<T extends {

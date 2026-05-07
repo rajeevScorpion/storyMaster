@@ -325,7 +325,9 @@ export async function processCoverImageBuffer(
       fit: 'cover',
       position: sharp.strategy.attention,
     })
-    .webp({ quality: 82, effort: 4 })
+    // Client uploads may already be optimized, so keep server-side normalization
+    // at a high quality to avoid visible double-compression artifacts.
+    .webp({ quality: 90, effort: 4 })
     .toBuffer({ resolveWithObject: true });
 
   return {

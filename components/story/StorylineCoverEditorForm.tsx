@@ -1,11 +1,23 @@
 'use client';
 
-import { useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Check, Copy, ExternalLink, ImageIcon, Loader2, Upload, WandSparkles } from 'lucide-react';
 
 import { generateDraftStoryCoverImage } from '@/app/actions/storyline-covers';
+import { getImageUploadOptimizationSettings } from '@/app/actions/admin';
 import type { StoryCoverPromptVariant } from '@/lib/story/cover-prompts';
 import type { StorylineFormat, StorylineShareCoverSource } from '@/lib/types/database';
+import {
+  blobToDataUrl,
+  compressImageFile,
+  formatFileSize,
+} from '@/lib/media/clientImageCompression';
+import {
+  DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS,
+  getAssetTypeCompressionEnabled,
+  type ImageCompressionMetadata,
+  type ImageUploadOptimizationSettings,
+} from '@/lib/media/imageUploadOptimization';
 
 export const ACCEPTED_COVER_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
 
@@ -18,12 +30,17 @@ export type CoverAssetKind = 'social' | 'youtube' | 'reel';
 
 export type CoverUploadPreview = {
   dataUrl: string;
+  previewUrl: string;
+  previewObjectUrl?: string;
   fileName: string;
   fileSize: number;
   mimeType: string;
   width: number;
   height: number;
   source: 'uploaded' | 'custom_generated';
+  originalFileSize?: number;
+  optimizationMetadata?: ImageCompressionMetadata;
+  optimizationWarning?: string;
 };
 
 export type PersistedStorylineCoverAsset = {
@@ -109,23 +126,24 @@ function assertAspectRatio(width: number, height: number, targetRatio: number, l
   }
 }
 
-async function validateCoverUpload(file: File, kind: CoverAssetKind): Promise<CoverUploadPreview> {
-  if (!ACCEPTED_COVER_IMAGE_TYPES.includes(file.type as (typeof ACCEPTED_COVER_IMAGE_TYPES)[number])) {
-    throw new Error('Use a JPG, PNG, or WebP image.');
+function revokeCoverPreview(preview: CoverUploadPreview | null) {
+  if (preview?.previewObjectUrl) {
+    URL.revokeObjectURL(preview.previewObjectUrl);
   }
+}
 
-  const maxBytes = kind === 'social'
-    ? SOCIAL_COVER_MAX_BYTES
-    : kind === 'youtube'
-      ? YOUTUBE_THUMBNAIL_MAX_BYTES
-      : REEL_THUMBNAIL_MAX_BYTES;
-  if (file.size > maxBytes) {
-    throw new Error(`Image must be ${(maxBytes / (1024 * 1024)).toFixed(0)} MB or smaller.`);
+function buildCoverCompressionText(
+  metadata: ImageCompressionMetadata | undefined,
+  settings: ImageUploadOptimizationSettings
+): string | null {
+  if (!metadata || !settings.showCompressionStatsToUser) return null;
+  if (!metadata.compressionApplied) {
+    return metadata.skippedReason === 'already_optimized_webp' ? 'Image is already optimized.' : null;
   }
+  return `Image optimized successfully. Original: ${formatFileSize(metadata.originalSizeBytes)}. Optimized: ${formatFileSize(metadata.optimizedSizeBytes)}.`;
+}
 
-  const dataUrl = await readFileAsDataUrl(file);
-  const { width, height } = await readImageDimensions(dataUrl);
-
+function assertCoverUploadDimensions(kind: CoverAssetKind, width: number, height: number) {
   if (kind === 'youtube') {
     assertAspectRatio(width, height, 16 / 9, '16:9');
     if (width < 1280 || height < 720) throw new Error('YouTube thumbnails must be at least 1280x720.');
@@ -135,15 +153,73 @@ async function validateCoverUpload(file: File, kind: CoverAssetKind): Promise<Co
   } else if (width < 600 || height < 315) {
     throw new Error('Share covers should be at least 600x315. 1200x630 is recommended.');
   }
+}
 
+async function validateCoverUpload(
+  file: File,
+  kind: CoverAssetKind,
+  optimizationSettings: ImageUploadOptimizationSettings
+): Promise<CoverUploadPreview> {
+  if (!ACCEPTED_COVER_IMAGE_TYPES.includes(file.type as (typeof ACCEPTED_COVER_IMAGE_TYPES)[number])) {
+    throw new Error('Use a JPG, PNG, or WebP image.');
+  }
+
+  const maxBytes = kind === 'social'
+    ? SOCIAL_COVER_MAX_BYTES
+    : kind === 'youtube'
+      ? YOUTUBE_THUMBNAIL_MAX_BYTES
+      : REEL_THUMBNAIL_MAX_BYTES;
+  const compressionEnabled = getAssetTypeCompressionEnabled(
+    kind === 'social' ? 'social_cover_image' : 'cover_image',
+    optimizationSettings
+  );
+  if (!compressionEnabled && file.size > maxBytes) {
+    throw new Error(`Image must be ${(maxBytes / (1024 * 1024)).toFixed(0)} MB or smaller.`);
+  }
+
+  if (!compressionEnabled) {
+    const dataUrl = await readFileAsDataUrl(file);
+    const { width, height } = await readImageDimensions(dataUrl);
+    assertCoverUploadDimensions(kind, width, height);
+    return {
+      dataUrl,
+      previewUrl: dataUrl,
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type,
+      width,
+      height,
+      source: 'uploaded',
+    };
+  }
+
+  const result = await compressImageFile(file, {
+    assetType: kind === 'social' ? 'social_cover_image' : 'cover_image',
+    settings: optimizationSettings,
+    orientation: kind === 'reel' ? 'portrait' : 'landscape',
+  });
+  const width = result.metadata.outputWidth;
+  const height = result.metadata.outputHeight;
+  try {
+    assertCoverUploadDimensions(kind, width, height);
+  } catch (error) {
+    URL.revokeObjectURL(result.previewUrl);
+    throw error;
+  }
+  const dataUrl = await blobToDataUrl(result.file);
   return {
     dataUrl,
-    fileName: file.name,
-    fileSize: file.size,
-    mimeType: file.type,
+    previewUrl: result.previewUrl,
+    previewObjectUrl: result.previewUrl,
+    fileName: result.file.name,
+    fileSize: result.file.size,
+    mimeType: result.file.type,
     width,
     height,
     source: 'uploaded',
+    originalFileSize: file.size,
+    optimizationMetadata: result.metadata,
+    optimizationWarning: result.warningMessage ?? buildCoverCompressionText(result.metadata, optimizationSettings) ?? undefined,
   };
 }
 
@@ -218,6 +294,10 @@ export default function StorylineCoverEditorForm({
   const [youtubePreview, setYoutubePreview] = useState<CoverUploadPreview | null>(null);
   const [reelPreview, setReelPreview] = useState<CoverUploadPreview | null>(null);
   const [coverError, setCoverError] = useState<string | null>(null);
+  const [isOptimizingCover, setIsOptimizingCover] = useState(false);
+  const [optimizationSettings, setOptimizationSettings] = useState<ImageUploadOptimizationSettings>(
+    DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS
+  );
   const [copiedPrompt, setCopiedPrompt] = useState<string | null>(null);
   const [generatingCover, setGeneratingCover] = useState<StoryCoverPromptVariant | null>(null);
   const shareCoverInputRef = useRef<HTMLInputElement>(null);
@@ -232,13 +312,23 @@ export default function StorylineCoverEditorForm({
   const hasSelectedShareAsset = Boolean(shareCoverPreview || youtubePreview);
   const hasPendingChanges = Boolean(shareCoverPreview || youtubePreview || reelPreview);
   const canSubmit = mode === 'manage'
-    ? hasPendingChanges && !submitBusy && !generatingCover
-    : canSubmitBase && (storyFormat !== 'audio_story' || hasSelectedShareAsset) && !submitBusy && !generatingCover;
+    ? hasPendingChanges && !submitBusy && !generatingCover && !isOptimizingCover
+    : canSubmitBase && (storyFormat !== 'audio_story' || hasSelectedShareAsset) && !submitBusy && !generatingCover && !isOptimizingCover;
   const submitBlockedMessage = mode === 'manage'
     ? null
     : blockedMessage || (storyFormat === 'audio_story' && !hasSelectedShareAsset
       ? 'Audio story publishing needs a sharing cover. Upload a cover or generate one first.'
       : null);
+
+  useEffect(() => {
+    getImageUploadOptimizationSettings()
+      .then(setOptimizationSettings)
+      .catch(() => setOptimizationSettings(DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS));
+  }, []);
+
+  useEffect(() => () => revokeCoverPreview(shareCoverPreview), [shareCoverPreview]);
+  useEffect(() => () => revokeCoverPreview(youtubePreview), [youtubePreview]);
+  useEffect(() => () => revokeCoverPreview(reelPreview), [reelPreview]);
 
   const handleCoverFileSelected = async (
     event: ChangeEvent<HTMLInputElement>,
@@ -249,19 +339,37 @@ export default function StorylineCoverEditorForm({
     if (!file) return;
 
     setCoverError(null);
+    setIsOptimizingCover(true);
     try {
-      const preview = await validateCoverUpload(file, kind);
+      const preview = await validateCoverUpload(file, kind, optimizationSettings);
       if (kind === 'youtube') {
-        setYoutubePreview(preview);
-        setShareCoverPreview(null);
+        setYoutubePreview((prev) => {
+          revokeCoverPreview(prev);
+          return preview;
+        });
+        setShareCoverPreview((prev) => {
+          revokeCoverPreview(prev);
+          return null;
+        });
       } else if (kind === 'reel') {
-        setReelPreview(preview);
+        setReelPreview((prev) => {
+          revokeCoverPreview(prev);
+          return preview;
+        });
       } else {
-        setShareCoverPreview(preview);
-        setYoutubePreview(null);
+        setShareCoverPreview((prev) => {
+          revokeCoverPreview(prev);
+          return preview;
+        });
+        setYoutubePreview((prev) => {
+          revokeCoverPreview(prev);
+          return null;
+        });
       }
     } catch (error: any) {
       setCoverError(error?.message || 'Could not validate the selected image.');
+    } finally {
+      setIsOptimizingCover(false);
     }
   };
 
@@ -303,6 +411,7 @@ export default function StorylineCoverEditorForm({
       const { width, height } = await readImageDimensions(result.dataUrl);
       const preview: CoverUploadPreview = {
         dataUrl: result.dataUrl,
+        previewUrl: result.dataUrl,
         fileName: `${variant}-cover.webp`,
         fileSize: 0,
         mimeType: 'image/webp',
@@ -312,13 +421,28 @@ export default function StorylineCoverEditorForm({
       };
 
       if (variant === 'youtube') {
-        setYoutubePreview(preview);
-        setShareCoverPreview(null);
+        setYoutubePreview((prev) => {
+          revokeCoverPreview(prev);
+          return preview;
+        });
+        setShareCoverPreview((prev) => {
+          revokeCoverPreview(prev);
+          return null;
+        });
       } else if (variant === 'reel') {
-        setReelPreview(preview);
+        setReelPreview((prev) => {
+          revokeCoverPreview(prev);
+          return preview;
+        });
       } else {
-        setShareCoverPreview(preview);
-        setYoutubePreview(null);
+        setShareCoverPreview((prev) => {
+          revokeCoverPreview(prev);
+          return preview;
+        });
+        setYoutubePreview((prev) => {
+          revokeCoverPreview(prev);
+          return null;
+        });
       }
     } catch (error: any) {
       setCoverError(error?.message || 'Cover generation failed.');
@@ -414,15 +538,16 @@ export default function StorylineCoverEditorForm({
             <button
               type="button"
               onClick={() => shareCoverInputRef.current?.click()}
+              disabled={isOptimizingCover}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
             >
-              <Upload className="h-3.5 w-3.5" />
-              Upload Share Cover
+              {isOptimizingCover ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              {isOptimizingCover ? 'Optimizing...' : 'Upload Share Cover'}
             </button>
             <button
               type="button"
               onClick={() => void generateCover(primaryCoverVariant)}
-              disabled={Boolean(generatingCover) || submitBusy}
+              disabled={Boolean(generatingCover) || submitBusy || isOptimizingCover}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {generatingCover === primaryCoverVariant
@@ -449,15 +574,16 @@ export default function StorylineCoverEditorForm({
             <button
               type="button"
               onClick={() => youtubeInputRef.current?.click()}
+              disabled={isOptimizingCover}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
             >
-              <Upload className="h-3.5 w-3.5" />
-              Upload YouTube Thumbnail
+              {isOptimizingCover ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+              {isOptimizingCover ? 'Optimizing...' : 'Upload YouTube Thumbnail'}
             </button>
             <button
               type="button"
               onClick={() => void generateCover('youtube')}
-              disabled={Boolean(generatingCover) || submitBusy}
+              disabled={Boolean(generatingCover) || submitBusy || isOptimizingCover}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {generatingCover === 'youtube'
@@ -489,15 +615,16 @@ export default function StorylineCoverEditorForm({
               <button
                 type="button"
                 onClick={() => reelInputRef.current?.click()}
+                disabled={isOptimizingCover}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
               >
-                <Upload className="h-3.5 w-3.5" />
-                Upload Reel Thumbnail
+                {isOptimizingCover ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                {isOptimizingCover ? 'Optimizing...' : 'Upload Reel Thumbnail'}
               </button>
               <button
                 type="button"
                 onClick={() => void generateCover('reel')}
-                disabled={Boolean(generatingCover) || submitBusy}
+                disabled={Boolean(generatingCover) || submitBusy || isOptimizingCover}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500/25 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {generatingCover === 'reel'
@@ -531,11 +658,18 @@ export default function StorylineCoverEditorForm({
           className="hidden"
         />
 
+        {isOptimizingCover && (
+          <div className="mt-4 inline-flex items-center gap-2 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-sm text-sky-100">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Optimizing image for faster upload...
+          </div>
+        )}
+
         {activeSharePreview && (
           <div className="mt-4 grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)]">
             <div className="overflow-hidden rounded-xl border border-white/10 bg-black/30">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={activeSharePreview.dataUrl} alt="" className="aspect-video w-full object-cover" />
+              <img src={activeSharePreview.previewUrl} alt="" className="aspect-video w-full object-cover" />
             </div>
             <div className="text-xs leading-5 text-neutral-400">
               <p className="font-medium text-neutral-200">
@@ -545,6 +679,12 @@ export default function StorylineCoverEditorForm({
               <p>{activeSharePreview.mimeType}</p>
               {activeSharePreview.fileSize > 0 && (
                 <p>{(activeSharePreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+              )}
+              {activeSharePreview.originalFileSize && activeSharePreview.originalFileSize !== activeSharePreview.fileSize && (
+                <p>Original: {formatFileSize(activeSharePreview.originalFileSize)}</p>
+              )}
+              {activeSharePreview.optimizationWarning && (
+                <p className="mt-1 text-emerald-300">{activeSharePreview.optimizationWarning}</p>
               )}
               <p className="mt-1 text-emerald-300">
                 {youtubePreview

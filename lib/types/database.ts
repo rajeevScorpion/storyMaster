@@ -152,7 +152,12 @@ export interface DbBeat {
   image_status: BeatMediaStatus;
   image_error: string | null;
   image_synced_at: string | null;
-  image_gallery: Array<{ url: string; storage_key: string; uploaded_at: string }> | null;
+  image_gallery: Array<{
+    url: string;
+    storage_key: string;
+    uploaded_at: string;
+    optimization_metadata?: Record<string, unknown> | null;
+  }> | null;
   audio_url: string | null;
   audio_status: BeatMediaStatus;
   audio_error: string | null;

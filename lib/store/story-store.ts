@@ -33,6 +33,7 @@ import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorat
 import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, deleteAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
+import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
 import {
   normalizeBeatMediaFields,
   isBeatRowNotFoundError,
@@ -143,11 +144,11 @@ interface StoryState {
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
   retryPendingBeatAssetSync: () => Promise<void>;
-  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
-  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number }) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
@@ -3268,7 +3269,7 @@ export const useStoryStore = create<StoryState>()(
         await retryPendingBeatAssetSyncInternal(currentSession.savedStoryId);
       },
 
-      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number }) => {
+      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
         const { session } = get();
         if (!session) return;
         if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
@@ -3282,8 +3283,14 @@ export const useStoryStore = create<StoryState>()(
           throw new Error(`You can only keep ${cap} images per beat. Delete one before uploading another.`);
         }
 
-        const storageKeySuffix = `image-${crypto.randomUUID()}.webp`;
+        const storageExtension = (options?.storageExtension || 'webp').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'webp';
+        const storageKeySuffix = `image-${crypto.randomUUID()}.${storageExtension}`;
         const uploadedAt = new Date().toISOString();
+        const baseGalleryEntry = {
+          url: imageDataUrl,
+          uploadedAt,
+          ...(options?.optimizationMetadata ? { optimizationMetadata: options.optimizationMetadata } : {}),
+        };
 
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
@@ -3294,7 +3301,7 @@ export const useStoryStore = create<StoryState>()(
             // cloud upload runs in the background.
             const optimisticGallery = [
               ...(previousBeat.imageGallery ?? []),
-              { url: imageDataUrl, storageKey, uploadedAt },
+              { ...baseGalleryEntry, storageKey },
             ];
             updateStoreSaveUi({
               session: updateSessionBeat(session, nodeId, (beat) => ({
@@ -3361,7 +3368,7 @@ export const useStoryStore = create<StoryState>()(
             imageError: undefined,
             imageGallery: [
               ...(previousBeat.imageGallery ?? []),
-              { url: imageDataUrl, storageKey: provisionalKey, uploadedAt },
+              { ...baseGalleryEntry, storageKey: provisionalKey },
             ],
           })),
           saveStatus: 'unsaved',
@@ -3485,7 +3492,7 @@ export const useStoryStore = create<StoryState>()(
         });
       },
 
-      setCharacterReferenceSheet: async (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number }) => {
+      setCharacterReferenceSheet: async (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
         const { session } = get();
         if (!session) return;
 
@@ -3506,7 +3513,13 @@ export const useStoryStore = create<StoryState>()(
         const slug = slugifyCharacterName(character.name);
         const uploadStamp = formatCharacterSheetTimestamp(uploadedAt);
         const uploadId = crypto.randomUUID().slice(0, 8);
-        const storageKeySuffix = `character-sheets/${slug}_${characterId}/${slug}-${uploadStamp}-${uploadId}.webp`;
+        const storageExtension = (options?.storageExtension || 'webp').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'webp';
+        const storageKeySuffix = `character-sheets/${slug}_${characterId}/${slug}-${uploadStamp}-${uploadId}.${storageExtension}`;
+        const baseGalleryEntry = {
+          url: imageDataUrl,
+          uploadedAt,
+          ...(options?.optimizationMetadata ? { optimizationMetadata: options.optimizationMetadata } : {}),
+        };
 
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
@@ -3514,7 +3527,7 @@ export const useStoryStore = create<StoryState>()(
             const storageKey = `${userId}/${session.savedStoryId}/${storageKeySuffix}`;
             const optimisticGallery: CharacterSheetGalleryEntry[] = [
               ...existingGallery,
-              { url: imageDataUrl, storageKey, uploadedAt },
+              { ...baseGalleryEntry, storageKey },
             ];
 
             updateStoreSaveUi({
@@ -3574,7 +3587,7 @@ export const useStoryStore = create<StoryState>()(
             referenceSheetUploadedAt: uploadedAt,
             referenceSheetGallery: [
               ...existingGallery,
-              { url: imageDataUrl, storageKey: provisionalKey, uploadedAt },
+              { ...baseGalleryEntry, storageKey: provisionalKey },
             ],
           })),
           saveStatus: 'unsaved',

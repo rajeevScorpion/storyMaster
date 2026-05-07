@@ -43,6 +43,7 @@ function normalizeGalleryEntry(entry: CharacterSheetGalleryEntry): CharacterShee
     url: normalizeStorageUrl(entry.url, 'story-assets'),
     storageKey: entry.storageKey,
     uploadedAt: entry.uploadedAt,
+    ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
   };
 }
 

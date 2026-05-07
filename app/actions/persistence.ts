@@ -35,6 +35,7 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
         url: normalizeStorageUrl(entry.url, 'story-assets'),
         storageKey: entry.storageKey,
         uploadedAt: entry.uploadedAt,
+        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
       }));
     nodes[id] = {
       ...node,
@@ -58,6 +59,7 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
               url: normalizeStorageUrl(entry.url, 'story-assets'),
               storageKey: entry.storageKey,
               uploadedAt: entry.uploadedAt,
+              ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
             }));
           return {
             ...c,
@@ -84,6 +86,7 @@ function sanitizeSessionCharacters(session: StorySession): StorySession['charact
         url: normalizeStorageUrl(entry.url, 'story-assets'),
         storageKey: entry.storageKey,
         uploadedAt: entry.uploadedAt,
+        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
       }));
     return {
       ...character,
@@ -413,6 +416,7 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
       url: normalizeStorageUrl(entry.url, 'story-assets'),
       storage_key: entry.storageKey,
       uploaded_at: entry.uploadedAt,
+      ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
     }));
   }
 
@@ -444,6 +448,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
           url: entry.url,
           storageKey: entry.storage_key,
           uploadedAt: entry.uploaded_at,
+          ...(entry.optimization_metadata ? {
+            optimizationMetadata: entry.optimization_metadata as unknown as import('@/lib/media/imageUploadOptimization').ImageCompressionMetadata,
+          } : {}),
         }))
       : [],
     audioUrl: beat.audio_url || undefined,
@@ -958,6 +965,7 @@ export async function updateBeatMediaState(
       url: normalizeStorageUrl(entry.url, 'story-assets'),
       storage_key: entry.storageKey,
       uploaded_at: entry.uploadedAt,
+      ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
     }));
   }
   if ('audioUrl' in patch) {
@@ -1028,6 +1036,7 @@ export async function updateBeatMediaState(
         url: normalizeStorageUrl(entry.url, 'story-assets'),
         storageKey: entry.storageKey,
         uploadedAt: entry.uploadedAt,
+        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
       })),
     } : {}),
     ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),

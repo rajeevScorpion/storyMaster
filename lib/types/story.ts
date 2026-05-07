@@ -1,9 +1,11 @@
 import type { BeatMediaStatus } from './beat-media';
+import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
 
 export interface CharacterSheetGalleryEntry {
   url: string;
   storageKey: string;
   uploadedAt: string;
+  optimizationMetadata?: ImageCompressionMetadata;
 }
 
 export interface Character {
@@ -92,6 +94,7 @@ export interface BeatImageGalleryEntry {
   url: string;
   storageKey: string;
   uploadedAt: string;
+  optimizationMetadata?: ImageCompressionMetadata;
 }
 
 export interface StoryBeat {

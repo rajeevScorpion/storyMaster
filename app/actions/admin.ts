@@ -29,6 +29,12 @@ import {
   type StoryboardImageQualitySettings,
   type StoryboardImageSize,
 } from '@/lib/types/storyboard-settings';
+import {
+  DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS,
+  IMAGE_UPLOAD_OPTIMIZATION_FLAG_KEYS,
+  normalizeImageUploadOptimizationSettings,
+  type ImageUploadOptimizationSettings,
+} from '@/lib/media/imageUploadOptimization';
 
 // ============================================================
 // Search
@@ -240,6 +246,113 @@ export async function getStoryboardImageQualitySettings(): Promise<StoryboardIma
   };
 }
 
+function parseFlagNumber(value: string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export async function getImageUploadOptimizationSettings(): Promise<ImageUploadOptimizationSettings> {
+  const keys = IMAGE_UPLOAD_OPTIMIZATION_FLAG_KEYS;
+  const defaults = DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS;
+  const [
+    clientSideCompressionEnabled,
+    compressBeatImages,
+    compressStoryboardImages,
+    compressCoverImages,
+    compressSocialCoverImages,
+    compressCharacterRefs,
+    outputFormat,
+    defaultWebpQuality,
+    characterRefWebpQuality,
+    maxLandscapeWidth,
+    maxLandscapeHeight,
+    maxVerticalWidth,
+    maxVerticalHeight,
+    maxCharacterRefDimension,
+    rawSelectedFileLimitMB,
+    finalUploadLimitMB,
+    showCompressionStatsToUser,
+    allowOriginalUploadIfCompressionFailsAndWithinLimit,
+  ] = await Promise.all([
+    getFeatureFlag(keys.clientSideCompressionEnabled, defaults.clientSideCompressionEnabled),
+    getFeatureFlag(keys.compressBeatImages, defaults.compressBeatImages),
+    getFeatureFlag(keys.compressStoryboardImages, defaults.compressStoryboardImages),
+    getFeatureFlag(keys.compressCoverImages, defaults.compressCoverImages),
+    getFeatureFlag(keys.compressSocialCoverImages, defaults.compressSocialCoverImages),
+    getFeatureFlag(keys.compressCharacterRefs, defaults.compressCharacterRefs),
+    getFeatureFlagValue(keys.outputFormat),
+    getFeatureFlagValue(keys.defaultWebpQuality),
+    getFeatureFlagValue(keys.characterRefWebpQuality),
+    getFeatureFlagValue(keys.maxLandscapeWidth),
+    getFeatureFlagValue(keys.maxLandscapeHeight),
+    getFeatureFlagValue(keys.maxVerticalWidth),
+    getFeatureFlagValue(keys.maxVerticalHeight),
+    getFeatureFlagValue(keys.maxCharacterRefDimension),
+    getFeatureFlagValue(keys.rawSelectedFileLimitMB),
+    getFeatureFlagValue(keys.finalUploadLimitMB),
+    getFeatureFlag(keys.showCompressionStatsToUser, defaults.showCompressionStatsToUser),
+    getFeatureFlag(
+      keys.allowOriginalUploadIfCompressionFailsAndWithinLimit,
+      defaults.allowOriginalUploadIfCompressionFailsAndWithinLimit
+    ),
+  ]);
+
+  return normalizeImageUploadOptimizationSettings({
+    clientSideCompressionEnabled,
+    compressBeatImages,
+    compressStoryboardImages,
+    compressCoverImages,
+    compressSocialCoverImages,
+    compressCharacterRefs,
+    outputFormat: outputFormat === 'webp' ? 'webp' : defaults.outputFormat,
+    defaultWebpQuality: parseFlagNumber(defaultWebpQuality, defaults.defaultWebpQuality),
+    characterRefWebpQuality: parseFlagNumber(characterRefWebpQuality, defaults.characterRefWebpQuality),
+    maxLandscapeWidth: parseFlagNumber(maxLandscapeWidth, defaults.maxLandscapeWidth),
+    maxLandscapeHeight: parseFlagNumber(maxLandscapeHeight, defaults.maxLandscapeHeight),
+    maxVerticalWidth: parseFlagNumber(maxVerticalWidth, defaults.maxVerticalWidth),
+    maxVerticalHeight: parseFlagNumber(maxVerticalHeight, defaults.maxVerticalHeight),
+    maxCharacterRefDimension: parseFlagNumber(maxCharacterRefDimension, defaults.maxCharacterRefDimension),
+    rawSelectedFileLimitMB: parseFlagNumber(rawSelectedFileLimitMB, defaults.rawSelectedFileLimitMB),
+    finalUploadLimitMB: parseFlagNumber(finalUploadLimitMB, defaults.finalUploadLimitMB),
+    showCompressionStatsToUser,
+    allowOriginalUploadIfCompressionFailsAndWithinLimit,
+  });
+}
+
+export async function saveImageUploadOptimizationSettings(
+  input: Partial<ImageUploadOptimizationSettings>
+): Promise<ImageUploadOptimizationSettings> {
+  await verifyAdmin();
+  const settings = normalizeImageUploadOptimizationSettings(input);
+  const keys = IMAGE_UPLOAD_OPTIMIZATION_FLAG_KEYS;
+
+  await Promise.all([
+    setFeatureFlag(keys.clientSideCompressionEnabled, settings.clientSideCompressionEnabled),
+    setFeatureFlag(keys.compressBeatImages, settings.compressBeatImages),
+    setFeatureFlag(keys.compressStoryboardImages, settings.compressStoryboardImages),
+    setFeatureFlag(keys.compressCoverImages, settings.compressCoverImages),
+    setFeatureFlag(keys.compressSocialCoverImages, settings.compressSocialCoverImages),
+    setFeatureFlag(keys.compressCharacterRefs, settings.compressCharacterRefs),
+    setFeatureFlagValue(keys.outputFormat, settings.outputFormat),
+    setFeatureFlagValue(keys.defaultWebpQuality, String(settings.defaultWebpQuality)),
+    setFeatureFlagValue(keys.characterRefWebpQuality, String(settings.characterRefWebpQuality)),
+    setFeatureFlagValue(keys.maxLandscapeWidth, String(settings.maxLandscapeWidth)),
+    setFeatureFlagValue(keys.maxLandscapeHeight, String(settings.maxLandscapeHeight)),
+    setFeatureFlagValue(keys.maxVerticalWidth, String(settings.maxVerticalWidth)),
+    setFeatureFlagValue(keys.maxVerticalHeight, String(settings.maxVerticalHeight)),
+    setFeatureFlagValue(keys.maxCharacterRefDimension, String(settings.maxCharacterRefDimension)),
+    setFeatureFlagValue(keys.rawSelectedFileLimitMB, String(settings.rawSelectedFileLimitMB)),
+    setFeatureFlagValue(keys.finalUploadLimitMB, String(settings.finalUploadLimitMB)),
+    setFeatureFlag(keys.showCompressionStatsToUser, settings.showCompressionStatsToUser),
+    setFeatureFlag(
+      keys.allowOriginalUploadIfCompressionFailsAndWithinLimit,
+      settings.allowOriginalUploadIfCompressionFailsAndWithinLimit
+    ),
+  ]);
+
+  return settings;
+}
+
 export async function getGlobalSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
@@ -280,11 +393,12 @@ export async function getGlobalSettings(): Promise<{
   promptOnlyMaxImagesPerBeat: number;
   promptOnlyImageGalleryCleanupEnabled: boolean;
   promptOnlyImageGalleryCleanupDays: number;
+  imageUploadOptimizationSettings: ImageUploadOptimizationSettings;
   narrationVoiceSettings: NarrationVoiceSettings;
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -320,6 +434,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('prompt_only_max_images_per_beat'),
     getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
     getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
+    getImageUploadOptimizationSettings(),
     getNarrationVoiceSettings(),
     getNarrationVoiceSampleStatusesForAdmin(),
   ]);
@@ -373,6 +488,7 @@ export async function getGlobalSettings(): Promise<{
     promptOnlyMaxImagesPerBeat: Math.max(1, Math.min(10, parseInt(promptOnlyMaxImagesPerBeatStr ?? '3', 10) || 3)),
     promptOnlyImageGalleryCleanupEnabled: promptOnlyImageGalleryCleanupEnabledFlag,
     promptOnlyImageGalleryCleanupDays: Math.max(1, Math.min(90, parseInt(promptOnlyImageGalleryCleanupDaysStr ?? '7', 10) || 7)),
+    imageUploadOptimizationSettings,
     narrationVoiceSettings,
     narrationVoiceSampleStatuses,
   };
@@ -684,8 +800,9 @@ export async function getStoryboardSettings(): Promise<{
   characterSheetMaxPerCharacter: number;
   characterSheetCleanupEnabled: boolean;
   characterSheetCleanupDays: number;
+  imageUploadOptimizationSettings: ImageUploadOptimizationSettings;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr, imageUploadOptimizationSettings] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -722,6 +839,7 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlagValue('character_sheet_max_per_character'),
     getFeatureFlag('character_sheet_cleanup_enabled', true),
     getFeatureFlagValue('character_sheet_cleanup_days'),
+    getImageUploadOptimizationSettings(),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
@@ -783,6 +901,7 @@ export async function getStoryboardSettings(): Promise<{
     characterSheetCleanupDays: Number.isFinite(parsedCharacterSheetCleanupDays)
       ? Math.max(1, Math.min(90, parsedCharacterSheetCleanupDays))
       : 7,
+    imageUploadOptimizationSettings,
   };
 }
 

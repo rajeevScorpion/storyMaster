@@ -5,6 +5,13 @@ import { getBeatPersistedAudioUrl, getBeatPersistedImageUrl } from '@/lib/types/
 
 export type NodeAssetUrlMap = Record<string, { imageUrl?: string; audioUrl?: string }>;
 
+export type StorageUploadBody = string | Blob | File;
+
+export interface StorageUploadOptions {
+  contentType?: string;
+  cacheControl?: string;
+}
+
 /**
  * Convert a base64 data URL to a Blob with the correct content type.
  */
@@ -25,21 +32,28 @@ export function base64ToBlob(base64DataUrl: string): { blob: Blob; contentType: 
 }
 
 /**
- * Upload a base64 data URL to Supabase Storage.
+ * Upload a base64 data URL or provider-neutral Blob/File to Supabase Storage.
  * Returns the public URL of the uploaded file.
  */
 export async function uploadAsset(
   bucket: string,
   path: string,
-  base64DataUrl: string
+  uploadBody: StorageUploadBody,
+  options: StorageUploadOptions = {}
 ): Promise<string> {
   const supabase = createClient();
-  const { blob, contentType } = base64ToBlob(base64DataUrl);
+  const { blob, contentType } = typeof uploadBody === 'string'
+    ? base64ToBlob(uploadBody)
+    : {
+        blob: uploadBody,
+        contentType: options.contentType || uploadBody.type || 'application/octet-stream',
+      };
 
   const { error } = await supabase.storage
     .from(bucket)
     .upload(path, blob, {
       contentType,
+      ...(options.cacheControl ? { cacheControl: options.cacheControl } : {}),
       upsert: true,
     });
 
@@ -235,6 +249,7 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
         url: normalizeStorageUrl(entry.url, 'story-assets'),
         storageKey: entry.storageKey,
         uploadedAt: entry.uploadedAt,
+        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
       }));
     cloned.nodes[nodeId] = {
       ...node,
@@ -251,6 +266,7 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
               url: normalizeStorageUrl(entry.url, 'story-assets'),
               storageKey: entry.storageKey,
               uploadedAt: entry.uploadedAt,
+              ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
             }));
           return {
             ...c,

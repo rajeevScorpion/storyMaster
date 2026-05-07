@@ -88,7 +88,10 @@ export default function ManageStorylineCoverDialog({
 
   useEffect(() => {
     if (!isOpen || !storylineId) return;
-    void loadEditorState(storylineId);
+    const timer = window.setTimeout(() => {
+      void loadEditorState(storylineId);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [isOpen, storylineId]);
 
   const handleDialogClose = () => {
