@@ -183,6 +183,12 @@ type PromptOnlyUploadPreview = {
   resolutionAdvice: string;
 };
 
+type PromptToolsModalState =
+  | { view: 'closed' }
+  | { view: 'overview' }
+  | { view: 'beat-upload' }
+  | { view: 'character-upload'; characterId: string; characterName: string };
+
 function buildBeatPromptCopyText(beat: StoryBeat): string {
   return beat.finalImagePromptText?.trim()
     || beat.storyboardPromptText?.trim()
@@ -643,14 +649,15 @@ function StoryScreenInner({
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
   const [scrollState, setScrollState] = useState({ atTop: true, atBottom: false });
   const [copiedPromptKey, setCopiedPromptKey] = useState<string | null>(null);
-  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [promptToolsModalState, setPromptToolsModalState] = useState<PromptToolsModalState>({ view: 'closed' });
+  const [isPromptToolsHelpOpen, setIsPromptToolsHelpOpen] = useState(false);
+  const [savedRefsExpanded, setSavedRefsExpanded] = useState(false);
+  const [promptToolsSuccess, setPromptToolsSuccess] = useState<string | null>(null);
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploadingPromptOnlyImage, setIsUploadingPromptOnlyImage] = useState(false);
   const [pendingDeleteStorageKey, setPendingDeleteStorageKey] = useState<string | null>(null);
   const [isPermanentlyDeletingKey, setIsPermanentlyDeletingKey] = useState<string | null>(null);
-  const [showPromptToolsPopover, setShowPromptToolsPopover] = useState(false);
-  const [characterSheetTarget, setCharacterSheetTarget] = useState<{ characterId: string; characterName: string } | null>(null);
   const [characterSheetPreview, setCharacterSheetPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [characterSheetError, setCharacterSheetError] = useState<string | null>(null);
   const [isUploadingCharacterSheet, setIsUploadingCharacterSheet] = useState(false);
@@ -712,6 +719,34 @@ function StoryScreenInner({
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
   const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat, session);
+  const promptToolsOpen = promptToolsModalState.view !== 'closed';
+  const needsAttentionCharacters = characterPromptItems.filter((item) => !item.referenceSheetUrl);
+  const readyInBeatCharacters = characterPromptItems.filter((item) => Boolean(item.referenceSheetUrl));
+  const activeCharacterSheetTarget = promptToolsModalState.view === 'character-upload' ? promptToolsModalState : null;
+  const activeCharacterPromptItem = activeCharacterSheetTarget
+    ? characterPromptItems.find((item) => item.characterId === activeCharacterSheetTarget.characterId) ?? null
+    : null;
+  const promptToolsHelpText = promptToolsModalState.view === 'beat-upload'
+    ? `Use a ${isVerticalStory ? '9:16' : '16:9'} JPG, PNG, or WebP image. Review the preview, upload it to this beat, and you'll come right back here.`
+    : promptToolsModalState.view === 'character-upload'
+    ? 'Upload a square JPG, PNG, or WebP sheet. It stays attached to this character for future beats and continuations, then returns you to the tools overview.'
+    : isPromptOnlyStory
+    ? 'Copy prompts, upload this beat image, and add refs only for characters that still need them. Successful uploads return here automatically.'
+    : 'Copy prompts and add character refs only where this beat still needs them. Successful uploads return here automatically.';
+  const promptToolsShellLabel = promptToolsModalState.view === 'beat-upload'
+    ? 'Beat image upload tools'
+    : promptToolsModalState.view === 'character-upload'
+    ? 'Character sheet tools'
+    : isPromptOnlyStory
+    ? 'Prompt and image tools'
+    : 'Prompt tools';
+  const canOpenPromptTools = Boolean(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0);
+  const isPromptToolsOverview = promptToolsModalState.view === 'overview';
+  const isBeatUploadView = promptToolsModalState.view === 'beat-upload';
+  const isCharacterUploadView = promptToolsModalState.view === 'character-upload';
+  const activeCharacterGallery = activeCharacterPromptItem?.referenceSheetGallery ?? [];
+  const activeCharacterStorageKey = activeCharacterPromptItem?.referenceSheetStorageKey;
+  const activeCharacterHasSheet = Boolean(activeCharacterPromptItem?.referenceSheetUrl);
   const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
   const canPublishStandardStoryline = Boolean(
     publishPath?.beats.every((beat) => {
@@ -815,14 +850,10 @@ function StoryScreenInner({
   }, [copiedPromptKey]);
 
   useEffect(() => {
-    setShowUploadModal(false);
-    setUploadPreview(null);
-    setUploadError(null);
-    setIsUploadingPromptOnlyImage(false);
-    if (uploadInputRef.current) {
-      uploadInputRef.current.value = '';
-    }
-  }, [currentNodeId]);
+    if (!promptToolsSuccess) return;
+    const timeoutId = window.setTimeout(() => setPromptToolsSuccess(null), 2200);
+    return () => window.clearTimeout(timeoutId);
+  }, [promptToolsSuccess]);
 
   // Auto-save when a new beat is generated
   useEffect(() => {
@@ -830,23 +861,6 @@ function StoryScreenInner({
       onSave();
     }
   }, [saveStatus, onSave, isSaving]);
-
-  // Close the prompt-tools modal on Escape — backdrop clicks are handled inline on the overlay.
-  useEffect(() => {
-    if (!showPromptToolsPopover) return;
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowPromptToolsPopover(false);
-    };
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [showPromptToolsPopover]);
-
-  // Close the popover when the active beat changes — context shifts to a different beat's prompts.
-  useEffect(() => {
-    setShowPromptToolsPopover(false);
-  }, [currentNodeId]);
 
   // Recovery guard for a save request that is taking longer than expected.
   // The store queues one retry behind the active save instead of launching overlapping uploads.
@@ -912,6 +926,71 @@ function StoryScreenInner({
     height: `min(46vh, calc(${cycleSettings.storyUiTextLineCount} * 1lh))`,
   } satisfies CSSProperties;
 
+  const resetBeatUploadState = useCallback(() => {
+    setUploadPreview(null);
+    setUploadError(null);
+    setIsUploadingPromptOnlyImage(false);
+    setPendingDeleteStorageKey(null);
+    setIsPermanentlyDeletingKey(null);
+    if (uploadInputRef.current) {
+      uploadInputRef.current.value = '';
+    }
+  }, []);
+
+  const resetCharacterUploadState = useCallback(() => {
+    setCharacterSheetPreview(null);
+    setCharacterSheetError(null);
+    setIsUploadingCharacterSheet(false);
+    setPendingCharacterDeleteId(null);
+    setPendingSheetDeleteKey(null);
+    setPermanentlyDeletingSheetKey(null);
+    if (characterSheetInputRef.current) {
+      characterSheetInputRef.current.value = '';
+    }
+  }, []);
+
+  const openPromptToolsOverview = useCallback(() => {
+    setPromptToolsModalState({ view: 'overview' });
+    setIsPromptToolsHelpOpen(false);
+    setSavedRefsExpanded(false);
+    setPromptToolsSuccess(null);
+  }, []);
+
+  const closePromptToolsModal = useCallback(() => {
+    if (isUploadingPromptOnlyImage || isUploadingCharacterSheet) return;
+
+    setPromptToolsModalState({ view: 'closed' });
+    setIsPromptToolsHelpOpen(false);
+    setSavedRefsExpanded(false);
+    setPromptToolsSuccess(null);
+    resetBeatUploadState();
+    resetCharacterUploadState();
+  }, [isUploadingCharacterSheet, isUploadingPromptOnlyImage, resetBeatUploadState, resetCharacterUploadState]);
+
+  // Close the prompt-tools modal on Escape only from the overview state.
+  useEffect(() => {
+    if (!promptToolsOpen) return;
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && promptToolsModalState.view === 'overview') {
+        closePromptToolsModal();
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [closePromptToolsModal, promptToolsModalState.view, promptToolsOpen]);
+
+  // Reset the prompt-tools modal when the active beat changes.
+  useEffect(() => {
+    setPromptToolsModalState({ view: 'closed' });
+    setIsPromptToolsHelpOpen(false);
+    setSavedRefsExpanded(false);
+    setPromptToolsSuccess(null);
+    resetBeatUploadState();
+    resetCharacterUploadState();
+  }, [currentNodeId, resetBeatUploadState, resetCharacterUploadState]);
+
   const copyPromptText = useCallback(async (key: string, text: string) => {
     if (!text) return;
     try {
@@ -922,15 +1001,12 @@ function StoryScreenInner({
     }
   }, []);
 
-  const openUploadModal = useCallback(() => {
-    setShowUploadModal(true);
-    setUploadPreview(null);
-    setUploadError(null);
-    setIsUploadingPromptOnlyImage(false);
-    if (uploadInputRef.current) {
-      uploadInputRef.current.value = '';
-    }
-  }, []);
+  const openBeatUploadView = useCallback(() => {
+    resetBeatUploadState();
+    setPromptToolsSuccess(null);
+    setIsPromptToolsHelpOpen(false);
+    setPromptToolsModalState({ view: 'beat-upload' });
+  }, [resetBeatUploadState]);
 
   const handlePromptOnlyFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -962,18 +1038,16 @@ function StoryScreenInner({
       await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl, {
         maxImagesPerBeat: cycleSettings.promptOnlyMaxImagesPerBeat,
       });
-      setShowUploadModal(false);
-      setShowPromptToolsPopover(false);
-      setUploadPreview(null);
-      if (uploadInputRef.current) {
-        uploadInputRef.current.value = '';
-      }
+      resetBeatUploadState();
+      setPromptToolsSuccess('Beat image saved.');
+      setIsPromptToolsHelpOpen(false);
+      setPromptToolsModalState({ view: 'overview' });
     } catch (error: any) {
       setUploadError(error?.message || 'Could not upload this image.');
     } finally {
       setIsUploadingPromptOnlyImage(false);
     }
-  }, [currentNodeId, setPromptOnlyBeatImage, uploadPreview, cycleSettings.promptOnlyMaxImagesPerBeat]);
+  }, [currentNodeId, cycleSettings.promptOnlyMaxImagesPerBeat, resetBeatUploadState, setPromptOnlyBeatImage, uploadPreview]);
 
   const handlePromptOnlyDelete = useCallback(async () => {
     try {
@@ -1004,28 +1078,11 @@ function StoryScreenInner({
   }, [currentNodeId, permanentlyDeletePromptOnlyBeatImage]);
 
   const openCharacterSheetUpload = useCallback((characterId: string, characterName: string) => {
-    setCharacterSheetTarget({ characterId, characterName });
-    setCharacterSheetPreview(null);
-    setCharacterSheetError(null);
-    setIsUploadingCharacterSheet(false);
-    setPendingSheetDeleteKey(null);
-    setPermanentlyDeletingSheetKey(null);
-    if (characterSheetInputRef.current) {
-      characterSheetInputRef.current.value = '';
-    }
-  }, []);
-
-  const closeCharacterSheetUpload = useCallback(() => {
-    if (isUploadingCharacterSheet) return;
-    setCharacterSheetTarget(null);
-    setCharacterSheetPreview(null);
-    setCharacterSheetError(null);
-    setPendingSheetDeleteKey(null);
-    setPermanentlyDeletingSheetKey(null);
-    if (characterSheetInputRef.current) {
-      characterSheetInputRef.current.value = '';
-    }
-  }, [isUploadingCharacterSheet]);
+    resetCharacterUploadState();
+    setPromptToolsSuccess(null);
+    setIsPromptToolsHelpOpen(false);
+    setPromptToolsModalState({ view: 'character-upload', characterId, characterName });
+  }, [resetCharacterUploadState]);
 
   const handleCharacterSheetFileSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -1044,7 +1101,7 @@ function StoryScreenInner({
   }, [cycleSettings.characterSheetUploadMaxBytes]);
 
   const handleCharacterSheetUpload = useCallback(async () => {
-    if (!characterSheetTarget) return;
+    if (!activeCharacterSheetTarget) return;
     if (!characterSheetPreview) {
       setCharacterSheetError('Choose an image before uploading.');
       return;
@@ -1053,19 +1110,25 @@ function StoryScreenInner({
     setIsUploadingCharacterSheet(true);
     setCharacterSheetError(null);
     try {
-      await setCharacterReferenceSheet(characterSheetTarget.characterId, characterSheetPreview.dataUrl, {
+      await setCharacterReferenceSheet(activeCharacterSheetTarget.characterId, characterSheetPreview.dataUrl, {
         maxPerCharacter: cycleSettings.characterSheetMaxPerCharacter,
       });
-      setCharacterSheetPreview(null);
-      if (characterSheetInputRef.current) {
-        characterSheetInputRef.current.value = '';
-      }
+      resetCharacterUploadState();
+      setPromptToolsSuccess(`${activeCharacterSheetTarget.characterName} sheet saved.`);
+      setIsPromptToolsHelpOpen(false);
+      setPromptToolsModalState({ view: 'overview' });
     } catch (error: any) {
       setCharacterSheetError(error?.message || 'Could not upload this character sheet.');
     } finally {
       setIsUploadingCharacterSheet(false);
     }
-  }, [characterSheetTarget, characterSheetPreview, setCharacterReferenceSheet, cycleSettings.characterSheetMaxPerCharacter]);
+  }, [
+    activeCharacterSheetTarget,
+    characterSheetPreview,
+    cycleSettings.characterSheetMaxPerCharacter,
+    resetCharacterUploadState,
+    setCharacterReferenceSheet,
+  ]);
 
   const handleCharacterSheetClearActive = useCallback(async (characterId: string) => {
     setPendingCharacterDeleteId(characterId);
@@ -1097,6 +1160,21 @@ function StoryScreenInner({
       setPermanentlyDeletingSheetKey(null);
     }
   }, [permanentlyDeleteCharacterReferenceSheet]);
+
+  const returnToPromptToolsOverview = useCallback(() => {
+    if (isUploadingPromptOnlyImage || isUploadingCharacterSheet) return;
+
+    resetBeatUploadState();
+    resetCharacterUploadState();
+    setPromptToolsSuccess(null);
+    setIsPromptToolsHelpOpen(false);
+    setPromptToolsModalState({ view: 'overview' });
+  }, [
+    isUploadingCharacterSheet,
+    isUploadingPromptOnlyImage,
+    resetBeatUploadState,
+    resetCharacterUploadState,
+  ]);
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
@@ -1388,15 +1466,21 @@ function StoryScreenInner({
                   <ChevronDown className="w-5 h-5 text-neutral-300" />
                 )}
               </button>
-              {(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0) && (
+              {canOpenPromptTools && (
                 <>
                   <button
                     type="button"
-                    onClick={() => setShowPromptToolsPopover((open) => !open)}
-                    aria-expanded={showPromptToolsPopover}
+                    onClick={() => {
+                      if (promptToolsOpen) {
+                        closePromptToolsModal();
+                      } else {
+                        openPromptToolsOverview();
+                      }
+                    }}
+                    aria-expanded={promptToolsOpen}
                     aria-haspopup="dialog"
                     className={`p-2 rounded-full backdrop-blur-md transition-colors ${
-                      showPromptToolsPopover
+                      promptToolsOpen
                         ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
                         : 'bg-white/5 hover:bg-white/10 text-neutral-300'
                     }`}
@@ -1758,627 +1842,639 @@ function StoryScreenInner({
       </main>
 
       <AnimatePresence>
-        {showPromptToolsPopover && (
+        {promptToolsOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) {
-                setShowPromptToolsPopover(false);
-              }
-            }}
           >
             <motion.div
               initial={{ opacity: 0, scale: 0.96, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 8 }}
               role="dialog"
-              aria-label={isPromptOnlyStory ? 'Prompt and image tools' : 'Prompt tools'}
-              className="flex max-h-[min(85vh,40rem)] w-full max-w-xl flex-col rounded-[28px] border border-sky-500/20 bg-neutral-900/95 shadow-2xl"
+              aria-modal="true"
+              aria-label={promptToolsShellLabel}
+              className={`flex max-h-[min(90vh,48rem)] w-full ${isPromptToolsOverview ? 'max-w-xl' : 'max-w-2xl'} flex-col overflow-hidden rounded-[28px] border border-sky-500/20 bg-neutral-900/95 shadow-2xl`}
             >
               <div className="flex items-start justify-between gap-3 border-b border-white/5 px-6 pb-4 pt-6">
-                <div>
+                <div className="min-w-0">
                   <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-sky-200">
-                    {isPromptOnlyStory ? 'Prompt and Image Tools' : 'Prompt Tools'}
+                    {isBeatUploadView
+                      ? 'Upload Beat Image'
+                      : isCharacterUploadView
+                      ? activeCharacterHasSheet
+                        ? 'Manage Character Sheets'
+                        : 'Upload Character Sheet'
+                      : isPromptOnlyStory
+                      ? 'Prompt and Image Tools'
+                      : 'Prompt Tools'}
                   </p>
-                  <p className="mt-2 text-sm leading-relaxed text-neutral-300">
-                    {isPromptOnlyStory
-                      ? `This story was generated without images. Copy the exact prompts for external image generation, then upload or replace a ${isVerticalStory ? '9:16' : '16:9'} beat image here.`
-                      : 'Copy the exact prompt text that was sent to the image model for this beat, including any character-sheet prompts stored for continuity.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPromptToolsPopover(false)}
-                  className="rounded-full p-1 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
-                  title="Close"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto px-6 py-5">
-                <div className="flex flex-wrap gap-2">
-                  {beatPromptText && (
-                    <button
-                      type="button"
-                      onClick={() => void copyPromptText('beat', beatPromptText)}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
-                      title="Copy this beat's image prompt"
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                      {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
-                    </button>
-                  )}
-                  {isPromptOnlyStory && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowPromptToolsPopover(false);
-                        openUploadModal();
-                      }}
-                      className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                      title={displayImageUrl ? 'Replace this beat’s image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
-                    >
-                      <Upload className="h-3.5 w-3.5" />
-                      {displayImageUrl ? 'Replace Image' : 'Upload Image'}
-                    </button>
-                  )}
-                  {isPromptOnlyStory && displayImageUrl && (
-                    <button
-                      type="button"
-                      onClick={() => void handlePromptOnlyDelete()}
-                      className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-xs uppercase tracking-[0.18em] text-rose-200 transition-colors hover:bg-rose-500/20"
-                      title="Remove the uploaded image for this beat"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Delete Image
-                    </button>
-                  )}
-                </div>
-                {characterPromptItems.length > 0 && (
-                  <div className="mt-6 flex flex-col gap-4">
-                    <p className="text-[11px] font-sans uppercase tracking-[0.18em] text-neutral-400">
-                      Characters in this beat
-                    </p>
-                    {characterPromptItems.map((item) => {
-                      const hasSheet = Boolean(item.referenceSheetUrl);
-                      const hasPrompt = Boolean(item.promptText);
-                      const isClearing = pendingCharacterDeleteId === item.characterId;
-                      const savedCount = item.referenceSheetGallery.length;
-                      return (
-                        <div
-                          key={item.key}
-                          className="rounded-2xl border border-white/5 bg-neutral-950/40 p-4"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-medium text-neutral-100">{item.label}</p>
-                            {savedCount > 0 && (
-                              <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                                {savedCount} saved
-                              </span>
-                            )}
-                          </div>
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
-                            {hasPrompt && (
-                              <button
-                                type="button"
-                                onClick={() => void copyPromptText(item.key, item.promptText)}
-                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/50 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
-                                title={`Copy the ${item.label} character sheet prompt`}
-                              >
-                                <Copy className="h-3.5 w-3.5" />
-                                {copiedPromptKey === item.key ? 'Copied Sheet' : 'Copy Sheet'}
-                              </button>
-                            )}
-                            {cycleSettings.characterSheetUploadEnabled && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setShowPromptToolsPopover(false);
-                                  openCharacterSheetUpload(item.characterId, item.characterName);
-                                }}
-                                className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                                title={savedCount > 0
-                                  ? `Manage reference sheets for ${item.characterName}`
-                                  : `Upload a 1:1 reference sheet for ${item.characterName}`}
-                              >
-                                <Upload className="h-3.5 w-3.5" />
-                                {savedCount > 0 ? 'Manage Sheets' : 'Upload Sheet'}
-                              </button>
-                            )}
-                            {cycleSettings.characterSheetUploadEnabled && hasSheet && (
-                              <button
-                                type="button"
-                                onClick={() => void handleCharacterSheetClearActive(item.characterId)}
-                                disabled={isClearing}
-                                className="inline-flex items-center justify-center rounded-full border border-rose-500/25 bg-rose-500/10 p-2 text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                                title={`Clear the active reference sheet for ${item.characterName} (gallery preserved)`}
-                              >
-                                {isClearing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-        {showUploadModal && isPromptOnlyStory && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.98, y: 8 }}
-              className="w-full max-w-2xl rounded-[28px] border border-white/10 bg-neutral-900/95 p-6 shadow-2xl"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs uppercase tracking-[0.24em] text-sky-200">Upload Beat Image</p>
                   <h3 className="mt-2 text-2xl font-serif text-neutral-100">
-                    Add a {isVerticalStory ? '9:16' : '16:9'} storyboard image
+                    {isBeatUploadView
+                      ? `Add a ${isVerticalStory ? '9:16' : '16:9'} storyboard image`
+                      : isCharacterUploadView
+                      ? activeCharacterSheetTarget?.characterName
+                      : isPromptOnlyStory
+                      ? 'Copy prompts and keep going'
+                      : 'Copy prompts and manage refs'}
                   </h3>
+                  <p className="mt-1 text-sm leading-relaxed text-neutral-400">
+                    {isBeatUploadView
+                      ? 'Saved images stay attached to this beat so you can swap between them later.'
+                      : isCharacterUploadView
+                      ? 'Reference sheets persist with this character so future episodes and continuations can reuse them.'
+                      : isPromptOnlyStory
+                      ? `Copy the exact prompts for this beat, then upload a ${isVerticalStory ? '9:16' : '16:9'} image or add only the character refs still missing.`
+                      : 'Copy the exact prompt text for this beat and add character refs only where continuity still needs them.'}
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isUploadingPromptOnlyImage) return;
-                    setShowUploadModal(false);
-                    setUploadPreview(null);
-                    setUploadError(null);
-                  }}
-                  className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
-                  aria-label="Close upload dialog"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {(() => {
-                const gallery = normalizedCurrentBeat.imageGallery ?? [];
-                const cap = cycleSettings.promptOnlyMaxImagesPerBeat;
-                const capReached = gallery.length >= cap;
-                const cleanupDays = cycleSettings.promptOnlyImageGalleryCleanupDays;
-                const cleanupEnabled = cycleSettings.promptOnlyImageGalleryCleanupEnabled;
-                const activeStorageKey = getActiveGalleryStorageKey(normalizedCurrentBeat);
-                return (
-                  <>
-                    {gallery.length > 0 && (
-                      <div className="mt-5">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
-                            Saved Images ({gallery.length} / {cap})
-                          </p>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-3">
-                          {gallery.map((entry) => {
-                            const isActive = activeStorageKey === entry.storageKey;
-                            const isPendingConfirm = pendingDeleteStorageKey === entry.storageKey;
-                            const isDeleting = isPermanentlyDeletingKey === entry.storageKey;
-                            return (
-                              <div key={entry.storageKey} className="relative">
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSelectGalleryImage(entry.storageKey)}
-                                  disabled={isActive || isDeleting}
-                                  className={`group relative block overflow-hidden rounded-xl border transition-colors ${
-                                    isVerticalStory ? 'aspect-[9/16] w-20' : 'aspect-video w-32'
-                                  } ${
-                                    isActive
-                                      ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
-                                      : 'border-white/10 hover:border-sky-400/40'
-                                  } ${isDeleting ? 'opacity-50' : ''}`}
-                                  title={isActive ? 'Active beat image' : 'Use this image'}
-                                >
-                                  <Image
-                                    src={entry.url}
-                                    alt="Beat image option"
-                                    fill
-                                    className="object-cover"
-                                    unoptimized
-                                  />
-                                  {isActive && (
-                                    <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
-                                      Active
-                                    </span>
-                                  )}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (isDeleting) return;
-                                    if (isActive) {
-                                      setPendingDeleteStorageKey(entry.storageKey);
-                                    } else {
-                                      void handlePermanentDelete(entry.storageKey);
-                                    }
-                                  }}
-                                  disabled={isDeleting}
-                                  className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
-                                  title="Permanently delete this image"
-                                >
-                                  {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-                                </button>
-                                {isPendingConfirm && (
-                                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
-                                    <p>Permanently delete this active image? The most recent remaining image will become active.</p>
-                                    <div className="flex gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => setPendingDeleteStorageKey(null)}
-                                        className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
-                                      >
-                                        Keep
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void handlePermanentDelete(entry.storageKey)}
-                                        className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
-                                      >
-                                        Delete
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {cleanupEnabled && (
-                          <p className="mt-2 text-[11px] text-neutral-500">
-                            Unused images are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                      <p>Accepted formats: JPG, PNG, or WebP.</p>
-                      <p className="mt-1">Maximum file size: {PROMPT_ONLY_MAX_UPLOAD_MB} MB.</p>
-                      <p className="mt-1">Required aspect ratio: {isVerticalStory ? '9:16' : '16:9'}.</p>
-                      <p className="mt-1">
-                        Recommended resolution: {isVerticalStory
-                          ? '720x1280 or above for smaller screens, and 1152x2048 or above for larger screens.'
-                          : '1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.'}
-                      </p>
-                    </div>
-
-                    <div className="mt-5 flex flex-wrap gap-3">
-                      <input
-                        ref={uploadInputRef}
-                        type="file"
-                        accept={PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.join(',')}
-                        onChange={handlePromptOnlyFileSelected}
-                        className="hidden"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => uploadInputRef.current?.click()}
-                        disabled={capReached}
-                        className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                        title={capReached ? `Limit of ${cap} images per beat reached` : undefined}
-                      >
-                        <Upload className="h-4 w-4" />
-                        {uploadPreview ? 'Choose Different Image' : 'Choose Image'}
-                      </button>
-                      {displayImageUrl && (
-                        <button
-                          type="button"
-                          onClick={() => void handlePromptOnlyDelete()}
-                          className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
-                          title="Clear active image (keeps it in the gallery)"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Clear Active
-                        </button>
-                      )}
-                    </div>
-                    {capReached && (
-                      <p className="mt-3 text-xs text-amber-300">
-                        You&apos;ve reached the limit of {cap} image{cap === 1 ? '' : 's'} per beat. Delete one to upload another.
-                      </p>
-                    )}
-                  </>
-                );
-              })()}
-
-              {uploadPreview && (
-                <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-                  <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
-                    <Image
-                      src={uploadPreview.dataUrl}
-                      alt="Selected beat upload preview"
-                      fill
-                      className="object-cover"
-                      unoptimized
-                    />
-                  </div>
-                  <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                    <p className="font-medium text-neutral-100">{uploadPreview.fileName}</p>
-                    <p className="mt-2">Format: {uploadPreview.mimeType}</p>
-                    <p className="mt-1">Size: {(uploadPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
-                    <p className="mt-1">Resolution: {uploadPreview.width}x{uploadPreview.height}</p>
-                    <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
-                    <p className="mt-1 text-sm text-neutral-300">{uploadPreview.resolutionAdvice}</p>
-                  </div>
-                </div>
-              )}
-
-              {uploadError && (
-                <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-                  {uploadError}
-                </div>
-              )}
-
-              <div className="mt-6 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isUploadingPromptOnlyImage) return;
-                    setShowUploadModal(false);
-                    setUploadPreview(null);
-                    setUploadError(null);
-                  }}
-                  className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handlePromptOnlyUpload()}
-                  disabled={!uploadPreview || isUploadingPromptOnlyImage}
-                  className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isUploadingPromptOnlyImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                  Upload Image
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-
-        {characterSheetTarget && (() => {
-          const targetItem = characterPromptItems.find((item) => item.characterId === characterSheetTarget.characterId);
-          const gallery = targetItem?.referenceSheetGallery ?? [];
-          const activeStorageKey = targetItem?.referenceSheetStorageKey;
-          const cap = cycleSettings.characterSheetMaxPerCharacter;
-          const capReached = gallery.length >= cap;
-          const cleanupDays = cycleSettings.characterSheetCleanupDays;
-          const cleanupEnabled = cycleSettings.characterSheetCleanupEnabled;
-          const hasActive = Boolean(targetItem?.referenceSheetUrl);
-          const isClearingActive = pendingCharacterDeleteId === characterSheetTarget.characterId;
-          return (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 flex items-center justify-center bg-black/65 px-4 py-6 backdrop-blur-sm"
-            >
-              <motion.div
-                initial={{ opacity: 0, scale: 0.96, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.98, y: 8 }}
-                className="flex max-h-[min(90vh,48rem)] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-white/10 bg-neutral-900/95 shadow-2xl"
-              >
-                <div className="flex items-start justify-between gap-4 border-b border-white/5 p-6">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.24em] text-sky-200">
-                      {hasActive ? 'Manage Character Sheets' : 'Upload Character Sheet'}
-                    </p>
-                    <h3 className="mt-2 text-2xl font-serif text-neutral-100">
-                      {characterSheetTarget.characterName}
-                    </h3>
-                    <p className="mt-1 text-sm text-neutral-400">
-                      Reference sheets persist with this character so future episodes and continuations can reuse them.
-                    </p>
-                  </div>
+                <div className="relative flex items-start gap-2">
                   <button
                     type="button"
-                    onClick={closeCharacterSheetUpload}
-                    className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
-                    aria-label="Close character sheet upload dialog"
+                    onClick={() => setIsPromptToolsHelpOpen((open) => !open)}
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 text-sm font-medium text-neutral-300 transition-colors hover:bg-white/10 hover:text-neutral-100"
+                    aria-label="Open prompt tools help"
+                    title="What to do here"
+                  >
+                    i
+                  </button>
+                  <button
+                    type="button"
+                    onClick={closePromptToolsModal}
+                    disabled={isUploadingPromptOnlyImage || isUploadingCharacterSheet}
+                    className="rounded-full border border-white/10 p-2 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-label="Close prompt tools dialog"
+                    title="Close"
                   >
                     <X className="h-4 w-4" />
                   </button>
+                  <AnimatePresence>
+                    {isPromptToolsHelpOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -4 }}
+                        className="absolute right-0 top-full z-10 mt-3 w-72 rounded-2xl border border-white/10 bg-neutral-950/95 px-4 py-3 text-sm leading-relaxed text-neutral-200 shadow-2xl"
+                      >
+                        {promptToolsHelpText}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
+              </div>
 
-                <div className="flex-1 overflow-y-auto p-6">
-                  {gallery.length > 0 && (
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
-                          Saved Sheets ({gallery.length} / {cap})
-                        </p>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-3">
-                        {gallery.map((entry) => {
-                          const isActive = activeStorageKey === entry.storageKey;
-                          const isPendingConfirm = pendingSheetDeleteKey === entry.storageKey;
-                          const isDeleting = permanentlyDeletingSheetKey === entry.storageKey;
-                          return (
-                            <div key={entry.storageKey} className="relative">
-                              <button
-                                type="button"
-                                onClick={() => void handleSelectCharacterSheet(characterSheetTarget.characterId, entry.storageKey)}
-                                disabled={isActive || isDeleting}
-                                className={`group relative block aspect-square w-24 overflow-hidden rounded-xl border transition-colors ${
-                                  isActive
-                                    ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
-                                    : 'border-white/10 hover:border-sky-400/40'
-                                } ${isDeleting ? 'opacity-50' : ''}`}
-                                title={isActive ? 'Active character sheet' : 'Use this sheet'}
-                              >
-                                <Image
-                                  src={entry.url}
-                                  alt={`${characterSheetTarget.characterName} reference sheet`}
-                                  fill
-                                  className="object-cover"
-                                  unoptimized
-                                />
-                                {isActive && (
-                                  <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
-                                    Active
-                                  </span>
-                                )}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (isDeleting) return;
-                                  if (isActive) {
-                                    setPendingSheetDeleteKey(entry.storageKey);
-                                  } else {
-                                    void handlePermanentDeleteCharacterSheet(characterSheetTarget.characterId, entry.storageKey);
-                                  }
-                                }}
-                                disabled={isDeleting}
-                                className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
-                                title="Permanently delete this sheet"
-                              >
-                                {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
-                              </button>
-                              {isPendingConfirm && (
-                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
-                                  <p>Permanently delete the active sheet? The most recent remaining sheet will become active.</p>
-                                  <div className="flex gap-2">
-                                    <button
-                                      type="button"
-                                      onClick={() => setPendingSheetDeleteKey(null)}
-                                      className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
-                                    >
-                                      Keep
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => void handlePermanentDeleteCharacterSheet(characterSheetTarget.characterId, entry.storageKey)}
-                                      className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
-                                    >
-                                      Delete
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {cleanupEnabled && (
-                        <p className="mt-2 text-[11px] text-neutral-500">
-                          Unused sheets are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
-                        </p>
+              <div className="flex-1 overflow-y-auto px-6 py-5">
+                {promptToolsSuccess && isPromptToolsOverview && (
+                  <div
+                    role="status"
+                    className="mb-5 rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100"
+                  >
+                    {promptToolsSuccess}
+                  </div>
+                )}
+
+                {isPromptToolsOverview && (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {beatPromptText && (
+                        <button
+                          type="button"
+                          onClick={() => void copyPromptText('beat', beatPromptText)}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.18em] text-neutral-100 transition-colors hover:bg-white/10"
+                          title="Copy this beat's image prompt"
+                        >
+                          {copiedPromptKey === 'beat' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                          {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
+                        </button>
+                      )}
+                      {isPromptOnlyStory && (
+                        <button
+                          type="button"
+                          onClick={openBeatUploadView}
+                          className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                          title={displayImageUrl ? 'Replace this beat image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          {displayImageUrl ? 'Replace Image' : 'Upload Image'}
+                        </button>
                       )}
                     </div>
-                  )}
 
-                  <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                    <p>Accepted formats: JPG, PNG, or WebP.</p>
-                    <p className="mt-1">
-                      Maximum file size: {Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.
-                    </p>
-                    <p className="mt-1">Required aspect ratio: 1:1 (square).</p>
-                    <p className="mt-1">
-                      Minimum resolution: {CHARACTER_SHEET_MIN_DIMENSION}x{CHARACTER_SHEET_MIN_DIMENSION}. Recommended: 1024x1024 or above.
-                    </p>
-                  </div>
+                    {characterPromptItems.length > 0 && (
+                      <div className="mt-6 rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-sans uppercase tracking-[0.18em] text-neutral-400">
+                              Character Refs
+                            </p>
+                            <p className="mt-1 text-sm text-neutral-300">
+                              {readyInBeatCharacters.length} ready
+                              {needsAttentionCharacters.length > 0
+                                ? ` • ${needsAttentionCharacters.length} need${needsAttentionCharacters.length === 1 ? 's' : ''} attention`
+                                : ' • All current-beat characters are covered.'}
+                            </p>
+                          </div>
+                          {readyInBeatCharacters.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSavedRefsExpanded((open) => !open)}
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-neutral-200 transition-colors hover:bg-white/10"
+                              aria-expanded={savedRefsExpanded}
+                              title={savedRefsExpanded ? 'Hide saved references' : 'Show saved references'}
+                            >
+                              {savedRefsExpanded ? 'Hide Saved' : 'Show Saved'}
+                              {savedRefsExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                            </button>
+                          )}
+                        </div>
 
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <input
-                      ref={characterSheetInputRef}
-                      type="file"
-                      accept={CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.join(',')}
-                      onChange={handleCharacterSheetFileSelected}
-                      className="hidden"
-                    />
+                        {needsAttentionCharacters.length > 0 && (
+                          <div className="mt-4 space-y-2">
+                            {needsAttentionCharacters.map((item) => (
+                              <div
+                                key={item.key}
+                                className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-neutral-950/50 px-4 py-3"
+                              >
+                                <p className="min-w-0 truncate text-sm font-medium text-neutral-100">{item.label}</p>
+                                <div className="flex items-center gap-2">
+                                  {item.promptText && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void copyPromptText(item.key, item.promptText)}
+                                      className="rounded-full border border-white/10 bg-white/5 p-2 text-neutral-200 transition-colors hover:bg-white/10"
+                                      title={`Copy the ${item.label} character sheet prompt`}
+                                      aria-label={`Copy the ${item.label} character sheet prompt`}
+                                    >
+                                      {copiedPromptKey === item.key ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                                    </button>
+                                  )}
+                                  {cycleSettings.characterSheetUploadEnabled && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openCharacterSheetUpload(item.characterId, item.characterName)}
+                                      className="rounded-full border border-emerald-500/25 bg-emerald-500/10 p-2 text-emerald-200 transition-colors hover:bg-emerald-500/20"
+                                      title={`Open character sheet tools for ${item.characterName}`}
+                                      aria-label={`Open character sheet tools for ${item.characterName}`}
+                                    >
+                                      <ImageIcon className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {savedRefsExpanded && readyInBeatCharacters.length > 0 && (
+                          <div className="mt-4 border-t border-white/5 pt-4">
+                            <p className="text-[11px] font-sans uppercase tracking-[0.18em] text-neutral-500">
+                              Saved In This Beat
+                            </p>
+                            <div className="mt-3 space-y-2">
+                              {readyInBeatCharacters.map((item) => (
+                                <div
+                                  key={`${item.key}:ready`}
+                                  className="flex items-center justify-between gap-3 rounded-2xl border border-white/5 bg-neutral-950/50 px-4 py-3"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="truncate text-sm font-medium text-neutral-100">{item.label}</p>
+                                    <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+                                      {item.referenceSheetGallery.length} saved
+                                    </p>
+                                  </div>
+                                  {cycleSettings.characterSheetUploadEnabled && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openCharacterSheetUpload(item.characterId, item.characterName)}
+                                      className="rounded-full border border-white/10 bg-white/5 p-2 text-neutral-200 transition-colors hover:bg-white/10"
+                                      title={`Open character sheet tools for ${item.characterName}`}
+                                      aria-label={`Open character sheet tools for ${item.characterName}`}
+                                    >
+                                      <ImageIcon className="h-4 w-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {isBeatUploadView && (() => {
+                  const gallery = normalizedCurrentBeat.imageGallery ?? [];
+                  const cap = cycleSettings.promptOnlyMaxImagesPerBeat;
+                  const capReached = gallery.length >= cap;
+                  const cleanupDays = cycleSettings.promptOnlyImageGalleryCleanupDays;
+                  const cleanupEnabled = cycleSettings.promptOnlyImageGalleryCleanupEnabled;
+                  const activeStorageKey = getActiveGalleryStorageKey(normalizedCurrentBeat);
+
+                  return (
+                    <>
+                      {gallery.length > 0 && (
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                              Saved Images ({gallery.length} / {cap})
+                            </p>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-3">
+                            {gallery.map((entry) => {
+                              const isActive = activeStorageKey === entry.storageKey;
+                              const isPendingConfirm = pendingDeleteStorageKey === entry.storageKey;
+                              const isDeleting = isPermanentlyDeletingKey === entry.storageKey;
+                              return (
+                                <div key={entry.storageKey} className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleSelectGalleryImage(entry.storageKey)}
+                                    disabled={isActive || isDeleting}
+                                    className={`group relative block overflow-hidden rounded-xl border transition-colors ${
+                                      isVerticalStory ? 'aspect-[9/16] w-20' : 'aspect-video w-32'
+                                    } ${
+                                      isActive
+                                        ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
+                                        : 'border-white/10 hover:border-sky-400/40'
+                                    } ${isDeleting ? 'opacity-50' : ''}`}
+                                    title={isActive ? 'Active beat image' : 'Use this image'}
+                                  >
+                                    <Image
+                                      src={entry.url}
+                                      alt="Beat image option"
+                                      fill
+                                      className="object-cover"
+                                      unoptimized
+                                    />
+                                    {isActive && (
+                                      <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                        Active
+                                      </span>
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isDeleting) return;
+                                      if (isActive) {
+                                        setPendingDeleteStorageKey(entry.storageKey);
+                                      } else {
+                                        void handlePermanentDelete(entry.storageKey);
+                                      }
+                                    }}
+                                    disabled={isDeleting}
+                                    className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                                    title="Permanently delete this image"
+                                  >
+                                    {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                                  </button>
+                                  {isPendingConfirm && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
+                                      <p>Permanently delete this active image? The most recent remaining image will become active.</p>
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => setPendingDeleteStorageKey(null)}
+                                          className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
+                                        >
+                                          Keep
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => void handlePermanentDelete(entry.storageKey)}
+                                          className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {cleanupEnabled && (
+                            <p className="mt-2 text-[11px] text-neutral-500">
+                              Unused images are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                        <p>Accepted formats: JPG, PNG, or WebP.</p>
+                        <p className="mt-1">Maximum file size: {PROMPT_ONLY_MAX_UPLOAD_MB} MB.</p>
+                        <p className="mt-1">Required aspect ratio: {isVerticalStory ? '9:16' : '16:9'}.</p>
+                        <p className="mt-1">
+                          Recommended resolution: {isVerticalStory
+                            ? '720x1280 or above for smaller screens, and 1152x2048 or above for larger screens.'
+                            : '1280x720 or above for smaller screens, and 2048x1152 or above for larger screens.'}
+                        </p>
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap gap-3">
+                        <input
+                          ref={uploadInputRef}
+                          type="file"
+                          accept={PROMPT_ONLY_ACCEPTED_IMAGE_TYPES.join(',')}
+                          onChange={handlePromptOnlyFileSelected}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => uploadInputRef.current?.click()}
+                          disabled={capReached}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={capReached ? `Limit of ${cap} images per beat reached` : undefined}
+                        >
+                          <Upload className="h-4 w-4" />
+                          {uploadPreview ? 'Choose Different Image' : 'Choose Image'}
+                        </button>
+                        {displayImageUrl && (
+                          <button
+                            type="button"
+                            onClick={() => void handlePromptOnlyDelete()}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
+                            title="Clear active image (keeps it in the gallery)"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Clear Active
+                          </button>
+                        )}
+                      </div>
+
+                      {capReached && (
+                        <p className="mt-3 text-xs text-amber-300">
+                          You&apos;ve reached the limit of {cap} image{cap === 1 ? '' : 's'} per beat. Delete one to upload another.
+                        </p>
+                      )}
+
+                      {uploadPreview && (
+                        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+                          <div className="relative aspect-video overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
+                            <Image
+                              src={uploadPreview.dataUrl}
+                              alt="Selected beat upload preview"
+                              fill
+                              className="object-cover"
+                              unoptimized
+                            />
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                            <p className="font-medium text-neutral-100">{uploadPreview.fileName}</p>
+                            <p className="mt-2">Format: {uploadPreview.mimeType}</p>
+                            <p className="mt-1">Size: {(uploadPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                            <p className="mt-1">Resolution: {uploadPreview.width}x{uploadPreview.height}</p>
+                            <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
+                            <p className="mt-1 text-sm text-neutral-300">{uploadPreview.resolutionAdvice}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {uploadError && (
+                        <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                          {uploadError}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+
+                {isCharacterUploadView && activeCharacterSheetTarget && (() => {
+                  const cap = cycleSettings.characterSheetMaxPerCharacter;
+                  const capReached = activeCharacterGallery.length >= cap;
+                  const cleanupDays = cycleSettings.characterSheetCleanupDays;
+                  const cleanupEnabled = cycleSettings.characterSheetCleanupEnabled;
+                  const isClearingActive = pendingCharacterDeleteId === activeCharacterSheetTarget.characterId;
+
+                  return (
+                    <>
+                      {activeCharacterGallery.length > 0 && (
+                        <div>
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                              Saved Sheets ({activeCharacterGallery.length} / {cap})
+                            </p>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-3">
+                            {activeCharacterGallery.map((entry) => {
+                              const isActive = activeCharacterStorageKey === entry.storageKey;
+                              const isPendingConfirm = pendingSheetDeleteKey === entry.storageKey;
+                              const isDeleting = permanentlyDeletingSheetKey === entry.storageKey;
+
+                              return (
+                                <div key={entry.storageKey} className="relative">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleSelectCharacterSheet(activeCharacterSheetTarget.characterId, entry.storageKey)}
+                                    disabled={isActive || isDeleting}
+                                    className={`group relative block aspect-square w-24 overflow-hidden rounded-xl border transition-colors ${
+                                      isActive
+                                        ? 'border-emerald-400/70 ring-2 ring-emerald-400/40'
+                                        : 'border-white/10 hover:border-sky-400/40'
+                                    } ${isDeleting ? 'opacity-50' : ''}`}
+                                    title={isActive ? 'Active character sheet' : 'Use this sheet'}
+                                  >
+                                    <Image
+                                      src={entry.url}
+                                      alt={`${activeCharacterSheetTarget.characterName} reference sheet`}
+                                      fill
+                                      className="object-cover"
+                                      unoptimized
+                                    />
+                                    {isActive && (
+                                      <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                        Active
+                                      </span>
+                                    )}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (isDeleting) return;
+                                      if (isActive) {
+                                        setPendingSheetDeleteKey(entry.storageKey);
+                                      } else {
+                                        void handlePermanentDeleteCharacterSheet(activeCharacterSheetTarget.characterId, entry.storageKey);
+                                      }
+                                    }}
+                                    disabled={isDeleting}
+                                    className="absolute -right-1.5 -top-1.5 rounded-full border border-white/10 bg-neutral-950/90 p-1 text-neutral-300 transition-colors hover:border-rose-400/60 hover:bg-rose-500/20 hover:text-rose-200 disabled:opacity-50"
+                                    title="Permanently delete this sheet"
+                                  >
+                                    {isDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
+                                  </button>
+                                  {isPendingConfirm && (
+                                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 rounded-xl bg-neutral-950/95 p-2 text-center text-[11px] text-neutral-200">
+                                      <p>Permanently delete the active sheet? The most recent remaining sheet will become active.</p>
+                                      <div className="flex gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => setPendingSheetDeleteKey(null)}
+                                          className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-neutral-200 hover:bg-white/10"
+                                        >
+                                          Keep
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => void handlePermanentDeleteCharacterSheet(activeCharacterSheetTarget.characterId, entry.storageKey)}
+                                          className="rounded-full border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-100 hover:bg-rose-500/25"
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {cleanupEnabled && (
+                            <p className="mt-2 text-[11px] text-neutral-500">
+                              Unused sheets are removed after {cleanupDays} day{cleanupDays === 1 ? '' : 's'}.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="mt-5 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                        <p>Accepted formats: JPG, PNG, or WebP.</p>
+                        <p className="mt-1">
+                          Maximum file size: {Math.max(1, Math.round(cycleSettings.characterSheetUploadMaxBytes / (1024 * 1024)))} MB.
+                        </p>
+                        <p className="mt-1">Required aspect ratio: 1:1 (square).</p>
+                        <p className="mt-1">
+                          Minimum resolution: {CHARACTER_SHEET_MIN_DIMENSION}x{CHARACTER_SHEET_MIN_DIMENSION}. Recommended: 1024x1024 or above.
+                        </p>
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap gap-3">
+                        <input
+                          ref={characterSheetInputRef}
+                          type="file"
+                          accept={CHARACTER_SHEET_ACCEPTED_IMAGE_TYPES.join(',')}
+                          onChange={handleCharacterSheetFileSelected}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => characterSheetInputRef.current?.click()}
+                          disabled={capReached}
+                          className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={capReached ? `Limit of ${cap} sheets per character reached` : undefined}
+                        >
+                          <Upload className="h-4 w-4" />
+                          {characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
+                        </button>
+                        {activeCharacterHasSheet && (
+                          <button
+                            type="button"
+                            onClick={() => void handleCharacterSheetClearActive(activeCharacterSheetTarget.characterId)}
+                            disabled={isClearingActive}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Clear the active sheet (gallery preserved)"
+                          >
+                            {isClearingActive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            Clear Active
+                          </button>
+                        )}
+                      </div>
+
+                      {capReached && (
+                        <p className="mt-3 text-xs text-amber-300">
+                          You&apos;ve reached the limit of {cap} sheet{cap === 1 ? '' : 's'} per character. Delete one to upload another.
+                        </p>
+                      )}
+
+                      {characterSheetPreview && (
+                        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                          <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
+                            <Image
+                              src={characterSheetPreview.dataUrl}
+                              alt={`${activeCharacterSheetTarget.characterName} reference preview`}
+                              fill
+                              className="object-cover"
+                              unoptimized
+                            />
+                          </div>
+                          <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
+                            <p className="font-medium text-neutral-100">{characterSheetPreview.fileName}</p>
+                            <p className="mt-2">Format: {characterSheetPreview.mimeType}</p>
+                            <p className="mt-1">Size: {(characterSheetPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
+                            <p className="mt-1">Resolution: {characterSheetPreview.width}x{characterSheetPreview.height}</p>
+                            <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
+                            <p className="mt-1 text-sm text-neutral-300">{characterSheetPreview.resolutionAdvice}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {characterSheetError && (
+                        <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+                          {characterSheetError}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              {isBeatUploadView && (() => {
+                const capReached = (normalizedCurrentBeat.imageGallery ?? []).length >= cycleSettings.promptOnlyMaxImagesPerBeat;
+
+                return (
+                  <div className="flex items-center justify-end gap-3 border-t border-white/5 p-6">
                     <button
                       type="button"
-                      onClick={() => characterSheetInputRef.current?.click()}
-                      disabled={capReached}
-                      className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-neutral-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                      title={capReached ? `Limit of ${cap} sheets per character reached` : undefined}
+                      onClick={returnToPromptToolsOverview}
+                      disabled={isUploadingPromptOnlyImage}
+                      className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <Upload className="h-4 w-4" />
-                      {characterSheetPreview ? 'Choose Different Image' : 'Choose Image'}
+                      Back
                     </button>
-                    {hasActive && (
-                      <button
-                        type="button"
-                        onClick={() => void handleCharacterSheetClearActive(characterSheetTarget.characterId)}
-                        disabled={isClearingActive}
-                        className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Clear the active sheet (gallery preserved)"
-                      >
-                        {isClearingActive ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                        Clear Active
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => void handlePromptOnlyUpload()}
+                      disabled={!uploadPreview || isUploadingPromptOnlyImage || capReached}
+                      className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isUploadingPromptOnlyImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                      Upload Image
+                    </button>
                   </div>
-                  {capReached && (
-                    <p className="mt-3 text-xs text-amber-300">
-                      You&apos;ve reached the limit of {cap} sheet{cap === 1 ? '' : 's'} per character. Delete one to upload another.
-                    </p>
-                  )}
+                );
+              })()}
 
-                  {characterSheetPreview && (
-                    <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                      <div className="relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60">
-                        <Image
-                          src={characterSheetPreview.dataUrl}
-                          alt={`${characterSheetTarget.characterName} reference preview`}
-                          fill
-                          className="object-cover"
-                          unoptimized
-                        />
-                      </div>
-                      <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4 text-sm text-neutral-300">
-                        <p className="font-medium text-neutral-100">{characterSheetPreview.fileName}</p>
-                        <p className="mt-2">Format: {characterSheetPreview.mimeType}</p>
-                        <p className="mt-1">Size: {(characterSheetPreview.fileSize / (1024 * 1024)).toFixed(2)} MB</p>
-                        <p className="mt-1">Resolution: {characterSheetPreview.width}x{characterSheetPreview.height}</p>
-                        <p className="mt-3 text-xs uppercase tracking-[0.18em] text-neutral-500">Resolution advice</p>
-                        <p className="mt-1 text-sm text-neutral-300">{characterSheetPreview.resolutionAdvice}</p>
-                      </div>
-                    </div>
-                  )}
+              {isCharacterUploadView && activeCharacterSheetTarget && (() => {
+                const capReached = activeCharacterGallery.length >= cycleSettings.characterSheetMaxPerCharacter;
 
-                  {characterSheetError && (
-                    <div className="mt-5 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-                      {characterSheetError}
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-end gap-3 border-t border-white/5 p-6">
-                  <button
-                    type="button"
-                    onClick={closeCharacterSheetUpload}
-                    className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleCharacterSheetUpload()}
-                    disabled={!characterSheetPreview || isUploadingCharacterSheet || capReached}
-                    className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isUploadingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-                    Upload Sheet
-                  </button>
-                </div>
-              </motion.div>
+                return (
+                  <div className="flex items-center justify-end gap-3 border-t border-white/5 p-6">
+                    <button
+                      type="button"
+                      onClick={returnToPromptToolsOverview}
+                      disabled={isUploadingCharacterSheet}
+                      className="rounded-full px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCharacterSheetUpload()}
+                      disabled={!characterSheetPreview || isUploadingCharacterSheet || capReached}
+                      className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-5 py-2 text-sm text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isUploadingCharacterSheet ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                      Upload Sheet
+                    </button>
+                  </div>
+                );
+              })()}
             </motion.div>
-          );
-        })()}
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* Publish Dialog */}

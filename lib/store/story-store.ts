@@ -197,9 +197,22 @@ function buildCharacterRegistry(beats: StoryBeat[], fallbackCharacters: Characte
   }
 
   for (const character of fallbackCharacters) {
-    if (!registry.has(character.id)) {
+    const existing = registry.get(character.id);
+    if (!existing) {
       registry.set(character.id, character);
+      continue;
     }
+
+    registry.set(character.id, {
+      ...character,
+      ...existing,
+      portraitBase64: existing.portraitBase64 || character.portraitBase64,
+      portraitUrl: existing.portraitUrl || character.portraitUrl,
+      referenceSheetUrl: character.referenceSheetUrl || existing.referenceSheetUrl,
+      referenceSheetStorageKey: character.referenceSheetStorageKey || existing.referenceSheetStorageKey,
+      referenceSheetUploadedAt: character.referenceSheetUploadedAt || existing.referenceSheetUploadedAt,
+      referenceSheetGallery: character.referenceSheetGallery ?? existing.referenceSheetGallery,
+    });
   }
 
   return Array.from(registry.values());
@@ -562,6 +575,14 @@ function slugifyCharacterName(name: string): string {
   const trimmed = (name || '').toLowerCase().trim();
   const slug = trimmed.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return slug || 'character';
+}
+
+function formatCharacterSheetTimestamp(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown-date';
+  }
+  return date.toISOString().replace(/\.\d{3}Z$/, 'Z').replace('T', '_').replace(/:/g, '-');
 }
 
 function applyCharacterPatchEverywhere(
@@ -3483,7 +3504,9 @@ export const useStoryStore = create<StoryState>()(
 
         const uploadedAt = new Date().toISOString();
         const slug = slugifyCharacterName(character.name);
-        const storageKeySuffix = `character-sheets/${slug}_${characterId}/sheet-${crypto.randomUUID()}.webp`;
+        const uploadStamp = formatCharacterSheetTimestamp(uploadedAt);
+        const uploadId = crypto.randomUUID().slice(0, 8);
+        const storageKeySuffix = `character-sheets/${slug}_${characterId}/${slug}-${uploadStamp}-${uploadId}.webp`;
 
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
@@ -3520,16 +3543,15 @@ export const useStoryStore = create<StoryState>()(
 
               const latestSession = get().session;
               if (!latestSession) return;
-              // Swap the optimistic data URL for the persisted storage URL —
-              // see the prompt-only beat-image flow for the same body-overflow
-              // rationale (10 MB server-action body cap).
+              // Keep the local preview URL in memory because the private bucket
+              // needs a server-signed URL to render after a reload.
               updateStoreSaveUi({
                 session: applyCharacterPatchEverywhere(latestSession, characterId, (existing) => ({
                   ...existing,
-                  referenceSheetUrl: uploadedUrl,
+                  referenceSheetUrl: isDataUrl(existing.referenceSheetUrl) ? existing.referenceSheetUrl : imageDataUrl,
                   referenceSheetStorageKey: storageKey,
                   referenceSheetUploadedAt: uploadedAt,
-                  referenceSheetGallery: persistedGallery,
+                  referenceSheetGallery: optimisticGallery,
                 })),
                 saveStatus: 'saved',
               });
