@@ -82,6 +82,8 @@ function envStorageProvider(): MediaStorageProvider | null {
 }
 
 function productionGuardAllowsR2(): boolean {
+  const r2Environment = cleanEnv(process.env.R2_ENVIRONMENT)?.toLowerCase();
+  if (r2Environment && r2Environment !== 'production') return true;
   if (process.env.VERCEL_ENV !== 'production') return true;
   return cleanEnv(process.env.R2_PRODUCTION_ENABLED)?.toLowerCase() === 'true';
 }

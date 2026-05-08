@@ -184,6 +184,7 @@ R2_CACHE_CONTROL_PRIVATE=private, max-age=3600
 ```
 
 Because Kissago staging runs as the staging Vercel project's production deployment, add these to that project's production env.
+`R2_ENVIRONMENT=staging` is the explicit safety signal that allows R2 on the staging Vercel project even though Vercel labels that deployment as `production`. Keep `R2_PRODUCTION_ENABLED=false` there.
 
 ## 8. Apply Database Migration
 

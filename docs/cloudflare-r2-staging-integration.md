@@ -13,6 +13,7 @@
 - Local feature branches are tested locally first.
 - The `dev` branch is the staging release branch and is deployed as production on the staging Vercel project: `https://kissagostage.vercel.app`.
 - Staging uses a separate Supabase project from production.
+- Staging R2 activation relies on `R2_ENVIRONMENT=staging`; this permits R2 even though Vercel reports the staging project's promoted deployment as `production`.
 - The `main` branch is production and is deployed on the production Vercel project: `https://kissago.cc`.
 - Production uses a separate Supabase project from staging.
 - Migrations are applied to staging first, verified on web/mobile, then applied to production Supabase after rollout confidence.
