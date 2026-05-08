@@ -129,6 +129,11 @@ export function hasBeatImpossibleImageState<T extends {
  */
 export function extractStoryAssetStorageKey(url: string | undefined): string | null {
   if (!url) return null;
+  if (url.startsWith('r2://')) {
+    const withoutPrefix = url.slice('r2://'.length);
+    const separator = withoutPrefix.indexOf('/');
+    return separator > 0 ? withoutPrefix.slice(separator + 1) : null;
+  }
   const publicMarker = '/storage/v1/object/public/story-assets/';
   const publicIdx = url.indexOf(publicMarker);
   if (publicIdx !== -1) return url.substring(publicIdx + publicMarker.length);
@@ -138,6 +143,14 @@ export function extractStoryAssetStorageKey(url: string | undefined): string | n
     const tail = url.substring(signedIdx + signedMarker.length);
     const qIdx = tail.indexOf('?');
     return qIdx !== -1 ? tail.substring(0, qIdx) : tail;
+  }
+  try {
+    const parsed = new URL(url);
+    const path = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    const storiesIdx = path.indexOf('stories/');
+    if (storiesIdx >= 0) return path.slice(storiesIdx);
+  } catch {
+    // Not a URL we know how to inspect.
   }
   return null;
 }

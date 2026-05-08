@@ -16,6 +16,9 @@ import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaState } from '@/app/actions/persistence';
+import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
+import { putR2Object, createR2SignedGetUrl } from '@/lib/media/r2-server';
+import { recordMediaAsset } from '@/lib/media/media-assets';
 import {
   getDefaultVoiceForGender,
   resolveStoryNarrationLanguage,
@@ -572,6 +575,10 @@ export async function generateAndPersistNarration(
       if (authError || !user) throw new Error('Not authenticated');
 
       const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.wav`;
+      const r2ObjectKey = `stories/${savedStoryId}/beats/${nodeId}/audio.wav`;
+      const storageConfig = await getEffectiveMediaStorageConfig();
+      let persistedAudioUrl: string | null = null;
+      let playbackAudioUrl: string | null = null;
 
       await timeNarrationStep(
         'narration.upload_audio',
@@ -580,6 +587,42 @@ export async function generateAndPersistNarration(
           nodeId,
         },
         async () => {
+          if (storageConfig.r2.enabled && storageConfig.settings.r2UseForNarrationAudio) {
+            try {
+              const r2 = await putR2Object({
+                access: 'private',
+                objectKey: r2ObjectKey,
+                body: wavBuffer,
+                contentType: 'audio/wav',
+                cacheControl: storageConfig.r2.cacheControlPrivate,
+              });
+              persistedAudioUrl = r2.urlOrReference;
+              playbackAudioUrl = await createR2SignedGetUrl(persistedAudioUrl, undefined, 3600);
+              await recordMediaAsset({
+                storyId: savedStoryId,
+                nodeId,
+                userId: user.id,
+                assetType: 'narration_audio',
+                storageProvider: 'r2',
+                bucket: r2.bucket,
+                objectKey: r2.objectKey,
+                mimeType: 'audio/wav',
+                sizeBytes: wavBuffer.byteLength,
+                isPublic: false,
+                cacheControl: storageConfig.r2.cacheControlPrivate,
+              });
+              return;
+            } catch (r2Error) {
+              console.error(
+                'R2 narration upload failed; falling back to Supabase:',
+                r2Error instanceof Error ? r2Error.message : r2Error
+              );
+              if (!storageConfig.settings.r2FallbackToSupabase) {
+                throw r2Error;
+              }
+            }
+          }
+
           let uploadError: { message: string } | null = null;
           for (let attempt = 0; attempt < 3; attempt++) {
             const result = await supabase.storage
@@ -603,12 +646,26 @@ export async function generateAndPersistNarration(
           if (uploadError) {
             throw new Error(`Audio upload failed: ${uploadError.message}`);
           }
+
+          const { data: urlData } = supabase.storage
+            .from('story-assets')
+            .getPublicUrl(storagePath);
+          persistedAudioUrl = urlData.publicUrl;
+          await recordMediaAsset({
+            storyId: savedStoryId,
+            nodeId,
+            userId: user.id,
+            assetType: 'narration_audio',
+            storageProvider: 'supabase',
+            bucket: 'story-assets',
+            objectKey: storagePath,
+            publicUrl: urlData.publicUrl,
+            mimeType: 'audio/wav',
+            sizeBytes: wavBuffer.byteLength,
+            isPublic: false,
+          });
         }
       );
-
-      const { data: urlData } = supabase.storage
-        .from('story-assets')
-        .getPublicUrl(storagePath);
 
       await timeNarrationStep(
         'narration.persist_audio_url',
@@ -619,7 +676,7 @@ export async function generateAndPersistNarration(
         async () => {
           try {
             await updateBeatMediaState(savedStoryId, nodeId, {
-              audioUrl: urlData.publicUrl,
+              audioUrl: persistedAudioUrl,
               audioStatus: 'ready',
               audioError: null,
               narrationVoiceId: voiceName,
@@ -633,16 +690,19 @@ export async function generateAndPersistNarration(
         }
       );
 
-      const { data: signedData } = await timeNarrationStep(
-        'narration.create_signed_url',
-        {
-          storyId: savedStoryId,
-          nodeId,
-        },
-        () => supabase.storage.from('story-assets').createSignedUrl(storagePath, 3600)
-      );
+      if (!playbackAudioUrl) {
+        const { data: signedData } = await timeNarrationStep(
+          'narration.create_signed_url',
+          {
+            storyId: savedStoryId,
+            nodeId,
+          },
+          () => supabase.storage.from('story-assets').createSignedUrl(storagePath, 3600)
+        );
+        playbackAudioUrl = signedData?.signedUrl || persistedAudioUrl;
+      }
 
-      return { audioUrl: signedData?.signedUrl || urlData.publicUrl };
+      return { audioUrl: playbackAudioUrl || persistedAudioUrl || '' };
     }
   );
 }

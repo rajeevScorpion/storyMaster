@@ -2,6 +2,7 @@ import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { StoryMap, StoryBeat } from '@/lib/types/story';
 import { getBeatPersistedAudioUrl, getBeatPersistedImageUrl } from '@/lib/types/beat-media';
+import { normalizeR2UrlLikeReference } from '@/lib/media/r2-reference';
 
 export type NodeAssetUrlMap = Record<string, { imageUrl?: string; audioUrl?: string }>;
 
@@ -10,6 +11,18 @@ export type StorageUploadBody = string | Blob | File;
 export interface StorageUploadOptions {
   contentType?: string;
   cacheControl?: string;
+  access?: 'public' | 'private';
+  assetType?: string;
+  storyId?: string;
+  beatId?: string;
+  nodeId?: string;
+  storylineId?: string;
+  objectKey?: string;
+  fallbackPath?: string;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
+  durationSeconds?: number;
 }
 
 /**
@@ -31,6 +44,150 @@ export function base64ToBlob(base64DataUrl: string): { blob: Blob; contentType: 
   return { blob: new Blob([bytes], { type: contentType }), contentType, ext };
 }
 
+function resolveUploadPayload(
+  uploadBody: StorageUploadBody,
+  options: StorageUploadOptions
+): { blob: Blob | File; contentType: string; sizeBytes: number } {
+  if (typeof uploadBody === 'string') {
+    const { blob, contentType } = base64ToBlob(uploadBody);
+    return { blob, contentType, sizeBytes: blob.size };
+  }
+
+  return {
+    blob: uploadBody,
+    contentType: options.contentType || uploadBody.type || 'application/octet-stream',
+    sizeBytes: uploadBody.size,
+  };
+}
+
+function inferR2Access(bucket: string, options: StorageUploadOptions): 'public' | 'private' {
+  if (options.access) return options.access;
+  return bucket === 'public-storylines' ? 'public' : 'private';
+}
+
+function inferR2ObjectKey(bucket: string, path: string, options: StorageUploadOptions): string {
+  if (options.objectKey) return options.objectKey.replace(/^\/+/, '');
+  if (path.startsWith('stories/')) return path;
+
+  const parts = path.split('/').filter(Boolean);
+  if (bucket === 'story-assets' && parts.length >= 4) {
+    const storyId = parts[1];
+    const scope = parts[2];
+    const rest = parts.slice(3).join('/');
+    if (scope === 'character-sheets') {
+      return `stories/${storyId}/characters/${rest}`;
+    }
+    return `stories/${storyId}/beats/${scope}/${rest}`;
+  }
+
+  if (bucket === 'public-storylines' && parts.length >= 3) {
+    return `stories/${parts[1]}/covers/${parts.slice(2).join('/')}`;
+  }
+
+  return path.replace(/^\/+/, '');
+}
+
+function inferAssetType(bucket: string, path: string, options: StorageUploadOptions): string {
+  if (options.assetType) return options.assetType;
+  if (bucket === 'public-storylines') return 'storyline_cover';
+  if (path.includes('/audio.')) return 'narration_audio';
+  if (path.includes('/character-sheets/') || path.includes('/characters/')) return 'character_reference';
+  if (path.includes('/portrait_')) return 'portrait';
+  if (path.includes('/image.')) return 'storyboard_image';
+  return 'unknown';
+}
+
+async function uploadAssetToR2(
+  bucket: string,
+  path: string,
+  blob: Blob | File,
+  contentType: string,
+  options: StorageUploadOptions
+): Promise<string | null> {
+  const access = inferR2Access(bucket, options);
+  const objectKey = inferR2ObjectKey(bucket, path, options);
+  const assetType = inferAssetType(bucket, path, options);
+  const cacheControl = options.cacheControl;
+
+  const presignResponse = await fetch('/api/media/r2/presign', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      access,
+      objectKey,
+      contentType,
+      cacheControl,
+      assetType,
+      storyId: options.storyId,
+      nodeId: options.nodeId,
+      beatId: options.beatId,
+      storylineId: options.storylineId,
+      sizeBytes: options.sizeBytes ?? blob.size,
+      width: options.width,
+      height: options.height,
+      durationSeconds: options.durationSeconds,
+    }),
+  });
+
+  if (!presignResponse.ok) {
+    throw new Error(`R2 presign failed: ${presignResponse.status}`);
+  }
+
+  const presigned = await presignResponse.json();
+  if (!presigned?.enabled) return null;
+  if (!presigned.uploadUrl || !presigned.bucket) {
+    throw new Error('R2 presign response was incomplete.');
+  }
+
+  const uploadHeaders: Record<string, string> = {
+    'Content-Type': contentType,
+  };
+  if (presigned.requiredHeaders?.['Cache-Control']) {
+    uploadHeaders['Cache-Control'] = presigned.requiredHeaders['Cache-Control'];
+  }
+
+  const putResponse = await fetch(presigned.uploadUrl, {
+    method: 'PUT',
+    headers: uploadHeaders,
+    body: blob,
+  });
+
+  if (!putResponse.ok) {
+    throw new Error(`R2 upload failed: ${putResponse.status}`);
+  }
+
+  const completeResponse = await fetch('/api/media/r2/complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      access,
+      bucket: presigned.bucket,
+      objectKey,
+      cacheControl: presigned.requiredHeaders?.['Cache-Control'] ?? cacheControl,
+      assetType,
+      storyId: options.storyId,
+      nodeId: options.nodeId,
+      beatId: options.beatId,
+      storylineId: options.storylineId,
+      mimeType: contentType,
+      sizeBytes: options.sizeBytes ?? blob.size,
+      width: options.width,
+      height: options.height,
+      durationSeconds: options.durationSeconds,
+    }),
+  });
+
+  if (!completeResponse.ok) {
+    throw new Error(`R2 upload confirmation failed: ${completeResponse.status}`);
+  }
+
+  const completed = await completeResponse.json();
+  if (!completed?.url) {
+    throw new Error('R2 upload confirmation did not return a media URL.');
+  }
+  return completed.url;
+}
+
 /**
  * Upload a base64 data URL or provider-neutral Blob/File to Supabase Storage.
  * Returns the public URL of the uploaded file.
@@ -42,16 +199,18 @@ export async function uploadAsset(
   options: StorageUploadOptions = {}
 ): Promise<string> {
   const supabase = createClient();
-  const { blob, contentType } = typeof uploadBody === 'string'
-    ? base64ToBlob(uploadBody)
-    : {
-        blob: uploadBody,
-        contentType: options.contentType || uploadBody.type || 'application/octet-stream',
-      };
+  const { blob, contentType } = resolveUploadPayload(uploadBody, options);
+
+  try {
+    const r2Url = await uploadAssetToR2(bucket, path, blob, contentType, options);
+    if (r2Url) return r2Url;
+  } catch (error) {
+    console.warn('R2 upload failed; falling back to Supabase Storage:', error instanceof Error ? error.message : error);
+  }
 
   const { error } = await supabase.storage
     .from(bucket)
-    .upload(path, blob, {
+    .upload(options.fallbackPath ?? path, blob, {
       contentType,
       ...(options.cacheControl ? { cacheControl: options.cacheControl } : {}),
       upsert: true,
@@ -63,7 +222,7 @@ export async function uploadAsset(
 
   const { data: urlData } = supabase.storage
     .from(bucket)
-    .getPublicUrl(path);
+    .getPublicUrl(options.fallbackPath ?? path);
 
   return urlData.publicUrl;
 }
@@ -75,6 +234,19 @@ export async function uploadAsset(
  */
 export async function deleteAsset(bucket: string, path: string): Promise<void> {
   if (!path) return;
+  if (path.startsWith('r2://') || path.startsWith('stories/')) {
+    try {
+      await fetch('/api/media/r2/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(path.startsWith('r2://')
+          ? { reference: path }
+          : { access: bucket === 'public-storylines' ? 'public' : 'private', objectKey: path }),
+      });
+    } catch (error) {
+      console.warn(`R2 delete failed for ${path}:`, error instanceof Error ? error.message : error);
+    }
+  }
   const supabase = createClient();
   const { error } = await supabase.storage.from(bucket).remove([path]);
   if (error) {
@@ -295,7 +467,13 @@ export async function uploadCoverImage(
   imageDataUrl: string
 ): Promise<string> {
   const path = `${userId}/${storylineId}/cover.webp`;
-  return uploadAsset('public-storylines', path, imageDataUrl);
+  return uploadAsset('public-storylines', `stories/${storylineId}/covers/cover.webp`, imageDataUrl, {
+    access: 'public',
+    assetType: 'storyline_cover',
+    storyId: storylineId,
+    objectKey: `stories/${storylineId}/covers/cover.webp`,
+    fallbackPath: path,
+  });
 }
 
 /**
@@ -373,6 +551,9 @@ export function extractStoragePath(url: string, bucket: string): string | null {
  * Returns the original string if it doesn't match any known format.
  */
 export function normalizeStorageUrl(url: string, bucket: string): string {
+  const r2Reference = normalizeR2UrlLikeReference(url);
+  if (r2Reference !== url) return r2Reference;
+
   const path = extractStoragePath(url, bucket);
   if (!path) return url;
   // Reconstruct as public URL using the project's Supabase URL

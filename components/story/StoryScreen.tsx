@@ -187,6 +187,7 @@ const CHARACTER_SHEET_MIN_DIMENSION = 512;
 
 type PromptOnlyUploadPreview = {
   dataUrl: string;
+  uploadBody: File;
   previewUrl: string;
   previewObjectUrl?: string;
   fileName: string;
@@ -384,6 +385,7 @@ async function validateCharacterSheetUpload(
 
     return {
       dataUrl,
+      uploadBody: file,
       previewUrl: dataUrl,
       fileName: file.name,
       fileSize: file.size,
@@ -413,6 +415,7 @@ async function validateCharacterSheetUpload(
   const dataUrl = await blobToDataUrl(result.file);
   return {
     dataUrl,
+    uploadBody: result.file,
     previewUrl: result.previewUrl,
     previewObjectUrl: result.previewUrl,
     fileName: result.file.name,
@@ -456,6 +459,7 @@ async function validatePromptOnlyImageFile(
 
     return {
       dataUrl,
+      uploadBody: file,
       previewUrl: dataUrl,
       fileName: file.name,
       fileSize: file.size,
@@ -481,6 +485,7 @@ async function validatePromptOnlyImageFile(
   const dataUrl = await blobToDataUrl(result.file);
   return {
     dataUrl,
+    uploadBody: result.file,
     previewUrl: result.previewUrl,
     previewObjectUrl: result.previewUrl,
     fileName: result.file.name,
@@ -745,11 +750,11 @@ function StoryScreenInner({
   cycleSettings: StoryRuntimeSettings;
   continueCoinCost: number;
   showCoinHint: boolean;
-  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string; uploadBody?: File | Blob | string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
-  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string; uploadBody?: File | Blob | string }) => Promise<void>;
   selectCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
@@ -1194,6 +1199,7 @@ function StoryScreenInner({
     setUploadError(null);
     try {
       await setPromptOnlyBeatImage(currentNodeId, uploadPreview.dataUrl, {
+        uploadBody: uploadPreview.uploadBody,
         maxImagesPerBeat: cycleSettings.promptOnlyMaxImagesPerBeat,
         optimizationMetadata: uploadPreview.optimizationMetadata,
         storageExtension: uploadPreview.storageExtension,
@@ -1283,6 +1289,7 @@ function StoryScreenInner({
     setCharacterSheetError(null);
     try {
       await setCharacterReferenceSheet(activeCharacterSheetTarget.characterId, characterSheetPreview.dataUrl, {
+        uploadBody: characterSheetPreview.uploadBody,
         maxPerCharacter: cycleSettings.characterSheetMaxPerCharacter,
         optimizationMetadata: characterSheetPreview.optimizationMetadata,
         storageExtension: characterSheetPreview.storageExtension,

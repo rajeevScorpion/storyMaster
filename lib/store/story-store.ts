@@ -30,7 +30,7 @@ import {
   removeCharacterReferenceSheetEntryRecord,
 } from '@/app/actions/character-assets';
 import { loadStoryTree as loadStoryTreeAction, trackExploration as trackExplorationAction, refreshStoryMapSignedUrls as refreshStoryMapAction } from '@/app/actions/exploration';
-import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, deleteAsset, type NodeAssetUrlMap } from '@/lib/supabase/storage';
+import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploadCoverImage, extractStoragePath, signNodeAssetUrls, uploadAsset, deleteAsset, type NodeAssetUrlMap, type StorageUploadBody } from '@/lib/supabase/storage';
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
@@ -144,11 +144,11 @@ interface StoryState {
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<void>;
   retryPendingBeatAssetSync: () => Promise<void>;
-  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
+  setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
   deletePromptOnlyBeatImage: (nodeId: string) => Promise<void>;
   permanentlyDeletePromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
-  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
+  setCharacterReferenceSheet: (characterId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
@@ -882,8 +882,16 @@ async function uploadBeatPortraits(
       try {
         const portraitUrl = await uploadAsset(
           'story-assets',
-          `${userId}/${storyId}/${nodeId}/portrait_${character.id}.webp`,
-          portraitBase64
+          `stories/${storyId}/beats/${nodeId}/portrait_${character.id}.webp`,
+          portraitBase64,
+          {
+            access: 'private',
+            assetType: 'portrait',
+            storyId,
+            nodeId,
+            objectKey: `stories/${storyId}/beats/${nodeId}/portrait_${character.id}.webp`,
+            fallbackPath: `${userId}/${storyId}/${nodeId}/portrait_${character.id}.webp`,
+          }
         );
 
         return {
@@ -1279,8 +1287,16 @@ export const useStoryStore = create<StoryState>()(
           try {
             const imageUrl = await uploadAsset(
               'story-assets',
-              `${userId}/${storyId}/${record.nodeId}/image.webp`,
-              record.imageDataUrl
+              `stories/${storyId}/beats/${record.nodeId}/image.webp`,
+              record.imageDataUrl,
+              {
+                access: 'private',
+                assetType: 'beat_image',
+                storyId,
+                nodeId: record.nodeId,
+                objectKey: `stories/${storyId}/beats/${record.nodeId}/image.webp`,
+                fallbackPath: `${userId}/${storyId}/${record.nodeId}/image.webp`,
+              }
             );
 
             const latestSession = get().session;
@@ -3269,7 +3285,7 @@ export const useStoryStore = create<StoryState>()(
         await retryPendingBeatAssetSyncInternal(currentSession.savedStoryId);
       },
 
-      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
+      setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
         const { session } = get();
         if (!session) return;
         if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
@@ -3295,7 +3311,8 @@ export const useStoryStore = create<StoryState>()(
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
           if (userId) {
-            const storageKey = `${userId}/${session.savedStoryId}/${nodeId}/${storageKeySuffix}`;
+            const storageKey = `stories/${session.savedStoryId}/beats/${nodeId}/${storageKeySuffix}`;
+            const fallbackStorageKey = `${userId}/${session.savedStoryId}/${nodeId}/${storageKeySuffix}`;
 
             // Optimistic local render — surface the chosen image instantly while the
             // cloud upload runs in the background.
@@ -3316,9 +3333,18 @@ export const useStoryStore = create<StoryState>()(
             });
 
             try {
-              const uploadedUrl = await uploadAsset('story-assets', storageKey, imageDataUrl);
+              const uploadedUrl = await uploadAsset('story-assets', storageKey, options?.uploadBody ?? imageDataUrl, {
+                access: 'private',
+                assetType: 'storyboard_image',
+                storyId: session.savedStoryId,
+                nodeId,
+                objectKey: storageKey,
+                fallbackPath: fallbackStorageKey,
+                contentType: options?.uploadBody instanceof Blob ? options.uploadBody.type : undefined,
+              });
+              const persistedStorageKey = uploadedUrl.startsWith('r2://') ? storageKey : fallbackStorageKey;
               const persistedGallery = optimisticGallery.map((entry) =>
-                entry.storageKey === storageKey ? { ...entry, url: uploadedUrl } : entry
+                entry.storageKey === storageKey ? { ...entry, storageKey: persistedStorageKey, url: uploadedUrl } : entry
               );
               await updateBeatMediaState(session.savedStoryId, nodeId, {
                 imageUrl: uploadedUrl,
@@ -3492,7 +3518,7 @@ export const useStoryStore = create<StoryState>()(
         });
       },
 
-      setCharacterReferenceSheet: async (characterId: string, imageDataUrl: string, options?: { maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
+      setCharacterReferenceSheet: async (characterId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxPerCharacter?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
         const { session } = get();
         if (!session) return;
 
@@ -3524,7 +3550,8 @@ export const useStoryStore = create<StoryState>()(
         if (session.savedStoryId) {
           const userId = await resolveCurrentUserId(session.savedByUserId);
           if (userId) {
-            const storageKey = `${userId}/${session.savedStoryId}/${storageKeySuffix}`;
+            const storageKey = `stories/${session.savedStoryId}/characters/${characterId}/${slug}-${uploadStamp}-${uploadId}.${storageExtension}`;
+            const fallbackStorageKey = `${userId}/${session.savedStoryId}/${storageKeySuffix}`;
             const optimisticGallery: CharacterSheetGalleryEntry[] = [
               ...existingGallery,
               { ...baseGalleryEntry, storageKey },
@@ -3542,13 +3569,21 @@ export const useStoryStore = create<StoryState>()(
             });
 
             try {
-              const uploadedUrl = await uploadAsset('story-assets', storageKey, imageDataUrl);
+              const uploadedUrl = await uploadAsset('story-assets', storageKey, options?.uploadBody ?? imageDataUrl, {
+                access: 'private',
+                assetType: 'character_reference',
+                storyId: session.savedStoryId,
+                objectKey: storageKey,
+                fallbackPath: fallbackStorageKey,
+                contentType: options?.uploadBody instanceof Blob ? options.uploadBody.type : undefined,
+              });
+              const persistedStorageKey = uploadedUrl.startsWith('r2://') ? storageKey : fallbackStorageKey;
               const persistedGallery: CharacterSheetGalleryEntry[] = optimisticGallery.map((entry) =>
-                entry.storageKey === storageKey ? { ...entry, url: uploadedUrl } : entry
+                entry.storageKey === storageKey ? { ...entry, storageKey: persistedStorageKey, url: uploadedUrl } : entry
               );
               await setCharacterReferenceSheetRecord(session.savedStoryId, characterId, {
                 url: uploadedUrl,
-                storageKey,
+                storageKey: persistedStorageKey,
                 uploadedAt,
                 gallery: persistedGallery,
                 cap,

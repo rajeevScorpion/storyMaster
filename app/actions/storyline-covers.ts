@@ -501,6 +501,7 @@ export async function finalizeStorylineShareAssets(
       const youtubeAsset = await processAndUploadStorylineAsset({
         supabase,
         userId: input.userId,
+        storyId: input.storyId,
         storylineId: input.storylineId,
         kind: 'youtube_thumbnail',
         source: input.youtubeThumbnailSource ?? 'uploaded',
@@ -512,6 +513,7 @@ export async function finalizeStorylineShareAssets(
       const derivedShareAsset = await processAndUploadStorylineAsset({
         supabase,
         userId: input.userId,
+        storyId: input.storyId,
         storylineId: input.storylineId,
         kind: 'share_cover',
         source: input.youtubeThumbnailSource ?? 'uploaded',
@@ -523,6 +525,7 @@ export async function finalizeStorylineShareAssets(
       const shareAsset = await processAndUploadStorylineAsset({
         supabase,
         userId: input.userId,
+        storyId: input.storyId,
         storylineId: input.storylineId,
         kind: 'share_cover',
         source: input.shareCoverSource ?? 'uploaded',
@@ -541,6 +544,7 @@ export async function finalizeStorylineShareAssets(
         const fallbackAsset = await processAndUploadStorylineAsset({
           supabase,
           userId: input.userId,
+          storyId: input.storyId,
           storylineId: input.storylineId,
           kind: 'share_cover',
           source: 'fallback_beat',
@@ -555,6 +559,7 @@ export async function finalizeStorylineShareAssets(
       const reelAsset = await processAndUploadStorylineAsset({
         supabase,
         userId: input.userId,
+        storyId: input.storyId,
         storylineId: input.storylineId,
         kind: 'reel_thumbnail',
         source: input.reelThumbnailSource ?? 'uploaded',
@@ -568,6 +573,7 @@ export async function finalizeStorylineShareAssets(
       const defaultAsset = await uploadBrandedDefaultShareCover({
         supabase,
         userId: input.userId,
+        storyId: input.storyId,
         storylineId: input.storylineId,
         title: input.title,
         authorName: input.authorName,
@@ -583,6 +589,7 @@ export async function finalizeStorylineShareAssets(
       const defaultAsset = await uploadBrandedDefaultShareCover({
         supabase,
         userId: input.userId,
+        storyId: input.storyId,
         storylineId: input.storylineId,
         title: input.title,
         authorName: input.authorName,
@@ -645,6 +652,7 @@ export async function updatePublishedStorylineShareAssets(input: {
     const youtubeAsset = await processAndUploadStorylineAsset({
       supabase: admin,
       userId: user.id,
+      storyId: storyline.story_id,
       storylineId: storyline.id,
       kind: 'youtube_thumbnail',
       source: input.youtubeThumbnailSource ?? 'uploaded',
@@ -656,6 +664,7 @@ export async function updatePublishedStorylineShareAssets(input: {
     const derivedShareAsset = await processAndUploadStorylineAsset({
       supabase: admin,
       userId: user.id,
+      storyId: storyline.story_id,
       storylineId: storyline.id,
       kind: 'share_cover',
       source: input.youtubeThumbnailSource ?? 'uploaded',
@@ -667,6 +676,7 @@ export async function updatePublishedStorylineShareAssets(input: {
     const shareAsset = await processAndUploadStorylineAsset({
       supabase: admin,
       userId: user.id,
+      storyId: storyline.story_id,
       storylineId: storyline.id,
       kind: 'share_cover',
       source: input.shareCoverSource ?? 'uploaded',
@@ -680,6 +690,7 @@ export async function updatePublishedStorylineShareAssets(input: {
     const reelAsset = await processAndUploadStorylineAsset({
       supabase: admin,
       userId: user.id,
+      storyId: storyline.story_id,
       storylineId: storyline.id,
       kind: 'reel_thumbnail',
       source: input.reelThumbnailSource ?? 'uploaded',
@@ -876,6 +887,7 @@ export async function repairPublishedStorylineShareCovers(options: { limit?: num
           asset = await processAndUploadStorylineAsset({
             supabase,
             userId,
+            storyId,
             storylineId: row.id,
             kind: 'share_cover',
             source: 'fallback_beat',
@@ -890,6 +902,7 @@ export async function repairPublishedStorylineShareCovers(options: { limit?: num
         asset = await uploadBrandedDefaultShareCover({
           supabase,
           userId,
+          storyId,
           storylineId: row.id,
           title: row.title,
           authorName: row.author_name,
