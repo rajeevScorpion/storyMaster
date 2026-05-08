@@ -35,6 +35,13 @@ import {
   normalizeImageUploadOptimizationSettings,
   type ImageUploadOptimizationSettings,
 } from '@/lib/media/imageUploadOptimization';
+import {
+  MEDIA_STORAGE_FLAG_KEYS,
+  normalizeMediaStorageSettings,
+  type MediaStorageAdminState,
+  type MediaStorageSettings,
+} from '@/lib/media/storage-settings';
+import { getMediaStorageAdminState as loadMediaStorageAdminState } from '@/lib/media/storage-config';
 
 // ============================================================
 // Search
@@ -353,6 +360,28 @@ export async function saveImageUploadOptimizationSettings(
   return settings;
 }
 
+export async function saveMediaStorageSettings(
+  input: Partial<MediaStorageSettings>
+): Promise<MediaStorageAdminState> {
+  await verifyAdmin();
+  const settings = normalizeMediaStorageSettings(input);
+  const keys = MEDIA_STORAGE_FLAG_KEYS;
+
+  await Promise.all([
+    setFeatureFlagValue(keys.storageProvider, settings.storageProvider),
+    setFeatureFlag(keys.r2Enabled, settings.r2Enabled),
+    setFeatureFlag(keys.r2UseForImages, settings.r2UseForImages),
+    setFeatureFlag(keys.r2UseForCovers, settings.r2UseForCovers),
+    setFeatureFlag(keys.r2UseForNarrationAudio, settings.r2UseForNarrationAudio),
+    setFeatureFlag(keys.r2PublicDeliveryForPublishedStories, settings.r2PublicDeliveryForPublishedStories),
+    setFeatureFlag(keys.r2GenerateThumbnails, settings.r2GenerateThumbnails),
+    setFeatureFlag(keys.r2FallbackToSupabase, settings.r2FallbackToSupabase),
+    setFeatureFlagValue(keys.publishedAssetCacheDuration, String(settings.publishedAssetCacheDuration)),
+  ]);
+
+  return loadMediaStorageAdminState();
+}
+
 export async function getGlobalSettings(): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
@@ -394,11 +423,12 @@ export async function getGlobalSettings(): Promise<{
   promptOnlyImageGalleryCleanupEnabled: boolean;
   promptOnlyImageGalleryCleanupDays: number;
   imageUploadOptimizationSettings: ImageUploadOptimizationSettings;
+  mediaStorage: MediaStorageAdminState;
   narrationVoiceSettings: NarrationVoiceSettings;
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -435,6 +465,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
     getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
     getImageUploadOptimizationSettings(),
+    loadMediaStorageAdminState(),
     getNarrationVoiceSettings(),
     getNarrationVoiceSampleStatusesForAdmin(),
   ]);
@@ -489,6 +520,7 @@ export async function getGlobalSettings(): Promise<{
     promptOnlyImageGalleryCleanupEnabled: promptOnlyImageGalleryCleanupEnabledFlag,
     promptOnlyImageGalleryCleanupDays: Math.max(1, Math.min(90, parseInt(promptOnlyImageGalleryCleanupDaysStr ?? '7', 10) || 7)),
     imageUploadOptimizationSettings,
+    mediaStorage,
     narrationVoiceSettings,
     narrationVoiceSampleStatuses,
   };

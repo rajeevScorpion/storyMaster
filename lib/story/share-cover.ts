@@ -5,6 +5,10 @@ import sharp from 'sharp';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
+import { getR2ObjectBuffer, putR2Object } from '@/lib/media/r2-server';
+import { parseR2Reference } from '@/lib/media/r2-reference';
+import { recordMediaAsset, type MediaAssetType } from '@/lib/media/media-assets';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type {
   StorylineFormat,
@@ -286,6 +290,17 @@ export async function readImageSourceBuffer(
     return parseDataUrl(sourceUrlOrDataUrl);
   }
 
+  if (parseR2Reference(sourceUrlOrDataUrl)) {
+    const object = await getR2ObjectBuffer(sourceUrlOrDataUrl);
+    if (!object) {
+      throw new Error('Failed to download source image from R2.');
+    }
+    return {
+      buffer: object.buffer,
+      mimeType: object.contentType,
+    };
+  }
+
   const storage = getStorageReference(sourceUrlOrDataUrl);
   if (storage.bucket && storage.path) {
     const { data, error } = await supabase.storage.from(storage.bucket).download(storage.path);
@@ -382,9 +397,103 @@ function getFolderForKind(kind: StorylineShareAssetKind): string {
   return 'share-covers';
 }
 
+function getAssetTypeForKind(kind: StorylineShareAssetKind): MediaAssetType {
+  if (kind === 'youtube_thumbnail') return 'youtube_thumbnail';
+  if (kind === 'reel_thumbnail') return 'reel_thumbnail';
+  return 'share_cover';
+}
+
+async function uploadProcessedPublicAsset(input: {
+  supabase: SupabaseClient;
+  userId: string;
+  storyId?: string | null;
+  storylineId: string;
+  kind: StorylineShareAssetKind;
+  path: string;
+  objectKey: string;
+  buffer: Buffer;
+  mimeType: string;
+  width: number;
+  height: number;
+}): Promise<{ url: string; storagePath: string }> {
+  const config = await getEffectiveMediaStorageConfig();
+  const assetType = getAssetTypeForKind(input.kind);
+
+  if (
+    config.r2.enabled
+    && config.settings.r2UseForCovers
+    && config.settings.r2PublicDeliveryForPublishedStories
+    && config.r2.publicDeliveryEnabled
+  ) {
+    try {
+      const r2 = await putR2Object({
+        access: 'public',
+        objectKey: input.objectKey,
+        body: input.buffer,
+        contentType: input.mimeType,
+        cacheControl: config.r2.cacheControlPublic,
+      });
+      await recordMediaAsset({
+        storyId: input.storyId ?? null,
+        storylineId: input.storylineId,
+        userId: input.userId,
+        assetType,
+        storageProvider: 'r2',
+        bucket: r2.bucket,
+        objectKey: r2.objectKey,
+        publicUrl: r2.publicUrl,
+        mimeType: input.mimeType,
+        sizeBytes: input.buffer.byteLength,
+        width: input.width,
+        height: input.height,
+        isPublic: true,
+        cacheControl: config.r2.cacheControlPublic,
+      });
+      return { url: r2.publicUrl ?? r2.urlOrReference, storagePath: r2.objectKey };
+    } catch (error) {
+      console.error('R2 cover upload failed; falling back to Supabase public bucket:', error instanceof Error ? error.message : error);
+      if (!config.settings.r2FallbackToSupabase) {
+        throw error;
+      }
+    }
+  }
+
+  const { error } = await input.supabase.storage
+    .from(STORYLINE_PUBLIC_ASSET_BUCKET)
+    .upload(input.path, input.buffer, {
+      contentType: input.mimeType,
+      cacheControl: '31536000',
+      upsert: false,
+    });
+
+  if (error) {
+    throw new Error(`Failed to upload processed cover: ${error.message}`);
+  }
+
+  const { data } = input.supabase.storage.from(STORYLINE_PUBLIC_ASSET_BUCKET).getPublicUrl(input.path);
+  await recordMediaAsset({
+    storyId: input.storyId ?? null,
+    storylineId: input.storylineId,
+    userId: input.userId,
+    assetType,
+    storageProvider: 'supabase',
+    bucket: STORYLINE_PUBLIC_ASSET_BUCKET,
+    objectKey: input.path,
+    publicUrl: data.publicUrl,
+    mimeType: input.mimeType,
+    sizeBytes: input.buffer.byteLength,
+    width: input.width,
+    height: input.height,
+    isPublic: true,
+    cacheControl: '31536000',
+  });
+  return { url: data.publicUrl, storagePath: input.path };
+}
+
 export async function processAndUploadStorylineAsset(input: {
   supabase?: SupabaseClient;
   userId: string;
+  storyId?: string | null;
   storylineId: string;
   kind: StorylineShareAssetKind;
   source: StorylineShareCoverSource;
@@ -405,23 +514,23 @@ export async function processAndUploadStorylineAsset(input: {
   const processed = await processCoverImageBuffer(source.buffer, target);
   const version = createVersion(input.versionSeed ?? input.sourceUrlOrDataUrl);
   const path = `${input.userId}/${input.storylineId}/${getFolderForKind(input.kind)}/${version}.webp`;
-
-  const { error } = await supabase.storage
-    .from(STORYLINE_PUBLIC_ASSET_BUCKET)
-    .upload(path, processed.buffer, {
-      contentType: processed.mimeType,
-      cacheControl: '31536000',
-      upsert: false,
-    });
-
-  if (error) {
-    throw new Error(`Failed to upload processed cover: ${error.message}`);
-  }
-
-  const { data } = supabase.storage.from(STORYLINE_PUBLIC_ASSET_BUCKET).getPublicUrl(path);
+  const objectKey = `stories/${input.storyId ?? input.storylineId}/covers/${getFolderForKind(input.kind)}/${version}.webp`;
+  const uploaded = await uploadProcessedPublicAsset({
+    supabase,
+    userId: input.userId,
+    storyId: input.storyId,
+    storylineId: input.storylineId,
+    kind: input.kind,
+    path,
+    objectKey,
+    buffer: processed.buffer,
+    mimeType: processed.mimeType,
+    width: processed.width,
+    height: processed.height,
+  });
   return {
-    url: data.publicUrl,
-    storagePath: path,
+    url: uploaded.url,
+    storagePath: uploaded.storagePath,
     source: input.source,
     status: 'ready',
     width: processed.width,
@@ -477,6 +586,7 @@ export async function createBrandedDefaultCoverBuffer(input: {
 export async function uploadBrandedDefaultShareCover(input: {
   supabase?: SupabaseClient;
   userId: string;
+  storyId?: string | null;
   storylineId: string;
   title: string;
   authorName?: string | null;
@@ -486,21 +596,23 @@ export async function uploadBrandedDefaultShareCover(input: {
   const version = createVersion(`${input.storylineId}:${input.title}:branded-default`);
   const path = `${input.userId}/${input.storylineId}/share-covers/${version}.webp`;
   const buffer = await createBrandedDefaultCoverBuffer(input);
-
-  const { error } = await supabase.storage.from(STORYLINE_PUBLIC_ASSET_BUCKET).upload(path, buffer, {
-    contentType: SOCIAL_SHARE_COVER_MIME_TYPE,
-    cacheControl: '31536000',
-    upsert: false,
+  const objectKey = `stories/${input.storyId ?? input.storylineId}/covers/share-covers/${version}.webp`;
+  const uploaded = await uploadProcessedPublicAsset({
+    supabase,
+    userId: input.userId,
+    storyId: input.storyId,
+    storylineId: input.storylineId,
+    kind: 'share_cover',
+    path,
+    objectKey,
+    buffer,
+    mimeType: SOCIAL_SHARE_COVER_MIME_TYPE,
+    width: SOCIAL_SHARE_COVER_SIZE.width,
+    height: SOCIAL_SHARE_COVER_SIZE.height,
   });
-
-  if (error) {
-    throw new Error(`Failed to upload branded default cover: ${error.message}`);
-  }
-
-  const { data } = supabase.storage.from(STORYLINE_PUBLIC_ASSET_BUCKET).getPublicUrl(path);
   return {
-    url: data.publicUrl,
-    storagePath: path,
+    url: uploaded.url,
+    storagePath: uploaded.storagePath,
     source: 'branded_default',
     status: 'ready',
     width: SOCIAL_SHARE_COVER_SIZE.width,

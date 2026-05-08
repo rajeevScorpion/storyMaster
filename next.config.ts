@@ -43,6 +43,12 @@ const nextConfig: NextConfig = {
         port: '',
         pathname: '/storage/**',
       },
+      {
+        protocol: 'https',
+        hostname: 'media-stage.kissago.cc',
+        port: '',
+        pathname: '/**',
+      },
     ],
   },
   experimental: {

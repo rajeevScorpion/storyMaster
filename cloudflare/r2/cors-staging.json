@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "allowed": {
+        "origins": [
+          "https://kissagostage.vercel.app",
+          "https://*.vercel.app",
+          "https://kissago.cc",
+          "https://www.kissago.cc",
+          "http://localhost:3000"
+        ],
+        "methods": ["GET", "HEAD", "PUT"],
+        "headers": ["*"]
+      },
+      "exposeHeaders": ["ETag"],
+      "maxAgeSeconds": 3600
+    }
+  ]
+}

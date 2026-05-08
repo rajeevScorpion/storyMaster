@@ -11,6 +11,8 @@
     "clean": "next clean"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1044.0",
+    "@aws-sdk/s3-request-presigner": "^3.1044.0",
     "@ffmpeg/core": "^0.12.6",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",

@@ -2,7 +2,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
-import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
+import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
+import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
@@ -17,6 +18,7 @@ import {
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 
 /**
@@ -1346,7 +1348,24 @@ export async function copyCoverToPublicBucket(
   if (authError || !user) return null;
 
   const destPath = `${user.id}/${storyId}/cover.webp`;
-  return copyToPublicBucket(supabase, sourceImageUrl, 'story-assets', 'public-storylines', destPath);
+  const copied = await copyToPublicBucket(supabase, sourceImageUrl, 'story-assets', 'public-storylines', destPath);
+  if (copied) return copied;
+
+  try {
+    const asset = await processAndUploadStorylineAsset({
+      userId: user.id,
+      storyId,
+      storylineId: storyId,
+      kind: 'share_cover',
+      source: 'fallback_beat',
+      sourceUrlOrDataUrl: sourceImageUrl,
+      versionSeed: `${storyId}:cover:${sourceImageUrl}`,
+    });
+    return asset.url;
+  } catch (error) {
+    console.error('Failed to copy non-Supabase cover source to public media:', error instanceof Error ? error.message : error);
+    return null;
+  }
 }
 
 /**

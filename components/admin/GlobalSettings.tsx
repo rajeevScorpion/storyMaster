@@ -57,6 +57,7 @@ import {
   setVideoDownload,
   setVideoDownloadAdminBypass,
   saveImageUploadOptimizationSettings,
+  saveMediaStorageSettings,
 } from '@/app/actions/admin';
 import { generateNarrationVoiceSamples, getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
 import {
@@ -74,6 +75,11 @@ import {
   DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS,
   type ImageUploadOptimizationSettings,
 } from '@/lib/media/imageUploadOptimization';
+import {
+  DEFAULT_MEDIA_STORAGE_SETTINGS,
+  type MediaStorageAdminState,
+  type MediaStorageSettings,
+} from '@/lib/media/storage-settings';
 
 export type GlobalSettingsSection =
   | 'overview'
@@ -370,6 +376,25 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   );
   const [imageUploadSaving, setImageUploadSaving] = useState(false);
   const [imageUploadMessage, setImageUploadMessage] = useState<string | null>(null);
+  const [mediaStorage, setMediaStorage] = useState<MediaStorageAdminState>({
+    settings: DEFAULT_MEDIA_STORAGE_SETTINGS,
+    envStatus: {
+      accountIdPresent: false,
+      accessKeyPresent: false,
+      secretKeyPresent: false,
+      bucketNamePresent: false,
+      privateBucketNamePresent: false,
+      publicBaseUrlPresent: false,
+      endpointPresent: false,
+      environment: null,
+      productionEnabled: false,
+      effectiveEnabled: false,
+      missing: [],
+    },
+  });
+  const [mediaStorageDraft, setMediaStorageDraft] = useState<MediaStorageSettings>(DEFAULT_MEDIA_STORAGE_SETTINGS);
+  const [mediaStorageSaving, setMediaStorageSaving] = useState(false);
+  const [mediaStorageMessage, setMediaStorageMessage] = useState<string | null>(null);
 
   useEffect(() => {
     getGlobalSettings()
@@ -414,6 +439,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         authoringWordCap: awc,
         previewSeedPlanPriceCoins: previewPriceCoins,
         imageUploadOptimizationSettings: nextImageUploadSettings,
+        mediaStorage: nextMediaStorage,
         narrationVoiceSettings: nextNarrationVoiceSettings,
         narrationVoiceSampleStatuses: nextNarrationVoiceSampleStatuses,
       }) => {
@@ -474,6 +500,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setPreviewSeedPlanPriceCoinsInput(String(previewPriceCoins));
         setImageUploadSettings(nextImageUploadSettings);
         setImageUploadDraft(nextImageUploadSettings);
+        setMediaStorage(nextMediaStorage);
+        setMediaStorageDraft(nextMediaStorage.settings);
         setNarrationVoiceSettingsState(nextNarrationVoiceSettings);
         setNarrationMaleVoiceInput(voicesToMultilineText(nextNarrationVoiceSettings.maleVoiceList));
         setNarrationFemaleVoiceInput(voicesToMultilineText(nextNarrationVoiceSettings.femaleVoiceList));
@@ -735,6 +763,26 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
+  function updateMediaStorageDraft(patch: Partial<MediaStorageSettings>) {
+    setMediaStorageDraft((current) => ({ ...current, ...patch }));
+    setMediaStorageMessage(null);
+  }
+
+  async function handleMediaStorageSettingsSave() {
+    setMediaStorageSaving(true);
+    setMediaStorageMessage(null);
+    try {
+      const saved = await saveMediaStorageSettings(mediaStorageDraft);
+      setMediaStorage(saved);
+      setMediaStorageDraft(saved.settings);
+      setMediaStorageMessage('Media storage settings saved.');
+    } catch (error: any) {
+      setMediaStorageMessage(error?.message || 'Failed to save media storage settings.');
+    } finally {
+      setMediaStorageSaving(false);
+    }
+  }
+
   const parsedMs = parseInt(cycleMsInput, 10);
   const parsedVignetteAmountPercent = parseInt(vignetteAmountInput, 10);
   const parsedStoryboardWebpQualityPercent = parseInt(storyboardWebpQualityInput, 10);
@@ -765,12 +813,13 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       : 'Voice settings not loaded',
     authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
-    media: `Compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}, final limit ${imageUploadSettings.finalUploadLimitMB} MB`,
+    media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
     pages: 'Managed rollout pages, footer controls, and route guards',
   };
   const imageUploadHasUnsavedChanges = JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings);
+  const mediaStorageHasUnsavedChanges = JSON.stringify(mediaStorageDraft) !== JSON.stringify(mediaStorage.settings);
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -1708,6 +1757,111 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 )}
               </div>
             </div>
+          </div>
+          )}
+
+          {section === 'media' && (
+          <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Media Storage</h2>
+            <p className="text-xs text-neutral-400 -mt-2">
+              Cloudflare R2 is gated by both these controls and staging environment variables. Secrets stay server-side.
+            </p>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              {(['hybrid', 'r2', 'supabase'] as const).map((provider) => (
+                <button
+                  key={provider}
+                  onClick={() => updateMediaStorageDraft({ storageProvider: provider })}
+                  className={`rounded-xl border px-4 py-3 text-left text-sm transition-colors ${
+                    mediaStorageDraft.storageProvider === provider
+                      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200'
+                      : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
+                  }`}
+                >
+                  <span className="font-medium capitalize">{provider}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              {([
+                ['r2Enabled', 'Enable R2'],
+                ['r2UseForImages', 'Use R2 for images'],
+                ['r2UseForCovers', 'Use R2 for covers'],
+                ['r2UseForNarrationAudio', 'Use R2 for narration audio'],
+                ['r2PublicDeliveryForPublishedStories', 'Public R2 delivery for published stories'],
+                ['r2GenerateThumbnails', 'Generate R2 thumbnails'],
+                ['r2FallbackToSupabase', 'Fallback to Supabase after R2 failure'],
+              ] as const).map(([key, label]) => (
+                <label key={key} className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                  <span className="text-sm text-neutral-100">{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(mediaStorageDraft[key])}
+                    onChange={(event) => updateMediaStorageDraft({ [key]: event.target.checked })}
+                    className="h-4 w-4 accent-emerald-500"
+                  />
+                </label>
+              ))}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-2">Published asset cache duration</p>
+              <input
+                type="number"
+                min={60}
+                max={31536000}
+                step={60}
+                value={mediaStorageDraft.publishedAssetCacheDuration}
+                onChange={(event) => updateMediaStorageDraft({ publishedAssetCacheDuration: Number(event.target.value) })}
+                className="w-44 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4 text-xs text-neutral-400">
+              <p className="mb-2 text-sm font-medium text-neutral-200">R2 environment</p>
+              <div className="grid gap-2 md:grid-cols-2">
+                {([
+                  ['Account ID', mediaStorage.envStatus.accountIdPresent],
+                  ['Access key', mediaStorage.envStatus.accessKeyPresent],
+                  ['Secret key', mediaStorage.envStatus.secretKeyPresent],
+                  ['Public bucket', mediaStorage.envStatus.bucketNamePresent],
+                  ['Private bucket', mediaStorage.envStatus.privateBucketNamePresent],
+                  ['Public base URL', mediaStorage.envStatus.publicBaseUrlPresent],
+                  ['Endpoint', mediaStorage.envStatus.endpointPresent],
+                  ['Effective R2', mediaStorage.envStatus.effectiveEnabled],
+                ] as const).map(([label, ok]) => (
+                  <span key={label} className={ok ? 'text-emerald-300' : 'text-amber-300'}>
+                    {label}: {ok ? 'ready' : 'missing/off'}
+                  </span>
+                ))}
+              </div>
+              {mediaStorage.envStatus.missing.length > 0 && (
+                <p className="mt-3 text-amber-300">Missing: {mediaStorage.envStatus.missing.join(', ')}</p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-xs leading-relaxed text-neutral-400">
+                Private R2 media is persisted as r2:// references and resolved through server-side signed URLs.
+              </p>
+              <div className="flex items-center gap-3">
+                {mediaStorageHasUnsavedChanges && <span className="text-xs text-amber-400">Unsaved</span>}
+                <button
+                  onClick={handleMediaStorageSettingsSave}
+                  disabled={mediaStorageSaving || !mediaStorageHasUnsavedChanges}
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {mediaStorageSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+              </div>
+            </div>
+
+            {mediaStorageMessage && (
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 px-4 py-3 text-sm text-neutral-300">
+                {mediaStorageMessage}
+              </div>
+            )}
           </div>
           )}
 
