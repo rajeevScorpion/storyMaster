@@ -415,7 +415,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   } | null;
   const sourceStoryConfig = normalizeStoryConfig({
     ...(sourceStory?.story_config ?? {}),
-    storyKind: sourceStory?.story_kind,
+    story_kind: sourceStory?.story_kind,
     is_vertical_story: sourceStory?.is_vertical_story,
     aspect_ratio: sourceStory?.aspect_ratio,
   });

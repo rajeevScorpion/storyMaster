@@ -54,8 +54,8 @@ SET
   END,
   reel_length_key = CASE
     WHEN story_config->>'storyKind' = 'reel'
-      AND story_config->>'reelLength' IN ('short', 'medium', 'long')
-    THEN story_config->>'reelLength'
+      AND story_config->'reel'->>'length' IN ('short', 'medium', 'long')
+    THEN story_config->'reel'->>'length'
     ELSE reel_length_key
   END
 WHERE story_config IS NOT NULL;
@@ -96,10 +96,8 @@ CREATE TABLE IF NOT EXISTS public.reel_cleanup_runs (
 
 ALTER TABLE public.reel_cleanup_runs ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS "Admins can read reel cleanup runs" ON public.reel_cleanup_runs;
-CREATE POLICY "Admins can read reel cleanup runs"
-  ON public.reel_cleanup_runs FOR SELECT
-  USING (auth.uid() = current_setting('app.admin_user_id', true)::uuid);
+-- No direct client policy is created here. Cleanup runs are read/written through
+-- verified admin server actions with the service-role client.
 
 INSERT INTO public.feature_flags (flag_key, enabled, value)
 VALUES
@@ -112,7 +110,7 @@ VALUES
     'reel_story_settings',
     true,
     '{
-      "defaultLength": "short",
+      "defaultLength": "medium",
       "defaultMood": "playful",
       "defaultVisualStyle": "cinematic",
       "defaultNarrationStyle": "expressive",
@@ -138,9 +136,15 @@ VALUES
 ON CONFLICT (flag_key) DO NOTHING;
 
 INSERT INTO public.pricing_action_costs (action_key, beat_cost, is_active)
-VALUES
-  ('start_reel_initial_beat', 1, true),
-  ('continue_reel_new_beat', 1, true)
+SELECT
+  'start_reel_initial_beat',
+  COALESCE((SELECT beat_cost FROM public.pricing_action_costs WHERE action_key = 'start_story_initial_beat' ORDER BY effective_from DESC LIMIT 1), 1),
+  true
+UNION ALL
+SELECT
+  'continue_reel_new_beat',
+  COALESCE((SELECT beat_cost FROM public.pricing_action_costs WHERE action_key = 'continue_story_new_beat' ORDER BY effective_from DESC LIMIT 1), 1),
+  true
 ON CONFLICT (action_key) DO NOTHING;
 
 INSERT INTO public.model_config (task_key, model_id, temperature)

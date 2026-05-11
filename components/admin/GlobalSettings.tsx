@@ -5,6 +5,7 @@ import { type ComponentType, useEffect, useState } from 'react';
 import {
   BookOpenText,
   Brush,
+  Clapperboard,
   Clock3,
   FileText,
   ImageIcon,
@@ -84,6 +85,7 @@ import {
 export type GlobalSettingsSection =
   | 'overview'
   | 'storyboard'
+  | 'reels'
   | 'reader'
   | 'narration'
   | 'authoring'
@@ -117,6 +119,13 @@ const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
     href: '/admin/settings/storyboard',
     description: 'Image output, panel timing, WebP processing, layout, and vignette controls.',
     icon: Brush,
+  },
+  {
+    section: 'reels',
+    label: 'Reel Story',
+    href: '/admin/settings/reels',
+    description: 'Short-form reel defaults, prompt definers, retention windows, and manual cleanup.',
+    icon: Clapperboard,
   },
   {
     section: 'reader',
@@ -807,6 +816,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const sectionMeta = GLOBAL_SETTINGS_LINKS.find((item) => item.section === section) ?? GLOBAL_SETTINGS_LINKS[0];
   const overviewSummaries: Record<Exclude<GlobalSettingsSection, 'overview'>, string> = {
     storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
+    reels: 'Prompt-only 9:16 reels, editable JSON definers, and manual draft cleanup',
     reader: `${storyUiTextLineCount} text lines, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
     narration: narrationVoiceSettings
       ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`

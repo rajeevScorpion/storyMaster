@@ -39,7 +39,7 @@ export interface ReelStorySetupSettings {
 }
 
 export const DEFAULT_REEL_STORY_SETTINGS: ReelStorySettings = {
-  defaultLength: 'short',
+  defaultLength: 'medium',
   defaultMood: 'playful',
   defaultVisualStyle: 'cinematic',
   defaultNarrationStyle: 'expressive',

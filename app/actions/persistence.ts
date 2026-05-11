@@ -1252,7 +1252,7 @@ export async function autoPublishStoryline(
 
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
-    storyKind: sourceStory?.story_kind,
+    story_kind: sourceStory?.story_kind,
     isVerticalStory: sourceStory?.is_vertical_story,
     aspectRatio: sourceStory?.aspect_ratio,
   });
@@ -1412,14 +1412,18 @@ export async function autoPublishStoryline(
     }
   }
 
-  storylineId = storylineId ?? storyline!.id;
+  storylineId = storylineId ?? storyline?.id ?? null;
+  if (!storylineId) {
+    throw new Error('Failed to publish storyline: missing inserted storyline id.');
+  }
+  const publishedStorylineId = storylineId;
 
   // Create storyline_beats junction rows
   const junctionRows = nodePath.map((nodeId, index) => {
     const beat = beatsMap.get(nodeId);
     const choiceForThisBeat = index > 0 ? choices[index - 1] : undefined;
     return {
-      storyline_id: storylineId,
+      storyline_id: publishedStorylineId,
       beat_id: beat!.id,
       position: index,
       choice_label: choiceForThisBeat?.optionLabel || null,
@@ -1438,12 +1442,12 @@ export async function autoPublishStoryline(
   await supabase
     .from('saved_storylines')
     .upsert(
-          { user_id: user.id, storyline_id: storylineId },
+      { user_id: user.id, storyline_id: publishedStorylineId },
       { onConflict: 'user_id,storyline_id' }
     );
 
   await finalizeStorylineShareAssets({
-    storylineId,
+    storylineId: publishedStorylineId,
     storyId,
     userId: user.id,
     title: storyTitle,
@@ -1455,7 +1459,7 @@ export async function autoPublishStoryline(
     orientation: publishModes.orientation,
   });
 
-  return { alreadyPublished: false, storylineId };
+  return { alreadyPublished: false, storylineId: publishedStorylineId };
 }
 
 // ============================================================
@@ -1721,7 +1725,7 @@ export async function publishStoryline(params: {
     .maybeSingle();
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
-    storyKind: sourceStory?.story_kind,
+    story_kind: sourceStory?.story_kind,
     isVerticalStory: sourceStory?.is_vertical_story,
     aspectRatio: sourceStory?.aspect_ratio,
   });
@@ -1834,19 +1838,23 @@ export async function publishStoryline(params: {
     }
   }
 
-  insertedStorylineId = insertedStorylineId ?? data!.id;
+  insertedStorylineId = insertedStorylineId ?? data?.id ?? null;
+  if (!insertedStorylineId) {
+    throw new Error('Failed to publish storyline: missing inserted storyline id.');
+  }
+  const publishedStorylineId = insertedStorylineId;
 
   // Link the author to their own published storyline so it appears in the
   // saved-storylines list alongside the auto-publish path's behavior.
   await supabase
     .from('saved_storylines')
     .upsert(
-      { user_id: user.id, storyline_id: insertedStorylineId },
+      { user_id: user.id, storyline_id: publishedStorylineId },
       { onConflict: 'user_id,storyline_id' }
     );
 
   await finalizeStorylineShareAssets({
-    storylineId: insertedStorylineId,
+    storylineId: publishedStorylineId,
     storyId: params.storyId,
     userId: user.id,
     title: params.title,
@@ -1868,7 +1876,7 @@ export async function publishStoryline(params: {
     audioCoverPrompt: params.audioCoverPrompt ?? null,
   });
 
-  return { storylineId: insertedStorylineId };
+  return { storylineId: publishedStorylineId };
 }
 
 // ============================================================
