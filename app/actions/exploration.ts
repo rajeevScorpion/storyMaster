@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/supabase/storage';
+import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/media/storage-url-signing';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
