@@ -65,3 +65,28 @@ R2_CACHE_CONTROL_PRIVATE=private, max-age=3600
 ```
 
 Never prefix `R2_ACCESS_KEY_ID` or `R2_SECRET_ACCESS_KEY` with `NEXT_PUBLIC_`.
+
+## Production Setup
+
+After creating the production buckets and production R2 API token, run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File cloudflare/r2/setup-production.ps1
+```
+
+Defaults:
+
+```text
+Public bucket: kissago-media-production
+Private bucket: kissago-media-private-production
+Public domain: media.kissago.cc
+Zone ID: c7e22e411b36b4f531af9682acf8909a
+```
+
+Override with parameters if needed:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File cloudflare/r2/setup-production.ps1 -ZoneId <ZONE_ID> -PublicDomain media.kissago.cc
+```
+
+The script connects only the public production bucket to the custom domain. The private production bucket must remain without a custom domain or public `r2.dev` URL.

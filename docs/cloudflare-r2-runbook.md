@@ -332,6 +332,12 @@ For production:
 
 - Create separate production buckets.
 - Use a production public media domain.
+- Run the production helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File cloudflare/r2/setup-production.ps1
+```
+
 - Add production R2 env vars to the production Vercel project only.
 - Keep `R2_PRODUCTION_ENABLED=false` until ready.
 - Apply migration to production Supabase only after staging passes.
