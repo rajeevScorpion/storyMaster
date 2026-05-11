@@ -847,19 +847,19 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         </div>
         )}
 
-        {/* Scroll to discover indicator — pinned to bottom of viewport */}
+        {/* Scroll to beat preview indicator — only shown when seeded preview is ready */}
         <AnimatePresence>
-          {!showAdvanced && (
+          {!showAdvanced && creationMode === 'seeded' && seedPreview && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.5, delay: 0.2 }}
               className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2 cursor-pointer"
-              onClick={() => document.getElementById(creationMode === 'seeded' && seedPreview ? 'seed-preview-section' : 'gallery-section')?.scrollIntoView({ behavior: 'smooth' })}
+              onClick={() => document.getElementById('seed-preview-section')?.scrollIntoView({ behavior: 'smooth' })}
             >
               <span className="text-sm text-neutral-500 font-sans">
-                {creationMode === 'seeded' && seedPreview ? 'Scroll to review your beat preview' : 'Scroll to discover stories'}
+                Scroll to review your beat preview
               </span>
               <motion.div
                 animate={{ y: [0, 6, 0] }}
@@ -989,8 +989,8 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         </section>
       )}
 
-      {/* Public Storylines Gallery — below the fold */}
-      <div id="gallery-section">
+      {/* Public Storylines Gallery — hidden for now */}
+      <div id="gallery-section" className="hidden">
         <Gallery />
       </div>
     </div>

@@ -2,6 +2,7 @@
 
 import { Suspense, useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import LandingScreen from '@/components/story/LandingScreen';
@@ -68,8 +69,14 @@ function HomeContent() {
       <KissagoLogo onClick={handleLogoClick} />
 
 
-      {/* User menu — fixed top-right across all views */}
-      <div className="fixed top-4 right-4 z-40">
+      {/* Gallery pill + user menu — fixed top-right across all views */}
+      <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
+        <Link
+          href="/gallery"
+          className="px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-sm font-sans text-neutral-300 hover:bg-white/10 hover:border-emerald-500/30 hover:text-neutral-100 transition-all duration-200"
+        >
+          Gallery
+        </Link>
         <UserMenu onMyStories={() => setShowMyStories(true)} />
       </div>
 
