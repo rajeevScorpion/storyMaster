@@ -405,10 +405,14 @@ function getSpendTitle(actionKey: string): string {
       return 'Started a story';
     case 'start_story_initial_beat_prompt_only':
       return 'Started a prompt-only story';
+    case 'start_reel_initial_beat':
+      return 'Started a reel story';
     case 'continue_story_new_beat':
       return 'Added a new beat';
     case 'continue_story_new_beat_prompt_only':
       return 'Added a prompt-only beat';
+    case 'continue_reel_new_beat':
+      return 'Added a reel beat';
     case 'preview_seed_plan':
       return 'Previewed a seed plan';
     case 'regenerate_image':

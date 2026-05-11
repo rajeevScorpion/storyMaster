@@ -151,18 +151,24 @@ async function executeTaskTest(
   switch (taskKey) {
     case 'story_generation':
       return runStoryGenerationTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
+    case 'reel_story_generation':
+      return runReelStoryGenerationTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'seed_plan_generation':
       return runSeedPlanGenerationTest(ai, modelId, temperature ?? 0.3, inputs, promptBody!);
     case 'seeded_beat_materialization':
       return runSeededBeatMaterializationTest(ai, modelId, temperature ?? 0.4, inputs, promptBody!);
     case 'visual_prompt':
       return runVisualPromptTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
+    case 'reel_visual_prompt':
+      return runReelVisualPromptTest(ai, modelId, temperature ?? 0.5, inputs, promptBody!);
     case 'image_generation':
       return runImageGenerationTest(ai, modelId, inputs, promptBody!);
     case 'portrait_generation':
       return runPortraitGenerationTest(ai, modelId, inputs, promptBody!);
     case 'tts':
       return runTTSTest(ai, modelId, inputs, promptBody!);
+    case 'reel_tts':
+      return runReelTTSTest(ai, modelId, inputs, promptBody!);
     case 'voice_selection':
       return runVoiceSelectionTest(ai, modelId, temperature ?? 0.3, inputs, promptBody!);
     default:
@@ -263,6 +269,40 @@ async function runStoryGenerationTest(
   return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
 }
 
+async function runReelStoryGenerationTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  temperature: number,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const prompt = resolvePromptTemplate(promptBody, {
+    language: inputs.language || 'english',
+    userPrompt: inputs.userPrompt || '',
+    storyConfig: inputs.storyConfig || '{}',
+    storyState: inputs.storyState || '{}',
+    selectedOptionLabel: inputs.selectedOptionLabel || 'None yet - first beat',
+    reelLength: inputs.reelLength || 'short',
+    moodDefiner: inputs.moodDefiner || 'Playful: bright, curious, quick emotional turns',
+    visualStyleDefiner: inputs.visualStyleDefiner || 'Cinematic: cinematic storybook frames with expressive lighting',
+    narrationStyleDefiner: inputs.narrationStyleDefiner || 'Expressive: expressive narrator with natural pauses and energy',
+  });
+
+  const start = Date.now();
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: prompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_story_generation,
+      responseMimeType: 'application/json',
+      responseSchema: beatSchema,
+      temperature,
+    },
+  });
+  const latencyMs = Date.now() - start;
+  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
+}
+
 async function runVisualPromptTest(
   ai: GoogleGenAI,
   modelId: string,
@@ -290,6 +330,44 @@ async function runVisualPromptTest(
     contents: prompt,
     config: {
       systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
+      responseMimeType: 'application/json',
+      responseSchema: storyboardPlanSchema,
+      temperature,
+    },
+  });
+  const latencyMs = Date.now() - start;
+  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
+}
+
+async function runReelVisualPromptTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  temperature: number,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const prompt = resolvePromptTemplate(promptBody, {
+    storyText: inputs.storyText || '',
+    sceneSummary: inputs.sceneSummary || '',
+    imageIntent: inputs.imageIntent || '',
+    characters: inputs.characters || '[]',
+    continuityNotes: inputs.continuityNotes || '[]',
+    visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
+    moodDefiner: inputs.moodDefiner || 'Playful: bright, curious, quick emotional turns',
+    visualStyleDefiner: inputs.visualStyleDefiner || 'Cinematic: cinematic storybook frames with expressive lighting',
+    beatNumber: inputs.beatNumber || '1',
+    storyState: inputs.storyState || '{}',
+    newCharacterIds: inputs.newCharacterIds || '[]',
+    changedCharacterIds: inputs.changedCharacterIds || '[]',
+    previousStoryboardContext: inputs.previousStoryboardContext || 'None yet - first beat',
+  });
+
+  const start = Date.now();
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: prompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_visual_prompt,
       responseMimeType: 'application/json',
       responseSchema: storyboardPlanSchema,
       temperature,
@@ -437,6 +515,7 @@ async function runTTSTest(
     tone: inputs.tone || 'playful',
     genre: inputs.genre || 'adventure',
     language: inputs.language || 'english',
+    narrationStyle: inputs.narrationStyle || 'Expressive: expressive narrator with natural pauses and energy',
   });
 
   const start = Date.now();
@@ -495,6 +574,15 @@ async function runTTSTest(
     estimatedCostUsd: estimateCost(modelId, inputTokens, outputTokens),
     model: modelId,
   };
+}
+
+async function runReelTTSTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  return runTTSTest(ai, modelId, inputs, promptBody);
 }
 
 async function runVoiceSelectionTest(

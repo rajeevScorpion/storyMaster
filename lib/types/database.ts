@@ -15,7 +15,7 @@ import type {
 } from './pricing';
 import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
 import type { BeatMediaStatus } from './beat-media';
-import type { StoryAspectRatio } from './story';
+import type { ReelPanelCaption, StoryAspectRatio, StoryKind } from './story';
 
 export type StorylineShareCoverSource =
   | 'custom_generated'
@@ -46,6 +46,7 @@ export interface DbStory {
   visual_style: string | null;
   target_age: string | null;
   story_config: Record<string, unknown> | null;
+  story_kind?: StoryKind;
   is_vertical_story: boolean;
   aspect_ratio: StoryAspectRatio;
   story_map: Record<string, unknown>;
@@ -59,6 +60,12 @@ export interface DbStory {
   is_archived: boolean;
   current_node_id: string | null;
   cover_image_url: string | null;
+  reel_length_key?: string | null;
+  reel_retention_days?: number | null;
+  reel_expires_at?: string | null;
+  reel_cleanup_status?: string | null;
+  reel_deleted_at?: string | null;
+  reel_cleanup_last_error?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -72,6 +79,7 @@ export interface DbStoryline {
   cover_image_url: string | null;
   is_vertical_story: boolean;
   aspect_ratio: StoryAspectRatio;
+  story_kind?: StoryKind;
   node_path: string[];
   beats: Record<string, unknown>[];
   choices: Record<string, unknown>[];
@@ -164,6 +172,7 @@ export interface DbBeat {
   audio_synced_at: string | null;
   narration_voice_id: string | null;
   is_storyboard: boolean;
+  reel_captions?: ReelPanelCaption[] | null;
   origin_kind: string | null;
   seed_plan_beat_index: number | null;
   canonical_option_id: string | null;

@@ -2,6 +2,7 @@ import type {
   PortraitReferenceConfig,
   PortraitReferenceQuality,
   PortraitReferenceMode,
+  ReelStoryConfig,
   SeedBeatOutline,
   SeedPlan,
   StoryAuthoringConfig,
@@ -13,6 +14,11 @@ import type {
   VisualSettings,
   VisualStylePreset,
 } from '@/lib/types/story';
+import {
+  DEFAULT_REEL_STORY_SETTINGS,
+  getReelLengthBeatCount,
+  normalizeReelLength,
+} from '@/lib/reel/settings';
 import type {
   NarrationGenderBucket,
   NarrationLanguageCode,
@@ -97,7 +103,16 @@ export const DEFAULT_PORTRAIT_REFERENCE_CONFIG: PortraitReferenceConfig = {
   quality: '0.5K',
 };
 
+export const DEFAULT_REEL_CONFIG: ReelStoryConfig = {
+  length: DEFAULT_REEL_STORY_SETTINGS.defaultLength,
+  moodKey: DEFAULT_REEL_STORY_SETTINGS.defaultMood,
+  visualStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle,
+  narrationStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle,
+  brandingEnabled: true,
+};
+
 export const DEFAULT_STORY_CONFIG: StoryConfig = {
+  storyKind: 'story',
   language: 'english',
   ageGroup: 'all_ages',
   settingCountry: 'generic',
@@ -107,6 +122,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   aspectRatio: '16:9',
   visualSettings: DEFAULT_VISUAL_SETTINGS,
   authoring: DEFAULT_AUTHORING,
+  reel: DEFAULT_REEL_CONFIG,
   portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
 };
 
@@ -144,6 +160,8 @@ const DETAIL_SUMMARIES: Record<StoryDetailLevel, string> = {
 };
 
 type RawStoryConfig = Partial<StoryConfig> & {
+  storyKind?: string | null;
+  story_kind?: string | null;
   is_vertical_story?: boolean | null;
   aspect_ratio?: string | null;
   visualSettings?: Partial<VisualSettings> | null;
@@ -151,11 +169,14 @@ type RawStoryConfig = Partial<StoryConfig> & {
     mode?: string | null;
     preludeText?: string | null;
   }) | null;
+  reel?: Partial<ReelStoryConfig> | null;
   portraitReferences?: Partial<PortraitReferenceConfig> | null;
   narrationVoice?: Partial<StoryNarrationVoiceSelection> | null;
 };
 
 export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig {
+  const storyKind = normalizeStoryKind(input?.storyKind ?? input?.story_kind);
+  const reel = normalizeReelConfig(input?.reel);
   const visualSettings: VisualSettings = {
     preset: input?.visualSettings?.preset || DEFAULT_VISUAL_SETTINGS.preset,
     theme: input?.visualSettings?.theme || DEFAULT_VISUAL_SETTINGS.theme,
@@ -184,19 +205,24 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
   const narrationVoice = normalizeNarrationVoiceSelection(input?.narrationVoice);
-  const isVerticalStory = normalizeVerticalStoryFlag(input);
+  const isVerticalStory = storyKind === 'reel' ? true : normalizeVerticalStoryFlag(input);
   const aspectRatio = isVerticalStory ? '9:16' : '16:9';
+  const maxBeats = storyKind === 'reel'
+    ? getReelLengthBeatCount(reel.length)
+    : clampMaxBeats(input?.maxBeats);
 
   return {
+    storyKind,
     language: input?.language || DEFAULT_STORY_CONFIG.language,
     ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
-    maxBeats: clampMaxBeats(input?.maxBeats),
-    imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
+    maxBeats,
+    imageGenerationMode: storyKind === 'reel' ? 'generate' : normalizeImageGenerationMode(input?.imageGenerationMode),
     isVerticalStory,
     aspectRatio,
     visualSettings,
-    authoring,
+    authoring: storyKind === 'reel' ? { mode: 'prompt' } : authoring,
+    reel,
     portraitReferences,
     ...(narrationVoice ? { narrationVoice } : {}),
   };
@@ -234,6 +260,15 @@ export function isSeededMode(config?: Partial<StoryConfig> | null): boolean {
 
 export function isVerticalStoryConfig(config?: Partial<StoryConfig> | null): boolean {
   return normalizeStoryConfig(config).isVerticalStory;
+}
+
+export function isReelStoryConfig(config?: Partial<StoryConfig> | null): boolean {
+  return normalizeStoryConfig(config).storyKind === 'reel';
+}
+
+export function getReelMaxBeats(config?: Partial<StoryConfig> | null): number {
+  const normalized = normalizeStoryConfig(config);
+  return getReelLengthBeatCount(normalized.reel.length);
 }
 
 export function getSeedSourceText(config?: Partial<StoryConfig> | null): string {
@@ -303,6 +338,20 @@ function normalizeNarrationLanguageCode(value?: string | null): NarrationLanguag
 
 function sanitizeText(value?: string | null): string {
   return value?.trim() || '';
+}
+
+function normalizeStoryKind(value?: string | null): StoryConfig['storyKind'] {
+  return value === 'reel' ? 'reel' : 'story';
+}
+
+function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null): ReelStoryConfig {
+  return {
+    length: normalizeReelLength(input?.length),
+    moodKey: sanitizeText(input?.moodKey) || DEFAULT_REEL_CONFIG.moodKey,
+    visualStyleKey: sanitizeText(input?.visualStyleKey) || DEFAULT_REEL_CONFIG.visualStyleKey,
+    narrationStyleKey: sanitizeText(input?.narrationStyleKey) || DEFAULT_REEL_CONFIG.narrationStyleKey,
+    brandingEnabled: input?.brandingEnabled !== false,
+  };
 }
 
 function normalizeAuthoringMode(value?: string | null): StoryAuthoringConfig['mode'] {

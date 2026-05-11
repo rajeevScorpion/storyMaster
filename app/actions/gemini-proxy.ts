@@ -60,7 +60,7 @@ function getAI(): GoogleGenAI {
 }
 
 export interface TextCallParams {
-  task: Extract<TaskKey, 'story_generation' | 'seed_plan_generation' | 'seeded_beat_materialization' | 'visual_prompt'>;
+  task: Extract<TaskKey, 'story_generation' | 'reel_story_generation' | 'seed_plan_generation' | 'seeded_beat_materialization' | 'visual_prompt' | 'reel_visual_prompt'>;
   model: string;
   prompt: string;
   temperature?: number;
@@ -73,9 +73,11 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
 
   const schemaMap = {
     story_generation: beatSchema,
+    reel_story_generation: beatSchema,
     seed_plan_generation: seedPlanSchema,
     seeded_beat_materialization: beatSchema,
     visual_prompt: storyboardPlanSchema,
+    reel_visual_prompt: storyboardPlanSchema,
   } as const;
 
   const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');

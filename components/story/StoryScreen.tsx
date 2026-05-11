@@ -49,6 +49,7 @@ function StoryboardCycler({
   onImageLoad,
   imageClassName,
   showIndicators = true,
+  captions,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -61,6 +62,7 @@ function StoryboardCycler({
   onImageLoad?: () => void;
   imageClassName?: string;
   showIndicators?: boolean;
+  captions?: StoryBeat['reelCaptions'];
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
@@ -122,6 +124,7 @@ function StoryboardCycler({
       clearInterval(id);
     };
   }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
+  const activeCaption = captions?.find((caption) => caption.panelIndex === activePanel)?.text;
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -153,6 +156,13 @@ function StoryboardCycler({
         </AnimatePresence>
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
+      {activeCaption && (
+        <div className="absolute inset-x-4 bottom-9 z-20 flex justify-center">
+          <div className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-center text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
+            {activeCaption}
+          </div>
+        </div>
+      )}
       {showIndicators && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
           {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
@@ -633,12 +643,15 @@ export default function StoryScreen() {
   const currentBeat = normalizeBeatMediaFields(currentNode.data);
   const isEnding = currentBeat.isEnding;
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  const isReelStory = session.storyConfig.storyKind === 'reel';
   const continueCoinCost = (
-    pricing.actionCosts[
-      isPromptOnlyStory
-        ? 'continue_story_new_beat_prompt_only'
-        : 'continue_story_new_beat'
-    ] ?? (isPromptOnlyStory ? 0.5 : 1)
+    isReelStory
+      ? pricing.actionCosts.continue_reel_new_beat ?? 1
+      : pricing.actionCosts[
+          isPromptOnlyStory
+            ? 'continue_story_new_beat_prompt_only'
+            : 'continue_story_new_beat'
+        ] ?? (isPromptOnlyStory ? 0.5 : 1)
   ) * 10;
   const showCoinHint = pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled;
 
@@ -1384,6 +1397,7 @@ function StoryScreenInner({
                 vignetteEnabled={cycleSettings.vignetteEnabled}
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
+                captions={normalizedCurrentBeat.reelCaptions}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
               />
@@ -1414,6 +1428,7 @@ function StoryScreenInner({
                       vignetteEnabled={cycleSettings.vignetteEnabled}
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
+                      captions={normalizedCurrentBeat.reelCaptions}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                     />
@@ -1545,6 +1560,7 @@ function StoryScreenInner({
                   vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                   playbackState={playbackState}
                   imageClassName="mobile-scene-shuttle"
+                  captions={normalizedCurrentBeat.reelCaptions}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                 />

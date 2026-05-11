@@ -184,6 +184,41 @@ User Selected Option:
 
 Generate the next story beat.`;
 
+export const REEL_STORY_GENERATION_PROMPT_DEFAULT = `You are Kissago's Reel Story writer for short vertical visual stories.
+
+Generate exactly one interactive reel beat. A Reel Story uses the same beat structure as Kissago stories, but it is shorter, faster, and designed for a 9:16 four-panel storyboard.
+
+Rules:
+1. Return strict valid JSON only using the story beat schema.
+2. The reel length is {{reelLength}} and the configured maximum beat count is provided in Story Configuration.
+3. If this beat is the final configured beat, set isEnding to true and return an empty options array.
+4. If this beat is not final, set isEnding to false and return exactly 3 short, distinct options.
+5. Keep storyText concise, vivid, and narration-friendly.
+6. Keep the beat highly visual. The imagePrompt must remain in English and describe a clear vertical storyboard moment.
+7. Use the mood definer, visual style definer, and narration style definer as strong direction without exposing them to the user.
+8. Preserve continuity from the story state and selected option.
+9. Write user-facing story values in {{language}}. Keep JSON field names in English.
+10. Avoid text overlays, logos, watermarks, captions, or UI elements in imagePrompt.
+
+Runtime context:
+Language: {{language}}
+User Request: {{userPrompt}}
+Reel Length: {{reelLength}}
+Mood Definer: {{moodDefiner}}
+Visual Style Definer: {{visualStyleDefiner}}
+Narration Style Definer: {{narrationStyleDefiner}}
+
+Story Configuration:
+{{storyConfig}}
+
+Current Story State:
+{{storyState}}
+
+User Selected Option:
+{{selectedOptionLabel}}
+
+Generate the next reel beat.`;
+
 export const SEED_PLAN_GENERATION_PROMPT_DEFAULT = `You are Kissago's source-to-story planner.
 
 Your job is to transform user-authored source material into a structured canonical beat plan for a branching visual story.
@@ -446,9 +481,73 @@ Previous Storyboard Context:
 
 Generate the storyboard plan now.`;
 
+export const REEL_VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT = `You are Kissago's Reel Visual Prompt Composer.
+
+Transform one reel beat into a 2x2 vertical storyboard plan. The output schema is the same as the normal visual composer, but the pacing should feel like four quick reel moments.
+
+Rules:
+1. Return strict valid JSON only.
+2. Use exactly four frames: topLeft, topRight, bottomLeft, bottomRight.
+3. Each frame should be a distinct sequential visual moment that can hold for 2-3 seconds in a vertical reel.
+4. Keep all frames full-bleed, cinematic, and phone-first.
+5. Preserve character identity and visual continuity.
+6. Use the mood and visual style definers as strong direction.
+7. Do not request text overlays, captions, speech bubbles, labels, logos, or watermarks.
+
+Story Beat Text:
+{{storyText}}
+
+Scene Summary:
+{{sceneSummary}}
+
+Story Writer Visual Intent:
+{{imageIntent}}
+
+Characters:
+{{characters}}
+
+Continuity Notes:
+{{continuityNotes}}
+
+Visual Style:
+{{visualStyle}}
+
+Mood Definer:
+{{moodDefiner}}
+
+Visual Style Definer:
+{{visualStyleDefiner}}
+
+Beat Number:
+{{beatNumber}}
+
+Compact Story Bible:
+{{storyState}}
+
+New Character Ids:
+{{newCharacterIds}}
+
+Changed Character Ids:
+{{changedCharacterIds}}
+
+Previous Storyboard Context:
+{{previousStoryboardContext}}
+
+Generate the reel storyboard plan now.`;
+
 export const TTS_PROMPT_DEFAULT = `You are a master storyteller narrating a {{genre}} tale with a {{tone}} tone in {{language}}.
 
 Read this passage aloud with natural pacing, dramatic pauses, and emotional expression that matches the scene.
+
+Passage:
+{{storyText}}`;
+
+export const REEL_TTS_PROMPT_DEFAULT = `You are narrating a short visual reel in {{language}}.
+
+Narration style:
+{{narrationStyle}}
+
+Read this passage with compact pacing, clean emotion, and natural pauses that fit four visual storyboard panels. Do not add extra words.
 
 Passage:
 {{storyText}}`;
@@ -509,12 +608,15 @@ Requirements:
 
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
+  reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the story beat schema exactly. Reel beats must be concise, safe, visual, and paced to end at the configured beat cap.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
+  reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly and optimize the four frames for vertical reel pacing.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
   portrait_generation: 'Generate a single-character reference image only. No text overlays, no other characters, and no cluttered background. Do not duplicate the character beyond the requested reference views.',
   tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata or alternative takes.',
+  reel_tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata, subtitles, timestamps, or alternative takes.',
   voice_selection: 'Return only a single voice name from the available list. Do not add commentary or punctuation beyond the voice name.',
 };
 
@@ -531,6 +633,23 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label and intent, or blank on the first beat.', required: true },
     ],
     defaultPrompt: STORY_GENERATION_PROMPT_DEFAULT,
+  },
+  reel_story_generation: {
+    key: 'reel_story_generation',
+    label: 'Reel Story Generation Prompt',
+    description: 'Controls the short-form storytelling template used before Reel JSON beat generation.',
+    placeholders: [
+      { key: 'language', label: 'Language', description: 'Requested output language.', required: true },
+      { key: 'userPrompt', label: 'User Prompt', description: 'Original reel request from the user.', required: true },
+      { key: 'storyConfig', label: 'Story Config', description: 'Formatted reel configuration and beat pacing context.', required: true },
+      { key: 'storyState', label: 'Story State', description: 'Compact story bible snapshot used for continuity.', required: true },
+      { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label and intent, or blank on the first beat.', required: true },
+      { key: 'reelLength', label: 'Reel Length', description: 'Short, medium, or long reel length.', required: true },
+      { key: 'moodDefiner', label: 'Mood Definer', description: 'Admin-defined mood prompt fragment.', required: true },
+      { key: 'visualStyleDefiner', label: 'Visual Style Definer', description: 'Admin-defined visual style prompt fragment.', required: true },
+      { key: 'narrationStyleDefiner', label: 'Narration Style Definer', description: 'Admin-defined narration style prompt fragment.', required: true },
+    ],
+    defaultPrompt: REEL_STORY_GENERATION_PROMPT_DEFAULT,
   },
   seed_plan_generation: {
     key: 'seed_plan_generation',
@@ -580,6 +699,27 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
     ],
     defaultPrompt: VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT,
   },
+  reel_visual_prompt: {
+    key: 'reel_visual_prompt',
+    label: 'Reel Visual Prompt Composer',
+    description: 'Controls how a reel beat is decomposed into a vertical 4-frame storyboard plan.',
+    placeholders: [
+      { key: 'storyText', label: 'Story Text', description: 'The reel beat story text.', required: true },
+      { key: 'sceneSummary', label: 'Scene Summary', description: 'Compact summary of the beat scene.', required: true },
+      { key: 'imageIntent', label: 'Image Intent', description: 'High-level visual intent from the reel writer.', required: true },
+      { key: 'characters', label: 'Characters', description: 'Character continuity details.', required: true },
+      { key: 'continuityNotes', label: 'Continuity Notes', description: 'English continuity notes for the beat.', required: true },
+      { key: 'visualStyle', label: 'Visual Style', description: 'Requested art style or rendering direction.', required: true },
+      { key: 'moodDefiner', label: 'Mood Definer', description: 'Admin-defined mood prompt fragment.', required: true },
+      { key: 'visualStyleDefiner', label: 'Visual Style Definer', description: 'Admin-defined visual style prompt fragment.', required: true },
+      { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number.', required: true },
+      { key: 'storyState', label: 'Story State', description: 'Compact story bible JSON used for continuity and cast memory.', required: true },
+      { key: 'newCharacterIds', label: 'New Character Ids', description: 'JSON array of newly introduced named character ids.', required: true },
+      { key: 'changedCharacterIds', label: 'Changed Character Ids', description: 'JSON array of character ids with meaningful visible changes.', required: true },
+      { key: 'previousStoryboardContext', label: 'Previous Storyboard Context', description: 'Summary of the previous storyboard for continuity.', required: true },
+    ],
+    defaultPrompt: REEL_VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT,
+  },
   image_generation: {
     key: 'image_generation',
     label: 'Image Generation Wrapper',
@@ -618,6 +758,19 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'language', label: 'Language', description: 'Narration language.', required: true },
     ],
     defaultPrompt: TTS_PROMPT_DEFAULT,
+  },
+  reel_tts: {
+    key: 'reel_tts',
+    label: 'Reel TTS Narration Prompt',
+    description: 'Controls short-form spoken narration style before audio synthesis.',
+    placeholders: [
+      { key: 'storyText', label: 'Story Text', description: 'Text passage that will be narrated.', required: true },
+      { key: 'tone', label: 'Tone', description: 'Desired narration tone.', required: false },
+      { key: 'genre', label: 'Genre', description: 'Story genre context.', required: false },
+      { key: 'language', label: 'Language', description: 'Narration language.', required: true },
+      { key: 'narrationStyle', label: 'Narration Style', description: 'Admin-defined narration style direction.', required: true },
+    ],
+    defaultPrompt: REEL_TTS_PROMPT_DEFAULT,
   },
   voice_selection: {
     key: 'voice_selection',

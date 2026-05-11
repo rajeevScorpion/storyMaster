@@ -72,6 +72,7 @@ function StoryboardCycler({
   vignetteAmountPercent,
   playbackState,
   imageClassName,
+  captions,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -81,6 +82,7 @@ function StoryboardCycler({
   vignetteAmountPercent: number;
   playbackState: 'idle' | 'playing' | 'paused';
   imageClassName?: string;
+  captions?: StoryBeat['reelCaptions'];
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
@@ -124,6 +126,7 @@ function StoryboardCycler({
       clearInterval(id);
     };
   }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
+  const activeCaption = captions?.find((caption) => caption.panelIndex === activePanel)?.text;
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -148,6 +151,13 @@ function StoryboardCycler({
         </AnimatePresence>
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
+      {activeCaption && (
+        <div className="absolute inset-x-4 bottom-9 z-20 flex justify-center">
+          <div className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-center text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
+            {activeCaption}
+          </div>
+        </div>
+      )}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
         {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
           <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'}`} />
@@ -581,6 +591,7 @@ export default function StorylinePlayer({
                   vignetteEnabled={cycleSettings.vignetteEnabled}
                   vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                   playbackState={playbackState}
+                  captions={currentBeat.reelCaptions}
                 />
               </div>
             ) : displayImageUrl ? (
@@ -622,6 +633,7 @@ export default function StorylinePlayer({
                       vignetteEnabled={cycleSettings.vignetteEnabled}
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
+                      captions={currentBeat.reelCaptions}
                     />
                   ) : (
                     <Image
@@ -857,6 +869,7 @@ export default function StorylinePlayer({
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
                 imageClassName="mobile-scene-shuttle"
+                captions={currentBeat.reelCaptions}
               />
             ) : displayImageUrl ? (
               <div className="mobile-scene-shuttle absolute inset-0">

@@ -13,6 +13,7 @@ import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import type { TaskKey } from '@/lib/ai/model-config.shared';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaState } from '@/app/actions/persistence';
@@ -468,7 +469,11 @@ async function callGeminiTTS(
   genre: string,
   voiceName: string,
   language: string,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  options: {
+    taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+    narrationStyle?: string;
+  } = {}
 ): Promise<string> {
   return timeNarrationStep(
     'narration.call_gemini_tts',
@@ -479,14 +484,16 @@ async function callGeminiTTS(
     },
     async () => {
       const ai = new GoogleGenAI({ apiKey: getApiKey() });
-      const ttsConfig = await getModelConfig('tts');
+      const taskKey = options.taskKey ?? 'tts';
+      const ttsConfig = await getModelConfig(taskKey);
       const ttsPrompt = resolvePromptTemplate(
-        await getPublishedPrompt('tts'),
+        await getPublishedPrompt(taskKey),
         {
           storyText,
           tone,
           genre,
           language,
+          narrationStyle: options.narrationStyle || tone,
         }
       );
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
@@ -524,7 +531,7 @@ async function callGeminiTTS(
         const fallbackAudioOutputTokens = Math.ceil(audioSeconds * 25);
         await recordModelCostEvent({
           context: costTelemetry,
-          taskKey: 'tts',
+          taskKey,
           modelId: ttsConfig.model,
           inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
           outputTokens: response.usageMetadata?.candidatesTokenCount || fallbackAudioOutputTokens,
@@ -556,7 +563,11 @@ export async function generateAndPersistNarration(
   language: string,
   savedStoryId: string,
   nodeId: string,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  options: {
+    taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+    narrationStyle?: string;
+  } = {}
 ): Promise<{ audioUrl: string }> {
   return timeNarrationStep(
     'narration.generate_and_persist',
@@ -567,7 +578,7 @@ export async function generateAndPersistNarration(
       voiceName,
     },
     async () => {
-      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry);
+      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry, options);
       const wavBuffer = pcmToWavBuffer(pcmBase64);
 
       const supabase = await createClient();
@@ -717,7 +728,11 @@ export async function generateNarrationOnly(
   genre: string,
   voiceName: string,
   language: string,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  options: {
+    taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+    narrationStyle?: string;
+  } = {}
 ): Promise<string> {
   return timeNarrationStep(
     'narration.generate_only',
@@ -726,7 +741,7 @@ export async function generateNarrationOnly(
       voiceName,
     },
     async () => {
-      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry);
+      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry, options);
       const wavBuffer = pcmToWavBuffer(pcmBase64);
       return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
     }

@@ -41,8 +41,10 @@ export type BeatReservationStatus = (typeof BEAT_RESERVATION_STATUSES)[number];
 export const PRICING_ACTION_KEYS = [
   'start_story_initial_beat',
   'start_story_initial_beat_prompt_only',
+  'start_reel_initial_beat',
   'continue_story_new_beat',
   'continue_story_new_beat_prompt_only',
+  'continue_reel_new_beat',
   'preview_seed_plan',
   'regenerate_image',
   'regenerate_narration',

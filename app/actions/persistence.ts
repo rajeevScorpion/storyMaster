@@ -17,6 +17,12 @@ import {
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import {
+  getReelRetentionDaysForPlan,
+  parseReelStorySettingsValue,
+} from '@/lib/reel/settings';
+import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
@@ -326,6 +332,7 @@ export async function repairMissingReadyBeatImageUrls(
 
 const ADDITIVE_BEAT_COLUMNS = [
   'is_storyboard',
+  'reel_captions',
   'origin_kind',
   'seed_plan_beat_index',
   'canonical_option_id',
@@ -339,11 +346,31 @@ const ADDITIVE_BEAT_COLUMNS = [
   'audio_synced_at',
 ] as const;
 
+const ADDITIVE_STORY_COLUMNS = [
+  'story_kind',
+  'reel_length_key',
+  'reel_retention_days',
+  'reel_expires_at',
+  'reel_cleanup_status',
+] as const;
+
+const ADDITIVE_STORYLINE_COLUMNS = [
+  'story_kind',
+] as const;
+
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error?.message) return false;
   return (
     error.code === 'PGRST204'
     || (/schema cache/i.test(error.message) && /column/i.test(error.message) && /beats/i.test(error.message))
+  );
+}
+
+function isMissingAdditiveColumnError(error: { code?: string; message?: string } | null | undefined, tableName: string): boolean {
+  if (!error?.message) return false;
+  return (
+    error.code === 'PGRST204'
+    || (/schema cache/i.test(error.message) && /column/i.test(error.message) && error.message.includes(tableName))
   );
 }
 
@@ -357,6 +384,45 @@ function withoutAdditiveBeatColumns(row: Record<string, unknown>): Record<string
 
 function withoutAdditiveBeatColumnsBatch(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   return rows.map(withoutAdditiveBeatColumns);
+}
+
+function withoutAdditiveColumns(row: Record<string, unknown>, columns: readonly string[]): Record<string, unknown> {
+  const fallbackRow = { ...row };
+  for (const column of columns) {
+    delete fallbackRow[column];
+  }
+  return fallbackRow;
+}
+
+async function buildReelStoryPersistencePatch(
+  storyConfig: StorySession['storyConfig'],
+  setInitialRetention: boolean
+): Promise<Record<string, unknown>> {
+  const normalized = normalizeStoryConfig(storyConfig);
+  if (normalized.storyKind !== 'reel') {
+    return {
+      story_kind: 'story',
+      reel_length_key: null,
+    };
+  }
+
+  const patch: Record<string, unknown> = {
+    story_kind: 'reel',
+    reel_length_key: normalized.reel.length,
+  };
+
+  if (setInitialRetention) {
+    const settingsValue = await getFeatureFlagValue('reel_story_settings').catch(() => null);
+    const settings = parseReelStorySettingsValue(settingsValue);
+    const pricing = await getPricingRuntimeContext().catch(() => null);
+    const retentionDays = getReelRetentionDaysForPlan(settings, pricing?.snapshot.planKey);
+    const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    patch.reel_retention_days = retentionDays;
+    patch.reel_expires_at = expiresAt;
+    patch.reel_cleanup_status = 'active';
+  }
+
+  return patch;
 }
 
 /**
@@ -413,6 +479,10 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.is_storyboard = true;
   }
 
+  if (normalizedBeat.reelCaptions && normalizedBeat.reelCaptions.length > 0) {
+    row.reel_captions = normalizedBeat.reelCaptions as unknown as Record<string, unknown>[];
+  }
+
   if (normalizedBeat.imageGallery && normalizedBeat.imageGallery.length > 0) {
     row.image_gallery = normalizedBeat.imageGallery.map((entry) => ({
       url: normalizeStorageUrl(entry.url, 'story-assets'),
@@ -460,6 +530,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     audioError: beat.audio_error || undefined,
     narrationVoiceId: beat.narration_voice_id || undefined,
     isStoryboard: beat.is_storyboard || undefined,
+    reelCaptions: Array.isArray(beat.reel_captions)
+      ? beat.reel_captions as StoryBeat['reelCaptions']
+      : undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -596,6 +669,8 @@ export async function saveStory(
   const cleanMap = stripBase64(storyMapWithUrls, fallbackStoryMap);
   const storyOrientation = getStoryOrientation(session.storyConfig);
 
+  const reelPersistencePatch = await buildReelStoryPersistencePatch(session.storyConfig, !session.savedStoryId);
+
   const storyData = {
     user_id: user.id,
     title: session.title,
@@ -605,6 +680,7 @@ export async function saveStory(
     visual_style: session.visualStyle,
     target_age: session.targetAge,
     story_config: session.storyConfig as unknown as Record<string, unknown>,
+    ...reelPersistencePatch,
     is_vertical_story: storyOrientation.isVerticalStory,
     aspect_ratio: storyOrientation.aspectRatio,
     story_map: cleanMap as unknown as Record<string, unknown>,
@@ -629,7 +705,19 @@ export async function saveStory(
       .eq('id', session.savedStoryId)
       .eq('user_id', user.id);
 
-    if (error) throw new Error(`Failed to update story: ${error.message}`);
+    if (error) {
+      if (isMissingAdditiveColumnError(error, 'stories')) {
+        const { error: fallbackError } = await supabase
+          .from('stories')
+          .update(withoutAdditiveColumns(storyData, ADDITIVE_STORY_COLUMNS))
+          .eq('id', session.savedStoryId)
+          .eq('user_id', user.id);
+
+        if (fallbackError) throw new Error(`Failed to update story: ${fallbackError.message}`);
+      } else {
+        throw new Error(`Failed to update story: ${error.message}`);
+      }
+    }
     storyId = session.savedStoryId;
   } else {
     const { data, error } = await supabase
@@ -638,8 +726,24 @@ export async function saveStory(
       .select('id')
       .single();
 
-    if (error) throw new Error(`Failed to save story: ${error.message}`);
-    storyId = data.id;
+    if (error) {
+      if (isMissingAdditiveColumnError(error, 'stories')) {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('stories')
+          .insert(withoutAdditiveColumns(storyData, ADDITIVE_STORY_COLUMNS))
+          .select('id')
+          .single();
+
+        if (fallbackError || !fallbackData) {
+          throw new Error(`Failed to save story: ${fallbackError?.message || error.message}`);
+        }
+        storyId = fallbackData.id;
+      } else {
+        throw new Error(`Failed to save story: ${error.message}`);
+      }
+    } else {
+      storyId = data.id;
+    }
   }
 
   // Dual-write: batch upsert all nodes into beats table
@@ -762,6 +866,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
             ...(jsonbNode.data.storyboardPromptText ? { storyboardPromptText: jsonbNode.data.storyboardPromptText } : {}),
+            ...(jsonbNode.data.reelCaptions ? { reelCaptions: jsonbNode.data.reelCaptions } : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
@@ -794,6 +899,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
   );
   const storyConfig = normalizeStoryConfig({
     ...(story.story_config as any),
+    storyKind: story.story_kind,
     isVerticalStory: story.is_vertical_story,
     aspectRatio: story.aspect_ratio,
   });
@@ -1136,7 +1242,7 @@ export async function autoPublishStoryline(
 
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
-    .select('story_config, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
     .eq('id', storyId)
     .maybeSingle();
 
@@ -1146,6 +1252,7 @@ export async function autoPublishStoryline(
 
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
+    storyKind: sourceStory?.story_kind,
     isVerticalStory: sourceStory?.is_vertical_story,
     aspectRatio: sourceStory?.aspect_ratio,
   });
@@ -1237,32 +1344,37 @@ export async function autoPublishStoryline(
     audioError: b.audio_error || undefined,
     narrationVoiceId: b.narration_voice_id || undefined,
     isStoryboard: b.is_storyboard || undefined,
+    reelCaptions: Array.isArray(b.reel_captions) ? b.reel_captions as StoryBeat['reelCaptions'] : undefined,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
     canonicalOptionId: b.canonical_option_id || undefined,
   }));
   const publishModes = getStorylinePublishModes(storyConfig, 'standard', legacyBeats);
 
+  const storylineRow = {
+    story_id: storyId,
+    user_id: user.id,
+    title: storyTitle,
+    beat_count: nodePath.length,
+    cover_image_url: coverImageUrl || null,
+    is_vertical_story: orientation.isVerticalStory,
+    aspect_ratio: orientation.aspectRatio,
+    story_kind: storyConfig.storyKind,
+    story_format: publishModes.storyFormat,
+    story_visual_mode: publishModes.storyVisualMode,
+    orientation: publishModes.orientation,
+    node_path: nodePath,
+    beats: legacyBeats as unknown as Record<string, unknown>[],
+    choices: choices as unknown as Record<string, unknown>[],
+    author_name: profile?.display_name || 'Anonymous',
+    is_public: true,
+    path_hash: pathHash,
+  };
+
+  let storylineId: string | null = null;
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .insert({
-      story_id: storyId,
-      user_id: user.id,
-      title: storyTitle,
-      beat_count: nodePath.length,
-      cover_image_url: coverImageUrl || null,
-      is_vertical_story: orientation.isVerticalStory,
-      aspect_ratio: orientation.aspectRatio,
-      story_format: publishModes.storyFormat,
-      story_visual_mode: publishModes.storyVisualMode,
-      orientation: publishModes.orientation,
-      node_path: nodePath,
-      beats: legacyBeats as unknown as Record<string, unknown>[],
-      choices: choices as unknown as Record<string, unknown>[],
-      author_name: profile?.display_name || 'Anonymous',
-      is_public: true,
-      path_hash: pathHash,
-    })
+    .insert(storylineRow)
     .select('id')
     .single();
 
@@ -1284,15 +1396,30 @@ export async function autoPublishStoryline(
         return { alreadyPublished: true, storylineId: dup.id };
       }
     }
-    throw new Error(`Failed to publish storyline: ${slError.message}`);
+    if (isMissingAdditiveColumnError(slError, 'storylines')) {
+      const { data: fallbackStoryline, error: fallbackError } = await supabase
+        .from('storylines')
+        .insert(withoutAdditiveColumns(storylineRow, ADDITIVE_STORYLINE_COLUMNS))
+        .select('id')
+        .single();
+
+      if (fallbackError || !fallbackStoryline) {
+        throw new Error(`Failed to publish storyline: ${fallbackError?.message || slError.message}`);
+      }
+      storylineId = fallbackStoryline.id;
+    } else {
+      throw new Error(`Failed to publish storyline: ${slError.message}`);
+    }
   }
+
+  storylineId = storylineId ?? storyline!.id;
 
   // Create storyline_beats junction rows
   const junctionRows = nodePath.map((nodeId, index) => {
     const beat = beatsMap.get(nodeId);
     const choiceForThisBeat = index > 0 ? choices[index - 1] : undefined;
     return {
-      storyline_id: storyline.id,
+      storyline_id: storylineId,
       beat_id: beat!.id,
       position: index,
       choice_label: choiceForThisBeat?.optionLabel || null,
@@ -1311,12 +1438,12 @@ export async function autoPublishStoryline(
   await supabase
     .from('saved_storylines')
     .upsert(
-      { user_id: user.id, storyline_id: storyline.id },
+          { user_id: user.id, storyline_id: storylineId },
       { onConflict: 'user_id,storyline_id' }
     );
 
   await finalizeStorylineShareAssets({
-    storylineId: storyline.id,
+    storylineId,
     storyId,
     userId: user.id,
     title: storyTitle,
@@ -1328,7 +1455,7 @@ export async function autoPublishStoryline(
     orientation: publishModes.orientation,
   });
 
-  return { alreadyPublished: false, storylineId: storyline.id };
+  return { alreadyPublished: false, storylineId };
 }
 
 // ============================================================
@@ -1589,11 +1716,12 @@ export async function publishStoryline(params: {
 
   const { data: sourceStory } = await supabase
     .from('stories')
-    .select('story_config, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
     .eq('id', params.storyId)
     .maybeSingle();
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
+    storyKind: sourceStory?.story_kind,
     isVerticalStory: sourceStory?.is_vertical_story,
     aspectRatio: sourceStory?.aspect_ratio,
   });
@@ -1618,30 +1746,34 @@ export async function publishStoryline(params: {
   // Compute path hash
   const pathHash = await computePathHash(params.nodePath);
 
+  const storylineRow = {
+    story_id: params.storyId,
+    user_id: user.id,
+    title: params.title,
+    beat_count: params.beats.length,
+    cover_image_url: params.coverImageUrl,
+    is_vertical_story: orientation.isVerticalStory,
+    aspect_ratio: orientation.aspectRatio,
+    story_kind: storyConfig.storyKind,
+    story_format: publishModes.storyFormat,
+    story_visual_mode: publishModes.storyVisualMode,
+    orientation: publishModes.orientation,
+    social_cover_prompt: params.socialCoverPrompt ?? null,
+    youtube_thumbnail_prompt: params.youtubeThumbnailPrompt ?? null,
+    reel_thumbnail_prompt: params.reelThumbnailPrompt ?? null,
+    audio_cover_prompt: params.audioCoverPrompt ?? null,
+    node_path: params.nodePath,
+    beats: params.beats as unknown as Record<string, unknown>[],
+    choices: params.choices as unknown as Record<string, unknown>[],
+    author_name: profile?.display_name || 'Anonymous',
+    is_public: true,
+    path_hash: pathHash,
+  };
+
+  let insertedStorylineId: string | null = null;
   const { data, error } = await supabase
     .from('storylines')
-    .insert({
-      story_id: params.storyId,
-      user_id: user.id,
-      title: params.title,
-      beat_count: params.beats.length,
-      cover_image_url: params.coverImageUrl,
-      is_vertical_story: orientation.isVerticalStory,
-      aspect_ratio: orientation.aspectRatio,
-      story_format: publishModes.storyFormat,
-      story_visual_mode: publishModes.storyVisualMode,
-      orientation: publishModes.orientation,
-      social_cover_prompt: params.socialCoverPrompt ?? null,
-      youtube_thumbnail_prompt: params.youtubeThumbnailPrompt ?? null,
-      reel_thumbnail_prompt: params.reelThumbnailPrompt ?? null,
-      audio_cover_prompt: params.audioCoverPrompt ?? null,
-      node_path: params.nodePath,
-      beats: params.beats as unknown as Record<string, unknown>[],
-      choices: params.choices as unknown as Record<string, unknown>[],
-      author_name: profile?.display_name || 'Anonymous',
-      is_public: true,
-      path_hash: pathHash,
-    })
+    .insert(storylineRow)
     .select('id')
     .single();
 
@@ -1686,20 +1818,35 @@ export async function publishStoryline(params: {
         return { storylineId: dup.id };
       }
     }
-    throw new Error(`Failed to publish storyline: ${error.message}`);
+    if (isMissingAdditiveColumnError(error, 'storylines')) {
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('storylines')
+        .insert(withoutAdditiveColumns(storylineRow, ADDITIVE_STORYLINE_COLUMNS))
+        .select('id')
+        .single();
+
+      if (fallbackError || !fallbackData) {
+        throw new Error(`Failed to publish storyline: ${fallbackError?.message || error.message}`);
+      }
+      insertedStorylineId = fallbackData.id;
+    } else {
+      throw new Error(`Failed to publish storyline: ${error.message}`);
+    }
   }
+
+  insertedStorylineId = insertedStorylineId ?? data!.id;
 
   // Link the author to their own published storyline so it appears in the
   // saved-storylines list alongside the auto-publish path's behavior.
   await supabase
     .from('saved_storylines')
     .upsert(
-      { user_id: user.id, storyline_id: data.id },
+      { user_id: user.id, storyline_id: insertedStorylineId },
       { onConflict: 'user_id,storyline_id' }
     );
 
   await finalizeStorylineShareAssets({
-    storylineId: data.id,
+    storylineId: insertedStorylineId,
     storyId: params.storyId,
     userId: user.id,
     title: params.title,
@@ -1721,7 +1868,7 @@ export async function publishStoryline(params: {
     audioCoverPrompt: params.audioCoverPrompt ?? null,
   });
 
-  return { storylineId: data.id };
+  return { storylineId: insertedStorylineId };
 }
 
 // ============================================================

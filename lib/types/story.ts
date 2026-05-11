@@ -1,5 +1,6 @@
 import type { BeatMediaStatus } from './beat-media';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
+import type { ReelLengthKey } from '@/lib/reel/settings';
 
 export interface CharacterSheetGalleryEntry {
   url: string;
@@ -90,6 +91,13 @@ export interface StoryboardPlan {
   negativeConstraints: string[];
 }
 
+export interface ReelPanelCaption {
+  panelIndex: number;
+  text: string;
+  startMs?: number;
+  endMs?: number;
+}
+
 export interface BeatImageGalleryEntry {
   url: string;
   storageKey: string;
@@ -114,6 +122,7 @@ export interface StoryBeat {
   changedCharacterIds?: string[];
   storyboardPlan?: StoryboardPlan;
   storyboardPromptText?: string;
+  reelCaptions?: ReelPanelCaption[];
   finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;
@@ -171,6 +180,7 @@ export interface VisualSettings {
 }
 
 export type AuthoringMode = 'prompt' | 'seeded';
+export type StoryKind = 'story' | 'reel';
 
 export interface StoryAuthoringConfig {
   mode: AuthoringMode;
@@ -182,7 +192,16 @@ export interface StoryAuthoringConfig {
   seedPlan?: SeedPlan;
 }
 
+export interface ReelStoryConfig {
+  length: ReelLengthKey;
+  moodKey: string;
+  visualStyleKey: string;
+  narrationStyleKey: string;
+  brandingEnabled: boolean;
+}
+
 export interface StoryConfig {
+  storyKind: StoryKind;
   ageGroup: AgeGroup;
   settingCountry: string;
   maxBeats: number;
@@ -192,6 +211,7 @@ export interface StoryConfig {
   aspectRatio: StoryAspectRatio;
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
+  reel: ReelStoryConfig;
   portraitReferences: PortraitReferenceConfig;
   narrationVoice?: import('@/lib/ai/narration-voices').StoryNarrationVoiceSelection;
 }

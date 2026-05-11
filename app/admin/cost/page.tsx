@@ -38,7 +38,9 @@ function formatDateTime(iso: string) {
 function activityLabel(key: string) {
   const labels: Record<string, string> = {
     start_story_initial_beat: 'Story start',
+    start_reel_initial_beat: 'Reel start',
     continue_story_new_beat: 'New beat',
+    continue_reel_new_beat: 'New reel beat',
     preview_seed_plan: 'Seed preview',
     regenerate_image: 'Image regen',
     regenerate_narration: 'Narration regen',

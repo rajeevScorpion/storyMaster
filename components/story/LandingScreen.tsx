@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
+import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
 import { generateSeedPlanPreview } from '@/app/actions/story-runtime';
 import {
@@ -12,6 +12,12 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import {
+  DEFAULT_REEL_STORY_SETTINGS,
+  getReelLengthBeatCount,
+  type ReelLengthKey,
+  type ReelStorySetupSettings,
+} from '@/lib/reel/settings';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { Sparkles, ChevronDown, ChevronUp, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -37,6 +43,8 @@ function countWords(value: string): number {
   return normalized.split(/\s+/).length;
 }
 
+type CreationMode = 'prompt' | 'seeded' | 'reel';
+
 export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const router = useRouter();
   const [prompt, setPrompt] = useState('');
@@ -51,6 +59,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
   const [visualSettings, setVisualSettings] = useState<VisualSettings>(DEFAULT_STORY_CONFIG.visualSettings);
+  const [creationMode, setCreationMode] = useState<CreationMode>('prompt');
   const [authoringMode, setAuthoringMode] = useState<StoryConfig['authoring']['mode']>(DEFAULT_STORY_CONFIG.authoring.mode);
   const [workingTitle, setWorkingTitle] = useState(DEFAULT_STORY_CONFIG.authoring.workingTitle || '');
   const [sourceText, setSourceText] = useState(DEFAULT_STORY_CONFIG.authoring.sourceText || '');
@@ -67,6 +76,14 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     storyPromptOnlyModeEnabled: false,
     verticalStoriesSettingEnabled: false,
   });
+  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>({
+    enabled: false,
+    settings: DEFAULT_REEL_STORY_SETTINGS,
+  });
+  const [reelLength, setReelLength] = useState<ReelLengthKey>(DEFAULT_REEL_STORY_SETTINGS.defaultLength);
+  const [reelMoodKey, setReelMoodKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultMood);
+  const [reelVisualStyleKey, setReelVisualStyleKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle);
+  const [reelNarrationStyleKey, setReelNarrationStyleKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle);
   const [isVerticalStory, setIsVerticalStory] = useState(false);
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
@@ -81,13 +98,17 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   });
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
-  const effectiveMaxBeats = storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
+  const isReelMode = creationMode === 'reel';
+  const reelMaxBeats = getReelLengthBeatCount(reelLength);
+  const effectiveMaxBeats = isReelMode ? reelMaxBeats : storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
   const startStoryCoinCost = (
-    pricing.actionCosts[
-      imageGenerationMode === 'prompt_only'
-        ? 'start_story_initial_beat_prompt_only'
-        : 'start_story_initial_beat'
-    ] ?? (imageGenerationMode === 'prompt_only' ? 0.5 : 1)
+    isReelMode
+      ? pricing.actionCosts.start_reel_initial_beat ?? 1
+      : pricing.actionCosts[
+          imageGenerationMode === 'prompt_only'
+            ? 'start_story_initial_beat_prompt_only'
+            : 'start_story_initial_beat'
+        ] ?? (imageGenerationMode === 'prompt_only' ? 0.5 : 1)
   ) * 10;
   const isCreatorPlan = pricing.snapshot.creatorControls;
   const showCreatorSettings = isCreatorPlan && setupSettings.creatorCharacterSheetsEnabled;
@@ -121,6 +142,20 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         });
         setIsVerticalStory(false);
         setAuthoringWordCap(500);
+      });
+  }, []);
+
+  useEffect(() => {
+    getReelStorySetupSettings()
+      .then((setup) => {
+        setReelSetup(setup);
+        setReelLength(setup.settings.defaultLength);
+        setReelMoodKey(setup.settings.defaultMood);
+        setReelVisualStyleKey(setup.settings.defaultVisualStyle);
+        setReelNarrationStyleKey(setup.settings.defaultNarrationStyle);
+      })
+      .catch(() => {
+        setReelSetup({ enabled: false, settings: DEFAULT_REEL_STORY_SETTINGS });
       });
   }, []);
 
@@ -164,6 +199,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         if (savedConfig) {
           try {
             const config = normalizeStoryConfig(JSON.parse(savedConfig) as StoryConfig);
+            setCreationMode(config.storyKind === 'reel' ? 'reel' : config.authoring.mode === 'seeded' ? 'seeded' : 'prompt');
             setLanguage(config.language);
             setAgeGroup(config.ageGroup);
             const isPresetSetting = ['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
@@ -172,6 +208,10 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
             setMaxBeats(config.maxBeats);
             setVisualSettings(config.visualSettings);
             setAuthoringMode(config.authoring.mode);
+            setReelLength(config.reel.length);
+            setReelMoodKey(config.reel.moodKey);
+            setReelVisualStyleKey(config.reel.visualStyleKey);
+            setReelNarrationStyleKey(config.reel.narrationStyleKey);
             setWorkingTitle(config.authoring.workingTitle || '');
             setSourceText(config.authoring.sourceText || '');
             setGuidanceText(config.authoring.guidanceText || '');
@@ -198,7 +238,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
 
   const previewSeedPlanCoinCost = (pricing.actionCosts.preview_seed_plan ?? 0) * 10;
   const authoringWordCount = countWords(
-    authoringMode === 'seeded'
+    creationMode === 'seeded'
       ? `${sourceText} ${guidanceText}`
       : prompt
   );
@@ -234,8 +274,48 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     seedPlan?: SeedPlan,
     voiceConfig: NarrationVoiceClientConfig | null = narrationVoiceConfig
   ): StoryConfig => {
+    if (isReelMode) {
+      return {
+        storyKind: 'reel',
+        language,
+        ageGroup,
+        settingCountry: 'generic',
+        maxBeats: reelMaxBeats,
+        imageGenerationMode: 'generate',
+        isVerticalStory: true,
+        aspectRatio: '9:16',
+        visualSettings,
+        authoring: {
+          mode: 'prompt',
+        },
+        reel: {
+          length: reelLength,
+          moodKey: reelMoodKey,
+          visualStyleKey: reelVisualStyleKey,
+          narrationStyleKey: reelNarrationStyleKey,
+          brandingEnabled: true,
+        },
+        portraitReferences: buildPortraitReferences(),
+        narrationVoice: voiceConfig?.enabled
+          ? {
+              mode: 'user_selected',
+              genderBucket: narrationVoiceSelection.genderBucket,
+              voiceId: narrationVoiceSelection.voiceId || (
+                narrationVoiceSelection.genderBucket === 'male'
+                  ? voiceConfig.defaultMaleVoice
+                  : voiceConfig.defaultFemaleVoice
+              ),
+              languageCode: voiceConfig.languageCode,
+            }
+          : {
+              mode: 'legacy_auto',
+            },
+      };
+    }
+
     const verticalStoryEnabled = setupSettings.verticalStoriesSettingEnabled && isVerticalStory;
     return {
+      storyKind: 'story',
       language,
       ageGroup,
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
@@ -256,6 +336,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         : {
             mode: 'prompt',
           },
+      reel: DEFAULT_STORY_CONFIG.reel,
       portraitReferences: buildPortraitReferences(),
       narrationVoice: voiceConfig?.enabled
         ? {
@@ -277,7 +358,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const startConfiguredStory = async (seedPlan?: SeedPlan) => {
     const voiceConfig = narrationVoiceConfig || await getNarrationVoiceSelectionConfig(language).catch(() => null);
     const config = buildStoryConfig(seedPlan, voiceConfig);
-    const storyPrompt = authoringMode === 'seeded' ? sourceText.trim() : prompt.trim();
+    const storyPrompt = creationMode === 'seeded' ? sourceText.trim() : prompt.trim();
     if (!storyPrompt) return;
 
     if (onBegin) {
@@ -397,7 +478,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (authoringMode === 'seeded') {
+    if (creationMode === 'seeded') {
       if (!seedPreview) {
         await handleGeneratePreview();
         return;
@@ -450,11 +531,12 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                   <button
                     type="button"
                     onClick={() => {
+                      setCreationMode('prompt');
                       setAuthoringMode('prompt');
                       clearSeedPreview();
                     }}
                     className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                      authoringMode === 'prompt'
+                      creationMode === 'prompt'
                         ? 'bg-white text-black'
                         : 'text-neutral-300 hover:text-white'
                     }`}
@@ -464,47 +546,100 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                   <button
                     type="button"
                     onClick={() => {
+                      setCreationMode('seeded');
                       setAuthoringMode('seeded');
                       clearSeedPreview();
                     }}
                     className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                      authoringMode === 'seeded'
+                      creationMode === 'seeded'
                         ? 'bg-white text-black'
                         : 'text-neutral-300 hover:text-white'
                     }`}
                   >
                     Seed From Story
                   </button>
+                  {reelSetup.enabled && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                      setCreationMode('reel');
+                      setAuthoringMode('prompt');
+                      setImageGenerationMode('generate');
+                      setIsVerticalStory(true);
+                      setShowAdvanced(false);
+                      clearSeedPreview();
+                      }}
+                      className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
+                        creationMode === 'reel'
+                          ? 'bg-white text-black'
+                          : 'text-neutral-300 hover:text-white'
+                      }`}
+                    >
+                      Reel Story
+                    </button>
+                  )}
                 </div>
               </div>
 
               <div className="relative group">
                 <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 rounded-2xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200" />
                 <div className="relative rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
-                  {authoringMode === 'prompt' ? (
-                    <div className="flex items-center p-2">
-                      <input
-                        type="text"
-                        value={prompt}
-                        onChange={(e) => setPrompt(e.target.value)}
-                        placeholder="Tell me a story of a monkey and an elephant..."
-                        className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
-                        disabled={isLoading}
-                      />
-                      <button
-                        type="submit"
-                        disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
-                        className="ml-2 bg-white text-black px-6 py-3 rounded-xl font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                      >
-                        {isLoading ? (
-                          <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <>
-                            <span>Begin</span>
-                            <Sparkles className="w-4 h-4" />
-                          </>
-                        )}
-                      </button>
+                  {creationMode !== 'seeded' ? (
+                    <div className="space-y-3 p-2">
+                      <div className="flex items-center">
+                        <input
+                          type="text"
+                          value={prompt}
+                          onChange={(e) => setPrompt(e.target.value)}
+                          placeholder={isReelMode ? 'Make a short reel about a moonlit mango market...' : 'Tell me a story of a monkey and an elephant...'}
+                          className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
+                          disabled={isLoading}
+                        />
+                        <button
+                          type="submit"
+                          disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
+                          className="ml-2 bg-white text-black px-6 py-3 rounded-xl font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                        >
+                          {isLoading ? (
+                            <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <span>Begin</span>
+                              <Sparkles className="w-4 h-4" />
+                            </>
+                          )}
+                        </button>
+                      </div>
+                      {isReelMode && (
+                        <div className="grid gap-2 border-t border-white/10 px-2 pb-2 pt-3 text-left md:grid-cols-4">
+                          <div className="space-y-1">
+                            <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Length</label>
+                            <select value={reelLength} onChange={(event) => setReelLength(event.target.value as ReelLengthKey)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+                              <option value="short">Short - 1 beat</option>
+                              <option value="medium">Medium - 2 beats</option>
+                              <option value="long">Long - 3 beats</option>
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mood</label>
+                            <select value={reelMoodKey} onChange={(event) => setReelMoodKey(event.target.value)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+                              {reelSetup.settings.moods.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Visual</label>
+                            <select value={reelVisualStyleKey} onChange={(event) => setReelVisualStyleKey(event.target.value)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+                              {reelSetup.settings.visualStyles.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Narration</label>
+                            <select value={reelNarrationStyleKey} onChange={(event) => setReelNarrationStyleKey(event.target.value)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
+                              {reelSetup.settings.narrationStyles.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="space-y-4 p-4 md:p-5">
@@ -603,15 +738,19 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
 
               <div className="space-y-1 text-center">
                 <p className={`text-xs font-sans ${isOverAuthoringWordCap ? 'text-rose-400' : 'text-neutral-500'}`}>
-                  {authoringMode === 'seeded'
+                  {creationMode === 'seeded'
                     ? `Source text and extra guidance share a ${authoringWordCap}-word limit.`
-                    : `Prompt text shares the ${authoringWordCap}-word authoring limit.`}
+                    : isReelMode
+                      ? `Reel prompts use the ${authoringWordCap}-word authoring limit.`
+                      : `Prompt text shares the ${authoringWordCap}-word authoring limit.`}
                 </p>
                 {(pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled || previewSeedPlanCoinCost > 0) && (
                   <p className="text-xs font-sans text-neutral-500">
-                    {authoringMode === 'seeded'
+                    {creationMode === 'seeded'
                       ? `${previewSeedPlanCoinCost > 0 ? `Preview uses ${previewSeedPlanCoinCost.toLocaleString()} coins. ` : 'Preview is free. '}Starting the story uses ${startStoryCoinCost.toLocaleString()} coins when payment controls are active.`
-                      : `Starting a new story uses ${startStoryCoinCost.toLocaleString()} coins when payment controls are active.`}
+                      : isReelMode
+                        ? `Starting a reel uses ${startStoryCoinCost.toLocaleString()} coins when payment controls are active.`
+                        : `Starting a new story uses ${startStoryCoinCost.toLocaleString()} coins when payment controls are active.`}
                   </p>
                 )}
               </div>
@@ -621,7 +760,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         </motion.div>
 
         {/* Floating prompt suggestions carousel */}
-        {authoringMode === 'prompt' && (
+        {creationMode === 'prompt' && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -632,6 +771,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
           </motion.div>
         )}
 
+        {creationMode !== 'reel' && (
         <div className="z-10 mt-6 w-full max-w-5xl text-center">
           <button
             type="button"
@@ -675,7 +815,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                   setVisualSettings(next);
                   clearSeedPreview();
                 }}
-                isSeedMode={authoringMode === 'seeded'}
+                isSeedMode={creationMode === 'seeded'}
                 sourceFidelity={sourceFidelity}
                 onSourceFidelityChange={(value) => {
                   setSourceFidelity(value);
@@ -705,6 +845,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
             )}
           </AnimatePresence>
         </div>
+        )}
 
         {/* Scroll to discover indicator — pinned to bottom of viewport */}
         <AnimatePresence>
@@ -715,10 +856,10 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.5, delay: 0.2 }}
               className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-2 cursor-pointer"
-              onClick={() => document.getElementById(authoringMode === 'seeded' && seedPreview ? 'seed-preview-section' : 'gallery-section')?.scrollIntoView({ behavior: 'smooth' })}
+              onClick={() => document.getElementById(creationMode === 'seeded' && seedPreview ? 'seed-preview-section' : 'gallery-section')?.scrollIntoView({ behavior: 'smooth' })}
             >
               <span className="text-sm text-neutral-500 font-sans">
-                {authoringMode === 'seeded' && seedPreview ? 'Scroll to review your beat preview' : 'Scroll to discover stories'}
+                {creationMode === 'seeded' && seedPreview ? 'Scroll to review your beat preview' : 'Scroll to discover stories'}
               </span>
               <motion.div
                 animate={{ y: [0, 6, 0] }}
@@ -731,7 +872,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         </AnimatePresence>
       </div>
 
-      {authoringMode === 'seeded' && seedPreview && (
+      {creationMode === 'seeded' && seedPreview && (
         <section id="seed-preview-section" className="relative z-10 mx-auto w-full max-w-5xl px-4 pb-14">
           <div className="rounded-[28px] border border-white/10 bg-neutral-900/70 p-5 backdrop-blur-md md:p-6 lg:p-7">
             <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">

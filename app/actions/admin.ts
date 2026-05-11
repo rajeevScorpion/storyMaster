@@ -4,6 +4,13 @@ import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue, setFeatureFlagValue, type ModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
+import {
+  parseReelStorySettingsValue,
+  serializeReelStorySettings,
+  normalizeReelStorySettings,
+  type ReelStorySetupSettings,
+  type ReelStorySettings,
+} from '@/lib/reel/settings';
 import { savePricingActionCost } from '@/app/actions/pricing-admin';
 import { getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
 import {
@@ -198,35 +205,69 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, imagePrompt, portraitPrompt, storyboardImageSettings] = await Promise.all([
+  const [storyPrompt, reelStoryPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, reelVisualPrompt, imagePrompt, portraitPrompt, storyboardImageSettings, reelSettingsValue] = await Promise.all([
     getPublishedPrompt('story_generation'),
+    getPublishedPrompt('reel_story_generation'),
     getPublishedPrompt('seed_plan_generation'),
     getPublishedPrompt('seeded_beat_materialization'),
     getPublishedPrompt('visual_prompt'),
+    getPublishedPrompt('reel_visual_prompt'),
     getPublishedPrompt('image_generation'),
     getPublishedPrompt('portrait_generation'),
     getStoryboardImageQualitySettings(),
+    getFeatureFlagValue('reel_story_settings'),
   ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
     storyTemperature: map.get('story_generation')?.temperature ?? undefined,
+    reelStoryModel: map.get('reel_story_generation')?.modelId,
+    reelStoryTemperature: map.get('reel_story_generation')?.temperature ?? undefined,
     seedPlanModel: map.get('seed_plan_generation')?.modelId,
     seedPlanTemperature: map.get('seed_plan_generation')?.temperature ?? undefined,
     seededBeatModel: map.get('seeded_beat_materialization')?.modelId,
     seededBeatTemperature: map.get('seeded_beat_materialization')?.temperature ?? undefined,
     composerModel: map.get('visual_prompt')?.modelId,
     composerTemperature: map.get('visual_prompt')?.temperature ?? undefined,
+    reelComposerModel: map.get('reel_visual_prompt')?.modelId,
+    reelComposerTemperature: map.get('reel_visual_prompt')?.temperature ?? undefined,
     imageModel: map.get('image_generation')?.modelId,
     portraitModel: map.get('portrait_generation')?.modelId,
     storyPrompt,
+    reelStoryPrompt,
     seedPlanPrompt,
     seededBeatPrompt,
     visualPrompt,
+    reelVisualPrompt,
     imagePrompt,
     portraitPrompt,
+    reelSettings: parseReelStorySettingsValue(reelSettingsValue),
     storyboardImageSettings,
     enableStoryboard: true,
   };
+}
+
+export async function getReelStorySetupSettings(): Promise<ReelStorySetupSettings> {
+  const [enabled, settingsValue] = await Promise.all([
+    getFeatureFlag('reel_story_enabled', false),
+    getFeatureFlagValue('reel_story_settings'),
+  ]);
+
+  return {
+    enabled,
+    settings: parseReelStorySettingsValue(settingsValue),
+  };
+}
+
+export async function setReelStoryEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('reel_story_enabled', enabled);
+}
+
+export async function saveReelStorySettings(settings: ReelStorySettings): Promise<ReelStorySettings> {
+  await verifyAdmin();
+  const normalized = normalizeReelStorySettings(settings);
+  await setFeatureFlagValue('reel_story_settings', serializeReelStorySettings(normalized));
+  return normalized;
 }
 
 export async function getStoryboardImageQualitySettings(): Promise<StoryboardImageQualitySettings> {

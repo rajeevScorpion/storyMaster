@@ -117,6 +117,7 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     changedCharacterIds: beat.changedCharacterIds || fallback.changedCharacterIds,
     storyboardPlan: beat.storyboardPlan || fallback.storyboardPlan,
     storyboardPromptText: beat.storyboardPromptText || fallback.storyboardPromptText,
+    reelCaptions: beat.reelCaptions || fallback.reelCaptions,
     finalImagePromptText: beat.finalImagePromptText || fallback.finalImagePromptText,
     narrationVoiceId: beat.narrationVoiceId || fallback.narrationVoiceId,
     originKind: beat.originKind || fallback.originKind,
@@ -250,6 +251,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
   }
   const storyConfig = normalizeStoryConfig({
     ...(dbStory.story_config as any),
+    storyKind: dbStory.story_kind,
     isVerticalStory: dbStory.is_vertical_story,
     aspectRatio: dbStory.aspect_ratio,
   });
@@ -399,7 +401,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, stories(story_map, story_config, is_vertical_story, aspect_ratio)')
+    .select('id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio)')
     .eq('id', storylineId)
     .single();
 
@@ -407,11 +409,13 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   const fallbackStoryMap = getStoryMapFromStorylineRow(storyline);
   const sourceStory = (storyline as any).stories as {
     story_config?: Record<string, unknown> | null;
+    story_kind?: string | null;
     is_vertical_story?: boolean | null;
     aspect_ratio?: string | null;
   } | null;
   const sourceStoryConfig = normalizeStoryConfig({
     ...(sourceStory?.story_config ?? {}),
+    storyKind: sourceStory?.story_kind,
     is_vertical_story: sourceStory?.is_vertical_story,
     aspect_ratio: sourceStory?.aspect_ratio,
   });
@@ -457,6 +461,9 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         audioError: b.audio_error || undefined,
         narrationVoiceId: b.narration_voice_id || undefined,
         isStoryboard: b.is_storyboard || undefined,
+        reelCaptions: Array.isArray(b.reel_captions)
+          ? b.reel_captions as StoryBeat['reelCaptions']
+          : undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,
@@ -598,6 +605,9 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         audioError: b.audio_error || undefined,
         narrationVoiceId: b.narration_voice_id || undefined,
         isStoryboard: b.is_storyboard || undefined,
+        reelCaptions: Array.isArray(b.reel_captions)
+          ? b.reel_captions as StoryBeat['reelCaptions']
+          : undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,

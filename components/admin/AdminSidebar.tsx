@@ -9,6 +9,7 @@ const navItems = [
   { label: 'Backfill', href: '/admin/backfill', icon: Database },
   { label: 'Share Covers', href: '/admin/share-covers', icon: ImageIcon },
   { label: 'Prompts Playground', href: '/admin/playground', icon: FlaskConical },
+  { label: 'Reel Playground', href: '/admin/reel-playground', icon: FlaskConical },
   { label: 'Cost', href: '/admin/cost', icon: WalletCards },
   {
     label: 'Pricing and offers',
@@ -32,6 +33,7 @@ const navItems = [
     children: [
       { label: 'Overview', href: '/admin/settings' },
       { label: 'Storyboard', href: '/admin/settings/storyboard' },
+      { label: 'Reels', href: '/admin/settings/reels' },
       { label: 'Reader and loader', href: '/admin/settings/reader' },
       { label: 'Narration voices', href: '/admin/settings/narration' },
       { label: 'Authoring', href: '/admin/settings/authoring' },

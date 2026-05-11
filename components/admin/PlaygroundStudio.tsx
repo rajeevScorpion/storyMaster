@@ -135,6 +135,17 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     storyState: DEFAULT_STORY_BIBLE,
     selectedOptionLabel: 'Pip follows the lantern trail into the orchard',
   },
+  reel_story_generation: {
+    userPrompt: 'Create a short visual reel about a child finding a glowing kite above a rainy city.',
+    language: 'english',
+    storyConfig: '- Story Kind: reel\n- Language: english\n- Maximum Beats: 2\n- Current Beat: 1 of 2\n- Reel Length: medium\n- Reel Orientation: 9:16\n- Reel Storyboard Panels Per Beat: 4',
+    storyState: DEFAULT_STORY_BIBLE,
+    selectedOptionLabel: 'None yet - first beat',
+    reelLength: 'medium',
+    moodDefiner: 'Playful: bright, curious, quick emotional turns',
+    visualStyleDefiner: 'Cinematic: cinematic storybook frames with expressive lighting',
+    narrationStyleDefiner: 'Expressive: expressive narrator with natural pauses and energy',
+  },
   seed_plan_generation: {
     language: 'english',
     storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Visual Style: storybook illustration\n- Seed Fidelity: balanced adaptation',
@@ -180,6 +191,21 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     changedCharacterIds: '[]',
     previousStoryboardContext: 'None yet - first beat',
   },
+  reel_visual_prompt: {
+    storyText: 'Mira spots a glowing kite caught on a rain-slick rooftop. As thunder rolls, the kite tugs its string toward the clouds like it is inviting her to follow.',
+    sceneSummary: 'Mira discovers a glowing kite above a rainy city rooftop.',
+    imageIntent: 'vertical cinematic reel beat showing Mira noticing, reaching, and following the glowing kite',
+    characters: DEFAULT_CHARACTER_ANCHORS,
+    continuityNotes: JSON.stringify(['Mira wears a yellow raincoat.', 'The kite glows blue-gold against the rain.'], null, 2),
+    visualStyle: DEFAULT_VISUAL_STYLE,
+    moodDefiner: 'Playful: bright, curious, quick emotional turns',
+    visualStyleDefiner: 'Cinematic: cinematic storybook frames with expressive lighting',
+    beatNumber: '1',
+    storyState: DEFAULT_STORY_BIBLE,
+    newCharacterIds: JSON.stringify(['char_pip'], null, 2),
+    changedCharacterIds: '[]',
+    previousStoryboardContext: 'None yet - first beat',
+  },
   image_generation: {
     prompt: 'Low-angle medium-wide shot of Pip and Barnaby stopping beneath a hanging cluster of glowing orchard lanterns, one panel per sequential moment as the lanterns brighten and reveal a hidden brass map case.',
     characters: DEFAULT_CHARACTER_ANCHORS,
@@ -191,6 +217,14 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     genre: 'adventure',
     tone: 'playful',
     language: 'english',
+    voice: 'Sulafat',
+  },
+  reel_tts: {
+    storyText: 'Mira reached for the glowing kite, and the whole rainy city seemed to hold its breath.',
+    genre: 'adventure',
+    tone: 'playful',
+    language: 'english',
+    narrationStyle: 'Expressive: expressive narrator with natural pauses and energy',
     voice: 'Sulafat',
   },
   portrait_generation: {
@@ -212,12 +246,12 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
 
 function getModelsForTask(taskKey: TaskKey): string[] {
   if (taskKey === 'image_generation' || taskKey === 'portrait_generation') return KNOWN_MODELS.image;
-  if (taskKey === 'tts') return KNOWN_MODELS.tts;
+  if (taskKey === 'tts' || taskKey === 'reel_tts') return KNOWN_MODELS.tts;
   return KNOWN_MODELS.text;
 }
 
 function taskHasTemperature(taskKey: TaskKey): boolean {
-  return taskKey !== 'image_generation' && taskKey !== 'portrait_generation' && taskKey !== 'tts';
+  return taskKey !== 'image_generation' && taskKey !== 'portrait_generation' && taskKey !== 'tts' && taskKey !== 'reel_tts';
 }
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -275,9 +309,22 @@ function OutputPreview({ result }: { result: Pick<TestResult, 'output' | 'output
   );
 }
 
-export default function PlaygroundStudio() {
+interface PlaygroundStudioProps {
+  title?: string;
+  description?: string;
+  taskKeys?: TaskKey[];
+  initialTask?: TaskKey;
+}
+
+export default function PlaygroundStudio({
+  title = 'Prompt + Model Playground',
+  description = 'Iterate on task prompts, test against different models, and publish production-ready prompt variants without a code deploy.',
+  taskKeys,
+  initialTask,
+}: PlaygroundStudioProps = {}) {
   const [configs, setConfigs] = useState<ModelConfig[]>([]);
-  const [selectedTask, setSelectedTask] = useState<TaskKey>('story_generation');
+  const visibleTaskKeys = useMemo(() => taskKeys ?? TASK_DEFINITIONS.map((task) => task.key), [taskKeys]);
+  const [selectedTask, setSelectedTask] = useState<TaskKey>(initialTask ?? visibleTaskKeys[0] ?? 'story_generation');
   const [selectedModel, setSelectedModel] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [inputs, setInputs] = useState<Record<string, string>>({});
@@ -606,15 +653,15 @@ export default function PlaygroundStudio() {
 
   return (
     <div className="mx-auto max-w-7xl">
-      <h1 className="mb-1 text-2xl text-neutral-100">Prompt + Model Playground</h1>
-      <p className="mb-8 text-sm text-neutral-400">Iterate on task prompts, test against different models, and publish production-ready prompt variants without a code deploy.</p>
+      <h1 className="mb-1 text-2xl text-neutral-100">{title}</h1>
+      <p className="mb-8 text-sm text-neutral-400">{description}</p>
 
       {isFetchingConfigs ? (
         <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading playground config...</div>
       ) : (
         <div className="flex gap-6">
           <div className="w-72 shrink-0 space-y-2">
-            {TASK_DEFINITIONS.map((task) => {
+            {TASK_DEFINITIONS.filter((task) => visibleTaskKeys.includes(task.key)).map((task) => {
               const config = configs.find((item) => item.taskKey === task.key);
               const active = selectedTask === task.key;
               const promptEnabled = PROMPT_TASK_KEYS.includes(task.key as PromptTaskKey);
