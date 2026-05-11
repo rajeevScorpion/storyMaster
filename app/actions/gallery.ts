@@ -2,6 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { createR2SignedGetUrl } from '@/lib/media/r2-server';
+import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryPage, GenreSection } from '@/lib/types/database';
 import type { StoryAspectRatio } from '@/lib/types/story';
@@ -23,6 +25,8 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
   aspect_ratio?: string | null;
   node_path?: string[] | null;
   beats?: LegacyGalleryBeat[] | null;
+  share_cover_url?: string | null;
+  share_cover_status?: string | null;
   stories?: {
     genre?: string | null;
     story_config?: Record<string, unknown> | null;
@@ -150,6 +154,11 @@ function getLegacyCoverUrl(row: StorylineGalleryRow): string | null {
     : null;
 }
 
+function getReadyShareCoverUrl(row: StorylineGalleryRow): string | null {
+  const shareCoverUrl = row.share_cover_url?.trim();
+  return row.share_cover_status === 'ready' && shareCoverUrl ? shareCoverUrl : null;
+}
+
 function getLegacyCoverIsStoryboard(row: StorylineGalleryRow): boolean {
   const coverBeat = getLegacyCoverBeat(row);
   const imagePrompt = coverBeat?.imagePrompt ?? coverBeat?.image_prompt;
@@ -164,11 +173,12 @@ function getLegacyCoverIsStoryboard(row: StorylineGalleryRow): boolean {
 }
 
 function getPreferredStorylineCoverUrl(row: StorylineGalleryRow): string | null {
-  if (row.cover_image_url && row.cover_image_url.trim().length > 0) {
-    return row.cover_image_url;
+  const coverImageUrl = row.cover_image_url?.trim();
+  if (coverImageUrl && !parseR2UrlLikeReference(coverImageUrl)) {
+    return coverImageUrl;
   }
 
-  return getLegacyCoverUrl(row);
+  return getReadyShareCoverUrl(row) ?? coverImageUrl ?? getLegacyCoverUrl(row);
 }
 
 function getStorylineCoverNodeId(row: StorylineGalleryRow): string | null {
@@ -390,43 +400,72 @@ async function resolveStorylineCovers<T extends StorylineGalleryRow>(
   const resolvedWithFallbackFlags = rowsWithCurrentBeatCovers.map((row) => ({
     ...row,
     cover_image_url: getPreferredStorylineCoverUrl(row),
-    cover_is_storyboard: getLegacyCoverIsStoryboard(row),
+    cover_is_storyboard: getPreferredStorylineCoverUrl(row) === getReadyShareCoverUrl(row)
+      ? false
+      : getLegacyCoverIsStoryboard(row),
   }));
   const normalizedResolved = await resolveNormalizedCoverStoryboardFlags(resolvedWithFallbackFlags);
   const resolved = await resolveStoryMapCoverStoryboardFlags(normalizedResolved);
 
-  const signTargets = resolved
+  const supabaseSignTargets = resolved
     .map((row, index) => ({
       index,
       path: row.cover_image_url ? extractStoragePath(row.cover_image_url, 'story-assets') : null,
     }))
     .filter((entry): entry is { index: number; path: string } => !!entry.path);
+  const r2SignTargets = resolved
+    .map((row, index) => ({
+      index,
+      reference: row.cover_image_url ? parseR2UrlLikeReference(row.cover_image_url) : null,
+    }))
+    .filter((entry): entry is { index: number; reference: { bucket: string; objectKey: string } } =>
+      Boolean(entry.reference)
+    );
 
-  if (signTargets.length === 0) {
+  if (supabaseSignTargets.length === 0 && r2SignTargets.length === 0) {
     return resolved;
   }
 
-  try {
-    const admin = createAdminClient();
-    const { data, error } = await admin.storage
-      .from('story-assets')
-      .createSignedUrls(signTargets.map((entry) => entry.path), 60 * 60 * 24);
+  const nextRows = [...resolved];
 
-    if (error || !data) {
-      console.error('Failed to sign gallery cover URLs:', error?.message);
-      return resolved;
+  try {
+    if (supabaseSignTargets.length > 0) {
+      const admin = createAdminClient();
+      const { data, error } = await admin.storage
+        .from('story-assets')
+        .createSignedUrls(supabaseSignTargets.map((entry) => entry.path), 60 * 60 * 24);
+
+      if (error || !data) {
+        console.error('Failed to sign gallery cover URLs:', error?.message);
+      } else {
+        supabaseSignTargets.forEach((entry, index) => {
+          const signedUrl = data[index]?.signedUrl;
+          if (signedUrl) {
+            nextRows[entry.index] = {
+              ...nextRows[entry.index],
+              cover_image_url: signedUrl,
+            };
+          }
+        });
+      }
     }
 
-    const nextRows = [...resolved];
-    signTargets.forEach((entry, index) => {
-      const signedUrl = data[index]?.signedUrl;
+    await Promise.all(r2SignTargets.map(async (entry) => {
+      const signedUrl = await createR2SignedGetUrl(
+        entry.reference.bucket,
+        entry.reference.objectKey,
+        60 * 60 * 24
+      ).catch((error) => {
+        console.error('Failed to sign R2 gallery cover URL:', error instanceof Error ? error.message : error);
+        return null;
+      });
       if (signedUrl) {
         nextRows[entry.index] = {
           ...nextRows[entry.index],
           cover_image_url: signedUrl,
         };
       }
-    });
+    }));
 
     return nextRows;
   } catch (error) {
@@ -443,7 +482,7 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
 
   const { data, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats')
+    .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats')
     .eq('is_public', true)
     .eq('is_vertical_story', false)
     .neq('aspect_ratio', '9:16')
@@ -456,7 +495,9 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
   }
 
   const rows = await resolveStorylineCovers((data || []) as StorylineGalleryRow[]);
-  return rows.map(({ beats, node_path, stories, ...storyline }) => {
+  return rows.map(({ beats, node_path, stories, share_cover_url, share_cover_status, ...storyline }) => {
+    void share_cover_url;
+    void share_cover_status;
     const aspectRatio = resolveStoryAspectRatio(storyline, stories?.story_config);
     return {
       ...storyline,
@@ -475,7 +516,7 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   // Fetch public storylines joined with their parent story for genre
   const { data: rows, error } = await supabase
     .from('storylines')
-    .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
+    .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
     .eq('is_public', true)
     .eq('is_vertical_story', false)
     .neq('aspect_ratio', '9:16')
@@ -574,7 +615,7 @@ export async function getGalleryItems(
   if (filters.type === 'storylines') {
     let query = supabase
       .from('storylines')
-      .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
+      .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
       .eq('is_public', true)
       .eq('is_vertical_story', false)
       .neq('aspect_ratio', '9:16')
@@ -617,7 +658,7 @@ export async function getGalleryItems(
   if (filters.type === 'vertical') {
     let query = supabase
       .from('storylines')
-      .select('id, title, cover_image_url, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
+      .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
       .eq('is_public', true)
       .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
       .order('created_at', { ascending: false });
