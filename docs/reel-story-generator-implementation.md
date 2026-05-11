@@ -33,11 +33,15 @@
 
 ## Data Model and Migrations
 
-- Manual migration file: `supabase/migrations/046_reel_story_generator.sql`.
+- Manual migration files:
+  - `supabase/migrations/046_reel_story_generator.sql` for the base Reel Story schema/settings seed.
+  - `supabase/migrations/047_reel_story_generator_post_apply_patch.sql` for environments where an earlier `046` was already applied before the default/backfill/policy corrections.
 - The migration adds indexed `story_kind` fields on `stories` and `storylines`, reel retention/cleanup fields on `stories`, `beats.reel_captions`, and `reel_cleanup_runs`.
 - It seeds the reel feature flags, model config rows, and pricing action cost rows. Reel action costs copy the current generated story start/continue costs when available, then admins can tune them later.
 - It was not applied automatically. Apply manually through the project Supabase migration process, then refresh generated DB types if this repo later adopts generated Supabase types.
-- Rollback should remove the added reel columns, indexes, seeded rows, and `reel_cleanup_runs` only after verifying no reel data is needed.
+- Rollback files:
+  - `supabase/migrations/046_reel_story_generator_rollback.sql` removes the base Reel Story schema/settings seed.
+  - `supabase/migrations/047_reel_story_generator_post_apply_patch_rollback.sql` restores the earlier post-046 behavior without dropping the base schema.
 
 ## User Flow
 
