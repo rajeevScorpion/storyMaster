@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
+import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { DEFAULT_VIDEO_EXPORT_PRESET, normalizeVideoExportPreset, type VideoExportPreset } from '@/lib/types/pricing';
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
@@ -50,6 +51,16 @@ function probeAudioDuration(url: string): Promise<number> {
 
     audio.src = url;
   });
+}
+
+function toExportFetchUrl(url: string): string {
+  const r2Reference = parseR2UrlLikeReference(url);
+  if (!r2Reference || typeof window === 'undefined') return url;
+
+  const proxyUrl = new URL('/api/media/r2/object', window.location.origin);
+  proxyUrl.searchParams.set('bucket', r2Reference.bucket);
+  proxyUrl.searchParams.set('key', r2Reference.objectKey);
+  return proxyUrl.toString();
 }
 
 const FADE_DURATION = 0.6;
@@ -408,7 +419,9 @@ export function useVideoExport() {
 
       const segments: BeatSegment[] = await Promise.all(
         videoBeats.map(async (beat, index) => {
-          const audioDuration = beat.audioUrl ? await probeAudioDuration(beat.audioUrl) : 0;
+          const imageUrl = toExportFetchUrl(beat.imageUrl!);
+          const audioUrl = beat.audioUrl ? toExportFetchUrl(beat.audioUrl) : null;
+          const audioDuration = audioUrl ? await probeAudioDuration(audioUrl) : 0;
           const isStoryboard = beat.isStoryboard === true;
           const fallbackSeconds = STORYBOARD_ADVANCE_MS / 1000;
           const panelDuration = audioDuration > 0
@@ -417,8 +430,8 @@ export function useVideoExport() {
 
           return {
             index,
-            imageUrl: beat.imageUrl!,
-            audioUrl: beat.audioUrl ?? null,
+            imageUrl,
+            audioUrl,
             isStoryboard,
             panelDuration,
             totalDuration: isStoryboard ? panelDuration * 4 : panelDuration,
