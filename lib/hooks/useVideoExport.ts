@@ -55,12 +55,30 @@ function probeAudioDuration(url: string): Promise<number> {
 
 function toExportFetchUrl(url: string): string {
   const r2Reference = parseR2UrlLikeReference(url);
-  if (!r2Reference || typeof window === 'undefined') return url;
+  if (typeof window === 'undefined') return url;
 
   const proxyUrl = new URL('/api/media/r2/object', window.location.origin);
-  proxyUrl.searchParams.set('bucket', r2Reference.bucket);
-  proxyUrl.searchParams.set('key', r2Reference.objectKey);
-  return proxyUrl.toString();
+  if (r2Reference) {
+    proxyUrl.searchParams.set('bucket', r2Reference.bucket);
+    proxyUrl.searchParams.set('key', r2Reference.objectKey);
+    return proxyUrl.toString();
+  }
+
+  try {
+    const assetUrl = new URL(url);
+    if (
+      assetUrl.protocol === 'https:'
+      && assetUrl.pathname.startsWith('/stories/')
+      && /^media(?:-stage)?\.kissago\.cc$/i.test(assetUrl.hostname)
+    ) {
+      proxyUrl.searchParams.set('url', assetUrl.toString());
+      return proxyUrl.toString();
+    }
+  } catch {
+    // Keep non-URL values untouched.
+  }
+
+  return url;
 }
 
 const FADE_DURATION = 0.6;
