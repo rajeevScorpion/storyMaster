@@ -160,6 +160,31 @@ function getStoryOrientation(config: StorySession['storyConfig']): { isVerticalS
   };
 }
 
+function normalizePersistedAssetUrl(url: string | undefined): string | undefined {
+  return url ? normalizeStorageUrl(url, 'story-assets') : url;
+}
+
+function normalizePublishedBeatAssetUrls(beat: StoryBeat): StoryBeat {
+  return normalizeBeatMediaFields({
+    ...beat,
+    imageUrl: normalizePersistedAssetUrl(beat.imageUrl),
+    persistedImageUrl: normalizePersistedAssetUrl(beat.persistedImageUrl),
+    audioUrl: normalizePersistedAssetUrl(beat.audioUrl),
+    imageGallery: (beat.imageGallery ?? []).map((entry) => ({
+      ...entry,
+      url: normalizePersistedAssetUrl(entry.url) ?? entry.url,
+    })),
+    characters: beat.characters.map((character) => ({
+      ...character,
+      referenceSheetUrl: normalizePersistedAssetUrl(character.referenceSheetUrl),
+      referenceSheetGallery: character.referenceSheetGallery?.map((entry) => ({
+        ...entry,
+        url: normalizePersistedAssetUrl(entry.url) ?? entry.url,
+      })),
+    })),
+  });
+}
+
 function buildStorageObjectPublicUrl(bucket: string, path: string): string {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!supabaseUrl) {
@@ -1732,7 +1757,8 @@ export async function publishStoryline(params: {
     aspectRatio: sourceStory?.aspect_ratio,
   });
   const orientation = getStoryOrientation(storyConfig);
-  const publishModes = getStorylinePublishModes(storyConfig, params.publishMode ?? 'standard', params.beats);
+  const publishedBeats = params.beats.map(normalizePublishedBeatAssetUrls);
+  const publishModes = getStorylinePublishModes(storyConfig, params.publishMode ?? 'standard', publishedBeats);
 
   if (
     publishModes.storyFormat === 'audio_story' &&
@@ -1756,7 +1782,7 @@ export async function publishStoryline(params: {
     story_id: params.storyId,
     user_id: user.id,
     title: params.title,
-    beat_count: params.beats.length,
+    beat_count: publishedBeats.length,
     cover_image_url: params.coverImageUrl,
     is_vertical_story: orientation.isVerticalStory,
     aspect_ratio: orientation.aspectRatio,
@@ -1769,7 +1795,7 @@ export async function publishStoryline(params: {
     reel_thumbnail_prompt: params.reelThumbnailPrompt ?? null,
     audio_cover_prompt: params.audioCoverPrompt ?? null,
     node_path: params.nodePath,
-    beats: params.beats as unknown as Record<string, unknown>[],
+    beats: publishedBeats as unknown as Record<string, unknown>[],
     choices: params.choices as unknown as Record<string, unknown>[],
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
@@ -1806,7 +1832,7 @@ export async function publishStoryline(params: {
           title: params.title,
           authorName: profile?.display_name || 'Anonymous',
           coverImageUrl: params.coverImageUrl,
-          beats: params.beats,
+          beats: publishedBeats,
           storyFormat: publishModes.storyFormat,
           storyVisualMode: publishModes.storyVisualMode,
           orientation: publishModes.orientation,
@@ -1862,7 +1888,7 @@ export async function publishStoryline(params: {
     title: params.title,
     authorName: profile?.display_name || 'Anonymous',
     coverImageUrl: params.coverImageUrl,
-    beats: params.beats,
+    beats: publishedBeats,
     storyFormat: publishModes.storyFormat,
     storyVisualMode: publishModes.storyVisualMode,
     orientation: publishModes.orientation,
