@@ -34,12 +34,16 @@ import {
 } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import type { TaskKey } from '@/lib/ai/model-config.shared';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   findReelDefiner,
+  getReelTextLengthRange,
   normalizeReelStorySettings,
+  type ReelDefiner,
   type ReelStorySettings,
 } from '@/lib/reel/settings';
+import type { ReelVisualStyleRuntime } from '@/lib/reel/styles';
 import {
   normalizeStoryboardImageQualitySettings,
   type StoryboardImageQualitySettings,
@@ -75,10 +79,52 @@ const VERTICAL_STORY_PROMPT_INSTRUCTION = [
 
 interface StoryboardImagePromptOptions {
   aspectRatio?: StoryAspectRatio;
+  task?: Extract<TaskKey, 'image_generation' | 'reel_image_generation'>;
+  visualStyleDefiner?: string;
+  noFaceRule?: string;
+  textOverlayMode?: string;
 }
 
 function normalizeStoryboardAspectRatio(aspectRatio?: StoryAspectRatio | string | null): StoryAspectRatio {
   return aspectRatio === '9:16' ? '9:16' : '16:9';
+}
+
+function resolveReelVisualStyle(
+  modelOverrides: StoryModelOverrides | undefined,
+  settings: ReelStorySettings,
+  storyConfig: StoryConfig
+): ReelDefiner & { id?: string; noFaceDefault?: boolean } {
+  const selectedId = storyConfig.reel.visualStyleId;
+  const selectedKey = storyConfig.reel.visualStyleKey;
+  const tableStyle = modelOverrides?.reelVisualStyles?.find((style) => (
+    style.id === selectedId || style.slug === selectedKey
+  ));
+  if (tableStyle) {
+    return {
+      id: tableStyle.id,
+      key: tableStyle.slug,
+      label: tableStyle.name,
+      prompt: tableStyle.promptDefiner,
+      noFaceDefault: tableStyle.noFaceDefault,
+    };
+  }
+
+  return {
+    ...findReelDefiner(settings.visualStyles, selectedKey),
+    noFaceDefault: true,
+  };
+}
+
+function describeReelNoFaceRule(noFaceDefault: boolean | undefined): string {
+  return noFaceDefault === false
+    ? 'Faces may appear only when the beat explicitly needs them; still avoid celebrity likeness and unnecessary close-up portraits.'
+    : 'Default to no visible faces: use silhouettes, back views, hands, objects, spaces, symbolic landscapes, and abstract human presence.';
+}
+
+function describeReelTextOverlayMode(storyConfig: StoryConfig): string {
+  return storyConfig.reel.textOverlayEnabled
+    ? 'Visible overlay text is rendered by the player/export layer; reserve clean space and do not place text inside the generated image.'
+    : 'Overlay text is hidden for this reel; narration still runs, and generated images must still contain no text.';
 }
 
 function getStoryboardLayoutHardRequirements(aspectRatio?: StoryAspectRatio | string | null): string {
@@ -146,6 +192,7 @@ export interface StoryModelOverrides {
   reelComposerModel?: string;
   reelComposerTemperature?: number;
   imageModel?: string;
+  reelImageModel?: string;
   portraitModel?: string;
   storyPrompt?: string;
   reelStoryPrompt?: string;
@@ -154,8 +201,10 @@ export interface StoryModelOverrides {
   visualPrompt?: string;
   reelVisualPrompt?: string;
   imagePrompt?: string;
+  reelImagePrompt?: string;
   portraitPrompt?: string;
   reelSettings?: ReelStorySettings;
+  reelVisualStyles?: ReelVisualStyleRuntime[];
   storyboardImageSettings?: StoryboardImageQualitySettings;
   // Storyboard is now always on. Keep the field as a no-op for older payload shapes.
   enableStoryboard?: boolean;
@@ -347,28 +396,19 @@ export async function generateStoryBeat(
 
   const lang = normalizedSessionState?.storyConfig?.language || 'english';
   const storyConfig = normalizeStoryConfig(normalizedSessionState?.storyConfig);
-  const isReel = isReelStoryConfig(storyConfig);
-  const promptTask = isReel ? 'reel_story_generation' : 'story_generation';
-  const reelSettings = normalizeReelStorySettings(modelOverrides?.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
-  const reelMood = findReelDefiner(reelSettings.moods, storyConfig.reel.moodKey);
-  const reelVisualStyle = findReelDefiner(reelSettings.visualStyles, storyConfig.reel.visualStyleKey);
-  const reelNarrationStyle = findReelDefiner(reelSettings.narrationStyles, storyConfig.reel.narrationStyleKey);
-  const storyTemplateCandidate = isReel
-    ? modelOverrides?.reelStoryPrompt || getDefaultPromptBody('reel_story_generation')
-    : modelOverrides?.storyPrompt || getDefaultPromptBody('story_generation');
-  const storyTemplate = validatePromptTemplate(promptTask, storyTemplateCandidate).isValid
+  if (isReelStoryConfig(storyConfig)) {
+    throw new Error('generateStoryBeat must not be called for reel sessions; use generateReelDraft instead.');
+  }
+  const storyTemplateCandidate = modelOverrides?.storyPrompt || getDefaultPromptBody('story_generation');
+  const storyTemplate = validatePromptTemplate('story_generation', storyTemplateCandidate).isValid
     ? storyTemplateCandidate
-    : getDefaultPromptBody(promptTask);
+    : getDefaultPromptBody('story_generation');
   const basePrompt = resolvePromptTemplate(storyTemplate, {
     language: lang,
     userPrompt,
     storyConfig: formatStoryConfig(normalizedSessionState),
     storyState: formatStoryState(normalizedSessionState, selectedOptionLabel),
     selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
-    reelLength: storyConfig.reel.length,
-    moodDefiner: `${reelMood.label}: ${reelMood.prompt}`,
-    visualStyleDefiner: `${reelVisualStyle.label}: ${reelVisualStyle.prompt}`,
-    narrationStyleDefiner: `${reelNarrationStyle.label}: ${reelNarrationStyle.prompt}`,
   });
 
   try {
@@ -381,14 +421,10 @@ export async function generateStoryBeat(
       },
       async () => {
         const text = await callGeminiText({
-          task: promptTask,
-          model: isReel
-            ? modelOverrides?.reelStoryModel || modelOverrides?.storyModel || 'gemini-3.1-pro-preview'
-            : modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+          task: 'story_generation',
+          model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
           prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
-          temperature: isReel
-            ? modelOverrides?.reelStoryTemperature ?? modelOverrides?.storyTemperature ?? 0.7
-            : modelOverrides?.storyTemperature ?? 0.7,
+          temperature: modelOverrides?.storyTemperature ?? 0.7,
           telemetry: costTelemetry,
         });
         try {
@@ -420,6 +456,100 @@ export async function generateStoryBeat(
     console.error('Story beat generation failed:', error);
     throw error;
   }
+}
+
+export interface ReelDraftBeatOutput {
+  beatIndex: number;
+  title: string;
+  storyText: string;
+  sceneSummary: string;
+  imagePrompt: string;
+}
+
+export interface ReelDraftResponse {
+  beatCount: number;
+  beats: ReelDraftBeatOutput[];
+}
+
+export async function generateReelDraft(
+  userPrompt: string,
+  storyConfig: StoryConfig,
+  modelOverrides?: StoryModelOverrides,
+  costTelemetry?: CostTelemetryContext
+): Promise<StoryBeat[]> {
+  const normalizedConfig = normalizeStoryConfig(storyConfig);
+  if (!isReelStoryConfig(normalizedConfig)) {
+    throw new Error('generateReelDraft requires a reel storyConfig.');
+  }
+
+  const lang = normalizedConfig.language || 'english';
+  const reelSettings = normalizeReelStorySettings(modelOverrides?.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
+  const reelMood = findReelDefiner(reelSettings.moods, normalizedConfig.reel.moodKey);
+  const reelVisualStyle = resolveReelVisualStyle(modelOverrides, reelSettings, normalizedConfig);
+  const reelNarrationStyle = findReelDefiner(reelSettings.narrationStyles, normalizedConfig.reel.narrationStyleKey);
+  const textLengthRange = getReelTextLengthRange(reelSettings, normalizedConfig.reel.textLength);
+  const beatCount = normalizedConfig.reel.beatCount;
+
+  const templateCandidate = modelOverrides?.reelStoryPrompt || getDefaultPromptBody('reel_story_generation');
+  const template = validatePromptTemplate('reel_story_generation', templateCandidate).isValid
+    ? templateCandidate
+    : getDefaultPromptBody('reel_story_generation');
+
+  const prompt = resolvePromptTemplate(template, {
+    language: lang,
+    userPrompt,
+    reelBeatCount: beatCount,
+    textLength: normalizedConfig.reel.textLength,
+    textLengthWordRange: `${textLengthRange.min}-${textLengthRange.max}`,
+    textOverlayMode: describeReelTextOverlayMode(normalizedConfig),
+    moodDefiner: `${reelMood.label}: ${reelMood.prompt}`,
+    visualStyleDefiner: `${reelVisualStyle.label}: ${reelVisualStyle.prompt}`,
+    narrationStyleDefiner: `${reelNarrationStyle.label}: ${reelNarrationStyle.prompt}`,
+  });
+
+  const text = await timeRuntimeStep(
+    'story_runtime.generate_reel_draft',
+    { beatCount, language: lang },
+    () => callGeminiText({
+      task: 'reel_story_generation',
+      model: modelOverrides?.reelStoryModel || modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+      prompt,
+      temperature: modelOverrides?.reelStoryTemperature ?? modelOverrides?.storyTemperature ?? 0.7,
+      telemetry: costTelemetry,
+    })
+  );
+
+  let parsed: ReelDraftResponse;
+  try {
+    parsed = JSON.parse(text) as ReelDraftResponse;
+  } catch {
+    throw new Error(`Failed to parse reel draft JSON: ${text.slice(0, 200)}`);
+  }
+
+  const draftBeats = Array.isArray(parsed?.beats) ? parsed.beats : [];
+  if (draftBeats.length !== beatCount) {
+    throw new Error(`Reel draft returned ${draftBeats.length} beats; expected ${beatCount}.`);
+  }
+
+  return draftBeats.map((draft, index) => {
+    const beatNumber = Number.isFinite(draft?.beatIndex) ? Number(draft.beatIndex) : index + 1;
+    return {
+      title: (draft?.title || `Beat ${beatNumber}`).trim(),
+      beatNumber,
+      isEnding: beatNumber === beatCount,
+      storyText: (draft?.storyText || '').trim(),
+      sceneSummary: (draft?.sceneSummary || '').trim(),
+      options: [],
+      characters: [],
+      continuityNotes: [],
+      imagePrompt: (draft?.imagePrompt || '').trim(),
+      clues: [],
+      nextBeatGoal: '',
+      endingForecast: [],
+      newCharacterIds: [],
+      changedCharacterIds: [],
+    };
+  });
 }
 
 export interface ReferenceImage {
@@ -590,7 +720,7 @@ export async function composeStoryboardPlan(
       const promptTask = isReel ? 'reel_visual_prompt' : 'visual_prompt';
       const reelSettings = normalizeReelStorySettings(modelOverrides?.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
       const reelMood = findReelDefiner(reelSettings.moods, storyConfig.reel.moodKey);
-      const reelVisualStyle = findReelDefiner(reelSettings.visualStyles, storyConfig.reel.visualStyleKey);
+      const reelVisualStyle = resolveReelVisualStyle(modelOverrides, reelSettings, storyConfig);
       const composerTemplateCandidate = isReel
         ? modelOverrides?.reelVisualPrompt || getDefaultPromptBody('reel_visual_prompt')
         : modelOverrides?.visualPrompt || getDefaultPromptBody('visual_prompt');
@@ -607,6 +737,8 @@ export async function composeStoryboardPlan(
         visualStyle,
         moodDefiner: `${reelMood.label}: ${reelMood.prompt}`,
         visualStyleDefiner: `${reelVisualStyle.label}: ${reelVisualStyle.prompt}`,
+        noFaceRule: describeReelNoFaceRule(reelVisualStyle.noFaceDefault),
+        textOverlayMode: describeReelTextOverlayMode(storyConfig),
         beatNumber: beat.beatNumber,
         storyState: formatStoryState(sessionState),
         newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState)),
@@ -627,13 +759,21 @@ export async function composeStoryboardPlan(
             : modelOverrides?.composerTemperature ?? 0.5,
           telemetry: costTelemetry,
         });
-        return JSON.parse(text) as StoryboardPlan;
+        const parsedPlan = JSON.parse(text) as StoryboardPlan;
+        if (isReel) {
+          parsedPlan.portraitTasks = [];
+        }
+        return parsedPlan;
       } catch (error) {
         console.error('Storyboard plan composition failed; using fallback storyboard plan:', {
           message: error instanceof Error ? error.message : 'Unknown storyboard plan error',
           responsePreview: text ? text.slice(0, 200) : null,
         });
-        return buildFallbackStoryboardPlan(beat, sessionState, visualStyle);
+        const fallback = buildFallbackStoryboardPlan(beat, sessionState, visualStyle);
+        if (isReel) {
+          fallback.portraitTasks = [];
+        }
+        return fallback;
       }
     }
   );
@@ -745,14 +885,23 @@ export function renderStoryboardPlan(plan: StoryboardPlan): string {
   ].join('\n');
 }
 
-export function buildReelPanelCaptions(beat: StoryBeat, plan: StoryboardPlan): StoryBeat['reelCaptions'] {
+export function buildReelPanelCaptions(
+  beat: StoryBeat,
+  plan: StoryboardPlan,
+  options: {
+    textLength?: StoryConfig['reel']['textLength'];
+    reelSettings?: ReelStorySettings;
+  } = {}
+): StoryBeat['reelCaptions'] {
   const frameDescriptions = [
     plan.topLeft.description,
     plan.topRight.description,
     plan.bottomLeft.description,
     plan.bottomRight.description,
   ];
-  const storyChunks = splitCaptionText(beat.storyText, 4);
+  const settings = normalizeReelStorySettings(options.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
+  const range = getReelTextLengthRange(settings, options.textLength ?? settings.defaultTextLength);
+  const storyChunks = splitCaptionText(beat.storyText, 4, range.max);
 
   return frameDescriptions.map((description, panelIndex) => ({
     panelIndex,
@@ -760,7 +909,7 @@ export function buildReelPanelCaptions(beat: StoryBeat, plan: StoryboardPlan): S
   }));
 }
 
-function splitCaptionText(value: string, count: number): string[] {
+function splitCaptionText(value: string, count: number, maxWordsPerChunk?: number): string[] {
   const sentences = value
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?])\s+/)
@@ -768,18 +917,28 @@ function splitCaptionText(value: string, count: number): string[] {
     .filter(Boolean);
 
   if (sentences.length >= count) {
-    return sentences.slice(0, count - 1).concat(sentences.slice(count - 1).join(' '));
+    return sentences.slice(0, count - 1)
+      .concat(sentences.slice(count - 1).join(' '))
+      .map((chunk) => capWords(chunk, maxWordsPerChunk));
   }
 
   const words = value.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
-  const chunkSize = Math.max(1, Math.ceil(words.length / count));
+  const idealChunkSize = Math.max(1, Math.ceil(words.length / count));
+  const chunkSize = maxWordsPerChunk ? Math.min(idealChunkSize, maxWordsPerChunk) : idealChunkSize;
   const chunks: string[] = [];
   for (let index = 0; index < count; index += 1) {
     const chunk = words.slice(index * chunkSize, (index + 1) * chunkSize).join(' ');
     if (chunk) chunks.push(chunk);
   }
   return chunks;
+}
+
+function capWords(value: string, maxWords?: number): string {
+  if (!maxWords) return value;
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return value;
+  return `${words.slice(0, maxWords).join(' ')}...`;
 }
 
 function cleanCaptionText(value: string): string {
@@ -797,16 +956,22 @@ export function buildFinalStoryboardImagePrompt(
   options?: StoryboardImagePromptOptions
 ): string {
   const aspectRatio = normalizeStoryboardAspectRatio(options?.aspectRatio);
-  const imageTemplateCandidate = modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
-  const imageTemplate = validatePromptTemplate('image_generation', imageTemplateCandidate).isValid
+  const imageTask = options?.task ?? 'image_generation';
+  const imageTemplateCandidate = imageTask === 'reel_image_generation'
+    ? modelOverrides?.reelImagePrompt || getDefaultPromptBody('reel_image_generation')
+    : modelOverrides?.imagePrompt || getDefaultPromptBody('image_generation');
+  const imageTemplate = validatePromptTemplate(imageTask, imageTemplateCandidate).isValid
     ? imageTemplateCandidate
-    : getDefaultPromptBody('image_generation');
+    : getDefaultPromptBody(imageTask);
 
   const promptParts = [
     resolvePromptTemplate(imageTemplate, {
       prompt,
       characters: buildPromptCharacterAnchors(characters),
       visualStyle,
+      visualStyleDefiner: options?.visualStyleDefiner || visualStyle,
+      noFaceRule: options?.noFaceRule || 'No extra no-face rule supplied.',
+      textOverlayMode: options?.textOverlayMode || 'Do not generate any text inside the image.',
       beatNumber,
     }),
   ];
@@ -848,7 +1013,9 @@ export async function generateImage(
   referenceImages?: ReferenceImage[],
   beatNumber?: number,
   costTelemetry?: CostTelemetryContext,
-  aspectRatio: StoryAspectRatio = '16:9'
+  aspectRatio: StoryAspectRatio = '16:9',
+  imageTask: Extract<TaskKey, 'image_generation' | 'reel_image_generation'> = 'image_generation',
+  imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {}
 ): Promise<GeneratedImageResult> {
   const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
   const finalImagePrompt = buildFinalStoryboardImagePrompt(
@@ -857,7 +1024,7 @@ export async function generateImage(
     visualStyle,
     beatNumber,
     modelOverrides,
-    { aspectRatio: resolvedAspectRatio }
+    { aspectRatio: resolvedAspectRatio, task: imageTask, ...imagePromptOptions }
   );
   const fallbackSize = resolvedAspectRatio === '9:16'
     ? { width: 1080, height: 1920 }
@@ -884,7 +1051,9 @@ export async function generateImage(
         aspectRatio: resolvedAspectRatio,
       },
       async () => {
-        const imageModel = modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
+        const imageModel = imageTask === 'reel_image_generation'
+          ? modelOverrides?.reelImageModel || modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview'
+          : modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
         const referenceParts = await resolveReferenceImageParts(referenceImages);
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
@@ -898,7 +1067,7 @@ export async function generateImage(
             aspectRatio: resolvedAspectRatio,
           },
           () => callGeminiImage({
-            task: 'image_generation',
+            task: imageTask,
             model: imageModel,
             prompt: finalImagePrompt,
             referenceParts,
@@ -940,7 +1109,7 @@ export async function generateImage(
               aspectRatio: resolvedAspectRatio,
             },
             () => callGeminiImage({
-              task: 'image_generation',
+              task: imageTask,
               model: imageModel,
               prompt: retryPrompt,
               referenceParts,
@@ -1091,8 +1260,12 @@ function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
     ...(cfg.storyKind === 'reel'
       ? [
           `- Reel Length: ${cfg.reel.length}`,
+          `- Reel Beat Count: ${cfg.reel.beatCount}`,
+          `- Reel Text Length: ${cfg.reel.textLength}`,
+          `- Reel Text Overlay: ${cfg.reel.textOverlayEnabled ? 'on' : 'off'}`,
           `- Reel Mood Key: ${cfg.reel.moodKey}`,
           `- Reel Visual Style Key: ${cfg.reel.visualStyleKey}`,
+          `- Reel Visual Style Id: ${cfg.reel.visualStyleId || 'none'}`,
           `- Reel Narration Style Key: ${cfg.reel.narrationStyleKey}`,
           '- Reel Orientation: 9:16',
           '- Reel Storyboard Panels Per Beat: 4',

@@ -29,6 +29,11 @@ import {
   type PlaygroundPromptState,
   type TestResult,
 } from '@/app/actions/prompt-playground';
+import {
+  listReelVisualStylesForAdminAction,
+  publishReelVisualStyleAction,
+  setReelVisualStyleStatusAction,
+} from '@/app/actions/reel-styles';
 import type { ModelConfig, TaskKey } from '@/lib/ai/model-config.shared';
 import { DEFAULT_MODELS, KNOWN_MODELS, TASK_DEFINITIONS } from '@/lib/ai/model-config.shared';
 import {
@@ -40,6 +45,7 @@ import {
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
 import { formatCost, formatLatency } from '@/lib/ai/pricing';
+import type { ReelVisualStyleRecord } from '@/lib/reel/styles';
 
 const AVAILABLE_VOICES = [
   'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
@@ -142,8 +148,12 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     storyState: DEFAULT_STORY_BIBLE,
     selectedOptionLabel: 'None yet - first beat',
     reelLength: 'medium',
+    reelBeatCount: '2',
+    textLength: 'medium',
+    textLengthWordRange: '9-14',
+    textOverlayMode: 'Visible overlay text is rendered by the player/export layer; reserve clean space and never place text inside generated images.',
     moodDefiner: 'Playful: bright, curious, quick emotional turns',
-    visualStyleDefiner: 'Cinematic: cinematic storybook frames with expressive lighting',
+    visualStyleDefiner: 'Risograph memory: grainy print texture, symbolic landscapes, bold silhouettes, quiet negative space',
     narrationStyleDefiner: 'Expressive: expressive narrator with natural pauses and energy',
   },
   seed_plan_generation: {
@@ -199,7 +209,9 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     continuityNotes: JSON.stringify(['Mira wears a yellow raincoat.', 'The kite glows blue-gold against the rain.'], null, 2),
     visualStyle: DEFAULT_VISUAL_STYLE,
     moodDefiner: 'Playful: bright, curious, quick emotional turns',
-    visualStyleDefiner: 'Cinematic: cinematic storybook frames with expressive lighting',
+    visualStyleDefiner: 'Risograph memory: grainy print texture, symbolic landscapes, bold silhouettes, quiet negative space',
+    noFaceRule: 'Default to no visible faces: use silhouettes, back views, hands, objects, spaces, symbolic landscapes, and abstract human presence.',
+    textOverlayMode: 'Visible overlay text is rendered by the player/export layer; reserve clean space and never place text inside generated images.',
     beatNumber: '1',
     storyState: DEFAULT_STORY_BIBLE,
     newCharacterIds: JSON.stringify(['char_pip'], null, 2),
@@ -211,6 +223,14 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     characters: DEFAULT_CHARACTER_ANCHORS,
     visualStyle: DEFAULT_VISUAL_STYLE,
     beatNumber: '3',
+  },
+  reel_image_generation: {
+    prompt: 'Four symbolic vertical reel panels about choosing inner peace over public praise: a curtain opening to dawn, a quiet shoreline walk, a red kite rising into teal sky, and a small lamp glowing beside an open notebook.',
+    visualStyle: 'phone-first 9:16 reel image, expressive abstract graphic storytelling, spacious composition for overlay text',
+    visualStyleDefiner: 'Risograph memory: grainy print texture, limited teal coral cream palette, bold silhouettes, quiet negative space, poetic symbolic objects',
+    noFaceRule: 'Default to no visible faces: use silhouettes, back views, hands, objects, spaces, symbolic landscapes, and abstract human presence.',
+    textOverlayMode: 'Visible overlay text is rendered by the player/export layer; reserve clean space and do not place text inside the generated image.',
+    beatNumber: '1',
   },
   tts: {
     storyText: 'Once upon a time, in a land far away, there lived a curious young fox who dreamed of touching the stars.',
@@ -242,16 +262,17 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
     targetAge: 'all_ages',
     language: 'english',
   },
+  graphic_style_extraction: {},
 };
 
 function getModelsForTask(taskKey: TaskKey): string[] {
-  if (taskKey === 'image_generation' || taskKey === 'portrait_generation') return KNOWN_MODELS.image;
+  if (taskKey === 'image_generation' || taskKey === 'reel_image_generation' || taskKey === 'portrait_generation') return KNOWN_MODELS.image;
   if (taskKey === 'tts' || taskKey === 'reel_tts') return KNOWN_MODELS.tts;
   return KNOWN_MODELS.text;
 }
 
 function taskHasTemperature(taskKey: TaskKey): boolean {
-  return taskKey !== 'image_generation' && taskKey !== 'portrait_generation' && taskKey !== 'tts' && taskKey !== 'reel_tts';
+  return taskKey !== 'image_generation' && taskKey !== 'reel_image_generation' && taskKey !== 'portrait_generation' && taskKey !== 'tts' && taskKey !== 'reel_tts';
 }
 
 function formatTimestamp(value: string | null | undefined): string {
@@ -317,7 +338,7 @@ interface PlaygroundStudioProps {
 }
 
 export default function PlaygroundStudio({
-  title = 'Prompt + Model Playground',
+  title = 'Story Playground',
   description = 'Iterate on task prompts, test against different models, and publish production-ready prompt variants without a code deploy.',
   taskKeys,
   initialTask,
@@ -343,6 +364,7 @@ export default function PlaygroundStudio({
   const [showApplyConfirm, setShowApplyConfirm] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  const [reelStyles, setReelStyles] = useState<ReelVisualStyleRecord[]>([]);
   const resultRef = useRef<HTMLDivElement>(null);
 
   const supportsPrompt = isPromptTaskKey(selectedTask);
@@ -402,6 +424,14 @@ export default function PlaygroundStudio({
   useEffect(() => {
     setApplyStatus('idle');
   }, [selectedModel, temperature, selectedTask]);
+
+  useEffect(() => {
+    if (selectedTask !== 'reel_image_generation') return;
+    listReelVisualStylesForAdminAction()
+      .then(setReelStyles)
+      .catch(() => setReelStyles([]));
+  }, [selectedTask]);
+
 
   const loadPromptState = async (taskKey: PromptTaskKey) => {
     setIsPromptLoading(true);
@@ -515,6 +545,33 @@ export default function PlaygroundStudio({
     }
   };
 
+  const refreshReelStyles = async () => {
+    if (selectedTask !== 'reel_image_generation') return;
+    setReelStyles(await listReelVisualStylesForAdminAction());
+  };
+
+  const handlePublishReelStyle = async (id: string) => {
+    setError(null);
+    try {
+      const style = await publishReelVisualStyleAction(id);
+      setPromptMessage(`Published "${style.name}".`);
+      await refreshReelStyles();
+    } catch (err: any) {
+      setError(err.message || 'Failed to publish reel visual style');
+    }
+  };
+
+  const handleDraftReelStyle = async (id: string) => {
+    setError(null);
+    try {
+      const style = await setReelVisualStyleStatusAction(id, 'draft');
+      setPromptMessage(`Moved "${style.name}" back to draft.`);
+      await refreshReelStyles();
+    } catch (err: any) {
+      setError(err.message || 'Failed to update reel visual style');
+    }
+  };
+
   const renderTaskInputs = () => {
     if (selectedTask === 'story_generation') {
       return (
@@ -525,6 +582,27 @@ export default function PlaygroundStudio({
             <input value={inputs.selectedOptionLabel || ''} onChange={(event) => setInputs((current) => ({ ...current, selectedOptionLabel: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Selected option label" />
           </div>
           <textarea value={inputs.storyConfig || ''} onChange={(event) => setInputs((current) => ({ ...current, storyConfig: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Formatted story config" />
+          <textarea value={inputs.storyState || ''} onChange={(event) => setInputs((current) => ({ ...current, storyState: event.target.value }))} rows={8} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Current story state JSON" />
+        </div>
+      );
+    }
+
+    if (selectedTask === 'reel_story_generation') {
+      return (
+        <div className="grid gap-3">
+          <textarea value={inputs.userPrompt || ''} onChange={(event) => setInputs((current) => ({ ...current, userPrompt: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Original reel prompt" />
+          <div className="grid gap-3 md:grid-cols-4">
+            <input value={inputs.language || ''} onChange={(event) => setInputs((current) => ({ ...current, language: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Language" />
+            <input value={inputs.reelBeatCount || ''} onChange={(event) => setInputs((current) => ({ ...current, reelBeatCount: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat count" />
+            <input value={inputs.textLength || ''} onChange={(event) => setInputs((current) => ({ ...current, textLength: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Text length" />
+            <input value={inputs.textLengthWordRange || ''} onChange={(event) => setInputs((current) => ({ ...current, textLengthWordRange: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Words per panel" />
+          </div>
+          <input value={inputs.selectedOptionLabel || ''} onChange={(event) => setInputs((current) => ({ ...current, selectedOptionLabel: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Selected option label" />
+          <textarea value={inputs.moodDefiner || ''} onChange={(event) => setInputs((current) => ({ ...current, moodDefiner: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Mood definer" />
+          <textarea value={inputs.visualStyleDefiner || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyleDefiner: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style definer" />
+          <textarea value={inputs.narrationStyleDefiner || ''} onChange={(event) => setInputs((current) => ({ ...current, narrationStyleDefiner: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Narration style definer" />
+          <textarea value={inputs.textOverlayMode || ''} onChange={(event) => setInputs((current) => ({ ...current, textOverlayMode: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Text overlay mode" />
+          <textarea value={inputs.storyConfig || ''} onChange={(event) => setInputs((current) => ({ ...current, storyConfig: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Formatted reel config" />
           <textarea value={inputs.storyState || ''} onChange={(event) => setInputs((current) => ({ ...current, storyState: event.target.value }))} rows={8} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Current story state JSON" />
         </div>
       );
@@ -559,7 +637,8 @@ export default function PlaygroundStudio({
       );
     }
 
-    if (selectedTask === 'visual_prompt') {
+    if (selectedTask === 'visual_prompt' || selectedTask === 'reel_visual_prompt') {
+      const isReelVisual = selectedTask === 'reel_visual_prompt';
       return (
         <div className="grid gap-3">
           <textarea value={inputs.storyText || ''} onChange={(event) => setInputs((current) => ({ ...current, storyText: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat story text" />
@@ -568,6 +647,14 @@ export default function PlaygroundStudio({
           <textarea value={inputs.characters || ''} onChange={(event) => setInputs((current) => ({ ...current, characters: event.target.value }))} rows={6} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Character continuity JSON" />
           <textarea value={inputs.continuityNotes || ''} onChange={(event) => setInputs((current) => ({ ...current, continuityNotes: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Continuity notes JSON" />
           <input value={inputs.visualStyle || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyle: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style" />
+          {isReelVisual && (
+            <>
+              <textarea value={inputs.moodDefiner || ''} onChange={(event) => setInputs((current) => ({ ...current, moodDefiner: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Mood definer" />
+              <textarea value={inputs.visualStyleDefiner || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyleDefiner: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style definer" />
+              <textarea value={inputs.noFaceRule || ''} onChange={(event) => setInputs((current) => ({ ...current, noFaceRule: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="No-face rule" />
+              <textarea value={inputs.textOverlayMode || ''} onChange={(event) => setInputs((current) => ({ ...current, textOverlayMode: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Text overlay mode" />
+            </>
+          )}
           <div className="grid gap-3 md:grid-cols-3">
             <input value={inputs.beatNumber || ''} onChange={(event) => setInputs((current) => ({ ...current, beatNumber: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat number" />
             <input value={inputs.newCharacterIds || ''} onChange={(event) => setInputs((current) => ({ ...current, newCharacterIds: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder='["char_new"]' />
@@ -592,7 +679,20 @@ export default function PlaygroundStudio({
       );
     }
 
-    if (selectedTask === 'tts') {
+    if (selectedTask === 'reel_image_generation') {
+      return (
+        <div className="grid gap-3">
+          <textarea value={inputs.prompt || ''} onChange={(event) => setInputs((current) => ({ ...current, prompt: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Reel storyboard prompt" />
+          <textarea value={inputs.visualStyle || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyle: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style" />
+          <textarea value={inputs.visualStyleDefiner || ''} onChange={(event) => setInputs((current) => ({ ...current, visualStyleDefiner: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Visual style definer" />
+          <textarea value={inputs.noFaceRule || ''} onChange={(event) => setInputs((current) => ({ ...current, noFaceRule: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="No-face rule" />
+          <textarea value={inputs.textOverlayMode || ''} onChange={(event) => setInputs((current) => ({ ...current, textOverlayMode: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Text overlay mode" />
+          <input value={inputs.beatNumber || ''} onChange={(event) => setInputs((current) => ({ ...current, beatNumber: event.target.value }))} className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat number" />
+        </div>
+      );
+    }
+
+    if (selectedTask === 'tts' || selectedTask === 'reel_tts') {
       return (
         <div className="grid gap-3">
           <textarea value={inputs.storyText || ''} onChange={(event) => setInputs((current) => ({ ...current, storyText: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Text to narrate" />
@@ -829,6 +929,42 @@ export default function PlaygroundStudio({
                 </motion.div>
               )}
             </AnimatePresence>
+            {selectedTask === 'reel_image_generation' && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-medium text-neutral-100">Reel Visual Styles</h3>
+                  <button onClick={() => void refreshReelStyles()} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-neutral-300 hover:bg-white/10">Refresh</button>
+                </div>
+                {reelStyles.length === 0 ? (
+                  <p className="text-sm text-neutral-500">No saved reel styles yet.</p>
+                ) : (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {reelStyles.map((style) => (
+                      <div key={style.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                        <div className="flex gap-3">
+                          {style.sampleImageUrl && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={style.sampleImageUrl} alt="" className="h-16 w-12 rounded-md object-cover" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-neutral-100">{style.name}</p>
+                            <p className="mt-1 text-xs text-neutral-500">{style.status} | {style.minPlan}</p>
+                            <p className="mt-1 line-clamp-2 text-xs text-neutral-400">{style.promptDefiner}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 flex gap-2">
+                          {style.status !== 'published' ? (
+                            <button onClick={() => void handlePublishReelStyle(style.id)} className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-500">Publish</button>
+                          ) : (
+                            <button onClick={() => void handleDraftReelStyle(style.id)} className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-neutral-300 hover:bg-white/10">Move to Draft</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             </>
           </div>
         </div>

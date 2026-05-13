@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, type ChangeEvent, type CSSProperties } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type ChangeEvent, type CSSProperties } from 'react';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
@@ -50,6 +50,8 @@ function StoryboardCycler({
   imageClassName,
   showIndicators = true,
   captions,
+  textOverlayEnabled = true,
+  textOverlayStyle,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -63,11 +65,21 @@ function StoryboardCycler({
   imageClassName?: string;
   showIndicators?: boolean;
   captions?: StoryBeat['reelCaptions'];
+  textOverlayEnabled?: boolean;
+  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
   const hasAudio = !!audioUrl;
   const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+  const timedCaptions = useMemo(() => captions?.filter((caption) => (
+    typeof caption.startMs === 'number'
+    && typeof caption.endMs === 'number'
+    && caption.endMs > caption.startMs
+  )), [captions]);
+  const hasTimedCaptions = Boolean(timedCaptions && timedCaptions.length > 0);
+  const elapsedBeforePauseRef = useRef(0);
+  const playbackStartedAtRef = useRef<number | null>(null);
   const panelDurationMs = cycleOverride
     ? cycleMs
     : !audioUrl
@@ -99,6 +111,7 @@ function StoryboardCycler({
   // Replay (idle → playing) → resets to panel 1 and restarts
   useEffect(() => {
     if (panelDurationMs === null) return;
+    if (hasTimedCaptions && hasAudio && !cycleOverride) return;
 
     const prev = prevPlaybackStateRef.current;
     prevPlaybackStateRef.current = playbackState;
@@ -123,8 +136,64 @@ function StoryboardCycler({
       if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
       clearInterval(id);
     };
-  }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
-  const activeCaption = captions?.find((caption) => caption.panelIndex === activePanel)?.text;
+  }, [panelDurationMs, playbackState, hasAudio, cycleOverride, hasTimedCaptions]);
+
+  useEffect(() => {
+    if (!hasTimedCaptions || !hasAudio || cycleOverride) return;
+
+    const prev = prevPlaybackStateRef.current;
+    prevPlaybackStateRef.current = playbackState;
+
+    if (prev === 'idle' && playbackState === 'playing') {
+      elapsedBeforePauseRef.current = 0;
+      playbackStartedAtRef.current = Date.now();
+      window.setTimeout(() => setActivePanel(0), 0);
+    } else if (playbackState === 'playing' && playbackStartedAtRef.current === null) {
+      playbackStartedAtRef.current = Date.now();
+    }
+
+    if (playbackState === 'paused' && playbackStartedAtRef.current !== null) {
+      elapsedBeforePauseRef.current += Date.now() - playbackStartedAtRef.current;
+      playbackStartedAtRef.current = null;
+    }
+
+    if (playbackState !== 'playing') return;
+
+    const id = window.setInterval(() => {
+      const startedAt = playbackStartedAtRef.current ?? Date.now();
+      const elapsedMs = elapsedBeforePauseRef.current + (Date.now() - startedAt);
+      const caption = timedCaptions!.find((item) => elapsedMs >= item.startMs! && elapsedMs < item.endMs!)
+        ?? timedCaptions!.find((item) => elapsedMs < item.endMs!)
+        ?? timedCaptions![timedCaptions!.length - 1];
+      setActivePanel(Math.max(0, Math.min(3, caption.panelIndex)));
+    }, 100);
+
+    return () => window.clearInterval(id);
+  }, [hasTimedCaptions, hasAudio, cycleOverride, playbackState, timedCaptions]);
+
+  const activeCaption = textOverlayEnabled
+    ? captions?.find((caption) => caption.panelIndex === activePanel)?.text
+    : undefined;
+  const captionPositionClass = textOverlayStyle?.position === 'upper'
+    ? 'top-16'
+    : textOverlayStyle?.position === 'middle'
+      ? 'top-1/2 -translate-y-1/2'
+      : 'bottom-9';
+  const captionAlignClass = textOverlayStyle?.align === 'left'
+    ? 'justify-start text-left'
+    : textOverlayStyle?.align === 'right'
+      ? 'justify-end text-right'
+      : 'justify-center text-center';
+  const captionStyle: CSSProperties = {
+    color: textOverlayStyle?.color,
+    fontFamily: textOverlayStyle?.fontFamily,
+    fontSize: textOverlayStyle?.fontSize ? `${textOverlayStyle.fontSize}px` : undefined,
+    fontWeight: textOverlayStyle?.fontWeight,
+    textShadow: textOverlayStyle?.shadowColor
+      ? `0 2px ${textOverlayStyle.shadowBlur ?? 12}px ${textOverlayStyle.shadowColor}`
+      : undefined,
+    backgroundColor: textOverlayStyle?.backgroundColor,
+  };
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -157,8 +226,8 @@ function StoryboardCycler({
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeCaption && (
-        <div className="absolute inset-x-4 bottom-9 z-20 flex justify-center">
-          <div className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-center text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
+        <div className={`absolute inset-x-4 z-20 flex ${captionPositionClass} ${captionAlignClass}`}>
+          <div style={captionStyle} className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
             {activeCaption}
           </div>
         </div>
@@ -644,15 +713,15 @@ export default function StoryScreen() {
   const isEnding = currentBeat.isEnding;
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
   const isReelStory = session.storyConfig.storyKind === 'reel';
-  const continueCoinCost = (
-    isReelStory
-      ? pricing.actionCosts.continue_reel_new_beat ?? 1
-      : pricing.actionCosts[
+  const continueCoinCost = isReelStory
+    ? 0
+    : (
+        pricing.actionCosts[
           isPromptOnlyStory
             ? 'continue_story_new_beat_prompt_only'
             : 'continue_story_new_beat'
         ] ?? (isPromptOnlyStory ? 0.5 : 1)
-  ) * 10;
+      ) * 10;
   const showCoinHint = pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled;
 
   const hasExistingBranch = (optionId: string) =>
@@ -1398,6 +1467,8 @@ function StoryScreenInner({
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
                 captions={normalizedCurrentBeat.reelCaptions}
+                textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+                textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
               />
@@ -1429,6 +1500,8 @@ function StoryScreenInner({
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
                       captions={normalizedCurrentBeat.reelCaptions}
+                      textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+                      textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                     />
@@ -1561,6 +1634,8 @@ function StoryScreenInner({
                   playbackState={playbackState}
                   imageClassName="mobile-scene-shuttle"
                   captions={normalizedCurrentBeat.reelCaptions}
+                  textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+                  textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                 />

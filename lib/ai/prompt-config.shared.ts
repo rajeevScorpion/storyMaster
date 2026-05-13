@@ -184,40 +184,37 @@ User Selected Option:
 
 Generate the next story beat.`;
 
-export const REEL_STORY_GENERATION_PROMPT_DEFAULT = `You are Kissago's Reel Story writer for short vertical visual stories.
+export const REEL_STORY_GENERATION_PROMPT_DEFAULT = `You are Kissago's Reel writer.
 
-Generate exactly one interactive reel beat. A Reel Story uses the same beat structure as Kissago stories, but it is shorter, faster, and designed for a 9:16 four-panel storyboard.
+A Kissago Reel is NOT a story. It is a linear sequence of inspirational quotes, statements, or lines played one after another. The words and narration are primary. The background visuals are abstract, expressive, and complementary — they support the line, they do not act it out.
+
+Generate all {{reelBeatCount}} beats of the reel in a single response. There is no branching, no options, no recurring characters, no plot continuity to maintain — each beat is one self-contained inspirational quote that flows naturally into the next.
 
 Rules:
-1. Return strict valid JSON only using the story beat schema.
-2. The reel length is {{reelLength}} and the configured maximum beat count is provided in Story Configuration.
-3. If this beat is the final configured beat, set isEnding to true and return an empty options array.
-4. If this beat is not final, set isEnding to false and return exactly 3 short, distinct options.
-5. Keep storyText concise, vivid, and narration-friendly.
-6. Keep the beat highly visual. The imagePrompt must remain in English and describe a clear vertical storyboard moment.
-7. Use the mood definer, visual style definer, and narration style definer as strong direction without exposing them to the user.
-8. Preserve continuity from the story state and selected option.
-9. Write user-facing story values in {{language}}. Keep JSON field names in English.
-10. Avoid text overlays, logos, watermarks, captions, or UI elements in imagePrompt.
+1. Return strict valid JSON only using the reel draft schema: { beatCount, beats: [{ beatIndex, title, storyText, sceneSummary, imagePrompt }] }.
+2. Produce exactly {{reelBeatCount}} beats. beatIndex starts at 1 and increments by 1.
+3. storyText is the quote itself — a single inspirational quote, statement, line, or short cluster of lines. Target {{textLengthWordRange}} words per visual panel, knowing each beat will be split across four panels for playback. Keep it narration-friendly: clean rhythm, natural pauses, no inner monologue or scene direction mixed in.
+4. The quotes should form a flowing emotional or thematic sequence — each one a fresh facet of the user's request, not a continuation of a plot. Avoid repeating phrasing across beats.
+5. title is 1–4 words, useful for admin previews only.
+6. sceneSummary is a short English continuity hint for the visual composer (atmosphere, mood, motif). Not user-facing.
+7. imagePrompt is a high-level abstract/symbolic visual cue in English — landscapes, silhouettes, hands, objects, textures, skies, geometric motion, atmospheric color. Avoid literal depictions of the quote, avoid faces by default, avoid text/logos/watermarks/UI in the image.
+8. Use the mood definer, visual style definer, and narration style definer as strong direction without surfacing them to the user.
+9. Write storyText in {{language}}. Keep title, sceneSummary, and imagePrompt in English (sceneSummary may be {{language}} if it reads more naturally).
+10. Default to safe, universal, share-ready content. Avoid graphic, hateful, or adult material.
+11. Do not return options, characters, continuityNotes, clues, newCharacterIds, changedCharacterIds, or any branching fields. They are not part of this schema.
 
 Runtime context:
 Language: {{language}}
 User Request: {{userPrompt}}
-Reel Length: {{reelLength}}
+Reel Beat Count: {{reelBeatCount}}
+Text Length: {{textLength}}
+Text Length Word Range: {{textLengthWordRange}}
+Text Overlay Mode: {{textOverlayMode}}
 Mood Definer: {{moodDefiner}}
 Visual Style Definer: {{visualStyleDefiner}}
 Narration Style Definer: {{narrationStyleDefiner}}
 
-Story Configuration:
-{{storyConfig}}
-
-Current Story State:
-{{storyState}}
-
-User Selected Option:
-{{selectedOptionLabel}}
-
-Generate the next reel beat.`;
+Generate the full reel now.`;
 
 export const SEED_PLAN_GENERATION_PROMPT_DEFAULT = `You are Kissago's source-to-story planner.
 
@@ -483,31 +480,30 @@ Generate the storyboard plan now.`;
 
 export const REEL_VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT = `You are Kissago's Reel Visual Prompt Composer.
 
-Transform one reel beat into a 2x2 vertical storyboard plan. The output schema is the same as the normal visual composer, but the pacing should feel like four quick reel moments.
+A Kissago Reel is a sequence of inspirational quote-beats. Your job is to transform one quote-beat into a 2x2 vertical storyboard plan whose four panels visually complement the quote without literally acting it out. The words are primary; the visuals are abstract, expressive, and atmospheric.
+
+There are no recurring characters in a reel. portraitTasks must always be an empty array.
 
 Rules:
-1. Return strict valid JSON only.
-2. Use exactly four frames: topLeft, topRight, bottomLeft, bottomRight.
-3. Each frame should be a distinct sequential visual moment that can hold for 2-3 seconds in a vertical reel.
-4. Keep all frames full-bleed, cinematic, and phone-first.
-5. Preserve character identity and visual continuity.
-6. Use the mood and visual style definers as strong direction.
-7. Do not request text overlays, captions, speech bubbles, labels, logos, or watermarks.
+1. Return strict valid JSON only matching the storyboard plan schema.
+2. Use exactly four frames: topLeft, topRight, bottomLeft, bottomRight, each a distinct symbolic visual moment that can hold for 2-3 seconds during reel playback.
+3. Prefer symbolic, abstract, atmospheric visuals: landscapes, silhouettes, hands, objects, textures, skies, geometric motion, shifting color fields, light and shadow.
+4. Default to no visible faces unless the no-face rule explicitly says otherwise.
+5. Keep all four frames in the same visual world, palette, and style. Panels should feel like a flowing meditation, not a literal four-step plot.
+6. Keep compositions spacious so optional caption text overlays readably — favor large readable shapes and generous negative space.
+7. Use the mood definer, visual style definer, and the visual style direction as strong guidance.
+8. No text overlays, captions, speech bubbles, labels, logos, or watermarks inside the image.
+9. Always return portraitTasks as []. Always return sharedVisualInvariants populated with atmosphere/palette/motif anchors that must hold across the four panels. Always populate negativeConstraints (e.g., "no visible faces", "no text inside image", "no logos").
+10. Frame design: topLeft establishes the atmosphere; topRight deepens it with a new motif; bottomLeft introduces movement or contrast; bottomRight lands the emotional resolution of the quote.
 
-Story Beat Text:
+Quote (storyText):
 {{storyText}}
 
 Scene Summary:
 {{sceneSummary}}
 
-Story Writer Visual Intent:
+Visual Intent from Reel Writer:
 {{imageIntent}}
-
-Characters:
-{{characters}}
-
-Continuity Notes:
-{{continuityNotes}}
 
 Visual Style:
 {{visualStyle}}
@@ -518,17 +514,14 @@ Mood Definer:
 Visual Style Definer:
 {{visualStyleDefiner}}
 
+No-Face Rule:
+{{noFaceRule}}
+
+Text Overlay Mode:
+{{textOverlayMode}}
+
 Beat Number:
 {{beatNumber}}
-
-Compact Story Bible:
-{{storyState}}
-
-New Character Ids:
-{{newCharacterIds}}
-
-Changed Character Ids:
-{{changedCharacterIds}}
 
 Previous Storyboard Context:
 {{previousStoryboardContext}}
@@ -586,6 +579,47 @@ Hard requirements:
 - No captions, speech bubbles, labels, subtitles, logos, watermarks, or any text overlays.
 - Keep the scene grounded in the supplied characters and story brief.`;
 
+export const REEL_IMAGE_GENERATION_PROMPT_DEFAULT = `Create the final Kissago Reel storyboard image using the following brief.
+
+Scene brief:
+{{prompt}}
+
+Style direction:
+{{visualStyle}}
+
+Visual style definer:
+{{visualStyleDefiner}}
+
+No-face rule:
+{{noFaceRule}}
+
+Text overlay mode:
+{{textOverlayMode}}
+
+Beat number:
+{{beatNumber}}
+
+Hard requirements:
+- Compose as a full-bleed 9:16 vertical portrait image containing exactly four equal panels in a 2x2 grid.
+- Each panel must read clearly when cropped to a phone-sized single panel during playback.
+- Each panel must show a distinct symbolic or abstract sequential moment in reading order: top-left, top-right, bottom-left, bottom-right.
+- Prefer abstract backgrounds, symbolic objects, silhouettes, hands, back views, landscapes, textures, skies, interiors, and graphic shapes over face-led character scenes.
+- By default, avoid visible faces, recognizable identities, celebrity likenesses, and close-up facial portraits unless the scene brief explicitly requires them.
+- Use art movements, historical/public-domain visual language, composition traits, materials, palette, grain, ink, print, collage, lighting, and camera movement as style guidance. Do not imitate a living artist by name.
+- Keep every panel visually rich but uncluttered, with large readable shapes and generous negative space for optional player text overlay.
+- Panels must snap tightly to each other and to the outer image bounds; no white gutters, cream gutters, empty gaps, padding, matting, page borders, or outer margins.
+- If panel dividers are present, they must be thin black or near-black lines only.
+- Do not render captions, subtitles, quotes, handwritten words, speech bubbles, labels, logos, watermarks, signatures, UI, social icons, or any other text inside the image.
+- Keep the image safe, expressive, meaningful, and social-share ready.`;
+
+export const GRAPHIC_STYLE_EXTRACTION_PROMPT_DEFAULT = `You are analyzing a reference image to extract its graphic style for a visual design system.
+
+Describe ONLY the visual style — brush strokes, line work, color palette, texture, lighting, composition rhythm, mood, materials, rendering technique, and any distinctive visual qualities.
+
+Do NOT describe the subject, scene, characters, story, or any narrative content of the image. Focus purely on how it looks, not what it shows.
+
+Output plain text only. No headings, no bullet points, no markdown formatting. Maximum 150 words.`;
+
 export const PORTRAIT_GENERATION_PROMPT_DEFAULT = `Generate a character reference image for {{characterName}}, a {{characterType}}.
 
 Appearance: {{characterAppearance}}
@@ -608,13 +642,15 @@ Requirements:
 
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
-  reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the story beat schema exactly. Reel beats must be concise, safe, visual, and paced to end at the configured beat cap.',
+  reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the reel draft schema { beatCount, beats: [...] } exactly: produce all beats in one response. Each beat carries only beatIndex, title, storyText, sceneSummary, imagePrompt. Do not return options, characters, continuityNotes, clues, or any branching fields. Reels are linear inspirational quote sequences, not stories.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
-  reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly and optimize the four frames for vertical reel pacing.',
+  reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly. Optimize the four frames for vertical reel pacing as abstract/symbolic visuals that complement an inspirational quote. portraitTasks MUST be an empty array — reels have no recurring characters.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
+  reel_image_generation: 'Return only the final reel image prompt as plain text. Do not add explanations, numbering, or markdown. Never request text inside the generated image. Prefer abstract, symbolic, no-face vertical reel visuals unless the brief explicitly requires otherwise.',
   portrait_generation: 'Generate a single-character reference image only. No text overlays, no other characters, and no cluttered background. Do not duplicate the character beyond the requested reference views.',
+  graphic_style_extraction: 'Return plain text only — no JSON, no markdown, no headings, no bullet points, no lists. Describe ONLY the visual style of the image (brush strokes, line work, color palette, texture, lighting, composition, materials, rendering). Do NOT describe the subject, scene, story, or narrative content. Cap your response at 150 words.',
   tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata or alternative takes.',
   reel_tts: 'Produce narration-ready text-to-speech content only. Do not introduce metadata, subtitles, timestamps, or alternative takes.',
   voice_selection: 'Return only a single voice name from the available list. Do not add commentary or punctuation beyond the voice name.',
@@ -637,14 +673,14 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
   reel_story_generation: {
     key: 'reel_story_generation',
     label: 'Reel Story Generation Prompt',
-    description: 'Controls the short-form storytelling template used before Reel JSON beat generation.',
+    description: 'One-shot generator that emits all N inspirational quote-beats of a reel in a single response.',
     placeholders: [
-      { key: 'language', label: 'Language', description: 'Requested output language.', required: true },
+      { key: 'language', label: 'Language', description: 'Requested output language for quote text.', required: true },
       { key: 'userPrompt', label: 'User Prompt', description: 'Original reel request from the user.', required: true },
-      { key: 'storyConfig', label: 'Story Config', description: 'Formatted reel configuration and beat pacing context.', required: true },
-      { key: 'storyState', label: 'Story State', description: 'Compact story bible snapshot used for continuity.', required: true },
-      { key: 'selectedOptionLabel', label: 'Selected Option', description: 'Most recently chosen option label and intent, or blank on the first beat.', required: true },
-      { key: 'reelLength', label: 'Reel Length', description: 'Short, medium, or long reel length.', required: true },
+      { key: 'reelBeatCount', label: 'Reel Beat Count', description: 'Configured reel beat count, 1 to 3.', required: true },
+      { key: 'textLength', label: 'Text Length', description: 'Short, medium, or long visible text amount per panel.', required: true },
+      { key: 'textLengthWordRange', label: 'Text Word Range', description: 'Target per-panel word range for reel captions/narration.', required: true },
+      { key: 'textOverlayMode', label: 'Text Overlay Mode', description: 'Whether player/export overlay text is enabled.', required: true },
       { key: 'moodDefiner', label: 'Mood Definer', description: 'Admin-defined mood prompt fragment.', required: true },
       { key: 'visualStyleDefiner', label: 'Visual Style Definer', description: 'Admin-defined visual style prompt fragment.', required: true },
       { key: 'narrationStyleDefiner', label: 'Narration Style Definer', description: 'Admin-defined narration style prompt fragment.', required: true },
@@ -702,21 +738,18 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
   reel_visual_prompt: {
     key: 'reel_visual_prompt',
     label: 'Reel Visual Prompt Composer',
-    description: 'Controls how a reel beat is decomposed into a vertical 4-frame storyboard plan.',
+    description: 'Decomposes one inspirational quote-beat into a vertical 4-frame abstract storyboard plan. portraitTasks always empty.',
     placeholders: [
-      { key: 'storyText', label: 'Story Text', description: 'The reel beat story text.', required: true },
-      { key: 'sceneSummary', label: 'Scene Summary', description: 'Compact summary of the beat scene.', required: true },
+      { key: 'storyText', label: 'Story Text', description: 'The quote being visualized.', required: true },
+      { key: 'sceneSummary', label: 'Scene Summary', description: 'Compact summary or atmosphere hint for the quote.', required: true },
       { key: 'imageIntent', label: 'Image Intent', description: 'High-level visual intent from the reel writer.', required: true },
-      { key: 'characters', label: 'Characters', description: 'Character continuity details.', required: true },
-      { key: 'continuityNotes', label: 'Continuity Notes', description: 'English continuity notes for the beat.', required: true },
       { key: 'visualStyle', label: 'Visual Style', description: 'Requested art style or rendering direction.', required: true },
       { key: 'moodDefiner', label: 'Mood Definer', description: 'Admin-defined mood prompt fragment.', required: true },
       { key: 'visualStyleDefiner', label: 'Visual Style Definer', description: 'Admin-defined visual style prompt fragment.', required: true },
+      { key: 'noFaceRule', label: 'No-Face Rule', description: 'Selected style no-face guidance.', required: true },
+      { key: 'textOverlayMode', label: 'Text Overlay Mode', description: 'Whether player/export overlay text is enabled.', required: true },
       { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number.', required: true },
-      { key: 'storyState', label: 'Story State', description: 'Compact story bible JSON used for continuity and cast memory.', required: true },
-      { key: 'newCharacterIds', label: 'New Character Ids', description: 'JSON array of newly introduced named character ids.', required: true },
-      { key: 'changedCharacterIds', label: 'Changed Character Ids', description: 'JSON array of character ids with meaningful visible changes.', required: true },
-      { key: 'previousStoryboardContext', label: 'Previous Storyboard Context', description: 'Summary of the previous storyboard for continuity.', required: true },
+      { key: 'previousStoryboardContext', label: 'Previous Storyboard Context', description: 'Summary of the previous storyboard for cross-beat continuity.', required: false },
     ],
     defaultPrompt: REEL_VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT,
   },
@@ -731,6 +764,20 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number for framing variety.', required: false },
     ],
     defaultPrompt: IMAGE_GENERATION_PROMPT_DEFAULT,
+  },
+  reel_image_generation: {
+    key: 'reel_image_generation',
+    label: 'Reel Image Generation Wrapper',
+    description: 'Controls the final plain-text wrapper sent into the image model for reel storyboard images.',
+    placeholders: [
+      { key: 'prompt', label: 'Base Prompt', description: 'The composed reel storyboard prompt.', required: true },
+      { key: 'visualStyle', label: 'Visual Style', description: 'Runtime art direction for the reel.', required: false },
+      { key: 'visualStyleDefiner', label: 'Visual Style Definer', description: 'Admin-published visual style prompt fragment.', required: true },
+      { key: 'noFaceRule', label: 'No-Face Rule', description: 'Whether the selected style defaults away from faces.', required: true },
+      { key: 'textOverlayMode', label: 'Text Overlay Mode', description: 'Whether player/export overlay text is enabled.', required: true },
+      { key: 'beatNumber', label: 'Beat Number', description: 'Current beat number for pacing.', required: false },
+    ],
+    defaultPrompt: REEL_IMAGE_GENERATION_PROMPT_DEFAULT,
   },
   portrait_generation: {
     key: 'portrait_generation',
@@ -784,6 +831,13 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'availableVoices', label: 'Available Voices', description: 'Comma-separated list of voice names available to the selector.', required: true },
     ],
     defaultPrompt: VOICE_SELECTION_PROMPT_DEFAULT,
+  },
+  graphic_style_extraction: {
+    key: 'graphic_style_extraction',
+    label: 'Graphic Style Extraction',
+    description: 'Analyzes a reference image and returns a concise plain-text visual style description (≤150 words) for the Graphic Style Studio.',
+    placeholders: [],
+    defaultPrompt: GRAPHIC_STYLE_EXTRACTION_PROMPT_DEFAULT,
   },
 };
 

@@ -12,6 +12,7 @@ import {
   type ReelStorySettings,
 } from '@/lib/reel/settings';
 import { savePricingActionCost } from '@/app/actions/pricing-admin';
+import { getPublishedReelVisualStylesForRuntime } from '@/app/actions/reel-styles';
 import { getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
 import {
   getNarrationVoiceSettings,
@@ -205,7 +206,7 @@ export async function getActiveModelConfigs(): Promise<ModelConfig[]> {
 export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
   const configs = await getAllModelConfigs();
   const map = new Map(configs.map(c => [c.taskKey, c]));
-  const [storyPrompt, reelStoryPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, reelVisualPrompt, imagePrompt, portraitPrompt, storyboardImageSettings, reelSettingsValue] = await Promise.all([
+  const [storyPrompt, reelStoryPrompt, seedPlanPrompt, seededBeatPrompt, visualPrompt, reelVisualPrompt, imagePrompt, reelImagePrompt, portraitPrompt, storyboardImageSettings, reelSettingsValue, reelVisualStyles] = await Promise.all([
     getPublishedPrompt('story_generation'),
     getPublishedPrompt('reel_story_generation'),
     getPublishedPrompt('seed_plan_generation'),
@@ -213,9 +214,11 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     getPublishedPrompt('visual_prompt'),
     getPublishedPrompt('reel_visual_prompt'),
     getPublishedPrompt('image_generation'),
+    getPublishedPrompt('reel_image_generation'),
     getPublishedPrompt('portrait_generation'),
     getStoryboardImageQualitySettings(),
     getFeatureFlagValue('reel_story_settings'),
+    getPublishedReelVisualStylesForRuntime().catch(() => []),
   ]);
   return {
     storyModel: map.get('story_generation')?.modelId,
@@ -231,6 +234,7 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     reelComposerModel: map.get('reel_visual_prompt')?.modelId,
     reelComposerTemperature: map.get('reel_visual_prompt')?.temperature ?? undefined,
     imageModel: map.get('image_generation')?.modelId,
+    reelImageModel: map.get('reel_image_generation')?.modelId,
     portraitModel: map.get('portrait_generation')?.modelId,
     storyPrompt,
     reelStoryPrompt,
@@ -239,8 +243,10 @@ export async function getStoryModelOverrides(): Promise<StoryModelOverrides> {
     visualPrompt,
     reelVisualPrompt,
     imagePrompt,
+    reelImagePrompt,
     portraitPrompt,
     reelSettings: parseReelStorySettingsValue(reelSettingsValue),
+    reelVisualStyles,
     storyboardImageSettings,
     enableStoryboard: true,
   };

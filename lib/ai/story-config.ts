@@ -16,9 +16,12 @@ import type {
 } from '@/lib/types/story';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
+  getReelLegacyLengthForBeatCount,
   getReelLengthBeatCount,
   normalizeReelLength,
+  normalizeReelTextLength,
 } from '@/lib/reel/settings';
+import { normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import type {
   NarrationGenderBucket,
   NarrationLanguageCode,
@@ -105,6 +108,11 @@ export const DEFAULT_PORTRAIT_REFERENCE_CONFIG: PortraitReferenceConfig = {
 
 export const DEFAULT_REEL_CONFIG: ReelStoryConfig = {
   length: DEFAULT_REEL_STORY_SETTINGS.defaultLength,
+  beatCount: DEFAULT_REEL_STORY_SETTINGS.defaultBeatCount,
+  textLength: DEFAULT_REEL_STORY_SETTINGS.defaultTextLength,
+  textOverlayEnabled: DEFAULT_REEL_STORY_SETTINGS.textOverlayDefault,
+  visualStyleId: null,
+  textOverlayStyle: normalizeReelTextOverlayStyle(null),
   moodKey: DEFAULT_REEL_STORY_SETTINGS.defaultMood,
   visualStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle,
   narrationStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle,
@@ -208,7 +216,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
   const isVerticalStory = storyKind === 'reel' ? true : normalizeVerticalStoryFlag(input);
   const aspectRatio = isVerticalStory ? '9:16' : '16:9';
   const maxBeats = storyKind === 'reel'
-    ? getReelLengthBeatCount(reel.length)
+    ? reel.beatCount
     : clampMaxBeats(input?.maxBeats);
 
   return {
@@ -217,7 +225,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats,
-    imageGenerationMode: storyKind === 'reel' ? 'generate' : normalizeImageGenerationMode(input?.imageGenerationMode),
+    imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
     isVerticalStory,
     aspectRatio,
     visualSettings,
@@ -268,7 +276,7 @@ export function isReelStoryConfig(config?: Partial<StoryConfig> | null): boolean
 
 export function getReelMaxBeats(config?: Partial<StoryConfig> | null): number {
   const normalized = normalizeStoryConfig(config);
-  return getReelLengthBeatCount(normalized.reel.length);
+  return normalized.reel.beatCount;
 }
 
 export function getSeedSourceText(config?: Partial<StoryConfig> | null): string {
@@ -345,8 +353,20 @@ function normalizeStoryKind(value?: string | null): StoryConfig['storyKind'] {
 }
 
 function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null): ReelStoryConfig {
+  const legacyLength = normalizeReelLength(input?.length);
+  const beatCountCandidate = Number(input?.beatCount);
+  const beatCount = beatCountCandidate === 1 || beatCountCandidate === 2 || beatCountCandidate === 3
+    ? beatCountCandidate
+    : getReelLengthBeatCount(legacyLength) as 1 | 2 | 3;
+  const length = input?.length ? legacyLength : getReelLegacyLengthForBeatCount(beatCount);
+
   return {
-    length: normalizeReelLength(input?.length),
+    length,
+    beatCount,
+    textLength: normalizeReelTextLength(input?.textLength ?? input?.length),
+    textOverlayEnabled: input?.textOverlayEnabled !== false,
+    visualStyleId: sanitizeText(input?.visualStyleId) || null,
+    textOverlayStyle: normalizeReelTextOverlayStyle(input?.textOverlayStyle),
     moodKey: sanitizeText(input?.moodKey) || DEFAULT_REEL_CONFIG.moodKey,
     visualStyleKey: sanitizeText(input?.visualStyleKey) || DEFAULT_REEL_CONFIG.visualStyleKey,
     narrationStyleKey: sanitizeText(input?.narrationStyleKey) || DEFAULT_REEL_CONFIG.narrationStyleKey,

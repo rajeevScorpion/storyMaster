@@ -163,6 +163,8 @@ async function executeTaskTest(
       return runReelVisualPromptTest(ai, modelId, temperature ?? 0.5, inputs, promptBody!);
     case 'image_generation':
       return runImageGenerationTest(ai, modelId, inputs, promptBody!);
+    case 'reel_image_generation':
+      return runReelImageGenerationTest(ai, modelId, inputs, promptBody!);
     case 'portrait_generation':
       return runPortraitGenerationTest(ai, modelId, inputs, promptBody!);
     case 'tts':
@@ -283,6 +285,10 @@ async function runReelStoryGenerationTest(
     storyState: inputs.storyState || '{}',
     selectedOptionLabel: inputs.selectedOptionLabel || 'None yet - first beat',
     reelLength: inputs.reelLength || 'short',
+    reelBeatCount: inputs.reelBeatCount || '2',
+    textLength: inputs.textLength || 'medium',
+    textLengthWordRange: inputs.textLengthWordRange || '9-14',
+    textOverlayMode: inputs.textOverlayMode || 'Visible overlay text is rendered by the player/export layer.',
     moodDefiner: inputs.moodDefiner || 'Playful: bright, curious, quick emotional turns',
     visualStyleDefiner: inputs.visualStyleDefiner || 'Cinematic: cinematic storybook frames with expressive lighting',
     narrationStyleDefiner: inputs.narrationStyleDefiner || 'Expressive: expressive narrator with natural pauses and energy',
@@ -355,6 +361,8 @@ async function runReelVisualPromptTest(
     visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
     moodDefiner: inputs.moodDefiner || 'Playful: bright, curious, quick emotional turns',
     visualStyleDefiner: inputs.visualStyleDefiner || 'Cinematic: cinematic storybook frames with expressive lighting',
+    noFaceRule: inputs.noFaceRule || 'Default to no visible faces: use silhouettes, back views, hands, objects, spaces, symbolic landscapes, and abstract human presence.',
+    textOverlayMode: inputs.textOverlayMode || 'Visible overlay text is rendered by the player/export layer.',
     beatNumber: inputs.beatNumber || '1',
     storyState: inputs.storyState || '{}',
     newCharacterIds: inputs.newCharacterIds || '[]',
@@ -414,6 +422,45 @@ async function runImageGenerationTest(
   throw new Error('No image generated');
 }
 
+async function runReelImageGenerationTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const wrappedPrompt = resolvePromptTemplate(promptBody, {
+    prompt: inputs.prompt || '',
+    visualStyle: inputs.visualStyle || DEFAULT_VISUAL_STYLE,
+    visualStyleDefiner: inputs.visualStyleDefiner || 'Risograph dream: grainy ink layers, symbolic landscapes, bold negative space',
+    noFaceRule: inputs.noFaceRule || 'Default to no visible faces: use silhouettes, back views, hands, objects, spaces, symbolic landscapes, and abstract human presence.',
+    textOverlayMode: inputs.textOverlayMode || 'Visible overlay text is rendered later by the player/export layer; reserve clean space and do not place text inside the generated image.',
+    beatNumber: inputs.beatNumber || '1',
+  });
+
+  const start = Date.now();
+  const response = await requestImageResponse(ai, modelId, wrappedPrompt, '9:16');
+  const initialImage = extractInlineImage(response);
+  if (initialImage) {
+    return buildImageTestResult(initialImage, Date.now() - start, modelId, response.usageMetadata);
+  }
+
+  const fallbackPrompt = (response.text || '').trim();
+  if (fallbackPrompt && fallbackPrompt !== wrappedPrompt) {
+    const retryResponse = await requestImageResponse(ai, modelId, fallbackPrompt, '9:16');
+    const retryImage = extractInlineImage(retryResponse);
+    if (retryImage) {
+      return buildImageTestResult(
+        retryImage,
+        Date.now() - start,
+        modelId,
+        mergeUsageMetadata(response.usageMetadata, retryResponse.usageMetadata)
+      );
+    }
+  }
+
+  throw new Error('No reel image generated');
+}
+
 async function runPortraitGenerationTest(
   ai: GoogleGenAI,
   modelId: string,
@@ -452,13 +499,13 @@ async function runPortraitGenerationTest(
   throw new Error('No portrait generated');
 }
 
-async function requestImageResponse(ai: GoogleGenAI, modelId: string, prompt: string) {
+async function requestImageResponse(ai: GoogleGenAI, modelId: string, prompt: string, aspectRatio: '16:9' | '9:16' = '16:9') {
   return ai.models.generateContent({
     model: modelId,
     contents: prompt,
     config: {
       imageConfig: {
-        aspectRatio: '16:9',
+        aspectRatio,
         imageSize: '1K',
       },
     },

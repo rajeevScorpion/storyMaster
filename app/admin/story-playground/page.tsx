@@ -11,7 +11,7 @@ const STORY_TASK_KEYS = [
   'voice_selection',
 ] as const;
 
-export default function PlaygroundPage() {
+export default function StoryPlaygroundPage() {
   return (
     <PlaygroundStudio
       title="Story Playground"

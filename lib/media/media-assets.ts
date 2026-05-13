@@ -10,6 +10,7 @@ export type MediaAssetType =
   | 'share_cover'
   | 'youtube_thumbnail'
   | 'reel_thumbnail'
+  | 'reel_style_sample'
   | 'narration_audio'
   | 'portrait'
   | 'unknown';

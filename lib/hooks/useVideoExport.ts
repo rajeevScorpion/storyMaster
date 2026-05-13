@@ -8,6 +8,7 @@ import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { DEFAULT_VIDEO_EXPORT_PRESET, normalizeVideoExportPreset, type VideoExportPreset } from '@/lib/types/pricing';
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
+import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 
 let ffmpegInstance: FFmpeg | null = null;
 
@@ -101,11 +102,40 @@ type BeatSegment = {
   audioUrl: string | null;
   isStoryboard: boolean;
   panelDuration: number;
+  panelDurations: number[];
   totalDuration: number;
+  reelCaptions?: StoryBeat['reelCaptions'];
+  textOverlayEnabled?: boolean;
+  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
 };
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function getStoryboardPanelDurationsSeconds(beat: StoryBeat, audioDuration: number): number[] {
+  const fallbackSeconds = STORYBOARD_ADVANCE_MS / 1000;
+  const timedCaptions = beat.reelCaptions?.filter((caption) => (
+    typeof caption.startMs === 'number'
+    && typeof caption.endMs === 'number'
+    && caption.endMs > caption.startMs
+  ));
+
+  if (timedCaptions?.length) {
+    const durations = Array.from({ length: 4 }, (_, panelIndex) => {
+      const caption = timedCaptions.find((item) => item.panelIndex === panelIndex);
+      return caption ? Math.max(0.5, (caption.endMs! - caption.startMs!) / 1000) : fallbackSeconds;
+    });
+    const total = durations.reduce((sum, duration) => sum + duration, 0);
+    if (audioDuration > 0 && total > 0) {
+      const scale = audioDuration / total;
+      return durations.map((duration) => Math.max(0.5, duration * scale));
+    }
+    return durations;
+  }
+
+  const equalDuration = audioDuration > 0 ? audioDuration / 4 : fallbackSeconds;
+  return [equalDuration, equalDuration, equalDuration, equalDuration];
 }
 
 function getExportCanvasSize(
@@ -287,6 +317,85 @@ function drawStoryboardPanel(
   );
 }
 
+function wrapCanvasText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (context.measureText(next).width <= maxWidth || !current) {
+      current = next;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.slice(0, 3);
+}
+
+function drawReelCaptionOverlay(
+  context: CanvasRenderingContext2D,
+  canvasSize: ExportCanvasSize,
+  captionText: string | undefined,
+  styleInput: StoryBeat['reelTextOverlayStyle']
+) {
+  if (!captionText?.trim()) return;
+
+  const style = {
+    ...DEFAULT_REEL_TEXT_OVERLAY_STYLE,
+    ...normalizeReelTextOverlayStyle(styleInput),
+  };
+  const fontSize = Math.max(22, Math.round(canvasSize.width * 0.055 * (style.fontSize / DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize)));
+  const lineHeight = Math.round(fontSize * 1.2);
+  const horizontalPadding = Math.round(canvasSize.width * 0.045);
+  const verticalPadding = Math.round(fontSize * 0.42);
+  const maxTextWidth = canvasSize.width - horizontalPadding * 4;
+
+  context.save();
+  context.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  context.textAlign = style.align;
+  context.textBaseline = 'middle';
+  const lines = wrapCanvasText(context, captionText, maxTextWidth);
+  const textWidth = Math.min(maxTextWidth, Math.max(...lines.map((line) => context.measureText(line).width), 0));
+  const boxWidth = textWidth + horizontalPadding * 2;
+  const boxHeight = lines.length * lineHeight + verticalPadding * 2;
+  const x = style.align === 'left'
+    ? horizontalPadding
+    : style.align === 'right'
+      ? canvasSize.width - boxWidth - horizontalPadding
+      : (canvasSize.width - boxWidth) / 2;
+  const y = style.position === 'upper'
+    ? canvasSize.height * 0.18
+    : style.position === 'middle'
+      ? (canvasSize.height - boxHeight) / 2
+      : canvasSize.height * 0.68;
+  const textX = style.align === 'left'
+    ? x + horizontalPadding
+    : style.align === 'right'
+      ? x + boxWidth - horizontalPadding
+      : x + boxWidth / 2;
+
+  context.globalAlpha = style.backgroundOpacity;
+  context.fillStyle = style.backgroundColor;
+  drawRoundedRect(context, x, y, boxWidth, boxHeight, Math.round(fontSize * 0.28));
+  context.fill();
+  context.globalAlpha = 1;
+  context.fillStyle = style.color;
+  context.shadowColor = style.shadowColor;
+  context.shadowBlur = style.shadowBlur;
+  context.shadowOffsetY = 2;
+  lines.forEach((line, index) => {
+    const textY = y + verticalPadding + lineHeight * index + lineHeight / 2;
+    context.fillText(line, textX, textY);
+  });
+  context.restore();
+}
+
 async function canvasToJpegBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((value) => {
@@ -328,7 +437,9 @@ async function renderStoryboardPanelBytes(
   panelIndex: number,
   canvasSize: ExportCanvasSize,
   videoExportPreset: VideoExportPreset,
-  showWatermark: boolean
+  showWatermark: boolean,
+  captionText?: string,
+  textOverlayStyle?: StoryBeat['reelTextOverlayStyle']
 ): Promise<Uint8Array> {
   const canvas = createExportCanvas(canvasSize);
   const context = canvas.getContext('2d');
@@ -337,6 +448,7 @@ async function renderStoryboardPanelBytes(
   }
 
   drawStoryboardPanel(context, image, panelIndex, canvasSize);
+  drawReelCaptionOverlay(context, canvasSize, captionText, textOverlayStyle);
   if (showWatermark) {
     drawWatermark(context, canvasSize, videoExportPreset);
   }
@@ -442,9 +554,10 @@ export function useVideoExport() {
           const audioDuration = audioUrl ? await probeAudioDuration(audioUrl) : 0;
           const isStoryboard = beat.isStoryboard === true;
           const fallbackSeconds = STORYBOARD_ADVANCE_MS / 1000;
-          const panelDuration = audioDuration > 0
-            ? (isStoryboard ? audioDuration / 4 : audioDuration)
-            : fallbackSeconds;
+          const panelDurations = isStoryboard
+            ? getStoryboardPanelDurationsSeconds(beat, audioDuration)
+            : [audioDuration > 0 ? audioDuration : fallbackSeconds];
+          const panelDuration = panelDurations[0] ?? fallbackSeconds;
 
           return {
             index,
@@ -452,7 +565,11 @@ export function useVideoExport() {
             audioUrl,
             isStoryboard,
             panelDuration,
-            totalDuration: isStoryboard ? panelDuration * 4 : panelDuration,
+            panelDurations,
+            totalDuration: panelDurations.reduce((sum, duration) => sum + duration, 0),
+            reelCaptions: beat.reelCaptions,
+            textOverlayEnabled: beat.reelTextOverlayEnabled !== false,
+            textOverlayStyle: beat.reelTextOverlayStyle,
           };
         })
       );
@@ -497,8 +614,8 @@ export function useVideoExport() {
             await ffmpeg.writeFile(audioFile, await fetchFile(segment.audioUrl));
           }
 
-          const fade = Math.max(0, Math.min(FADE_DURATION, segment.panelDuration / 2 - 0.01));
           const withFade = (inputLabel: string, outputLabel: string, duration: number) => {
+            const fade = Math.max(0, Math.min(FADE_DURATION, duration / 2 - 0.01));
             const fadeFilter = fade > 0
               ? `,fade=t=in:d=${fade.toFixed(3)},fade=t=out:st=${(duration - fade).toFixed(3)}:d=${fade.toFixed(3)}`
               : '';
@@ -514,20 +631,26 @@ export function useVideoExport() {
 
             for (let panelIndex = 0; panelIndex < 4; panelIndex += 1) {
               const panelFile = `img_${index}_${panelIndex}.jpg`;
+              const panelDuration = segment.panelDurations[panelIndex] ?? segment.panelDuration;
               panelFiles.push(panelFile);
+              const captionText = segment.textOverlayEnabled
+                ? segment.reelCaptions?.find((caption) => caption.panelIndex === panelIndex)?.text
+                : undefined;
               const panelBytes = await renderStoryboardPanelBytes(
                 storyboardImage,
                 panelIndex,
                 canvasSize,
                 videoExportPreset,
-                showWatermark
+                showWatermark,
+                captionText,
+                segment.textOverlayStyle
               );
               await ffmpeg.writeFile(panelFile, panelBytes);
 
               args.push(
                 '-framerate', String(FPS),
                 '-loop', '1',
-                '-t', segment.panelDuration.toFixed(3),
+                '-t', panelDuration.toFixed(3),
                 '-i', panelFile
               );
             }
@@ -544,10 +667,10 @@ export function useVideoExport() {
 
             const audioInputIndex = panelFiles.length;
             const filterComplex = [
-              withFade('0:v', 'v0', segment.panelDuration),
-              withFade('1:v', 'v1', segment.panelDuration),
-              withFade('2:v', 'v2', segment.panelDuration),
-              withFade('3:v', 'v3', segment.panelDuration),
+              withFade('0:v', 'v0', segment.panelDurations[0] ?? segment.panelDuration),
+              withFade('1:v', 'v1', segment.panelDurations[1] ?? segment.panelDuration),
+              withFade('2:v', 'v2', segment.panelDurations[2] ?? segment.panelDuration),
+              withFade('3:v', 'v3', segment.panelDurations[3] ?? segment.panelDuration),
               '[v0][v1][v2][v3]concat=n=4:v=1:a=0[vout]',
               `[${audioInputIndex}:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${durationSeconds.toFixed(3)},atrim=duration=${durationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`,
             ].join(';');

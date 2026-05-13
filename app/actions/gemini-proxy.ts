@@ -1,7 +1,7 @@
 'use server';
 
 import { GoogleGenAI } from '@google/genai';
-import { beatSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, reelDraftSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
@@ -67,13 +67,22 @@ export interface TextCallParams {
   telemetry?: CostTelemetryContext;
 }
 
+export interface VisionTextCallParams {
+  task: Extract<TaskKey, 'graphic_style_extraction'>;
+  model: string;
+  prompt: string;
+  referenceParts: InlineImagePart[];
+  temperature?: number;
+  telemetry?: CostTelemetryContext;
+}
+
 export async function callGeminiText(params: TextCallParams): Promise<string> {
   const { task, model, prompt, temperature, telemetry } = params;
   const ai = getAI();
 
   const schemaMap = {
     story_generation: beatSchema,
-    reel_story_generation: beatSchema,
+    reel_story_generation: reelDraftSchema,
     seed_plan_generation: seedPlanSchema,
     seeded_beat_materialization: beatSchema,
     visual_prompt: storyboardPlanSchema,
@@ -127,13 +136,62 @@ export async function callGeminiText(params: TextCallParams): Promise<string> {
   return text;
 }
 
+export async function callGeminiVisionText(params: VisionTextCallParams): Promise<string> {
+  const { task, model, prompt, referenceParts, temperature, telemetry } = params;
+  const ai = getAI();
+
+  const parts: any[] = [{ text: prompt }];
+  for (const ref of referenceParts) {
+    parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+  }
+  const contents = [{ role: 'user', parts }];
+
+  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
+  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
+
+  const startedAt = geminiNowMs();
+  const response = await timeGeminiStep(
+    `gemini_proxy.${task}`,
+    { model, timeoutMs, referenceCount: referenceParts.length, promptChars: prompt.length },
+    () => withTimeout(
+      ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction: LOCKED_PROMPT_GUARDRAILS[task],
+          responseMimeType: 'text/plain',
+          temperature: temperature ?? 0.4,
+        },
+      }),
+      timeoutMs,
+      task
+    )
+  );
+
+  if (telemetry) {
+    await recordModelCostEvent({
+      context: telemetry,
+      taskKey: task,
+      modelId: model,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs: geminiNowMs() - startedAt,
+      metadata: { promptChars: prompt.length, referenceCount: referenceParts.length },
+    });
+  }
+
+  const text = response.text;
+  if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
+  return text.trim();
+}
+
 export interface InlineImagePart {
   mimeType: string;
   data: string; // raw base64, no data: prefix
 }
 
 export interface ImageCallParams {
-  task: Extract<TaskKey, 'image_generation' | 'portrait_generation'>;
+  task: Extract<TaskKey, 'image_generation' | 'reel_image_generation' | 'portrait_generation'>;
   model: string;
   prompt: string;
   referenceParts?: InlineImagePart[];
@@ -162,8 +220,8 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
     contents = [{ role: 'user', parts }];
   }
 
-  const systemInstruction = task === 'image_generation'
-    ? LOCKED_PROMPT_GUARDRAILS.image_generation
+  const systemInstruction = task === 'image_generation' || task === 'reel_image_generation'
+    ? LOCKED_PROMPT_GUARDRAILS[task]
     : task === 'portrait_generation'
     ? LOCKED_PROMPT_GUARDRAILS.portrait_generation
     : undefined;

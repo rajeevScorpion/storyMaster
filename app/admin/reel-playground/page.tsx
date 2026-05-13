@@ -1,6 +1,6 @@
 import PlaygroundStudio from '@/components/admin/PlaygroundStudio';
 
-const REEL_TASK_KEYS = ['reel_story_generation', 'reel_visual_prompt', 'reel_tts'] as const;
+const REEL_TASK_KEYS = ['reel_story_generation', 'reel_visual_prompt', 'reel_image_generation', 'reel_tts'] as const;
 
 export default function ReelPlaygroundPage() {
   return (

@@ -38,9 +38,11 @@ function formatDateTime(iso: string) {
 function activityLabel(key: string) {
   const labels: Record<string, string> = {
     start_story_initial_beat: 'Story start',
-    start_reel_initial_beat: 'Reel start',
+    start_story_initial_beat_prompt_only: 'Story start (BYOI)',
+    start_reel_full_generation: 'Reel (full)',
+    start_reel_full_generation_prompt_only: 'Reel (BYOI)',
     continue_story_new_beat: 'New beat',
-    continue_reel_new_beat: 'New reel beat',
+    continue_story_new_beat_prompt_only: 'New beat (BYOI)',
     preview_seed_plan: 'Seed preview',
     regenerate_image: 'Image regen',
     regenerate_narration: 'Narration regen',
@@ -57,9 +59,13 @@ function taskLabel(key: string) {
     seed_plan_generation: 'Seed plan',
     seeded_beat_materialization: 'Seeded beat',
     visual_prompt: 'Visual plan',
+    reel_visual_prompt: 'Reel visual plan',
     image_generation: 'Image',
+    reel_image_generation: 'Reel image',
     portrait_generation: 'Portraits',
+    reel_story_generation: 'Reel story',
     tts: 'TTS',
+    reel_tts: 'Reel TTS',
     voice_selection: 'Voice',
   };
   return labels[key] || key.replaceAll('_', ' ');

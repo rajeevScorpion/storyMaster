@@ -1,6 +1,7 @@
 import type { BeatMediaStatus } from './beat-media';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
-import type { ReelLengthKey } from '@/lib/reel/settings';
+import type { ReelLengthKey, ReelTextLengthKey } from '@/lib/reel/settings';
+import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 
 export interface CharacterSheetGalleryEntry {
   url: string;
@@ -123,6 +124,8 @@ export interface StoryBeat {
   storyboardPlan?: StoryboardPlan;
   storyboardPromptText?: string;
   reelCaptions?: ReelPanelCaption[];
+  reelTextOverlayEnabled?: boolean;
+  reelTextOverlayStyle?: ReelTextOverlayStyle;
   finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;
@@ -194,6 +197,11 @@ export interface StoryAuthoringConfig {
 
 export interface ReelStoryConfig {
   length: ReelLengthKey;
+  beatCount: 1 | 2 | 3;
+  textLength: ReelTextLengthKey;
+  textOverlayEnabled: boolean;
+  visualStyleId?: string | null;
+  textOverlayStyle?: ReelTextOverlayStyle;
   moodKey: string;
   visualStyleKey: string;
   narrationStyleKey: string;

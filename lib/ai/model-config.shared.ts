@@ -8,7 +8,9 @@ export type TaskKey =
   | 'visual_prompt'
   | 'reel_visual_prompt'
   | 'image_generation'
+  | 'reel_image_generation'
   | 'portrait_generation'
+  | 'graphic_style_extraction'
   | 'tts'
   | 'reel_tts'
   | 'voice_selection';
@@ -32,7 +34,9 @@ export const TASK_DEFINITIONS: {
   { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Builds structured 4-frame storyboard plans and portrait tasks from each story beat' },
   { key: 'reel_visual_prompt', label: 'Reel Visual Composer', description: 'Builds 4-frame storyboard plans optimized for vertical reel pacing' },
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
+  { key: 'reel_image_generation', label: 'Reel Image Generation', description: 'Generates abstract vertical reel storyboard panels from reel-specific image prompts' },
   { key: 'portrait_generation', label: 'Portrait Generation', description: 'Generates character reference portraits for visual consistency across beats' },
+  { key: 'graphic_style_extraction', label: 'Graphic Style Extraction', description: 'Analyzes a reference image and returns a concise ≤150-word visual style description for the Graphic Style Studio' },
   { key: 'tts', label: 'Text-to-Speech', description: 'Narrates story text with expressive voice acting' },
   { key: 'reel_tts', label: 'Reel Text-to-Speech', description: 'Narrates reel text with short-form pacing and selected narration style' },
   { key: 'voice_selection', label: 'Legacy Voice Selection', description: 'Legacy AI selector used only when user-led narration voice selection is off' },
@@ -46,7 +50,9 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   visual_prompt: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
   reel_visual_prompt: { modelId: 'gemini-3.1-pro-preview', temperature: 0.5 },
   image_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
+  reel_image_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
   portrait_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
+  graphic_style_extraction: { modelId: 'gemini-2.5-flash', temperature: 0.4 },
   tts: { modelId: 'gemini-2.5-flash-preview-tts', temperature: null },
   reel_tts: { modelId: 'gemini-2.5-flash-preview-tts', temperature: null },
   voice_selection: { modelId: 'gemini-3.1-pro-preview', temperature: 0.3 },

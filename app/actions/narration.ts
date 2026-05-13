@@ -14,6 +14,8 @@ import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
+import type { StoryBeat } from '@/lib/types/story';
+import { DEFAULT_REEL_STORY_SETTINGS, normalizeReelStorySettings, type ReelStorySettings } from '@/lib/reel/settings';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaState } from '@/app/actions/persistence';
@@ -551,6 +553,190 @@ async function callGeminiTTS(
   );
 }
 
+type ReelCaptionTiming = NonNullable<StoryBeat['reelCaptions']>;
+
+interface NarrationAudioPayload {
+  buffer: Buffer;
+  mimeType: string;
+  extension: string;
+  reelCaptions?: ReelCaptionTiming;
+}
+
+interface ElevenLabsAlignment {
+  characters?: string[];
+  character_start_times_seconds?: number[];
+  character_end_times_seconds?: number[];
+}
+
+interface ElevenLabsTimestampResponse {
+  audio_base64?: string;
+  alignment?: ElevenLabsAlignment;
+  normalized_alignment?: ElevenLabsAlignment;
+}
+
+function joinReelCaptionText(captions: ReelCaptionTiming | undefined, fallback: string): string {
+  const text = captions
+    ?.map((caption) => caption.text.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  return text || fallback;
+}
+
+function estimateReelCaptionTimings(captions: ReelCaptionTiming | undefined): ReelCaptionTiming | undefined {
+  if (!captions?.length) return captions;
+  const wordCounts = captions.map((caption) => Math.max(1, caption.text.trim().split(/\s+/).filter(Boolean).length));
+  const totalWords = wordCounts.reduce((sum, count) => sum + count, 0);
+  const totalDurationMs = Math.max(3200, totalWords * 430 + captions.length * 160);
+  let cursor = 0;
+  return captions.map((caption, index) => {
+    const duration = index === captions.length - 1
+      ? totalDurationMs - cursor
+      : Math.max(700, Math.round((wordCounts[index] / totalWords) * totalDurationMs));
+    const startMs = cursor;
+    const endMs = Math.max(startMs + 700, Math.round(startMs + duration));
+    cursor = endMs;
+    return { ...caption, startMs, endMs };
+  });
+}
+
+function applyAlignmentToReelCaptions(
+  captions: ReelCaptionTiming | undefined,
+  narrationText: string,
+  alignment: ElevenLabsAlignment | undefined
+): ReelCaptionTiming | undefined {
+  if (!captions?.length || !alignment?.characters?.length) {
+    return estimateReelCaptionTimings(captions);
+  }
+
+  const startTimes = alignment.character_start_times_seconds ?? [];
+  const endTimes = alignment.character_end_times_seconds ?? [];
+  const source = narrationText.toLowerCase();
+  let cursor = 0;
+  const timed = captions.map((caption) => {
+    const captionText = caption.text.trim();
+    const search = captionText.toLowerCase();
+    const found = search ? source.indexOf(search, cursor) : -1;
+    const startIndex = found >= 0 ? found : cursor;
+    const endIndex = Math.max(startIndex, startIndex + captionText.length - 1);
+    cursor = Math.min(source.length, endIndex + 1);
+
+    const start = startTimes[startIndex];
+    const end = endTimes[Math.min(endIndex, endTimes.length - 1)];
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return caption;
+    }
+
+    return {
+      ...caption,
+      startMs: Math.max(0, Math.round(start * 1000)),
+      endMs: Math.max(0, Math.round(end * 1000)),
+    };
+  });
+
+  return timed.some((caption) => typeof caption.startMs === 'number' && typeof caption.endMs === 'number')
+    ? timed
+    : estimateReelCaptionTimings(captions);
+}
+
+async function callElevenLabsTTSWithTimestamps(
+  text: string,
+  settings: ReelStorySettings
+): Promise<{ audioBuffer: Buffer; mimeType: string; reelCaptions?: ReelCaptionTiming; alignment?: ElevenLabsAlignment }> {
+  const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error('ELEVENLABS_API_KEY is not configured.');
+  }
+
+  const voiceId = settings.elevenLabs.voiceId.trim();
+  if (!voiceId) {
+    throw new Error('Reel ElevenLabs voiceId is not configured.');
+  }
+
+  const response = await withTimeout(
+    fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/with-timestamps`, {
+      method: 'POST',
+      headers: {
+        'xi-api-key': apiKey,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        text,
+        model_id: settings.elevenLabs.modelId,
+      }),
+    }),
+    GEMINI_TTS_TIMEOUT_MS,
+    'elevenlabs_tts'
+  );
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => '');
+    throw new Error(`ElevenLabs TTS failed: ${response.status} ${message.slice(0, 160)}`);
+  }
+
+  const json = await response.json() as ElevenLabsTimestampResponse;
+  if (!json.audio_base64) {
+    throw new Error('ElevenLabs TTS returned no audio.');
+  }
+
+  return {
+    audioBuffer: Buffer.from(json.audio_base64, 'base64'),
+    mimeType: 'audio/mpeg',
+    alignment: json.normalized_alignment ?? json.alignment,
+  };
+}
+
+async function buildNarrationAudioPayload(
+  storyText: string,
+  tone: string,
+  genre: string,
+  voiceName: string,
+  language: string,
+  costTelemetry: CostTelemetryContext | undefined,
+  options: {
+    taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+    narrationStyle?: string;
+    reelCaptions?: ReelCaptionTiming;
+    reelSettings?: ReelStorySettings;
+  } = {}
+): Promise<NarrationAudioPayload> {
+  const isReel = options.taskKey === 'reel_tts';
+  const reelSettings = normalizeReelStorySettings(options.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
+  const narrationText = isReel ? joinReelCaptionText(options.reelCaptions, storyText) : storyText;
+
+  if (isReel && reelSettings.elevenLabs.enabled) {
+    try {
+      const eleven = await timeNarrationStep(
+        'narration.call_elevenlabs_tts_with_timestamps',
+        {
+          language,
+          storyLength: narrationText.length,
+          modelId: reelSettings.elevenLabs.modelId,
+        },
+        () => callElevenLabsTTSWithTimestamps(narrationText, reelSettings)
+      );
+
+      return {
+        buffer: eleven.audioBuffer,
+        mimeType: eleven.mimeType,
+        extension: 'mp3',
+        reelCaptions: applyAlignmentToReelCaptions(options.reelCaptions, narrationText, eleven.alignment),
+      };
+    } catch (error) {
+      console.warn('ElevenLabs reel TTS failed; falling back to Gemini TTS:', error instanceof Error ? error.message : error);
+    }
+  }
+
+  const pcmBase64 = await callGeminiTTS(narrationText, tone, genre, voiceName, language, costTelemetry, options);
+  return {
+    buffer: pcmToWavBuffer(pcmBase64),
+    mimeType: 'audio/wav',
+    extension: 'wav',
+    reelCaptions: isReel ? estimateReelCaptionTimings(options.reelCaptions) : undefined,
+  };
+}
+
 /**
  * Generate narration and persist directly to Supabase Storage + beats table.
  * Returns the public storage URL.
@@ -567,8 +753,10 @@ export async function generateAndPersistNarration(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    reelCaptions?: ReelCaptionTiming;
+    reelSettings?: ReelStorySettings;
   } = {}
-): Promise<{ audioUrl: string }> {
+): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming }> {
   return timeNarrationStep(
     'narration.generate_and_persist',
     {
@@ -578,15 +766,14 @@ export async function generateAndPersistNarration(
       voiceName,
     },
     async () => {
-      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry, options);
-      const wavBuffer = pcmToWavBuffer(pcmBase64);
+      const audioPayload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, options);
 
       const supabase = await createClient();
       const { data: { user }, error: authError } = await supabase.auth.getUser();
       if (authError || !user) throw new Error('Not authenticated');
 
-      const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.wav`;
-      const r2ObjectKey = `stories/${savedStoryId}/beats/${nodeId}/audio.wav`;
+      const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.${audioPayload.extension}`;
+      const r2ObjectKey = `stories/${savedStoryId}/beats/${nodeId}/audio.${audioPayload.extension}`;
       const storageConfig = await getEffectiveMediaStorageConfig();
       let persistedAudioUrl: string | null = null;
       let playbackAudioUrl: string | null = null;
@@ -603,8 +790,8 @@ export async function generateAndPersistNarration(
               const r2 = await putR2Object({
                 access: 'private',
                 objectKey: r2ObjectKey,
-                body: wavBuffer,
-                contentType: 'audio/wav',
+                body: audioPayload.buffer,
+                contentType: audioPayload.mimeType,
                 cacheControl: storageConfig.r2.cacheControlPrivate,
               });
               persistedAudioUrl = r2.urlOrReference;
@@ -617,8 +804,8 @@ export async function generateAndPersistNarration(
                 storageProvider: 'r2',
                 bucket: r2.bucket,
                 objectKey: r2.objectKey,
-                mimeType: 'audio/wav',
-                sizeBytes: wavBuffer.byteLength,
+                mimeType: audioPayload.mimeType,
+                sizeBytes: audioPayload.buffer.byteLength,
                 isPublic: false,
                 cacheControl: storageConfig.r2.cacheControlPrivate,
               });
@@ -638,8 +825,8 @@ export async function generateAndPersistNarration(
           for (let attempt = 0; attempt < 3; attempt++) {
             const result = await supabase.storage
               .from('story-assets')
-              .upload(storagePath, wavBuffer, {
-                contentType: 'audio/wav',
+              .upload(storagePath, audioPayload.buffer, {
+                contentType: audioPayload.mimeType,
                 upsert: true,
               });
 
@@ -671,8 +858,8 @@ export async function generateAndPersistNarration(
             bucket: 'story-assets',
             objectKey: storagePath,
             publicUrl: urlData.publicUrl,
-            mimeType: 'audio/wav',
-            sizeBytes: wavBuffer.byteLength,
+            mimeType: audioPayload.mimeType,
+            sizeBytes: audioPayload.buffer.byteLength,
             isPublic: false,
           });
         }
@@ -692,6 +879,17 @@ export async function generateAndPersistNarration(
               audioError: null,
               narrationVoiceId: voiceName,
             });
+            if (audioPayload.reelCaptions?.length) {
+              const admin = createAdminClient();
+              const { error: captionsError } = await admin
+                .from('beats')
+                .update({ reel_captions: audioPayload.reelCaptions as unknown as Record<string, unknown>[] })
+                .eq('story_id', savedStoryId)
+                .eq('node_id', nodeId);
+              if (captionsError) {
+                console.error('Failed to update reel caption timings:', captionsError.message);
+              }
+            }
           } catch (updateError) {
             console.error(
               'Failed to update beat audio media state:',
@@ -713,7 +911,7 @@ export async function generateAndPersistNarration(
         playbackAudioUrl = signedData?.signedUrl || persistedAudioUrl;
       }
 
-      return { audioUrl: playbackAudioUrl || persistedAudioUrl || '' };
+      return { audioUrl: playbackAudioUrl || persistedAudioUrl || '', reelCaptions: audioPayload.reelCaptions };
     }
   );
 }
@@ -744,6 +942,38 @@ export async function generateNarrationOnly(
       const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry, options);
       const wavBuffer = pcmToWavBuffer(pcmBase64);
       return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
+    }
+  );
+}
+
+export async function generateReelNarrationOnly(
+  storyText: string,
+  tone: string,
+  genre: string,
+  voiceName: string,
+  language: string,
+  costTelemetry?: CostTelemetryContext,
+  options: {
+    narrationStyle?: string;
+    reelCaptions?: ReelCaptionTiming;
+    reelSettings?: ReelStorySettings;
+  } = {}
+): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming }> {
+  return timeNarrationStep(
+    'narration.generate_reel_only',
+    {
+      language,
+      voiceName,
+    },
+    async () => {
+      const payload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, {
+        ...options,
+        taskKey: 'reel_tts',
+      });
+      return {
+        audioUrl: `data:${payload.mimeType};base64,${payload.buffer.toString('base64')}`,
+        reelCaptions: payload.reelCaptions,
+      };
     }
   );
 }

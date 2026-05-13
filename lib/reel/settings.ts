@@ -2,6 +2,8 @@ import type { PlanKey } from '@/lib/types/pricing';
 
 export const REEL_LENGTH_KEYS = ['short', 'medium', 'long'] as const;
 export type ReelLengthKey = (typeof REEL_LENGTH_KEYS)[number];
+export const REEL_TEXT_LENGTH_KEYS = ['short', 'medium', 'long'] as const;
+export type ReelTextLengthKey = (typeof REEL_TEXT_LENGTH_KEYS)[number];
 
 export const REEL_LENGTH_BEAT_COUNTS: Record<ReelLengthKey, number> = {
   short: 1,
@@ -21,13 +23,39 @@ export interface ReelRetentionDays {
   studio: number;
 }
 
+export interface ReelTextLengthWordRange {
+  min: number;
+  max: number;
+}
+
+export interface ReelTextLengthWordRanges {
+  short: ReelTextLengthWordRange;
+  medium: ReelTextLengthWordRange;
+  long: ReelTextLengthWordRange;
+}
+
+export interface ReelElevenLabsSettings {
+  enabled: boolean;
+  voiceId: string;
+  modelId: string;
+}
+
 export interface ReelStorySettings {
+  /**
+   * Legacy user-facing length key. Existing saved reels keep reading this.
+   * New reels use defaultBeatCount + defaultTextLength.
+   */
   defaultLength: ReelLengthKey;
+  defaultBeatCount: 1 | 2 | 3;
+  defaultTextLength: ReelTextLengthKey;
+  textOverlayDefault: boolean;
   defaultMood: string;
   defaultVisualStyle: string;
   defaultNarrationStyle: string;
   panelCount: 4;
   retentionDays: ReelRetentionDays;
+  textLengthWordRanges: ReelTextLengthWordRanges;
+  elevenLabs: ReelElevenLabsSettings;
   moods: ReelDefiner[];
   visualStyles: ReelDefiner[];
   narrationStyles: ReelDefiner[];
@@ -40,6 +68,9 @@ export interface ReelStorySetupSettings {
 
 export const DEFAULT_REEL_STORY_SETTINGS: ReelStorySettings = {
   defaultLength: 'medium',
+  defaultBeatCount: 2,
+  defaultTextLength: 'medium',
+  textOverlayDefault: true,
   defaultMood: 'playful',
   defaultVisualStyle: 'cinematic',
   defaultNarrationStyle: 'expressive',
@@ -48,6 +79,16 @@ export const DEFAULT_REEL_STORY_SETTINGS: ReelStorySettings = {
     free: 30,
     plus: 90,
     studio: 180,
+  },
+  textLengthWordRanges: {
+    short: { min: 5, max: 8 },
+    medium: { min: 9, max: 14 },
+    long: { min: 15, max: 22 },
+  },
+  elevenLabs: {
+    enabled: true,
+    voiceId: 'EXAVITQu4vr4xnSDxMaL',
+    modelId: 'eleven_multilingual_v2',
   },
   moods: [
     { key: 'playful', label: 'Playful', prompt: 'bright, curious, quick emotional turns' },
@@ -102,10 +143,62 @@ function normalizeRetentionNumber(value: unknown, fallback: number): number {
   return Math.max(1, Math.min(3650, Math.round(parsed)));
 }
 
+function normalizeBeatCount(value: unknown, fallback: 1 | 2 | 3): 1 | 2 | 3 {
+  const parsed = Number(value);
+  if (parsed === 1 || parsed === 2 || parsed === 3) return parsed;
+  return fallback;
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return fallback;
+}
+
+function normalizeTextLengthRange(value: unknown, fallback: ReelTextLengthWordRange): ReelTextLengthWordRange {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const min = Number(raw.min);
+  const max = Number(raw.max);
+  const normalizedMin = Number.isFinite(min) ? Math.max(1, Math.min(60, Math.round(min))) : fallback.min;
+  const normalizedMax = Number.isFinite(max) ? Math.max(normalizedMin, Math.min(80, Math.round(max))) : fallback.max;
+  return {
+    min: normalizedMin,
+    max: normalizedMax,
+  };
+}
+
+function normalizeTextLengthWordRanges(value: unknown): ReelTextLengthWordRanges {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    short: normalizeTextLengthRange(raw.short, DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges.short),
+    medium: normalizeTextLengthRange(raw.medium, DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges.medium),
+    long: normalizeTextLengthRange(raw.long, DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges.long),
+  };
+}
+
+function normalizeElevenLabsSettings(value: unknown): ReelElevenLabsSettings {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    enabled: normalizeBoolean(raw.enabled, DEFAULT_REEL_STORY_SETTINGS.elevenLabs.enabled),
+    voiceId: cleanKey(raw.voiceId, DEFAULT_REEL_STORY_SETTINGS.elevenLabs.voiceId),
+    modelId: cleanKey(raw.modelId, DEFAULT_REEL_STORY_SETTINGS.elevenLabs.modelId),
+  };
+}
+
 export function normalizeReelLength(value: unknown): ReelLengthKey {
   return REEL_LENGTH_KEYS.includes(value as ReelLengthKey)
     ? value as ReelLengthKey
     : DEFAULT_REEL_STORY_SETTINGS.defaultLength;
+}
+
+export function normalizeReelTextLength(value: unknown): ReelTextLengthKey {
+  return REEL_TEXT_LENGTH_KEYS.includes(value as ReelTextLengthKey)
+    ? value as ReelTextLengthKey
+    : DEFAULT_REEL_STORY_SETTINGS.defaultTextLength;
 }
 
 export function normalizeReelStorySettings(input: unknown): ReelStorySettings {
@@ -114,6 +207,10 @@ export function normalizeReelStorySettings(input: unknown): ReelStorySettings {
   const visualStyles = normalizeDefiners(raw.visualStyles, DEFAULT_REEL_STORY_SETTINGS.visualStyles);
   const narrationStyles = normalizeDefiners(raw.narrationStyles, DEFAULT_REEL_STORY_SETTINGS.narrationStyles);
   const defaultLength = normalizeReelLength(raw.defaultLength);
+  const defaultBeatCount = normalizeBeatCount(
+    raw.defaultBeatCount,
+    getReelLengthBeatCount(defaultLength) as 1 | 2 | 3
+  );
   const defaultMood = moods.some((item) => item.key === raw.defaultMood)
     ? raw.defaultMood as string
     : moods[0]?.key || DEFAULT_REEL_STORY_SETTINGS.defaultMood;
@@ -126,11 +223,16 @@ export function normalizeReelStorySettings(input: unknown): ReelStorySettings {
 
   return {
     defaultLength,
+    defaultBeatCount,
+    defaultTextLength: normalizeReelTextLength(raw.defaultTextLength ?? defaultLength),
+    textOverlayDefault: normalizeBoolean(raw.textOverlayDefault, DEFAULT_REEL_STORY_SETTINGS.textOverlayDefault),
     defaultMood,
     defaultVisualStyle,
     defaultNarrationStyle,
     panelCount: 4,
     retentionDays: normalizeRetentionDays(raw.retentionDays),
+    textLengthWordRanges: normalizeTextLengthWordRanges(raw.textLengthWordRanges),
+    elevenLabs: normalizeElevenLabsSettings(raw.elevenLabs),
     moods,
     visualStyles,
     narrationStyles,
@@ -152,6 +254,16 @@ export function serializeReelStorySettings(settings: ReelStorySettings): string 
 
 export function getReelLengthBeatCount(length: ReelLengthKey): number {
   return REEL_LENGTH_BEAT_COUNTS[length] ?? REEL_LENGTH_BEAT_COUNTS.short;
+}
+
+export function getReelLegacyLengthForBeatCount(beatCount: number): ReelLengthKey {
+  if (beatCount >= 3) return 'long';
+  if (beatCount === 2) return 'medium';
+  return 'short';
+}
+
+export function getReelTextLengthRange(settings: ReelStorySettings, textLength: ReelTextLengthKey): ReelTextLengthWordRange {
+  return settings.textLengthWordRanges[textLength] ?? DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges[textLength];
 }
 
 export function getReelRetentionDaysForPlan(settings: ReelStorySettings, planKey: PlanKey | string | null | undefined): number {

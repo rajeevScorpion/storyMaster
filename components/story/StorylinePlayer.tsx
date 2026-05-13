@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -73,6 +73,8 @@ function StoryboardCycler({
   playbackState,
   imageClassName,
   captions,
+  textOverlayEnabled = true,
+  textOverlayStyle,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -83,11 +85,21 @@ function StoryboardCycler({
   playbackState: 'idle' | 'playing' | 'paused';
   imageClassName?: string;
   captions?: StoryBeat['reelCaptions'];
+  textOverlayEnabled?: boolean;
+  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
   const hasAudio = !!audioUrl;
   const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
+  const timedCaptions = useMemo(() => captions?.filter((caption) => (
+    typeof caption.startMs === 'number'
+    && typeof caption.endMs === 'number'
+    && caption.endMs > caption.startMs
+  )), [captions]);
+  const hasTimedCaptions = Boolean(timedCaptions && timedCaptions.length > 0);
+  const elapsedBeforePauseRef = useRef(0);
+  const playbackStartedAtRef = useRef<number | null>(null);
   const panelDurationMs = cycleOverride
     ? cycleMs
     : !audioUrl
@@ -108,6 +120,7 @@ function StoryboardCycler({
 
   useEffect(() => {
     if (panelDurationMs === null) return;
+    if (hasTimedCaptions && hasAudio && !cycleOverride) return;
     const prev = prevPlaybackStateRef.current;
     prevPlaybackStateRef.current = playbackState;
     let resetPanelTimeout: number | undefined;
@@ -125,8 +138,64 @@ function StoryboardCycler({
       if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
       clearInterval(id);
     };
-  }, [panelDurationMs, playbackState, hasAudio, cycleOverride]);
-  const activeCaption = captions?.find((caption) => caption.panelIndex === activePanel)?.text;
+  }, [panelDurationMs, playbackState, hasAudio, cycleOverride, hasTimedCaptions]);
+
+  useEffect(() => {
+    if (!hasTimedCaptions || !hasAudio || cycleOverride) return;
+
+    const prev = prevPlaybackStateRef.current;
+    prevPlaybackStateRef.current = playbackState;
+
+    if (prev === 'idle' && playbackState === 'playing') {
+      elapsedBeforePauseRef.current = 0;
+      playbackStartedAtRef.current = Date.now();
+      window.setTimeout(() => setActivePanel(0), 0);
+    } else if (playbackState === 'playing' && playbackStartedAtRef.current === null) {
+      playbackStartedAtRef.current = Date.now();
+    }
+
+    if (playbackState === 'paused' && playbackStartedAtRef.current !== null) {
+      elapsedBeforePauseRef.current += Date.now() - playbackStartedAtRef.current;
+      playbackStartedAtRef.current = null;
+    }
+
+    if (playbackState !== 'playing') return;
+
+    const id = window.setInterval(() => {
+      const startedAt = playbackStartedAtRef.current ?? Date.now();
+      const elapsedMs = elapsedBeforePauseRef.current + (Date.now() - startedAt);
+      const caption = timedCaptions!.find((item) => elapsedMs >= item.startMs! && elapsedMs < item.endMs!)
+        ?? timedCaptions!.find((item) => elapsedMs < item.endMs!)
+        ?? timedCaptions![timedCaptions!.length - 1];
+      setActivePanel(Math.max(0, Math.min(3, caption.panelIndex)));
+    }, 100);
+
+    return () => window.clearInterval(id);
+  }, [hasTimedCaptions, hasAudio, cycleOverride, playbackState, timedCaptions]);
+
+  const activeCaption = textOverlayEnabled
+    ? captions?.find((caption) => caption.panelIndex === activePanel)?.text
+    : undefined;
+  const captionPositionClass = textOverlayStyle?.position === 'upper'
+    ? 'top-16'
+    : textOverlayStyle?.position === 'middle'
+      ? 'top-1/2 -translate-y-1/2'
+      : 'bottom-9';
+  const captionAlignClass = textOverlayStyle?.align === 'left'
+    ? 'justify-start text-left'
+    : textOverlayStyle?.align === 'right'
+      ? 'justify-end text-right'
+      : 'justify-center text-center';
+  const captionStyle: CSSProperties = {
+    color: textOverlayStyle?.color,
+    fontFamily: textOverlayStyle?.fontFamily,
+    fontSize: textOverlayStyle?.fontSize ? `${textOverlayStyle.fontSize}px` : undefined,
+    fontWeight: textOverlayStyle?.fontWeight,
+    textShadow: textOverlayStyle?.shadowColor
+      ? `0 2px ${textOverlayStyle.shadowBlur ?? 12}px ${textOverlayStyle.shadowColor}`
+      : undefined,
+    backgroundColor: textOverlayStyle?.backgroundColor,
+  };
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -152,8 +221,8 @@ function StoryboardCycler({
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeCaption && (
-        <div className="absolute inset-x-4 bottom-9 z-20 flex justify-center">
-          <div className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-center text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
+        <div className={`absolute inset-x-4 z-20 flex ${captionPositionClass} ${captionAlignClass}`}>
+          <div style={captionStyle} className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
             {activeCaption}
           </div>
         </div>
@@ -592,6 +661,8 @@ export default function StorylinePlayer({
                   vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                   playbackState={playbackState}
                   captions={currentBeat.reelCaptions}
+                  textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
+                  textOverlayStyle={currentBeat.reelTextOverlayStyle}
                 />
               </div>
             ) : displayImageUrl ? (
@@ -634,6 +705,8 @@ export default function StorylinePlayer({
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
                       captions={currentBeat.reelCaptions}
+                      textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
+                      textOverlayStyle={currentBeat.reelTextOverlayStyle}
                     />
                   ) : (
                     <Image
@@ -870,6 +943,8 @@ export default function StorylinePlayer({
                 playbackState={playbackState}
                 imageClassName="mobile-scene-shuttle"
                 captions={currentBeat.reelCaptions}
+                textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
+                textOverlayStyle={currentBeat.reelTextOverlayStyle}
               />
             ) : displayImageUrl ? (
               <div className="mobile-scene-shuttle absolute inset-0">

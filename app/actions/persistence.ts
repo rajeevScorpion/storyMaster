@@ -1345,6 +1345,8 @@ export async function autoPublishStoryline(
     narrationVoiceId: b.narration_voice_id || undefined,
     isStoryboard: b.is_storyboard || undefined,
     reelCaptions: Array.isArray(b.reel_captions) ? b.reel_captions as StoryBeat['reelCaptions'] : undefined,
+    reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,
+    reelTextOverlayStyle: storyConfig.reel.textOverlayStyle,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
     canonicalOptionId: b.canonical_option_id || undefined,

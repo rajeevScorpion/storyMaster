@@ -75,6 +75,30 @@ export const beatSchema = {
   ],
 };
 
+const reelDraftBeatSchema = {
+  type: Type.OBJECT,
+  properties: {
+    beatIndex: { type: Type.INTEGER },
+    title: { type: Type.STRING },
+    storyText: { type: Type.STRING },
+    sceneSummary: { type: Type.STRING },
+    imagePrompt: { type: Type.STRING },
+  },
+  required: ['beatIndex', 'title', 'storyText', 'sceneSummary', 'imagePrompt'],
+};
+
+export const reelDraftSchema = {
+  type: Type.OBJECT,
+  properties: {
+    beatCount: { type: Type.INTEGER },
+    beats: {
+      type: Type.ARRAY,
+      items: reelDraftBeatSchema,
+    },
+  },
+  required: ['beatCount', 'beats'],
+};
+
 const seedPlanOptionSchema = {
   type: Type.OBJECT,
   properties: {
