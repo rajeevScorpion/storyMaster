@@ -11,7 +11,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
-import { toR2Reference, parseR2Reference } from '@/lib/media/r2-reference';
+import { toR2Reference, parseR2Reference, parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 
 let cachedClient: S3Client | null = null;
 let cachedClientKey: string | null = null;
@@ -126,7 +126,9 @@ export async function createR2SignedGetUrl(
   objectKey?: string,
   expiresIn = 3600
 ): Promise<string | null> {
-  const parsed = objectKey ? { bucket: referenceOrBucket, objectKey } : parseR2Reference(referenceOrBucket);
+  const parsed = objectKey
+    ? { bucket: referenceOrBucket, objectKey }
+    : parseR2Reference(referenceOrBucket) ?? parseR2UrlLikeReference(referenceOrBucket);
   if (!parsed) return null;
   const client = await getR2Client();
   return getSignedUrl(
