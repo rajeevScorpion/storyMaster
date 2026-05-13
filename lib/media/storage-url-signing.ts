@@ -3,7 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createR2SignedGetUrl } from '@/lib/media/r2-server';
-import { parseR2Reference } from '@/lib/media/r2-reference';
+import { parseR2Reference, parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { StoryBeat, StoryMap, Character } from '@/lib/types/story';
 
@@ -13,9 +13,10 @@ type StoryMapCharacterEntry = { nodeId: string; characterIdx: number; url: strin
 type StoryMapCharacterGalleryEntry = { nodeId: string; characterIdx: number; galleryIdx: number; url: string };
 
 async function signR2Url(value: string, expiresIn: number): Promise<string | null> {
-  if (!parseR2Reference(value)) return null;
+  const parsedReference = parseR2Reference(value) ?? parseR2UrlLikeReference(value);
+  if (!parsedReference) return null;
   try {
-    return await createR2SignedGetUrl(value, undefined, expiresIn);
+    return await createR2SignedGetUrl(parsedReference.bucket, parsedReference.objectKey, expiresIn);
   } catch (error) {
     console.error('Failed to create R2 signed URL:', error instanceof Error ? error.message : error);
     return null;
