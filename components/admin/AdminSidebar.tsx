@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BookOpen, Coins, Database, FlaskConical, ImageIcon, Palette, Settings, WalletCards } from 'lucide-react';
+import { BookOpen, Coins, Database, FlaskConical, ImageIcon, Palette, Settings, WalletCards, Wind } from 'lucide-react';
 
 const navItems = [
   { label: 'Content', href: '/admin/content', icon: BookOpen },
@@ -11,6 +11,7 @@ const navItems = [
   { label: 'Story Playground', href: '/admin/story-playground', icon: FlaskConical },
   { label: 'Reel Playground', href: '/admin/reel-playground', icon: FlaskConical },
   { label: 'Graphic Styles', href: '/admin/graphic-styles', icon: Palette },
+  { label: 'Moods', href: '/admin/moods', icon: Wind },
   { label: 'Cost', href: '/admin/cost', icon: WalletCards },
   {
     label: 'Pricing and offers',

@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import PublishDialog from './PublishDialog';
@@ -921,6 +921,7 @@ function StoryScreenInner({
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  const isReelStory = session.storyConfig.storyKind === 'reel';
   const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
@@ -1517,6 +1518,20 @@ function StoryScreenInner({
                       onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                       onError={() => setFailedImageUrl(displayImageUrl)}
                     />
+                  )}
+                  {isReelStory && !normalizedCurrentBeat.audioUrl && (
+                    <button
+                      onClick={() => !isGeneratingAudio && generateNarrationForNode(currentNodeId)}
+                      disabled={isGeneratingAudio}
+                      className="absolute bottom-4 right-4 z-20 p-2.5 rounded-full bg-black/50 backdrop-blur-sm border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-all disabled:cursor-wait"
+                      title={isGeneratingAudio ? 'Generating narration...' : 'Generate narration'}
+                    >
+                      {isGeneratingAudio ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Volume2 className="w-4 h-4" />
+                      )}
+                    </button>
                   )}
                 </div>
               </div>

@@ -53,7 +53,7 @@ export interface ReelVisualStyleRuntime {
 
 export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
   fontFamily: 'Inter, system-ui, sans-serif',
-  fontSize: 38,
+  fontSize: 16,
   fontWeight: 600,
   color: '#ffffff',
   shadowColor: 'rgba(0,0,0,0.72)',
@@ -97,7 +97,7 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
       ? raw.fontFamily.trim()
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily,
     fontSize: Number.isFinite(fontSize)
-      ? Math.max(18, Math.min(80, Math.round(fontSize)))
+      ? Math.max(8, Math.min(80, Math.round(fontSize)))
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize,
     fontWeight: typeof raw.fontWeight === 'string' || typeof raw.fontWeight === 'number'
       ? raw.fontWeight

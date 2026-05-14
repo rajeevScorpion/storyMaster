@@ -14,7 +14,7 @@ import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
-import type { StoryBeat } from '@/lib/types/story';
+import type { StoryBeat, WordTiming } from '@/lib/types/story';
 import { DEFAULT_REEL_STORY_SETTINGS, normalizeReelStorySettings, type ReelStorySettings } from '@/lib/reel/settings';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
@@ -600,6 +600,44 @@ function estimateReelCaptionTimings(captions: ReelCaptionTiming | undefined): Re
   });
 }
 
+function deriveWordTimings(
+  alignment: ElevenLabsAlignment,
+  charStart: number,
+  charEnd: number
+): WordTiming[] {
+  const characters = alignment.characters ?? [];
+  const startTimes = alignment.character_start_times_seconds ?? [];
+  const endTimes = alignment.character_end_times_seconds ?? [];
+
+  const timings: WordTiming[] = [];
+  let wordFirstIdx = -1;
+  let wordChars: string[] = [];
+
+  const flush = (lastIdx: number) => {
+    if (wordFirstIdx < 0 || wordChars.length === 0) return;
+    const word = wordChars.join('');
+    const startMs = Math.round((startTimes[wordFirstIdx] ?? 0) * 1000);
+    const endMs = Math.round((endTimes[lastIdx] ?? startTimes[lastIdx] ?? 0) * 1000);
+    timings.push({ word, startMs: Math.max(0, startMs), endMs: Math.max(startMs, endMs) });
+    wordFirstIdx = -1;
+    wordChars = [];
+  };
+
+  for (let i = charStart; i <= charEnd && i < characters.length; i++) {
+    const ch = characters[i];
+    const isSpace = ch === ' ' || ch === '\n' || ch === '\t' || ch === '\r';
+    if (isSpace) {
+      flush(i - 1);
+    } else {
+      if (wordFirstIdx < 0) wordFirstIdx = i;
+      wordChars.push(ch);
+    }
+  }
+  flush(charEnd);
+
+  return timings;
+}
+
 function applyAlignmentToReelCaptions(
   captions: ReelCaptionTiming | undefined,
   narrationText: string,
@@ -627,10 +665,13 @@ function applyAlignmentToReelCaptions(
       return caption;
     }
 
+    const wordTimings = deriveWordTimings(alignment, startIndex, Math.min(endIndex, endTimes.length - 1));
+
     return {
       ...caption,
       startMs: Math.max(0, Math.round(start * 1000)),
       endMs: Math.max(0, Math.round(end * 1000)),
+      wordTimings: wordTimings.length > 0 ? wordTimings : undefined,
     };
   });
 

@@ -1768,6 +1768,7 @@ export const useStoryStore = create<StoryState>()(
             beat.reelCaptions = buildReelPanelCaptions(beat, storyboardPlan, {
               textLength: storyConfig.reel.textLength,
               reelSettings: modelOverrides?.reelSettings,
+              storyConfig,
             });
           }
 
@@ -1875,7 +1876,8 @@ export const useStoryStore = create<StoryState>()(
           );
 
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
-          if (storyPrompt.toLowerCase() !== 'mock') {
+          // Reels skip auto-narration — user triggers it on-demand via the speaker icon.
+          if (storyPrompt.toLowerCase() !== 'mock' && !isReelStoryConfig(storyConfig)) {
             Promise.all([lockedVoicePromise, earlySavePromise]).then(([voiceResolution, storyId]) => {
               set({ isGeneratingAudio: true });
               const narrationStartedAt = nowMs();
@@ -2349,6 +2351,7 @@ export const useStoryStore = create<StoryState>()(
             beat.reelCaptions = buildReelPanelCaptions(beat, plan, {
               textLength: storyConfig.reel.textLength,
               reelSettings: modelOverrides?.reelSettings,
+              storyConfig,
             });
 
             const storyboardPrompt = beat.storyboardPromptText;
@@ -2458,94 +2461,7 @@ export const useStoryStore = create<StoryState>()(
             loadingReader: null,
           });
 
-          // Kick off narration for each beat in parallel
-          if (prompt.toLowerCase() !== 'mock') {
-            const voiceResolution = await resolveNarrationVoiceServer({
-              savedStoryId: savedStoryId ?? null,
-              requestedMode: initialSession.narrationVoiceMode ?? requestedNarrationVoice?.mode ?? null,
-              requestedVoiceId: initialSession.narratorVoice ?? requestedNarrationVoice?.voiceId ?? null,
-              requestedGenderBucket: initialSession.narrationVoiceGenderBucket ?? requestedNarrationVoice?.genderBucket ?? null,
-              language: storyConfig.language,
-              genre: 'reel',
-              tone: 'reflective',
-              targetAge: storyConfig.ageGroup,
-              costTelemetry: costPhase(baseCostTelemetry, 'voice_selection'),
-            }).catch((err) => {
-              console.error('Reel voice resolution failed:', err);
-              return null;
-            });
-
-            if (voiceResolution) {
-              set({ isGeneratingAudio: true });
-              void Promise.all(
-                builtBeats.map((beat, idx) => {
-                  const nodeId = beatNodeIds[idx];
-                  const reelNarrationOptions = {
-                    reelCaptions: beat.reelCaptions,
-                    reelSettings: modelOverrides?.reelSettings,
-                  };
-                  const narrationPromise: Promise<{ audioUrl: string; reelCaptions?: StoryBeat['reelCaptions'] }> = savedStoryId
-                    ? generateAndPersistNarration(
-                        beat.storyText,
-                        'reflective',
-                        'reel',
-                        voiceResolution.voiceId,
-                        voiceResolution.languageCode,
-                        savedStoryId,
-                        nodeId,
-                        costPhase({ ...baseCostTelemetry, storyId: savedStoryId, nodeId, beatNumber: beat.beatNumber }, 'reel_tts'),
-                        {
-                          taskKey: 'reel_tts',
-                          narrationStyle: getReelNarrationStyle(modelOverrides, storyConfig),
-                          ...reelNarrationOptions,
-                        }
-                      )
-                    : generateReelNarrationOnly(
-                        beat.storyText,
-                        'reflective',
-                        'reel',
-                        voiceResolution.voiceId,
-                        voiceResolution.languageCode,
-                        costPhase({ ...baseCostTelemetry, nodeId, beatNumber: beat.beatNumber }, 'reel_tts'),
-                        {
-                          narrationStyle: getReelNarrationStyle(modelOverrides, storyConfig),
-                          ...reelNarrationOptions,
-                        }
-                      );
-
-                  return narrationPromise
-                    .then(({ audioUrl, reelCaptions }) => {
-                      const latestSession = get().session;
-                      if (!latestSession?.storyMap.nodes[nodeId]) return;
-                      set({
-                        session: updateSessionBeat(latestSession, nodeId, (existing) => ({
-                          ...existing,
-                          audioUrl,
-                          narrationVoiceId: voiceResolution.voiceId,
-                          audioStatus: savedStoryId ? 'ready' : 'not_requested',
-                          audioError: undefined,
-                          ...(reelCaptions?.length ? { reelCaptions } : {}),
-                        })),
-                      });
-                    })
-                    .catch((err) => {
-                      console.error(`Reel narration failed for beat ${beat.beatNumber}:`, err);
-                      const latestSession = get().session;
-                      if (!latestSession?.storyMap.nodes[nodeId]) return;
-                      set({
-                        session: updateSessionBeat(latestSession, nodeId, (existing) => ({
-                          ...existing,
-                          audioStatus: 'failed',
-                          audioError: err instanceof Error ? err.message : 'Narration generation failed',
-                        })),
-                      });
-                    });
-                })
-              ).finally(() => {
-                set({ isGeneratingAudio: false });
-              });
-            }
-          }
+          // Reel narration is on-demand only — user triggers it via the speaker icon.
         } catch (error: any) {
           console.error('Reel generation failed:', error);
           if (shouldReleaseReservation && reservationId) {

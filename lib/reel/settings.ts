@@ -81,9 +81,9 @@ export const DEFAULT_REEL_STORY_SETTINGS: ReelStorySettings = {
     studio: 180,
   },
   textLengthWordRanges: {
-    short: { min: 5, max: 8 },
-    medium: { min: 9, max: 14 },
-    long: { min: 15, max: 22 },
+    short: { min: 4, max: 8 },
+    medium: { min: 8, max: 12 },
+    long: { min: 12, max: 16 },
   },
   elevenLabs: {
     enabled: true,

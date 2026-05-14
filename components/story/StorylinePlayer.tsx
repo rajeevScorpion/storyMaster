@@ -89,6 +89,7 @@ function StoryboardCycler({
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
 }) {
   const [activePanel, setActivePanel] = useState(0);
+  const [currentElapsedMs, setCurrentElapsedMs] = useState<number | null>(null);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
   const hasAudio = !!audioUrl;
   const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
@@ -164,6 +165,7 @@ function StoryboardCycler({
     const id = window.setInterval(() => {
       const startedAt = playbackStartedAtRef.current ?? Date.now();
       const elapsedMs = elapsedBeforePauseRef.current + (Date.now() - startedAt);
+      setCurrentElapsedMs(elapsedMs);
       const caption = timedCaptions!.find((item) => elapsedMs >= item.startMs! && elapsedMs < item.endMs!)
         ?? timedCaptions!.find((item) => elapsedMs < item.endMs!)
         ?? timedCaptions![timedCaptions!.length - 1];
@@ -173,9 +175,11 @@ function StoryboardCycler({
     return () => window.clearInterval(id);
   }, [hasTimedCaptions, hasAudio, cycleOverride, playbackState, timedCaptions]);
 
-  const activeCaption = textOverlayEnabled
-    ? captions?.find((caption) => caption.panelIndex === activePanel)?.text
+  const activeCaptionObj = textOverlayEnabled
+    ? captions?.find((caption) => caption.panelIndex === activePanel)
     : undefined;
+  const activeCaption = activeCaptionObj?.text;
+  const activeCaptionWordTimings = activeCaptionObj?.wordTimings;
   const captionPositionClass = textOverlayStyle?.position === 'upper'
     ? 'top-16'
     : textOverlayStyle?.position === 'middle'
@@ -194,8 +198,8 @@ function StoryboardCycler({
     textShadow: textOverlayStyle?.shadowColor
       ? `0 2px ${textOverlayStyle.shadowBlur ?? 12}px ${textOverlayStyle.shadowColor}`
       : undefined,
-    backgroundColor: textOverlayStyle?.backgroundColor,
   };
+  const wordHighlightBg = textOverlayStyle?.backgroundColor ?? 'rgba(0,0,0,0.55)';
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -222,8 +226,28 @@ function StoryboardCycler({
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeCaption && (
         <div className={`absolute inset-x-4 z-20 flex ${captionPositionClass} ${captionAlignClass}`}>
-          <div style={captionStyle} className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
-            {activeCaption}
+          <div style={captionStyle} className="max-w-xl px-1 py-1 text-sm leading-relaxed text-white">
+            {activeCaptionWordTimings && currentElapsedMs !== null && playbackState === 'playing'
+              ? (() => {
+                  const tokens = activeCaption.split(/(\s+)/);
+                  let wordIdx = 0;
+                  return tokens.map((token, i) => {
+                    if (/^\s+$/.test(token)) return <span key={i}>{token}</span>;
+                    const timing = activeCaptionWordTimings[wordIdx++];
+                    const isActive = timing != null
+                      && currentElapsedMs >= timing.startMs
+                      && currentElapsedMs < timing.endMs;
+                    return (
+                      <span
+                        key={i}
+                        style={isActive ? { backgroundColor: wordHighlightBg, borderRadius: '4px', padding: '0 3px' } : undefined}
+                      >
+                        {token}
+                      </span>
+                    );
+                  });
+                })()
+              : activeCaption}
           </div>
         </div>
       )}

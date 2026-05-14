@@ -92,11 +92,18 @@ export interface StoryboardPlan {
   negativeConstraints: string[];
 }
 
+export interface WordTiming {
+  word: string;
+  startMs: number;
+  endMs: number;
+}
+
 export interface ReelPanelCaption {
   panelIndex: number;
   text: string;
   startMs?: number;
   endMs?: number;
+  wordTimings?: WordTiming[];
 }
 
 export interface BeatImageGalleryEntry {
@@ -182,7 +189,7 @@ export interface VisualSettings {
   detail: StoryDetailLevel;
 }
 
-export type AuthoringMode = 'prompt' | 'seeded';
+export type AuthoringMode = 'prompt' | 'seeded' | 'user_text';
 export type StoryKind = 'story' | 'reel';
 
 export interface StoryAuthoringConfig {
@@ -193,6 +200,8 @@ export interface StoryAuthoringConfig {
   guidanceText?: string;
   sourceFidelity?: SourceFidelity;
   seedPlan?: SeedPlan;
+  reelPanelTexts?: string[][];
+  reelImagePrompts?: string[];
 }
 
 export interface ReelStoryConfig {

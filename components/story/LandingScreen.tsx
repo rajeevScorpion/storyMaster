@@ -4,8 +4,10 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
 import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
+import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
+import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
-import { generateSeedPlanPreview } from '@/app/actions/story-runtime';
+import { generateSeedPlanPreview, distributeReelTextAction } from '@/app/actions/story-runtime';
 import {
   authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
@@ -89,7 +91,14 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [reelVisualStyleKey, setReelVisualStyleKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle);
   const [reelVisualStyleId, setReelVisualStyleId] = useState<string | null>(null);
   const [reelVisualStyleCards, setReelVisualStyleCards] = useState<ReelVisualStyleCard[]>([]);
+  const [publishedMoods, setPublishedMoods] = useState<ReelMoodRecord[]>([]);
   const [reelNarrationStyleKey, setReelNarrationStyleKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle);
+  const [reelInputMode, setReelInputMode] = useState<'prompt' | 'text'>('prompt');
+  const [reelUserText, setReelUserText] = useState('');
+  const [reelDistributedTexts, setReelDistributedTexts] = useState<string[][] | null>(null);
+  const [reelDistributedImagePrompts, setReelDistributedImagePrompts] = useState<string[] | null>(null);
+  const [isDistributing, setIsDistributing] = useState(false);
+  const [distributeError, setDistributeError] = useState<string | null>(null);
   const [isVerticalStory, setIsVerticalStory] = useState(false);
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
@@ -192,6 +201,14 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listPublishedReelMoodsAction()
+      .then((moods) => { if (!cancelled) setPublishedMoods(moods); })
+      .catch(() => { if (!cancelled) setPublishedMoods([]); });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -325,9 +342,15 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         isVerticalStory: true,
         aspectRatio: '9:16',
         visualSettings,
-        authoring: {
-          mode: 'prompt',
-        },
+        authoring: reelInputMode === 'text' && reelDistributedTexts && reelDistributedImagePrompts
+          ? {
+              mode: 'user_text' as const,
+              reelPanelTexts: reelDistributedTexts,
+              reelImagePrompts: reelDistributedImagePrompts,
+            }
+          : {
+              mode: 'prompt' as const,
+            },
         reel: {
           length: legacyLength,
           beatCount: reelBeatCount,
@@ -403,7 +426,11 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const startConfiguredStory = async (seedPlan?: SeedPlan) => {
     const voiceConfig = narrationVoiceConfig || await getNarrationVoiceSelectionConfig(language).catch(() => null);
     const config = buildStoryConfig(seedPlan, voiceConfig);
-    const storyPrompt = creationMode === 'seeded' ? sourceText.trim() : prompt.trim();
+    const storyPrompt = creationMode === 'seeded'
+      ? sourceText.trim()
+      : (isReelMode && reelInputMode === 'text')
+        ? reelUserText.trim()
+        : prompt.trim();
     if (!storyPrompt) return;
 
     if (onBegin) {
@@ -520,6 +547,24 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     }
   };
 
+  const handleDistributeReelText = async () => {
+    if (!reelUserText.trim() || isDistributing || isLoading) return;
+    setIsDistributing(true);
+    setDistributeError(null);
+    setReelDistributedTexts(null);
+    setReelDistributedImagePrompts(null);
+    try {
+      const result = await distributeReelTextAction({ text: reelUserText.trim(), beatCount: reelBeatCount });
+      setReelDistributedTexts(result.panelTexts);
+      setReelDistributedImagePrompts(result.imagePrompts);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to distribute text across panels.';
+      setDistributeError(msg);
+    } finally {
+      setIsDistributing(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -531,6 +576,17 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
 
       if (!isOverAuthoringWordCap && !isLoading) {
         await startConfiguredStory(seedPreview);
+      }
+      return;
+    }
+
+    if (isReelMode && reelInputMode === 'text') {
+      if (!reelDistributedTexts) {
+        await handleDistributeReelText();
+        return;
+      }
+      if (!isLoading) {
+        await startConfiguredStory();
       }
       return;
     }
@@ -631,33 +687,93 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                 <div className="relative rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
                   {creationMode !== 'seeded' ? (
                     <div className="space-y-3 p-2">
-                      <div className="flex items-center">
-                        <input
-                          type="text"
-                          value={prompt}
-                          onChange={(e) => setPrompt(e.target.value)}
-                          placeholder={isReelMode ? 'Make a short reel about a moonlit mango market...' : 'Tell me a story of a monkey and an elephant...'}
-                          className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
-                          disabled={isLoading}
-                        />
-                        <button
-                          type="submit"
-                          disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
-                          className="ml-2 bg-white text-black px-6 py-3 rounded-xl font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                        >
-                          {isLoading ? (
-                            <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                          ) : (
-                            <>
-                              <span>Begin</span>
-                              <Sparkles className="w-4 h-4" />
-                            </>
-                          )}
-                        </button>
-                      </div>
+                      {!(isReelMode && reelInputMode === 'text') && (
+                        <div className="flex items-center">
+                          <input
+                            type="text"
+                            value={prompt}
+                            onChange={(e) => setPrompt(e.target.value)}
+                            placeholder={isReelMode ? 'Make a short reel about a moonlit mango market...' : 'Tell me a story of a monkey and an elephant...'}
+                            className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
+                            disabled={isLoading}
+                          />
+                          <button
+                            type="submit"
+                            disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
+                            className="ml-2 bg-white text-black px-6 py-3 rounded-xl font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                          >
+                            {isLoading ? (
+                              <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <>
+                                <span>Begin</span>
+                                <Sparkles className="w-4 h-4" />
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
                       {isReelMode && (
                         <div className="space-y-3 border-t border-white/10 px-2 pb-2 pt-3 text-left">
-                          <div className="grid gap-2 md:grid-cols-6">
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => { setReelInputMode('prompt'); setReelDistributedTexts(null); setReelDistributedImagePrompts(null); setDistributeError(null); }}
+                              className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${reelInputMode === 'prompt' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'}`}
+                            >
+                              Prompt
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setReelInputMode('text')}
+                              className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${reelInputMode === 'text' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'}`}
+                            >
+                              Text
+                            </button>
+                          </div>
+
+                          {reelInputMode === 'text' && (
+                            <div className="space-y-2">
+                              <div className="relative">
+                                <textarea
+                                  value={reelUserText}
+                                  onChange={(e) => {
+                                    setReelUserText(e.target.value);
+                                    setReelDistributedTexts(null);
+                                    setReelDistributedImagePrompts(null);
+                                  }}
+                                  placeholder="Write your full reel story here. AI will split it across panels and derive image prompts."
+                                  rows={4}
+                                  maxLength={800}
+                                  className="w-full rounded-xl border border-white/10 bg-neutral-800/60 px-3 py-2.5 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50 resize-none"
+                                  disabled={isLoading || isDistributing}
+                                />
+                                <span className={`absolute bottom-2 right-3 text-[11px] ${reelUserText.length > 800 ? 'text-rose-400' : 'text-neutral-500'}`}>
+                                  {reelUserText.length} / 800
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                {distributeError && <p className="text-xs text-rose-400">{distributeError}</p>}
+                                <div className="ml-auto">
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDistributeReelText()}
+                                    disabled={!reelUserText.trim() || reelUserText.length > 800 || isDistributing || isLoading}
+                                    className="flex items-center gap-2 rounded-xl bg-neutral-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {isDistributing ? (
+                                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                                    ) : (
+                                      <Sparkles className="h-4 w-4" />
+                                    )}
+                                    Preview layout
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="grid gap-2 md:grid-cols-5">
                             <div className="space-y-1">
                               <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Beats</label>
                               <select value={reelBeatCount} onChange={(event) => {
@@ -675,12 +791,6 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                                 <option value="short">Short</option>
                                 <option value="medium">Medium</option>
                                 <option value="long">Long</option>
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mood</label>
-                              <select value={reelMoodKey} onChange={(event) => setReelMoodKey(event.target.value)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                                {reelSetup.settings.moods.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
                               </select>
                             </div>
                             <div className="space-y-1">
@@ -731,6 +841,32 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                             </label>
                           </div>
 
+                          {/* Mood pill selector */}
+                          {(publishedMoods.length > 0 || reelSetup.settings.moods.length > 0) && (
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mood</label>
+                              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                                {(publishedMoods.length > 0
+                                  ? publishedMoods.map((m) => ({ key: m.slug, label: m.name }))
+                                  : reelSetup.settings.moods
+                                ).map((item) => (
+                                  <button
+                                    key={item.key}
+                                    type="button"
+                                    onClick={() => setReelMoodKey(item.key)}
+                                    className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                                      reelMoodKey === item.key
+                                        ? 'border-indigo-500/50 bg-indigo-500/20 text-indigo-200'
+                                        : 'border-white/10 bg-neutral-800 text-neutral-400 hover:text-white'
+                                    }`}
+                                  >
+                                    {item.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
                           <div className="grid gap-2 md:grid-cols-3">
                             {reelVisualStyleCards.length > 0 ? reelVisualStyleCards.map((style) => {
                               const active = reelVisualStyleId === style.id;
@@ -774,6 +910,53 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                               </div>
                             )}
                           </div>
+
+                          {reelInputMode === 'text' && reelDistributedTexts && (
+                            <div className="space-y-3 border-t border-white/10 pt-3">
+                              <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Panel layout — edit to refine</p>
+                              {reelDistributedTexts.map((beatPanels, beatIdx) => (
+                                <div key={beatIdx} className="space-y-1.5">
+                                  {reelBeatCount > 1 && (
+                                    <p className="text-[11px] text-neutral-500">Beat {beatIdx + 1}</p>
+                                  )}
+                                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                                    {beatPanels.map((text, panelIdx) => (
+                                      <textarea
+                                        key={panelIdx}
+                                        value={text}
+                                        onChange={(e) => {
+                                          const updated = reelDistributedTexts.map((b, bi) =>
+                                            bi === beatIdx ? b.map((t, pi) => (pi === panelIdx ? e.target.value : t)) : b
+                                          );
+                                          setReelDistributedTexts(updated);
+                                        }}
+                                        rows={3}
+                                        className="rounded-lg border border-white/10 bg-neutral-800/80 px-2 py-2 text-xs text-white outline-none transition-colors focus:border-emerald-500/50 resize-none"
+                                        disabled={isLoading}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                              <div className="flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() => void startConfiguredStory()}
+                                  disabled={isLoading}
+                                  className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {isLoading ? (
+                                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-black border-t-transparent" />
+                                  ) : (
+                                    <>
+                                      <span>Generate reel</span>
+                                      <Sparkles className="h-4 w-4" />
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

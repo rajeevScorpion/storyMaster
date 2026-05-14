@@ -44,6 +44,7 @@ import {
   type ReelStorySettings,
 } from '@/lib/reel/settings';
 import type { ReelVisualStyleRuntime } from '@/lib/reel/styles';
+import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
   normalizeStoryboardImageQualitySettings,
   type StoryboardImageQualitySettings,
@@ -471,6 +472,64 @@ export interface ReelDraftResponse {
   beats: ReelDraftBeatOutput[];
 }
 
+export async function distributeReelTextAction(input: {
+  text: string;
+  beatCount: 1 | 2 | 3;
+}): Promise<{ panelTexts: string[][]; imagePrompts: string[] }> {
+  const { text, beatCount } = input;
+  const panelCount = beatCount * 4;
+  const prompt = [
+    'You are a short-form reel content editor. Distribute the user\'s story text into exactly ' + panelCount + ' short captions — one per image panel — preserving the narrative arc.',
+    'Rules for each caption: maximum 16 words, complete thought, no sentence fragments ending mid-idea.',
+    'Also write one brief visual scene description per beat (max 40 words), suitable as an AI image generation prompt, describing the setting/mood without referencing text or captions.',
+    '',
+    'Return ONLY valid JSON with this exact shape (no markdown, no explanation):',
+    '{ "panels": string[][], "imagePrompts": string[] }',
+    'Where panels[beatIndex][0..3] are the 4 captions for that beat, and imagePrompts[beatIndex] is the scene description for that beat.',
+    '',
+    `beats: ${beatCount}, panels per beat: 4`,
+    '',
+    "User's story text:",
+    '"""',
+    text.trim(),
+    '"""',
+  ].join('\n');
+
+  const raw = await callGeminiText({
+    task: 'reel_story_generation',
+    model: 'gemini-3.1-pro-preview',
+    prompt,
+    temperature: 0.5,
+  });
+
+  let parsed: { panels?: unknown; imagePrompts?: unknown };
+  try {
+    parsed = JSON.parse(raw) as { panels?: unknown; imagePrompts?: unknown };
+  } catch {
+    throw new Error(`distributeReelTextAction: failed to parse JSON: ${raw.slice(0, 200)}`);
+  }
+
+  const panels: string[][] = Array.isArray(parsed?.panels)
+    ? (parsed.panels as unknown[]).map((beat) =>
+        Array.isArray(beat)
+          ? (beat as unknown[]).map((t) => String(t ?? '').trim()).filter(Boolean)
+          : []
+      )
+    : Array.from({ length: beatCount }, () => []);
+
+  const imagePrompts: string[] = Array.isArray(parsed?.imagePrompts)
+    ? (parsed.imagePrompts as unknown[]).map((t) => String(t ?? '').trim())
+    : Array.from({ length: beatCount }, () => '');
+
+  while (panels.length < beatCount) panels.push([]);
+  while (imagePrompts.length < beatCount) imagePrompts.push('');
+
+  return {
+    panelTexts: panels.slice(0, beatCount),
+    imagePrompts: imagePrompts.slice(0, beatCount),
+  };
+}
+
 export async function generateReelDraft(
   userPrompt: string,
   storyConfig: StoryConfig,
@@ -482,13 +541,39 @@ export async function generateReelDraft(
     throw new Error('generateReelDraft requires a reel storyConfig.');
   }
 
+  const beatCount = normalizedConfig.reel.beatCount;
+
+  if (normalizedConfig.authoring.mode === 'user_text') {
+    const panelTexts = normalizedConfig.authoring.reelPanelTexts ?? [];
+    const imagePrompts = normalizedConfig.authoring.reelImagePrompts ?? [];
+    return Array.from({ length: beatCount }, (_, index) => ({
+      title: `Beat ${index + 1}`,
+      beatNumber: index + 1,
+      isEnding: index + 1 === beatCount,
+      storyText: (panelTexts[index] ?? []).join(' '),
+      sceneSummary: imagePrompts[index] ?? '',
+      options: [],
+      characters: [],
+      continuityNotes: [],
+      imagePrompt: imagePrompts[index] ?? '',
+      clues: [],
+      nextBeatGoal: '',
+      endingForecast: [],
+      newCharacterIds: [],
+      changedCharacterIds: [],
+    }));
+  }
+
   const lang = normalizedConfig.language || 'english';
   const reelSettings = normalizeReelStorySettings(modelOverrides?.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
-  const reelMood = findReelDefiner(reelSettings.moods, normalizedConfig.reel.moodKey);
+  const dbMoodsForDraft = await getPublishedReelMoodsForRuntime().catch(() => []);
+  const dbMoodForDraft = dbMoodsForDraft.find((m) => m.slug === normalizedConfig.reel.moodKey);
+  const reelMood = dbMoodForDraft
+    ? { key: dbMoodForDraft.slug, label: dbMoodForDraft.name, prompt: dbMoodForDraft.promptDefiner }
+    : findReelDefiner(reelSettings.moods, normalizedConfig.reel.moodKey);
   const reelVisualStyle = resolveReelVisualStyle(modelOverrides, reelSettings, normalizedConfig);
   const reelNarrationStyle = findReelDefiner(reelSettings.narrationStyles, normalizedConfig.reel.narrationStyleKey);
   const textLengthRange = getReelTextLengthRange(reelSettings, normalizedConfig.reel.textLength);
-  const beatCount = normalizedConfig.reel.beatCount;
 
   const templateCandidate = modelOverrides?.reelStoryPrompt || getDefaultPromptBody('reel_story_generation');
   const template = validatePromptTemplate('reel_story_generation', templateCandidate).isValid
@@ -719,7 +804,11 @@ export async function composeStoryboardPlan(
       const isReel = isReelStoryConfig(storyConfig);
       const promptTask = isReel ? 'reel_visual_prompt' : 'visual_prompt';
       const reelSettings = normalizeReelStorySettings(modelOverrides?.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
-      const reelMood = findReelDefiner(reelSettings.moods, storyConfig.reel.moodKey);
+      const dbMoodsForCompose = await getPublishedReelMoodsForRuntime().catch(() => []);
+      const dbMoodForCompose = dbMoodsForCompose.find((m) => m.slug === storyConfig.reel.moodKey);
+      const reelMood = dbMoodForCompose
+        ? { key: dbMoodForCompose.slug, label: dbMoodForCompose.name, prompt: dbMoodForCompose.promptDefiner }
+        : findReelDefiner(reelSettings.moods, storyConfig.reel.moodKey);
       const reelVisualStyle = resolveReelVisualStyle(modelOverrides, reelSettings, storyConfig);
       const composerTemplateCandidate = isReel
         ? modelOverrides?.reelVisualPrompt || getDefaultPromptBody('reel_visual_prompt')
@@ -891,8 +980,21 @@ export function buildReelPanelCaptions(
   options: {
     textLength?: StoryConfig['reel']['textLength'];
     reelSettings?: ReelStorySettings;
+    storyConfig?: StoryConfig;
   } = {}
 ): StoryBeat['reelCaptions'] {
+  const beatIndex = beat.beatNumber - 1;
+  const userPanelTexts = options.storyConfig?.authoring.mode === 'user_text'
+    ? options.storyConfig.authoring.reelPanelTexts?.[beatIndex]
+    : undefined;
+
+  if (userPanelTexts && userPanelTexts.length >= 4) {
+    return userPanelTexts.slice(0, 4).map((text, panelIndex) => ({
+      panelIndex,
+      text: cleanCaptionText(text),
+    }));
+  }
+
   const frameDescriptions = [
     plan.topLeft.description,
     plan.topRight.description,
@@ -943,8 +1045,8 @@ function capWords(value: string, maxWords?: number): string {
 
 function cleanCaptionText(value: string): string {
   const trimmed = value.replace(/\s+/g, ' ').trim();
-  if (trimmed.length <= 120) return trimmed;
-  return `${trimmed.slice(0, 117).trimEnd()}...`;
+  if (trimmed.length <= 80) return trimmed;
+  return `${trimmed.slice(0, 77).trimEnd()}...`;
 }
 
 export function buildFinalStoryboardImagePrompt(
