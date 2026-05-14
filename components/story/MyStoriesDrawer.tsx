@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import Link from 'next/link';
@@ -20,6 +20,7 @@ const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
   { id: 'explored', label: 'Explored', icon: Compass },
   { id: 'my-stories', label: 'My Stories', icon: BookOpen },
   { id: 'storylines', label: 'Storylines', icon: Library },
+  { id: 'reels', label: 'Reels', icon: Clapperboard },
 ];
 
 export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProps) {
@@ -29,6 +30,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
 
   const stories = useMyStoriesStore((s) => s.stories);
+  const reels = useMyStoriesStore((s) => s.reels);
   const exploredStories = useMyStoriesStore((s) => s.exploredStories);
   const savedStorylines = useMyStoriesStore((s) => s.savedStorylines);
   const loading = useMyStoriesStore((s) => s.loading);
@@ -74,6 +76,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     try {
       await archiveStory(storyId);
       useMyStoriesStore.getState().updateStory(storyId, { is_archived: true });
+      useMyStoriesStore.getState().updateReel(storyId, { is_archived: true });
     } catch (error) {
       console.error('Failed to archive story:', error);
     } finally {
@@ -86,6 +89,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     try {
       await unarchiveStory(storyId);
       useMyStoriesStore.getState().updateStory(storyId, { is_archived: false });
+      useMyStoriesStore.getState().updateReel(storyId, { is_archived: false });
     } catch (error) {
       console.error('Failed to unarchive story:', error);
     } finally {
@@ -209,6 +213,92 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             disabled={actionId === story.id}
             className="p-2 hover:bg-red-500/10 rounded-full transition-all"
             title="Delete story permanently"
+          >
+            <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
+          </button>
+        </div>
+      </motion.div>
+    ));
+  };
+
+  const renderReels = () => {
+    if (reels.length === 0) {
+      return renderEmptyState(Clapperboard, 'No reels yet', 'Your generated reels will appear here.');
+    }
+    return reels.map((reel) => (
+      <motion.div
+        key={reel.id}
+        layout
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className={`group relative rounded-2xl border transition-all overflow-hidden ${
+          reel.is_archived
+            ? 'bg-neutral-900/30 border-white/5 opacity-60'
+            : 'bg-neutral-900/60 border-white/5 hover:border-white/15'
+        }`}
+      >
+        <button
+          onClick={() => handleLoadStory(reel.id)}
+          className="w-full text-left p-5 pr-20"
+        >
+          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+            {reel.title}
+          </h3>
+          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
+          <div className="flex items-center gap-3 mt-3">
+            <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+              reel.is_archived
+                ? 'bg-neutral-500/10 text-neutral-500'
+                : reel.status === 'completed'
+                  ? 'bg-emerald-500/10 text-emerald-400'
+                  : 'bg-cyan-500/10 text-cyan-300'
+            }`}>
+              {reel.is_archived ? 'archived' : reel.status}
+            </span>
+            <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
+              {reel.beat_count} beats
+            </span>
+            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
+              <Clock className="w-3 h-3" />
+              {formatDate(reel.updated_at)}
+            </span>
+          </div>
+        </button>
+
+        <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+          {reel.is_archived ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleUnarchiveStory(reel.id); }}
+              disabled={actionId === reel.id}
+              className="p-2 hover:bg-emerald-500/10 rounded-full transition-all"
+              title="Restore reel"
+            >
+              {actionId === reel.id ? (
+                <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+              ) : (
+                <ArchiveRestore className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); handleArchiveStory(reel.id); }}
+              disabled={actionId === reel.id}
+              className="p-2 hover:bg-amber-500/10 rounded-full transition-all"
+              title="Archive reel"
+            >
+              {actionId === reel.id ? (
+                <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
+              ) : (
+                <Archive className="w-4 h-4 text-neutral-600 hover:text-amber-400 transition-colors" />
+              )}
+            </button>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); handleDeleteStory(reel.id); }}
+            disabled={actionId === reel.id}
+            className="p-2 hover:bg-red-500/10 rounded-full transition-all"
+            title="Delete reel permanently"
           >
             <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
           </button>
@@ -410,14 +500,14 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`flex-1 flex items-center justify-center gap-2 py-3 px-2 text-xs font-medium transition-all border-b-2 ${
+                    className={`flex min-w-0 flex-1 items-center justify-center gap-1.5 py-3 px-1 text-[11px] font-medium transition-all border-b-2 sm:gap-2 sm:px-2 sm:text-xs ${
                       isActive
                         ? 'border-emerald-400 text-emerald-400'
                         : 'border-transparent text-neutral-500 hover:text-neutral-300'
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5" />
-                    {tab.label}
+                    <span className="truncate">{tab.label}</span>
                   </button>
                 );
               })}
@@ -431,6 +521,8 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
                 renderMyStories()
               ) : activeTab === 'explored' ? (
                 renderExploredStories()
+              ) : activeTab === 'reels' ? (
+                renderReels()
               ) : (
                 renderStorylines()
               )}

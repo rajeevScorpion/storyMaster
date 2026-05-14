@@ -72,6 +72,14 @@ export function getPathToNode(map: StoryMap, nodeId: string): StoryNode[] {
   return path;
 }
 
+export function getNodesByBeatNumber(map: StoryMap): StoryNode[] {
+  return Object.values(map.nodes).sort((left, right) => {
+    const beatDiff = left.beatNumber - right.beatNumber;
+    if (beatDiff !== 0) return beatDiff;
+    return left.id.localeCompare(right.id);
+  });
+}
+
 export function getBeatsToNode(map: StoryMap, nodeId: string): StoryBeat[] {
   return getPathToNode(map, nodeId).map((n) => n.data);
 }

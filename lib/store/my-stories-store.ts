@@ -1,12 +1,13 @@
 import { create } from 'zustand';
-import { listUserStories, listSavedStorylines } from '@/app/actions/persistence';
+import { listUserStories, listSavedStorylines, listUserReels } from '@/app/actions/persistence';
 import { listExploredStories } from '@/app/actions/exploration';
-import type { TabId, SavedStory, ExploredStory, SavedStorylineItem } from '@/lib/types/my-stories';
+import type { TabId, SavedStory, UserReel, ExploredStory, SavedStorylineItem } from '@/lib/types/my-stories';
 
 const STALE_MS = 5 * 60 * 1000; // 5 minutes
 
 interface MyStoriesState {
   stories: SavedStory[];
+  reels: UserReel[];
   exploredStories: ExploredStory[];
   savedStorylines: SavedStorylineItem[];
   loading: Record<TabId, boolean>;
@@ -19,6 +20,8 @@ interface MyStoriesState {
   // Optimistic mutation helpers
   removeStory: (id: string) => void;
   updateStory: (id: string, patch: Partial<SavedStory>) => void;
+  removeReel: (id: string) => void;
+  updateReel: (id: string, patch: Partial<UserReel>) => void;
   removeExploredStory: (id: string) => void;
   removeSavedStoryline: (storylineId: string) => void;
 }
@@ -27,12 +30,14 @@ const initialLastFetched: Record<TabId, number> = {
   'my-stories': 0,
   explored: 0,
   storylines: 0,
+  reels: 0,
 };
 
 const initialLoading: Record<TabId, boolean> = {
   'my-stories': false,
   explored: false,
   storylines: false,
+  reels: false,
 };
 
 function isStale(lastFetched: number): boolean {
@@ -41,6 +46,7 @@ function isStale(lastFetched: number): boolean {
 
 export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   stories: [],
+  reels: [],
   exploredStories: [],
   savedStorylines: [],
   loading: { ...initialLoading },
@@ -48,7 +54,7 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
 
   prefetchAll: async () => {
     const state = get();
-    const tabs: TabId[] = ['my-stories', 'explored', 'storylines'];
+    const tabs: TabId[] = ['my-stories', 'explored', 'storylines', 'reels'];
     const staleTabs = tabs.filter((t) => isStale(state.lastFetched[t]));
     if (staleTabs.length === 0) return;
 
@@ -71,6 +77,9 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
         } else if (tab === 'storylines') {
           const data = await listSavedStorylines();
           set({ savedStorylines: data });
+        } else if (tab === 'reels') {
+          const data = await listUserReels();
+          set({ reels: data });
         }
         set((s) => ({
           lastFetched: { ...s.lastFetched, [tab]: Date.now() },
@@ -104,6 +113,9 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
       } else if (tab === 'storylines') {
         const data = await listSavedStorylines();
         set({ savedStorylines: data });
+      } else if (tab === 'reels') {
+        const data = await listUserReels();
+        set({ reels: data });
       }
       set((s) => ({
         lastFetched: { ...s.lastFetched, [tab]: Date.now() },
@@ -118,6 +130,7 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   clear: () => {
     set({
       stories: [],
+      reels: [],
       exploredStories: [],
       savedStorylines: [],
       loading: { ...initialLoading },
@@ -126,13 +139,28 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   },
 
   removeStory: (id: string) => {
-    set((s) => ({ stories: s.stories.filter((story) => story.id !== id) }));
+    set((s) => ({
+      stories: s.stories.filter((story) => story.id !== id),
+      reels: s.reels.filter((reel) => reel.id !== id),
+    }));
   },
 
   updateStory: (id: string, patch: Partial<SavedStory>) => {
     set((s) => ({
       stories: s.stories.map((story) =>
         story.id === id ? { ...story, ...patch } : story
+      ),
+    }));
+  },
+
+  removeReel: (id: string) => {
+    set((s) => ({ reels: s.reels.filter((reel) => reel.id !== id) }));
+  },
+
+  updateReel: (id: string, patch: Partial<UserReel>) => {
+    set((s) => ({
+      reels: s.reels.map((reel) =>
+        reel.id === id ? { ...reel, ...patch } : reel
       ),
     }));
   },

@@ -14,7 +14,7 @@ import Timeline from './Timeline';
 import Link from 'next/link';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
-import { findChildForOption, getCurrentNode } from '@/lib/utils/story-map';
+import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
@@ -251,6 +251,38 @@ function StoryboardCycler({
 function isFallbackImageUrl(url: string | undefined): boolean {
   if (!url) return false;
   return url.startsWith('https://picsum.photos/seed/');
+}
+
+const REEL_PANEL_COUNT = 4;
+
+function splitReelTextIntoPanels(text: string): string[] {
+  const sentences = text
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (sentences.length >= REEL_PANEL_COUNT) {
+    return Array.from({ length: REEL_PANEL_COUNT }, (_, index) =>
+      index === REEL_PANEL_COUNT - 1
+        ? sentences.slice(index).join(' ')
+        : sentences[index]
+    );
+  }
+
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const chunkSize = Math.max(1, Math.ceil(words.length / REEL_PANEL_COUNT));
+  return Array.from({ length: REEL_PANEL_COUNT }, (_, index) =>
+    words.slice(index * chunkSize, (index + 1) * chunkSize).join(' ')
+  );
+}
+
+function getReelPanelTexts(beat: Pick<StoryBeat, 'storyText' | 'reelCaptions'>): string[] {
+  const fallback = splitReelTextIntoPanels(beat.storyText || '');
+  return Array.from({ length: REEL_PANEL_COUNT }, (_, index) => {
+    const caption = beat.reelCaptions?.find((item) => item.panelIndex === index);
+    return caption?.text?.trim() || fallback[index] || '';
+  });
 }
 
 const PROMPT_ONLY_ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -619,6 +651,7 @@ export default function StoryScreen() {
   const isRegeneratingImage = useStoryStore((state) => state.isRegeneratingImage);
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
+  const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
   const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
   const storyMode = useStoryStore((state) => state.storyMode);
@@ -742,6 +775,7 @@ export default function StoryScreen() {
       isRegeneratingImage={isRegeneratingImage}
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
+      updateReelPanelCaptions={updateReelPanelCaptions}
       regenerateImageForNode={regenerateImageForNode}
       clearAudioReady={clearAudioReady}
       storyMode={storyMode}
@@ -786,6 +820,7 @@ function StoryScreenInner({
   isRegeneratingImage,
   audioReadyNodeId,
   generateNarrationForNode,
+  updateReelPanelCaptions,
   regenerateImageForNode,
   clearAudioReady,
   storyMode,
@@ -820,6 +855,7 @@ function StoryScreenInner({
   isRegeneratingImage: boolean;
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
+  updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   storyMode: boolean;
@@ -875,9 +911,10 @@ function StoryScreenInner({
   const [pendingSheetDeleteKey, setPendingSheetDeleteKey] = useState<string | null>(null);
   const [permanentlyDeletingSheetKey, setPermanentlyDeletingSheetKey] = useState<string | null>(null);
   const characterSheetInputRef = useRef<HTMLInputElement>(null);
-  const visibleReaderPanel: StoryReaderPanel = isEnding ? 'story' : activeReaderPanel;
+  const isReelStory = session.storyConfig.storyKind === 'reel';
+  const visibleReaderPanel: StoryReaderPanel = isEnding || isReelStory ? 'story' : activeReaderPanel;
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
-    enabled: cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
+    enabled: !isReelStory && cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
     resetKey: currentNodeId,
     pxPerSecond: cycleSettings.loadingReaderScrollSpeedPxPerSecond,
   });
@@ -921,7 +958,10 @@ function StoryScreenInner({
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
-  const isReelStory = session.storyConfig.storyKind === 'reel';
+  const reelTimelineNodes = useMemo(
+    () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
+    [isReelStory, session.storyMap]
+  );
   const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
@@ -986,6 +1026,82 @@ function StoryScreenInner({
         ...currentBeat.options.filter((option) => option.id !== currentBeat.canonicalOptionId),
       ]
     : currentBeat.options;
+  const savedReelPanelTexts = useMemo(
+    () => getReelPanelTexts({
+      storyText: normalizedCurrentBeat.storyText,
+      reelCaptions: normalizedCurrentBeat.reelCaptions,
+    }),
+    [normalizedCurrentBeat.reelCaptions, normalizedCurrentBeat.storyText]
+  );
+  const [reelPanelDraft, setReelPanelDraft] = useState<string[]>(savedReelPanelTexts);
+  const [reelTextSaveState, setReelTextSaveState] = useState<'idle' | 'saving' | 'warning' | 'saved' | 'error'>('idle');
+  const [reelTextMessage, setReelTextMessage] = useState<string | null>(null);
+  const hasReelAudio = Boolean(
+    normalizedCurrentBeat.audioUrl
+    || normalizedCurrentBeat.audioStatus === 'ready'
+    || normalizedCurrentBeat.audioStatus === 'pending'
+  );
+  const hasUnsavedReelText = isReelStory && reelPanelDraft.some((text, index) =>
+    text.trim() !== (savedReelPanelTexts[index] || '').trim()
+  );
+  const isReelTextSaving = reelTextSaveState === 'saving';
+
+  useEffect(() => {
+    setReelPanelDraft(savedReelPanelTexts);
+    setReelTextSaveState('idle');
+    setReelTextMessage(null);
+  }, [currentNodeId, savedReelPanelTexts]);
+
+  const updateReelPanelDraft = useCallback((panelIndex: number, value: string) => {
+    setReelPanelDraft((current) =>
+      Array.from({ length: REEL_PANEL_COUNT }, (_, index) => (
+        index === panelIndex ? value : current[index] || ''
+      ))
+    );
+    setReelTextSaveState('idle');
+    setReelTextMessage(null);
+  }, []);
+
+  const handleSaveReelText = useCallback(async (confirmClearNarration = false) => {
+    if (!isReelStory || !hasUnsavedReelText || isReelTextSaving) return;
+
+    if (hasReelAudio && !confirmClearNarration) {
+      setReelTextSaveState('warning');
+      setReelTextMessage('Saving text will clear the existing narration for this beat.');
+      return;
+    }
+
+    setReelTextSaveState('saving');
+    setReelTextMessage(null);
+
+    try {
+      const result = await updateReelPanelCaptions(currentNodeId, reelPanelDraft);
+      setReelTextSaveState('saved');
+      setReelTextMessage(result.clearedNarration
+        ? 'Text saved. Narration was cleared.'
+        : 'Text saved.');
+    } catch (error) {
+      setReelTextSaveState('error');
+      setReelTextMessage(error instanceof Error ? error.message : 'Failed to save reel text.');
+    }
+  }, [
+    currentNodeId,
+    hasReelAudio,
+    hasUnsavedReelText,
+    isReelStory,
+    isReelTextSaving,
+    reelPanelDraft,
+    updateReelPanelCaptions,
+  ]);
+
+  const handleGenerateNarration = useCallback(() => {
+    if (isReelStory && hasUnsavedReelText) {
+      setReelTextSaveState('error');
+      setReelTextMessage('Save panel text before generating narration.');
+      return;
+    }
+    void generateNarrationForNode(currentNodeId);
+  }, [currentNodeId, generateNarrationForNode, hasUnsavedReelText, isReelStory]);
 
   // Autoplay narration in story mode when navigating to a node with audio
   useEffect(() => {
@@ -1020,12 +1136,18 @@ function StoryScreenInner({
     onSelectOption: continueStory,
     onToggleMinimized: () => setIsMinimized(prev => !prev),
     onToggleNarration: () => {
+      if (isReelStory && hasUnsavedReelText) {
+        setReelTextSaveState('error');
+        setReelTextMessage('Save panel text before using narration.');
+        return;
+      }
       if (normalizedCurrentBeat.audioUrl) {
         togglePlayPause();
       } else if (!isGeneratingAudio) {
-        generateNarrationForNode(currentNodeId);
+        handleGenerateNarration();
       }
     },
+    timelineNodes: reelTimelineNodes,
     isLoading,
     isEnding,
   });
@@ -1143,6 +1265,9 @@ function StoryScreenInner({
     : 'opacity-100';
   const storyTextViewportStyle = {
     height: `min(46vh, calc(${cycleSettings.storyUiTextLineCount} * 1lh))`,
+  } satisfies CSSProperties;
+  const reelTextViewportStyle = {
+    height: 'min(52vh, 30rem)',
   } satisfies CSSProperties;
 
   const resetBeatUploadState = useCallback(() => {
@@ -1521,10 +1646,10 @@ function StoryScreenInner({
                   )}
                   {isReelStory && !normalizedCurrentBeat.audioUrl && (
                     <button
-                      onClick={() => !isGeneratingAudio && generateNarrationForNode(currentNodeId)}
-                      disabled={isGeneratingAudio}
+                      onClick={() => !isGeneratingAudio && handleGenerateNarration()}
+                      disabled={isGeneratingAudio || hasUnsavedReelText}
                       className="absolute bottom-4 right-4 z-20 p-2.5 rounded-full bg-black/50 backdrop-blur-sm border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-all disabled:cursor-wait"
-                      title={isGeneratingAudio ? 'Generating narration...' : 'Generate narration'}
+                      title={hasUnsavedReelText ? 'Save panel text before generating narration' : isGeneratingAudio ? 'Generating narration...' : 'Generate narration'}
                     >
                       {isGeneratingAudio ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -1695,7 +1820,7 @@ function StoryScreenInner({
         </div>
 
         <div className="mb-3 flex items-center gap-2 md:hidden">
-          {!isMinimized && (
+          {!isReelStory && !isMinimized && (
             <>
               <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
                 <Timeline
@@ -1730,18 +1855,36 @@ function StoryScreenInner({
           )}
         </div>
 
+        {isReelStory && isMinimized && (
+          <div className="mb-3 flex shrink-0 justify-center md:justify-start">
+            <button
+              type="button"
+              onClick={() => setIsMinimized(false)}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/80 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-300 shadow-2xl backdrop-blur-md transition-colors hover:bg-neutral-900 hover:text-white"
+              title="Show text"
+            >
+              <BookOpen className="h-4 w-4" />
+              Show text
+            </button>
+          </div>
+        )}
+
         <div className="grid shrink-0 md:grid-cols-12 gap-4 md:gap-8 items-end">
 
           {/* Story Text Card + Toggle */}
           <div
             className={`md:col-span-7 flex-col items-center relative ${
-              !isMinimized && visibleReaderPanel === 'story' ? 'flex' : 'hidden md:flex'
+              isReelStory && isMinimized
+                ? 'hidden'
+                : !isMinimized && visibleReaderPanel === 'story'
+                ? 'flex'
+                : 'hidden md:flex'
             }`}
             onMouseEnter={() => setIsCardHovered(true)}
             onMouseLeave={() => setIsCardHovered(false)}
           >
             {/* Card chrome toggles — minimize + prompt-tools popover */}
-            <div className="relative mb-2 flex items-center gap-2 self-end">
+            <div className={`relative mb-2 items-center gap-2 self-end ${isReelStory ? 'hidden' : 'flex'}`}>
               <button
                 onClick={() => setIsMinimized(!isMinimized)}
                 className="hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
@@ -1812,7 +1955,7 @@ function StoryScreenInner({
                     )}
                   </button>
                 )}
-                {cycleSettings.storyUiAutoScrollEnabled && (
+                {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton
                     active={isAutoScrolling}
                     onClick={toggleAutoScroll}
@@ -1825,10 +1968,12 @@ function StoryScreenInner({
                   playbackState={playbackState}
                   hasAudio={!!normalizedCurrentBeat.audioUrl}
                   onTogglePlayPause={togglePlayPause}
-                  onGenerateNarration={() => generateNarrationForNode(currentNodeId)}
+                  onGenerateNarration={handleGenerateNarration}
                   onClearGlow={clearAudioReady}
                   storyMode={storyMode}
                   onToggleStoryMode={toggleStoryMode}
+                  disabled={isReelStory && hasUnsavedReelText}
+                  disabledReason="Save panel text before generating narration"
                 />
               </div>
             )}
@@ -1837,11 +1982,60 @@ function StoryScreenInner({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            style={{ opacity: isCardHovered ? 1 : 0.1 }}
-            className={`touch-visible relative w-full border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-500 ${
-              isMinimized ? 'bg-neutral-950/40' : 'bg-neutral-900/80'
+            style={{ opacity: isReelStory ? 1 : isCardHovered ? 1 : 0.1 }}
+            className={`touch-visible relative z-20 w-full border border-white/10 rounded-3xl shadow-2xl flex flex-col overflow-hidden transition-all duration-500 ${
+              isReelStory
+                ? 'bg-neutral-950'
+                : isMinimized
+                ? 'bg-neutral-950/40'
+                : 'bg-neutral-900/80'
             }`}
           >
+            {isReelStory && !isMinimized && (
+              <div className="relative z-30 flex items-center justify-between gap-3 border-b border-white/10 bg-neutral-950 px-4 py-3 md:px-5">
+                <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
+                  <Timeline
+                    storyMap={session.storyMap}
+                    onNodeClick={navigateToNode}
+                    focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+                    nodes={reelTimelineNodes}
+                    compact
+                  />
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsMinimized(true)}
+                    className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-neutral-300 transition-colors"
+                    title="Hide text"
+                  >
+                    <ChevronDown className="w-4 h-4" />
+                  </button>
+                  {canOpenPromptTools && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (promptToolsOpen) {
+                          closePromptToolsModal();
+                        } else {
+                          openPromptToolsOverview();
+                        }
+                      }}
+                      aria-expanded={promptToolsOpen}
+                      aria-haspopup="dialog"
+                      className={`p-2 rounded-full transition-colors ${
+                        promptToolsOpen
+                          ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
+                          : 'bg-white/5 hover:bg-white/10 text-neutral-300'
+                      }`}
+                      title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                    >
+                      <Layers className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
             {/* Top scroll fade gradient */}
             {!isMinimized && (
               <div
@@ -1855,7 +2049,7 @@ function StoryScreenInner({
               <div
                 ref={scrollRef}
                 onScroll={handleScroll}
-                style={!isMinimized ? storyTextViewportStyle : undefined}
+                style={!isMinimized ? (isReelStory ? reelTextViewportStyle : storyTextViewportStyle) : undefined}
                 className={`text-xl md:text-2xl font-serif leading-relaxed ${isMinimized ? '' : 'overflow-y-auto scrollbar-none'}`}
               >
                 <AnimatePresence mode="wait">
@@ -1877,11 +2071,74 @@ function StoryScreenInner({
                     </div>
                   )}
 
-                  <p className={`transition-colors duration-500 ${
-                    isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
-                  }`}>
-                    {currentBeat.storyText}
-                  </p>
+                  {isReelStory && !isMinimized ? (
+                    <div className="space-y-4">
+                      {reelPanelDraft.map((text, panelIndex) => (
+                        <label key={panelIndex} className="block">
+                          <span className="font-sans text-[11px] uppercase tracking-[0.22em] text-emerald-300/80">
+                            Panel {String(panelIndex + 1).padStart(2, '0')}
+                          </span>
+                          <textarea
+                            value={text}
+                            onChange={(event) => updateReelPanelDraft(panelIndex, event.target.value)}
+                            rows={2}
+                            className="mt-2 w-full resize-none rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 font-serif text-base leading-relaxed text-neutral-100 outline-none transition-colors placeholder:text-neutral-600 focus:border-emerald-400/50 focus:bg-neutral-900 md:text-lg"
+                            placeholder={`Panel ${String(panelIndex + 1).padStart(2, '0')} text`}
+                          />
+                        </label>
+                      ))}
+
+                      <div className="flex flex-wrap items-center gap-3 pt-1">
+                        {hasUnsavedReelText && reelTextSaveState !== 'warning' && (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveReelText(false)}
+                            disabled={isReelTextSaving}
+                            className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-70"
+                          >
+                            {isReelTextSaving ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Save className="h-4 w-4" />
+                            )}
+                            Save text
+                          </button>
+                        )}
+                        {reelTextSaveState === 'warning' && (
+                          <button
+                            type="button"
+                            onClick={() => handleSaveReelText(true)}
+                            disabled={isReelTextSaving}
+                            className="inline-flex items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-amber-300 disabled:cursor-wait disabled:opacity-70"
+                          >
+                            {isReelTextSaving ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <AlertTriangle className="h-4 w-4" />
+                            )}
+                            Clear narration and save
+                          </button>
+                        )}
+                        {reelTextMessage && (
+                          <p className={`text-xs font-sans ${
+                            reelTextSaveState === 'error'
+                              ? 'text-rose-300'
+                              : reelTextSaveState === 'warning'
+                              ? 'text-amber-200'
+                              : 'text-emerald-300'
+                          }`}>
+                            {reelTextMessage}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className={`transition-colors duration-500 ${
+                      isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
+                    }`}>
+                      {currentBeat.storyText}
+                    </p>
+                  )}
 
                   {isEnding && !isMinimized && (
                     <div className="mt-8 pt-8 border-t border-white/10">
@@ -2016,7 +2273,7 @@ function StoryScreenInner({
           </div>
 
           {/* Choices Column */}
-          {!isEnding && (
+          {!isEnding && !isReelStory && (
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}

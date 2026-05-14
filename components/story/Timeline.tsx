@@ -1,6 +1,6 @@
 'use client';
 
-import { StoryMap } from '@/lib/types/story';
+import { StoryMap, StoryNode } from '@/lib/types/story';
 import { getPathToNode } from '@/lib/utils/story-map';
 import { motion } from 'motion/react';
 
@@ -9,12 +9,13 @@ interface TimelineProps {
   onNodeClick: (nodeId: string) => void;
   focusedNodeId?: string;
   compact?: boolean;
+  nodes?: StoryNode[];
 }
 
-export default function Timeline({ storyMap, onNodeClick, focusedNodeId, compact = false }: TimelineProps) {
-  const path = getPathToNode(storyMap, storyMap.currentNodeId);
+export default function Timeline({ storyMap, onNodeClick, focusedNodeId, compact = false, nodes }: TimelineProps) {
+  const path = nodes ?? getPathToNode(storyMap, storyMap.currentNodeId);
 
-  if (path.length <= 1) return null;
+  if (path.length === 0 || (!nodes && path.length <= 1)) return null;
 
   return (
     <div

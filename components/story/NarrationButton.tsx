@@ -14,6 +14,8 @@ interface NarrationButtonProps {
   onClearGlow: () => void;
   storyMode: boolean;
   onToggleStoryMode: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 function WaveformBars() {
@@ -78,6 +80,8 @@ export default function NarrationButton({
   onClearGlow,
   storyMode,
   onToggleStoryMode,
+  disabled = false,
+  disabledReason,
 }: NarrationButtonProps) {
   const [showGlow, setShowGlow] = useState(false);
 
@@ -94,6 +98,7 @@ export default function NarrationButton({
   }, [isAudioReady, onClearGlow]);
 
   const handleClick = () => {
+    if (disabled) return;
     if (isGeneratingAudio && !hasAudio) return;
     if (showGlow) {
       setShowGlow(false);
@@ -109,7 +114,8 @@ export default function NarrationButton({
   const isPlaying = playbackState === 'playing';
 
   let title = 'Generate narration';
-  if (isGeneratingAudio && !hasAudio) title = 'Preparing narration...';
+  if (disabled && disabledReason) title = disabledReason;
+  else if (isGeneratingAudio && !hasAudio) title = 'Preparing narration...';
   else if (isPlaying) title = 'Pause narration (P)';
   else if (hasAudio) title = 'Play narration (P)';
   else if (onGenerateNarration) title = 'Generate narration (P)';
@@ -118,9 +124,11 @@ export default function NarrationButton({
     <div className="flex flex-col items-center gap-2">
       <button
         onClick={handleClick}
-        disabled={isGeneratingAudio && !hasAudio}
+        disabled={disabled || (isGeneratingAudio && !hasAudio)}
         className={`p-2.5 backdrop-blur-md rounded-full transition-all duration-300 ${
-          isGeneratingAudio && !hasAudio
+          disabled
+            ? 'bg-neutral-900/60 border border-white/5 cursor-not-allowed opacity-50'
+            : isGeneratingAudio && !hasAudio
             ? 'bg-neutral-900/60 border border-white/5 cursor-wait'
             : hasAudio
               ? `bg-neutral-900/60 border border-emerald-500/20 hover:border-emerald-500/40 hover:bg-neutral-800 cursor-pointer ${isPlaying ? 'glow-pulse-strong' : ''}`

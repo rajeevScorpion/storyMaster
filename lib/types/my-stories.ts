@@ -1,4 +1,4 @@
-export type TabId = 'explored' | 'my-stories' | 'storylines';
+export type TabId = 'explored' | 'my-stories' | 'storylines' | 'reels';
 
 export interface SavedStory {
   id: string;
@@ -7,6 +7,17 @@ export interface SavedStory {
   is_archived: boolean;
   updated_at: string;
   user_prompt: string;
+}
+
+export interface UserReel {
+  id: string;
+  title: string;
+  status: string;
+  is_archived: boolean;
+  updated_at: string;
+  user_prompt: string;
+  story_kind: 'reel';
+  beat_count: number;
 }
 
 export interface ExploredStory {

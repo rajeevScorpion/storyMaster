@@ -508,14 +508,12 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.reel_captions = normalizedBeat.reelCaptions as unknown as Record<string, unknown>[];
   }
 
-  if (normalizedBeat.imageGallery && normalizedBeat.imageGallery.length > 0) {
-    row.image_gallery = normalizedBeat.imageGallery.map((entry) => ({
-      url: normalizeStorageUrl(entry.url, 'story-assets'),
-      storage_key: entry.storageKey,
-      uploaded_at: entry.uploadedAt,
-      ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
-    }));
-  }
+  row.image_gallery = (normalizedBeat.imageGallery ?? []).map((entry) => ({
+    url: normalizeStorageUrl(entry.url, 'story-assets'),
+    storage_key: entry.storageKey,
+    uploaded_at: entry.uploadedAt,
+    ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
+  }));
 
   return row;
 }
@@ -1567,10 +1565,57 @@ export async function listUserStories(): Promise<Array<{
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt')
     .eq('user_id', user.id)
+    .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
   if (error) throw new Error(`Failed to list stories: ${error.message}`);
   return data || [];
+}
+
+/**
+ * List the current user's generated reels.
+ */
+export async function listUserReels(): Promise<Array<{
+  id: string;
+  title: string;
+  status: string;
+  is_archived: boolean;
+  updated_at: string;
+  user_prompt: string;
+  story_kind: 'reel';
+  beat_count: number;
+}>> {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+
+  const { data, error } = await supabase
+    .from('stories')
+    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map')
+    .eq('user_id', user.id)
+    .eq('story_kind', 'reel')
+    .order('updated_at', { ascending: false });
+
+  if (error) throw new Error(`Failed to list reels: ${error.message}`);
+
+  return (data || []).map((story: any) => {
+    const storyMap = story.story_map && typeof story.story_map === 'object' ? story.story_map : null;
+    const nodeCount = storyMap?.nodes && typeof storyMap.nodes === 'object'
+      ? Object.keys(storyMap.nodes).length
+      : 0;
+    const configBeatCount = Number(story.story_config?.reel?.beatCount ?? story.story_config?.maxBeats ?? 0);
+
+    return {
+      id: story.id,
+      title: story.title,
+      status: story.status,
+      is_archived: Boolean(story.is_archived),
+      updated_at: story.updated_at,
+      user_prompt: story.user_prompt,
+      story_kind: 'reel',
+      beat_count: nodeCount || (Number.isFinite(configBeatCount) ? configBeatCount : 0),
+    };
+  });
 }
 
 /**

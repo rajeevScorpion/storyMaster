@@ -139,6 +139,7 @@ interface StoryState {
   restartExploration: () => void;
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
+  updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
@@ -3376,6 +3377,105 @@ export const useStoryStore = create<StoryState>()(
             set({ isGeneratingAudio: false });
           }
         }
+      },
+
+      updateReelPanelCaptions: async (nodeId: string, panelTexts: string[]) => {
+        const { session } = get();
+        if (!session || !isReelStoryConfig(session.storyConfig)) {
+          return { clearedNarration: false };
+        }
+
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) {
+          return { clearedNarration: false };
+        }
+
+        const normalizedTexts = Array.from({ length: 4 }, (_, index) => (panelTexts[index] || '').trim());
+        if (!normalizedTexts.some(Boolean)) {
+          throw new Error('Add text to at least one panel before saving.');
+        }
+
+        const nextStoryText = normalizedTexts.filter(Boolean).join(' ');
+        const nextCaptions: NonNullable<StoryBeat['reelCaptions']> = normalizedTexts.map((text, panelIndex) => ({
+          panelIndex,
+          text,
+        }));
+        const clearedNarration = Boolean(node.data.audioUrl || node.data.audioStatus === 'ready' || node.data.audioStatus === 'pending');
+
+        const nextMap = updateStoryMapBeat(session.storyMap, nodeId, (beat) => ({
+          ...beat,
+          storyText: nextStoryText,
+          reelCaptions: nextCaptions,
+          ...(clearedNarration
+            ? {
+                audioUrl: undefined,
+                audioStatus: 'not_requested' as const,
+                audioError: undefined,
+                narrationVoiceId: undefined,
+              }
+            : {}),
+        }));
+
+        updateStoreSaveUi({
+          session: deriveSessionFields(session, nextMap),
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+          audioReadyNodeId: clearedNarration && get().audioReadyNodeId === nodeId ? null : get().audioReadyNodeId,
+        });
+
+        if (!session.savedStoryId) {
+          return { clearedNarration };
+        }
+
+        try {
+          await saveBeatAction(session.savedStoryId, nodeId, nextMap.nodes[nodeId]);
+          if (clearedNarration) {
+            await updateBeatMediaState(session.savedStoryId, nodeId, {
+              audioUrl: null,
+              audioStatus: 'not_requested',
+              audioError: null,
+            });
+          }
+
+          const latestSession = get().session;
+          if (latestSession?.storyMap.nodes[nodeId]) {
+            const confirmedMap = updateStoryMapBeat(latestSession.storyMap, nodeId, (beat) => ({
+              ...beat,
+              storyText: nextStoryText,
+              reelCaptions: nextCaptions,
+              ...(clearedNarration
+                ? {
+                    audioUrl: undefined,
+                    audioStatus: 'not_requested' as const,
+                    audioError: undefined,
+                    narrationVoiceId: undefined,
+                  }
+                : {}),
+            }));
+            updateStoreSaveUi({
+              session: deriveSessionFields(latestSession, confirmedMap),
+              isSaving: false,
+              saveStatus: 'saved',
+              error: null,
+            });
+          } else {
+            updateStoreSaveUi({
+              isSaving: false,
+              saveStatus: 'saved',
+              error: null,
+            });
+          }
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to save reel text.',
+          });
+          throw error;
+        }
+
+        return { clearedNarration };
       },
 
       regenerateImageForNode: async (nodeId: string) => {

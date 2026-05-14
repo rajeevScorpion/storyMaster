@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { StoryMap, Option } from '@/lib/types/story';
+import { StoryMap, StoryNode, Option } from '@/lib/types/story';
 import { getPathToNode } from '@/lib/utils/story-map';
 
 type FocusMode = 'timeline' | 'options' | null;
@@ -11,6 +11,7 @@ interface UseKeyboardNavigationProps {
   onSelectOption: (optionId: string) => void;
   onToggleMinimized: () => void;
   onToggleNarration?: () => void;
+  timelineNodes?: StoryNode[];
   isLoading: boolean;
   isEnding: boolean;
 }
@@ -27,6 +28,7 @@ export function useKeyboardNavigation({
   onSelectOption,
   onToggleMinimized,
   onToggleNarration,
+  timelineNodes,
   isLoading,
   isEnding,
 }: UseKeyboardNavigationProps): UseKeyboardNavigationResult {
@@ -46,7 +48,7 @@ export function useKeyboardNavigation({
     (e: KeyboardEvent) => {
       if (isLoading) return;
 
-      const path = getPathToNode(storyMap, storyMap.currentNodeId);
+      const path = timelineNodes ?? getPathToNode(storyMap, storyMap.currentNodeId);
       const currentIndex = path.findIndex((n) => n.id === storyMap.currentNodeId);
 
       switch (e.key) {
@@ -125,7 +127,7 @@ export function useKeyboardNavigation({
         }
       }
     },
-    [storyMap, options, onNavigateNode, onSelectOption, onToggleMinimized, onToggleNarration, isLoading, isEnding, focusState]
+    [storyMap, options, onNavigateNode, onSelectOption, onToggleMinimized, onToggleNarration, timelineNodes, isLoading, isEnding, focusState]
   );
 
   useEffect(() => {
