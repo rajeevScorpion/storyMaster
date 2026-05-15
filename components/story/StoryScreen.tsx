@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2 } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import PublishDialog from './PublishDialog';
@@ -14,6 +14,7 @@ import Timeline from './Timeline';
 import Link from 'next/link';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
+import ReelCaptionOverlay from './ReelCaptionOverlay';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
@@ -23,7 +24,8 @@ import { getStoryboardSettings } from '@/app/actions/admin';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
-import type { StoryBeat, StorySession } from '@/lib/types/story';
+import type { StoryBeat, StoryNode, StorySession } from '@/lib/types/story';
+import { normalizeReelTextOverlayStyle, type ReelTextOverlayStyle } from '@/lib/reel/styles';
 import {
   blobToDataUrl,
   compressImageFile,
@@ -174,26 +176,6 @@ function StoryboardCycler({
   const activeCaption = textOverlayEnabled
     ? captions?.find((caption) => caption.panelIndex === activePanel)?.text
     : undefined;
-  const captionPositionClass = textOverlayStyle?.position === 'upper'
-    ? 'top-16'
-    : textOverlayStyle?.position === 'middle'
-      ? 'top-1/2 -translate-y-1/2'
-      : 'bottom-9';
-  const captionAlignClass = textOverlayStyle?.align === 'left'
-    ? 'justify-start text-left'
-    : textOverlayStyle?.align === 'right'
-      ? 'justify-end text-right'
-      : 'justify-center text-center';
-  const captionStyle: CSSProperties = {
-    color: textOverlayStyle?.color,
-    fontFamily: textOverlayStyle?.fontFamily,
-    fontSize: textOverlayStyle?.fontSize ? `${textOverlayStyle.fontSize}px` : undefined,
-    fontWeight: textOverlayStyle?.fontWeight,
-    textShadow: textOverlayStyle?.shadowColor
-      ? `0 2px ${textOverlayStyle.shadowBlur ?? 12}px ${textOverlayStyle.shadowColor}`
-      : undefined,
-    backgroundColor: textOverlayStyle?.backgroundColor,
-  };
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -225,13 +207,7 @@ function StoryboardCycler({
         </AnimatePresence>
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      {activeCaption && (
-        <div className={`absolute inset-x-4 z-20 flex ${captionPositionClass} ${captionAlignClass}`}>
-          <div style={captionStyle} className="max-w-xl rounded-lg bg-black/55 px-3 py-2 text-sm leading-snug text-white shadow-lg backdrop-blur-sm">
-            {activeCaption}
-          </div>
-        </div>
-      )}
+      <ReelCaptionOverlay text={activeCaption} style={textOverlayStyle} />
       {showIndicators && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
           {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
@@ -283,6 +259,386 @@ function getReelPanelTexts(beat: Pick<StoryBeat, 'storyText' | 'reelCaptions'>):
     const caption = beat.reelCaptions?.find((item) => item.panelIndex === index);
     return caption?.text?.trim() || fallback[index] || '';
   });
+}
+
+const REEL_FONT_PRESETS = [
+  { label: 'Inter', value: 'Inter, system-ui, sans-serif' },
+  { label: 'Serif', value: 'Georgia, Cambria, Times New Roman, serif' },
+  { label: 'Clean', value: 'Arial, Helvetica, sans-serif' },
+  { label: 'Rounded', value: 'Verdana, Geneva, sans-serif' },
+] as const;
+
+function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): string {
+  const normalized = normalizeReelTextOverlayStyle(style);
+  return JSON.stringify({
+    fontFamily: normalized.fontFamily,
+    fontSize: normalized.fontSize,
+    fontWeight: normalized.fontWeight,
+    color: normalized.color,
+    shadowColor: normalized.shadowColor,
+    shadowBlur: normalized.shadowBlur,
+    backgroundColor: normalized.backgroundColor,
+    backgroundOpacity: normalized.backgroundOpacity,
+    position: normalized.position,
+    align: normalized.align,
+  });
+}
+
+function reelOverlayBackgroundColor(opacity: number): string {
+  const bounded = Math.max(0, Math.min(0.85, opacity));
+  return `rgba(0,0,0,${bounded.toFixed(2)})`;
+}
+
+interface ReelToolbarProps {
+  storyMap: StorySession['storyMap'];
+  onNodeClick: (nodeId: string) => void;
+  focusedNodeId?: string;
+  nodes?: StoryNode[];
+  isCollapsed: boolean;
+  onToggleCollapsed: () => void;
+  canOpenPromptTools: boolean;
+  promptToolsOpen: boolean;
+  onTogglePromptTools: () => void;
+  className?: string;
+}
+
+function ReelToolbar({
+  storyMap,
+  onNodeClick,
+  focusedNodeId,
+  nodes,
+  isCollapsed,
+  onToggleCollapsed,
+  canOpenPromptTools,
+  promptToolsOpen,
+  onTogglePromptTools,
+  className,
+}: ReelToolbarProps) {
+  return (
+    <div className={`relative z-30 flex min-h-14 items-center justify-between gap-3 border-b border-white/10 bg-neutral-950 px-4 py-2.5 ${className ?? ''}`}>
+      <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
+        <Timeline
+          storyMap={storyMap}
+          onNodeClick={onNodeClick}
+          focusedNodeId={focusedNodeId}
+          nodes={nodes}
+          compact
+        />
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-neutral-300 transition-colors"
+          title={isCollapsed ? 'Show text' : 'Hide text'}
+        >
+          {isCollapsed ? (
+            <ChevronUp className="w-4 h-4" />
+          ) : (
+            <ChevronDown className="w-4 h-4" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={onTogglePromptTools}
+          disabled={!canOpenPromptTools}
+          aria-expanded={promptToolsOpen}
+          aria-haspopup="dialog"
+          className={`p-2 rounded-full transition-colors ${
+            !canOpenPromptTools
+              ? 'cursor-not-allowed bg-white/5 text-neutral-700'
+              : promptToolsOpen
+              ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
+              : 'bg-white/5 hover:bg-white/10 text-neutral-300'
+          }`}
+          title={canOpenPromptTools ? 'Prompt and image tools' : 'No prompt tools available'}
+        >
+          <Layers className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface ReelCaptionStylePanelProps {
+  normalizedStyle: ReelTextOverlayStyle;
+  hasUnsavedStyle: boolean;
+  isSavingStyle: boolean;
+  saveState: 'idle' | 'saving' | 'saved' | 'error';
+  message: string | null;
+  onChange: (patch: ReelTextOverlayStyle) => void;
+  onSave: () => void;
+}
+
+function ReelCaptionStylePanel({
+  normalizedStyle,
+  hasUnsavedStyle,
+  isSavingStyle,
+  saveState,
+  message,
+  onChange,
+  onSave,
+}: ReelCaptionStylePanelProps) {
+  return (
+    <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+        <div className="flex items-center gap-2 font-sans text-[10px] uppercase tracking-[0.24em] text-neutral-400">
+          <Type className="h-3.5 w-3.5 text-emerald-300/80" />
+          Caption style
+        </div>
+        {hasUnsavedStyle && (
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={isSavingStyle}
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-70"
+          >
+            {isSavingStyle ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Save className="h-3 w-3" />
+            )}
+            Save
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-2.5 px-4 py-3">
+        <div className="grid gap-2 md:grid-cols-[auto_auto_minmax(7rem,1fr)]">
+          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+            {([
+              ['upper', 'Top'],
+              ['middle', 'Mid'],
+              ['lower', 'Low'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => onChange({ position: value })}
+                className={`rounded-full px-2.5 py-1.5 text-[10px] font-sans uppercase tracking-wider transition-colors ${
+                  normalizedStyle.position === value
+                    ? 'bg-emerald-400 text-neutral-950'
+                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+            {([
+              ['left', AlignLeft, 'Align left'],
+              ['center', AlignCenter, 'Align center'],
+              ['right', AlignRight, 'Align right'],
+            ] as const).map(([value, Icon, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => onChange({ align: value })}
+                className={`rounded-full p-2 transition-colors ${
+                  normalizedStyle.align === value
+                    ? 'bg-emerald-400 text-neutral-950'
+                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+                }`}
+                title={label}
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            ))}
+          </div>
+
+          <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+            <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+              Size
+            </span>
+            <input
+              type="range"
+              min={12}
+              max={42}
+              value={normalizedStyle.fontSize ?? 16}
+              onChange={(event) => onChange({ fontSize: Number(event.target.value) })}
+              className="min-w-0 flex-1 accent-emerald-400"
+            />
+            <span className="w-6 text-right font-sans text-[10px] tabular-nums text-neutral-400">
+              {normalizedStyle.fontSize}
+            </span>
+          </label>
+        </div>
+
+        <div className="grid gap-2 md:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)]">
+          <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+            <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+              Font
+            </span>
+            <select
+              value={normalizedStyle.fontFamily}
+              onChange={(event) => onChange({ fontFamily: event.target.value })}
+              className="min-w-0 flex-1 bg-transparent font-sans text-[11px] text-neutral-200 outline-none"
+            >
+              {!REEL_FONT_PRESETS.some((font) => font.value === normalizedStyle.fontFamily) && (
+                <option value={normalizedStyle.fontFamily} className="bg-neutral-900 text-neutral-100">
+                  Custom
+                </option>
+              )}
+              {REEL_FONT_PRESETS.map((font) => (
+                <option key={font.value} value={font.value} className="bg-neutral-900 text-neutral-100">
+                  {font.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+            <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+              BG
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={0.75}
+              step={0.05}
+              value={normalizedStyle.backgroundOpacity ?? 0.32}
+              onChange={(event) => {
+                const opacity = Number(event.target.value);
+                onChange({
+                  backgroundOpacity: opacity,
+                  backgroundColor: reelOverlayBackgroundColor(opacity),
+                });
+              }}
+              className="min-w-0 flex-1 accent-emerald-400"
+            />
+            <span className="w-6 text-right font-sans text-[10px] tabular-nums text-neutral-400">
+              {Math.round((normalizedStyle.backgroundOpacity ?? 0) * 100)}
+            </span>
+          </label>
+        </div>
+
+        {message && (
+          <p className={`text-xs font-sans ${saveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
+            {message}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+interface ReelPanelEditorProps {
+  panelDrafts: string[];
+  hasUnsavedText: boolean;
+  isTextSaving: boolean;
+  saveState: 'idle' | 'saving' | 'warning' | 'saved' | 'error';
+  message: string | null;
+  onPanelChange: (panelIndex: number, value: string) => void;
+  onSaveText: (confirmClearNarration?: boolean) => void;
+  onCancelChanges: () => void;
+  onCancelWarning: () => void;
+}
+
+function ReelPanelEditor({
+  panelDrafts,
+  hasUnsavedText,
+  isTextSaving,
+  saveState,
+  message,
+  onPanelChange,
+  onSaveText,
+  onCancelChanges,
+  onCancelWarning,
+}: ReelPanelEditorProps) {
+  return (
+    <div className="bg-neutral-950">
+      <div
+        className="max-h-[12.25rem] overflow-y-auto scrollbar-none px-4 py-3"
+        style={{
+          maskImage: 'linear-gradient(to bottom, black 0%, black 82%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 82%, transparent 100%)',
+        }}
+      >
+        <div className="space-y-3">
+          {panelDrafts.map((text, panelIndex) => (
+            <label key={panelIndex} className="block">
+              <span className="font-sans text-[10px] uppercase tracking-[0.22em] text-emerald-300/80">
+                Panel {String(panelIndex + 1).padStart(2, '0')}
+              </span>
+              <textarea
+                value={text}
+                onChange={(event) => onPanelChange(panelIndex, event.target.value)}
+                rows={2}
+                className="mt-1.5 w-full resize-none rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 font-serif text-sm leading-relaxed text-neutral-100 outline-none transition-colors placeholder:text-neutral-600 focus:border-emerald-400/50 focus:bg-neutral-900 md:text-[13px]"
+                placeholder={`Panel ${String(panelIndex + 1).padStart(2, '0')} text`}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex min-h-12 flex-wrap items-center gap-2 border-t border-white/10 px-4 py-3">
+        {hasUnsavedText && saveState !== 'warning' && (
+          <>
+            <button
+              type="button"
+              onClick={() => onSaveText(false)}
+              disabled={isTextSaving}
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-70"
+            >
+              {isTextSaving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5" />
+              )}
+              Save text
+            </button>
+            <button
+              type="button"
+              onClick={onCancelChanges}
+              disabled={isTextSaving}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+        {saveState === 'warning' && (
+          <>
+            <button
+              type="button"
+              onClick={() => onSaveText(true)}
+              disabled={isTextSaving}
+              className="inline-flex items-center gap-2 rounded-full bg-amber-400 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-amber-300 disabled:cursor-wait disabled:opacity-70"
+            >
+              {isTextSaving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <AlertTriangle className="h-3.5 w-3.5" />
+              )}
+              Clear narration and save
+            </button>
+            <button
+              type="button"
+              onClick={onCancelWarning}
+              disabled={isTextSaving}
+              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+        {message && (
+          <p className={`text-xs font-sans ${
+            saveState === 'error'
+              ? 'text-rose-300'
+              : saveState === 'warning'
+              ? 'text-amber-200'
+              : 'text-emerald-300'
+          }`}>
+            {message}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 const PROMPT_ONLY_ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -652,6 +1008,7 @@ export default function StoryScreen() {
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
+  const updateReelTextOverlayStyle = useStoryStore((state) => state.updateReelTextOverlayStyle);
   const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
   const storyMode = useStoryStore((state) => state.storyMode);
@@ -776,6 +1133,7 @@ export default function StoryScreen() {
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
       updateReelPanelCaptions={updateReelPanelCaptions}
+      updateReelTextOverlayStyle={updateReelTextOverlayStyle}
       regenerateImageForNode={regenerateImageForNode}
       clearAudioReady={clearAudioReady}
       storyMode={storyMode}
@@ -821,6 +1179,7 @@ function StoryScreenInner({
   audioReadyNodeId,
   generateNarrationForNode,
   updateReelPanelCaptions,
+  updateReelTextOverlayStyle,
   regenerateImageForNode,
   clearAudioReady,
   storyMode,
@@ -856,6 +1215,7 @@ function StoryScreenInner({
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
+  updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   storyMode: boolean;
@@ -1033,9 +1393,23 @@ function StoryScreenInner({
     }),
     [normalizedCurrentBeat.reelCaptions, normalizedCurrentBeat.storyText]
   );
+  const savedReelOverlayStyle = useMemo(
+    () => normalizeReelTextOverlayStyle(
+      normalizedCurrentBeat.reelTextOverlayStyle
+        ?? session.storyConfig.reel.textOverlayStyle
+    ),
+    [normalizedCurrentBeat.reelTextOverlayStyle, session.storyConfig.reel.textOverlayStyle]
+  );
   const [reelPanelDraft, setReelPanelDraft] = useState<string[]>(savedReelPanelTexts);
   const [reelTextSaveState, setReelTextSaveState] = useState<'idle' | 'saving' | 'warning' | 'saved' | 'error'>('idle');
   const [reelTextMessage, setReelTextMessage] = useState<string | null>(null);
+  const [reelOverlayDraft, setReelOverlayDraft] = useState<ReelTextOverlayStyle>(savedReelOverlayStyle);
+  const [reelStyleSaveState, setReelStyleSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [reelStyleMessage, setReelStyleMessage] = useState<string | null>(null);
+  const normalizedReelOverlayDraft = useMemo(
+    () => normalizeReelTextOverlayStyle(reelOverlayDraft),
+    [reelOverlayDraft]
+  );
   const hasReelAudio = Boolean(
     normalizedCurrentBeat.audioUrl
     || normalizedCurrentBeat.audioStatus === 'ready'
@@ -1045,12 +1419,21 @@ function StoryScreenInner({
     text.trim() !== (savedReelPanelTexts[index] || '').trim()
   );
   const isReelTextSaving = reelTextSaveState === 'saving';
+  const hasUnsavedReelOverlayStyle = isReelStory
+    && reelOverlayStyleKey(reelOverlayDraft) !== reelOverlayStyleKey(savedReelOverlayStyle);
+  const isReelStyleSaving = reelStyleSaveState === 'saving';
 
   useEffect(() => {
     setReelPanelDraft(savedReelPanelTexts);
     setReelTextSaveState('idle');
     setReelTextMessage(null);
   }, [currentNodeId, savedReelPanelTexts]);
+
+  useEffect(() => {
+    setReelOverlayDraft(savedReelOverlayStyle);
+    setReelStyleSaveState('idle');
+    setReelStyleMessage(null);
+  }, [savedReelOverlayStyle]);
 
   const updateReelPanelDraft = useCallback((panelIndex: number, value: string) => {
     setReelPanelDraft((current) =>
@@ -1092,6 +1475,48 @@ function StoryScreenInner({
     isReelTextSaving,
     reelPanelDraft,
     updateReelPanelCaptions,
+  ]);
+
+  const handleCancelReelTextWarning = useCallback(() => {
+    setReelTextSaveState('idle');
+    setReelTextMessage(null);
+  }, []);
+
+  const handleCancelReelTextChanges = useCallback(() => {
+    setReelPanelDraft(savedReelPanelTexts);
+    setReelTextSaveState('idle');
+    setReelTextMessage(null);
+  }, [savedReelPanelTexts]);
+
+  const updateReelOverlayDraft = useCallback((patch: ReelTextOverlayStyle) => {
+    setReelOverlayDraft((current) => normalizeReelTextOverlayStyle({
+      ...current,
+      ...patch,
+    }));
+    setReelStyleSaveState('idle');
+    setReelStyleMessage(null);
+  }, []);
+
+  const handleSaveReelOverlayStyle = useCallback(async () => {
+    if (!isReelStory || !hasUnsavedReelOverlayStyle || isReelStyleSaving) return;
+
+    setReelStyleSaveState('saving');
+    setReelStyleMessage(null);
+
+    try {
+      await updateReelTextOverlayStyle(reelOverlayDraft);
+      setReelStyleSaveState('saved');
+      setReelStyleMessage('Style saved.');
+    } catch (error) {
+      setReelStyleSaveState('error');
+      setReelStyleMessage(error instanceof Error ? error.message : 'Failed to save text style.');
+    }
+  }, [
+    hasUnsavedReelOverlayStyle,
+    isReelStory,
+    isReelStyleSaving,
+    reelOverlayDraft,
+    updateReelTextOverlayStyle,
   ]);
 
   const handleGenerateNarration = useCallback(() => {
@@ -1565,6 +1990,153 @@ function StoryScreenInner({
     resetCharacterUploadState,
   ]);
 
+  const togglePromptTools = useCallback(() => {
+    if (!canOpenPromptTools) return;
+    if (promptToolsOpen) {
+      closePromptToolsModal();
+    } else {
+      openPromptToolsOverview();
+    }
+  }, [canOpenPromptTools, closePromptToolsModal, openPromptToolsOverview, promptToolsOpen]);
+
+  const mainClassName = `relative z-10 flex-1 flex flex-col w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass} ${
+    isReelStory
+      ? 'justify-center px-4 pb-3 pt-1 md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
+      : 'justify-end px-4 pb-[31px] pt-1 md:p-12 max-w-5xl mx-auto'
+  }`;
+
+  const renderReelPreview = (surface: 'desktop' | 'mobile') => (
+    <div
+      className={`relative mx-auto aspect-[9/16] overflow-hidden border border-white/15 bg-neutral-950/50 shadow-2xl ${
+        surface === 'desktop'
+          ? 'hidden h-[80dvh] max-h-[calc(100dvh-7rem)] rounded-[28px] md:block'
+          : 'w-full max-w-[19rem] rounded-[24px] md:hidden'
+      }`}
+    >
+      {isStoryboard ? (
+        <StoryboardCycler
+          key={`reel-${surface}:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
+          gridUrl={normalizedCurrentBeat.imageUrl!}
+          audioUrl={normalizedCurrentBeat.audioUrl}
+          cycleOverride={cycleSettings.cycleOverride}
+          cycleMs={cycleSettings.cycleMs}
+          vignetteEnabled={cycleSettings.vignetteEnabled}
+          vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+          playbackState={playbackState}
+          captions={normalizedCurrentBeat.reelCaptions}
+          textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+          textOverlayStyle={reelOverlayDraft}
+          onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
+          onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
+        />
+      ) : displayImageUrl ? (
+        <Image
+          src={displayImageUrl}
+          alt={currentBeat.sceneSummary}
+          fill
+          className="object-cover"
+          referrerPolicy="no-referrer"
+          priority
+          unoptimized
+          onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
+          onError={() => setFailedImageUrl(displayImageUrl)}
+        />
+      ) : showPromptOnlyPlaceholder ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
+          title="No image for this beat - use the prompt tools to upload one"
+        >
+          <ImageOff className="h-10 w-10 text-sky-200/80" />
+        </div>
+      ) : (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
+          {showPendingImageState ? (
+            <>
+              <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
+              <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Syncing</p>
+            </>
+          ) : (
+            <>
+              <AlertTriangle className="h-8 w-8 text-amber-300" />
+              <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Upload Needs Retry</p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const reelEditorLayout = isReelStory ? (
+    <div className="flex min-h-0 w-full flex-col gap-4 md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-end md:justify-center md:gap-6">
+      <div className="md:hidden">
+        {renderReelPreview('mobile')}
+      </div>
+
+      <div className="flex justify-start md:h-full md:items-end md:justify-center md:pb-4">
+        <NarrationButton
+          isGeneratingAudio={isGeneratingAudio}
+          isAudioReady={isAudioReady}
+          playbackState={playbackState}
+          hasAudio={!!normalizedCurrentBeat.audioUrl}
+          onTogglePlayPause={togglePlayPause}
+          onGenerateNarration={handleGenerateNarration}
+          onClearGlow={clearAudioReady}
+          storyMode={storyMode}
+          onToggleStoryMode={toggleStoryMode}
+          disabled={hasUnsavedReelText}
+          disabledReason="Save panel text before generating narration"
+        />
+      </div>
+
+      {renderReelPreview('desktop')}
+
+      <div className="flex min-h-0 w-full flex-col gap-3 md:self-end">
+        <ReelCaptionStylePanel
+          normalizedStyle={normalizedReelOverlayDraft}
+          hasUnsavedStyle={hasUnsavedReelOverlayStyle}
+          isSavingStyle={isReelStyleSaving}
+          saveState={reelStyleSaveState}
+          message={reelStyleMessage}
+          onChange={updateReelOverlayDraft}
+          onSave={handleSaveReelOverlayStyle}
+        />
+
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+          className="touch-visible relative z-20 w-full overflow-hidden rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl"
+        >
+          <ReelToolbar
+            storyMap={session.storyMap}
+            onNodeClick={navigateToNode}
+            focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+            nodes={reelTimelineNodes}
+            isCollapsed={isMinimized}
+            onToggleCollapsed={() => setIsMinimized((prev) => !prev)}
+            canOpenPromptTools={canOpenPromptTools}
+            promptToolsOpen={promptToolsOpen}
+            onTogglePromptTools={togglePromptTools}
+            className={isMinimized ? 'border-b-0 rounded-3xl' : ''}
+          />
+          {!isMinimized && (
+            <ReelPanelEditor
+              panelDrafts={reelPanelDraft}
+              hasUnsavedText={hasUnsavedReelText}
+              isTextSaving={isReelTextSaving}
+              saveState={reelTextSaveState}
+              message={reelTextMessage}
+              onPanelChange={updateReelPanelDraft}
+              onSaveText={handleSaveReelText}
+              onCancelChanges={handleCancelReelTextChanges}
+              onCancelWarning={handleCancelReelTextWarning}
+            />
+          )}
+        </motion.div>
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
@@ -1594,7 +2166,7 @@ function StoryScreenInner({
                 playbackState={playbackState}
                 captions={normalizedCurrentBeat.reelCaptions}
                 textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
+                textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
               />
@@ -1612,7 +2184,7 @@ function StoryScreenInner({
               />
             )}
             </div>
-            {isVerticalStory && displayImageUrl && (
+            {!isReelStory && isVerticalStory && displayImageUrl && (
               <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
                 <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
                   {isStoryboard ? (
@@ -1627,7 +2199,7 @@ function StoryScreenInner({
                       playbackState={playbackState}
                       captions={normalizedCurrentBeat.reelCaptions}
                       textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                      textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
+                      textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                     />
@@ -1758,7 +2330,9 @@ function StoryScreenInner({
       </header>
 
       {/* Main Content */}
-      <main className={`relative z-10 flex-1 flex flex-col justify-end px-4 pb-[31px] pt-1 md:p-12 max-w-5xl mx-auto w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass}`}>
+      <main className={mainClassName}>
+        {isReelStory ? reelEditorLayout : (
+          <>
         <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStory ? 'hidden' : 'flex'}`}>
           {(displayImageUrl || showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
@@ -1775,7 +2349,7 @@ function StoryScreenInner({
                   imageClassName="mobile-scene-shuttle"
                   captions={normalizedCurrentBeat.reelCaptions}
                   textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                  textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
+                  textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
                 />
@@ -2090,34 +2664,54 @@ function StoryScreenInner({
 
                       <div className="flex flex-wrap items-center gap-3 pt-1">
                         {hasUnsavedReelText && reelTextSaveState !== 'warning' && (
-                          <button
-                            type="button"
-                            onClick={() => handleSaveReelText(false)}
-                            disabled={isReelTextSaving}
-                            className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-70"
-                          >
-                            {isReelTextSaving ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Save className="h-4 w-4" />
-                            )}
-                            Save text
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveReelText(false)}
+                              disabled={isReelTextSaving}
+                              className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-wait disabled:opacity-70"
+                            >
+                              {isReelTextSaving ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Save className="h-4 w-4" />
+                              )}
+                              Save text
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCancelReelTextChanges}
+                              disabled={isReelTextSaving}
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                          </>
                         )}
                         {reelTextSaveState === 'warning' && (
-                          <button
-                            type="button"
-                            onClick={() => handleSaveReelText(true)}
-                            disabled={isReelTextSaving}
-                            className="inline-flex items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-amber-300 disabled:cursor-wait disabled:opacity-70"
-                          >
-                            {isReelTextSaving ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <AlertTriangle className="h-4 w-4" />
-                            )}
-                            Clear narration and save
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveReelText(true)}
+                              disabled={isReelTextSaving}
+                              className="inline-flex items-center gap-2 rounded-full bg-amber-400 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-950 transition-colors hover:bg-amber-300 disabled:cursor-wait disabled:opacity-70"
+                            >
+                              {isReelTextSaving ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <AlertTriangle className="h-4 w-4" />
+                              )}
+                              Clear narration and save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleCancelReelTextWarning}
+                              disabled={isReelTextSaving}
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                            >
+                              Cancel
+                            </button>
+                          </>
                         )}
                         {reelTextMessage && (
                           <p className={`text-xs font-sans ${
@@ -2128,6 +2722,148 @@ function StoryScreenInner({
                               : 'text-emerald-300'
                           }`}>
                             {reelTextMessage}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="border-t border-white/10 pt-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 font-sans text-[11px] uppercase tracking-[0.22em] text-neutral-400">
+                            <Type className="h-4 w-4 text-emerald-300/80" />
+                            Caption style
+                          </div>
+                          {hasUnsavedReelOverlayStyle && (
+                            <button
+                              type="button"
+                              onClick={handleSaveReelOverlayStyle}
+                              disabled={isReelStyleSaving}
+                              className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-70"
+                            >
+                              {isReelStyleSaving ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Save className="h-3.5 w-3.5" />
+                              )}
+                              Save style
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="mt-3 grid gap-3 md:grid-cols-[auto_auto_minmax(9rem,1fr)]">
+                          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+                            {([
+                              ['upper', 'Top'],
+                              ['middle', 'Mid'],
+                              ['lower', 'Low'],
+                            ] as const).map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => updateReelOverlayDraft({ position: value })}
+                                className={`rounded-full px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider transition-colors ${
+                                  normalizedReelOverlayDraft.position === value
+                                    ? 'bg-emerald-400 text-neutral-950'
+                                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+                            {([
+                              ['left', AlignLeft, 'Align left'],
+                              ['center', AlignCenter, 'Align center'],
+                              ['right', AlignRight, 'Align right'],
+                            ] as const).map(([value, Icon, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => updateReelOverlayDraft({ align: value })}
+                                className={`rounded-full p-2 transition-colors ${
+                                  normalizedReelOverlayDraft.align === value
+                                    ? 'bg-emerald-400 text-neutral-950'
+                                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+                                }`}
+                                title={label}
+                              >
+                                <Icon className="h-4 w-4" />
+                              </button>
+                            ))}
+                          </div>
+
+                          <label className="flex min-w-0 items-center gap-3 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+                            <span className="shrink-0 font-sans text-[11px] uppercase tracking-wider text-neutral-500">
+                              Size
+                            </span>
+                            <input
+                              type="range"
+                              min={12}
+                              max={42}
+                              value={normalizedReelOverlayDraft.fontSize ?? 16}
+                              onChange={(event) => updateReelOverlayDraft({ fontSize: Number(event.target.value) })}
+                              className="min-w-0 flex-1 accent-emerald-400"
+                            />
+                            <span className="w-8 text-right font-sans text-[11px] tabular-nums text-neutral-400">
+                              {normalizedReelOverlayDraft.fontSize}
+                            </span>
+                          </label>
+                        </div>
+
+                        <div className="mt-3 grid gap-3 md:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)]">
+                          <label className="flex min-w-0 items-center gap-3 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+                            <span className="shrink-0 font-sans text-[11px] uppercase tracking-wider text-neutral-500">
+                              Font
+                            </span>
+                            <select
+                              value={normalizedReelOverlayDraft.fontFamily}
+                              onChange={(event) => updateReelOverlayDraft({ fontFamily: event.target.value })}
+                              className="min-w-0 flex-1 bg-transparent font-sans text-xs text-neutral-200 outline-none"
+                            >
+                              {!REEL_FONT_PRESETS.some((font) => font.value === normalizedReelOverlayDraft.fontFamily) && (
+                                <option value={normalizedReelOverlayDraft.fontFamily} className="bg-neutral-900 text-neutral-100">
+                                  Custom
+                                </option>
+                              )}
+                              {REEL_FONT_PRESETS.map((font) => (
+                                <option key={font.value} value={font.value} className="bg-neutral-900 text-neutral-100">
+                                  {font.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="flex min-w-0 items-center gap-3 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+                            <span className="shrink-0 font-sans text-[11px] uppercase tracking-wider text-neutral-500">
+                              BG
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={0.75}
+                              step={0.05}
+                              value={normalizedReelOverlayDraft.backgroundOpacity ?? 0.32}
+                              onChange={(event) => {
+                                const opacity = Number(event.target.value);
+                                updateReelOverlayDraft({
+                                  backgroundOpacity: opacity,
+                                  backgroundColor: reelOverlayBackgroundColor(opacity),
+                                });
+                              }}
+                              className="min-w-0 flex-1 accent-emerald-400"
+                            />
+                            <span className="w-8 text-right font-sans text-[11px] tabular-nums text-neutral-400">
+                              {Math.round((normalizedReelOverlayDraft.backgroundOpacity ?? 0) * 100)}
+                            </span>
+                          </label>
+                        </div>
+
+                        {reelStyleMessage && (
+                          <p className={`mt-3 text-xs font-sans ${
+                            reelStyleSaveState === 'error' ? 'text-rose-300' : 'text-emerald-300'
+                          }`}>
+                            {reelStyleMessage}
                           </p>
                         )}
                       </div>
@@ -2383,6 +3119,8 @@ function StoryScreenInner({
             </motion.div>
           )}
         </div>
+          </>
+        )}
       </main>
 
       <AnimatePresence>

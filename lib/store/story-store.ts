@@ -140,6 +140,7 @@ interface StoryState {
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
+  updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
@@ -3476,6 +3477,109 @@ export const useStoryStore = create<StoryState>()(
         }
 
         return { clearedNarration };
+      },
+
+      updateReelTextOverlayStyle: async (style: StoryBeat['reelTextOverlayStyle']) => {
+        const { session } = get();
+        if (!session || !isReelStoryConfig(session.storyConfig)) {
+          return;
+        }
+
+        const normalizedStyle = normalizeReelTextOverlayStyle(style ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE);
+        const nextStoryConfig = normalizeStoryConfig({
+          ...session.storyConfig,
+          reel: {
+            ...session.storyConfig.reel,
+            textOverlayStyle: normalizedStyle,
+          },
+        });
+        const nextMap: StoryMap = {
+          ...session.storyMap,
+          nodes: Object.fromEntries(
+            Object.entries(session.storyMap.nodes).map(([nodeId, node]) => [
+              nodeId,
+              {
+                ...node,
+                data: normalizeBeatMediaFields({
+                  ...node.data,
+                  reelTextOverlayStyle: normalizedStyle,
+                }),
+              },
+            ])
+          ),
+        };
+        const nextSession = deriveSessionFields(
+          {
+            ...session,
+            storyConfig: nextStoryConfig,
+          },
+          nextMap
+        );
+
+        updateStoreSaveUi({
+          session: nextSession,
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+        });
+
+        if (!session.savedStoryId) {
+          return;
+        }
+
+        try {
+          await saveStoryAction(nextSession, nextMap);
+          const latestSession = get().session;
+          if (latestSession && isReelStoryConfig(latestSession.storyConfig)) {
+            const confirmedConfig = normalizeStoryConfig({
+              ...latestSession.storyConfig,
+              reel: {
+                ...latestSession.storyConfig.reel,
+                textOverlayStyle: normalizedStyle,
+              },
+            });
+            const confirmedMap: StoryMap = {
+              ...latestSession.storyMap,
+              nodes: Object.fromEntries(
+                Object.entries(latestSession.storyMap.nodes).map(([nodeId, node]) => [
+                  nodeId,
+                  {
+                    ...node,
+                    data: normalizeBeatMediaFields({
+                      ...node.data,
+                      reelTextOverlayStyle: normalizedStyle,
+                    }),
+                  },
+                ])
+              ),
+            };
+            updateStoreSaveUi({
+              session: deriveSessionFields(
+                {
+                  ...latestSession,
+                  storyConfig: confirmedConfig,
+                },
+                confirmedMap
+              ),
+              isSaving: false,
+              saveStatus: 'saved',
+              error: null,
+            });
+          } else {
+            updateStoreSaveUi({
+              isSaving: false,
+              saveStatus: 'saved',
+              error: null,
+            });
+          }
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to save reel text style.',
+          });
+          throw error;
+        }
       },
 
       regenerateImageForNode: async (nodeId: string) => {

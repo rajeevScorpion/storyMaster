@@ -52,6 +52,7 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
+import ReelCaptionOverlay from './ReelCaptionOverlay';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
@@ -180,25 +181,6 @@ function StoryboardCycler({
     : undefined;
   const activeCaption = activeCaptionObj?.text;
   const activeCaptionWordTimings = activeCaptionObj?.wordTimings;
-  const captionPositionClass = textOverlayStyle?.position === 'upper'
-    ? 'top-16'
-    : textOverlayStyle?.position === 'middle'
-      ? 'top-1/2 -translate-y-1/2'
-      : 'bottom-9';
-  const captionAlignClass = textOverlayStyle?.align === 'left'
-    ? 'justify-start text-left'
-    : textOverlayStyle?.align === 'right'
-      ? 'justify-end text-right'
-      : 'justify-center text-center';
-  const captionStyle: CSSProperties = {
-    color: textOverlayStyle?.color,
-    fontFamily: textOverlayStyle?.fontFamily,
-    fontSize: textOverlayStyle?.fontSize ? `${textOverlayStyle.fontSize}px` : undefined,
-    fontWeight: textOverlayStyle?.fontWeight,
-    textShadow: textOverlayStyle?.shadowColor
-      ? `0 2px ${textOverlayStyle.shadowBlur ?? 12}px ${textOverlayStyle.shadowColor}`
-      : undefined,
-  };
   const wordHighlightBg = textOverlayStyle?.backgroundColor ?? 'rgba(0,0,0,0.55)';
 
   return (
@@ -225,31 +207,29 @@ function StoryboardCycler({
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeCaption && (
-        <div className={`absolute inset-x-4 z-20 flex ${captionPositionClass} ${captionAlignClass}`}>
-          <div style={captionStyle} className="max-w-xl px-1 py-1 text-sm leading-relaxed text-white">
-            {activeCaptionWordTimings && currentElapsedMs !== null && playbackState === 'playing'
-              ? (() => {
-                  const tokens = activeCaption.split(/(\s+)/);
-                  let wordIdx = 0;
-                  return tokens.map((token, i) => {
-                    if (/^\s+$/.test(token)) return <span key={i}>{token}</span>;
-                    const timing = activeCaptionWordTimings[wordIdx++];
-                    const isActive = timing != null
-                      && currentElapsedMs >= timing.startMs
-                      && currentElapsedMs < timing.endMs;
-                    return (
-                      <span
-                        key={i}
-                        style={isActive ? { backgroundColor: wordHighlightBg, borderRadius: '4px', padding: '0 3px' } : undefined}
-                      >
-                        {token}
-                      </span>
-                    );
-                  });
-                })()
-              : activeCaption}
-          </div>
-        </div>
+        <ReelCaptionOverlay style={textOverlayStyle}>
+          {activeCaptionWordTimings && currentElapsedMs !== null && playbackState === 'playing'
+            ? (() => {
+                const tokens = activeCaption.split(/(\s+)/);
+                let wordIdx = 0;
+                return tokens.map((token, i) => {
+                  if (/^\s+$/.test(token)) return <span key={i}>{token}</span>;
+                  const timing = activeCaptionWordTimings[wordIdx++];
+                  const isActive = timing != null
+                    && currentElapsedMs >= timing.startMs
+                    && currentElapsedMs < timing.endMs;
+                  return (
+                    <span
+                      key={i}
+                      style={isActive ? { backgroundColor: wordHighlightBg, borderRadius: '4px', padding: '0 3px' } : undefined}
+                    >
+                      {token}
+                    </span>
+                  );
+                });
+              })()
+            : activeCaption}
+        </ReelCaptionOverlay>
       )}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
         {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
