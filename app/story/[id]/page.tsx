@@ -43,6 +43,10 @@ export default function StoryPage() {
 
     hasRequestedAuthRef.current = false;
 
+    if (sessionStorage.getItem('kissago_skip_story_reload') === storyId) {
+      return;
+    }
+
     // Only load if we don't already have this story loaded
     if (!session || session.savedStoryId !== storyId) {
       loadStoryFromCloud(storyId);

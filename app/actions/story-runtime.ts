@@ -42,6 +42,7 @@ import {
   normalizeReelStorySettings,
   type ReelDefiner,
   type ReelStorySettings,
+  type ReelTextLengthWordRange,
 } from '@/lib/reel/settings';
 import type { ReelVisualStyleRuntime } from '@/lib/reel/styles';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
@@ -472,15 +473,35 @@ export interface ReelDraftResponse {
   beats: ReelDraftBeatOutput[];
 }
 
+function normalizeReelPanelWordRange(
+  value: Partial<ReelTextLengthWordRange> | null | undefined,
+  fallback: ReelTextLengthWordRange
+): ReelTextLengthWordRange {
+  const min = Number(value?.min);
+  const max = Number(value?.max);
+  const normalizedMin = Number.isFinite(min) ? Math.max(1, Math.min(200, Math.round(min))) : fallback.min;
+  const normalizedMax = Number.isFinite(max) ? Math.max(normalizedMin, Math.min(240, Math.round(max))) : fallback.max;
+  return { min: normalizedMin, max: normalizedMax };
+}
+
+function formatWordRange(range: ReelTextLengthWordRange): string {
+  return `${range.min}-${range.max}`;
+}
+
 export async function distributeReelTextAction(input: {
   text: string;
   beatCount: 1 | 2 | 3;
+  wordsPerPanel?: Partial<ReelTextLengthWordRange>;
 }): Promise<{ panelTexts: string[][]; imagePrompts: string[] }> {
   const { text, beatCount } = input;
   const panelCount = beatCount * 4;
+  const wordsPerPanel = normalizeReelPanelWordRange(
+    input.wordsPerPanel,
+    DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges.medium
+  );
   const prompt = [
     'You are a short-form reel content editor. Distribute the user\'s story text into exactly ' + panelCount + ' short captions — one per image panel — preserving the narrative arc.',
-    'Rules for each caption: maximum 16 words, complete thought, no sentence fragments ending mid-idea.',
+    `Rules for each caption: target ${formatWordRange(wordsPerPanel)} words, maximum ${wordsPerPanel.max} words, complete thought, no sentence fragments ending mid-idea.`,
     'Also write one brief visual scene description per beat (max 40 words), suitable as an AI image generation prompt, describing the setting/mood without referencing text or captions.',
     '',
     'Return ONLY valid JSON with this exact shape (no markdown, no explanation):',
@@ -574,23 +595,33 @@ export async function generateReelDraft(
   const reelVisualStyle = resolveReelVisualStyle(modelOverrides, reelSettings, normalizedConfig);
   const reelNarrationStyle = findReelDefiner(reelSettings.narrationStyles, normalizedConfig.reel.narrationStyleKey);
   const textLengthRange = getReelTextLengthRange(reelSettings, normalizedConfig.reel.textLength);
+  const reelPanelCount = reelSettings.panelCount;
+  const textLengthWordRangePerPanel = formatWordRange(textLengthRange);
+  const textLengthWordRangePerBeat = `${textLengthRange.min * reelPanelCount}-${textLengthRange.max * reelPanelCount}`;
 
   const templateCandidate = modelOverrides?.reelStoryPrompt || getDefaultPromptBody('reel_story_generation');
   const template = validatePromptTemplate('reel_story_generation', templateCandidate).isValid
     ? templateCandidate
     : getDefaultPromptBody('reel_story_generation');
 
-  const prompt = resolvePromptTemplate(template, {
+  const resolvedPrompt = resolvePromptTemplate(template, {
     language: lang,
     userPrompt,
     reelBeatCount: beatCount,
+    reelPanelCount,
     textLength: normalizedConfig.reel.textLength,
-    textLengthWordRange: `${textLengthRange.min}-${textLengthRange.max}`,
+    textLengthWordRange: textLengthWordRangePerPanel,
+    textLengthWordRangePerPanel,
+    textLengthWordRangePerBeat,
     textOverlayMode: describeReelTextOverlayMode(normalizedConfig),
     moodDefiner: `${reelMood.label}: ${reelMood.prompt}`,
     visualStyleDefiner: `${reelVisualStyle.label}: ${reelVisualStyle.prompt}`,
     narrationStyleDefiner: `${reelNarrationStyle.label}: ${reelNarrationStyle.prompt}`,
   });
+  const prompt = [
+    `Critical reel text budget: "${normalizedConfig.reel.textLength}" means ${textLengthWordRangePerPanel} words per visual panel. Each beat will be split into ${reelPanelCount} panels, so every beat.storyText must be about ${textLengthWordRangePerBeat} words total. Do not collapse a beat into a single short line unless that total word budget permits it.`,
+    resolvedPrompt,
+  ].join('\n\n');
 
   const text = await timeRuntimeStep(
     'story_runtime.generate_reel_draft',
@@ -1001,9 +1032,7 @@ export function buildReelPanelCaptions(
     plan.bottomLeft.description,
     plan.bottomRight.description,
   ];
-  const settings = normalizeReelStorySettings(options.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
-  const range = getReelTextLengthRange(settings, options.textLength ?? settings.defaultTextLength);
-  const storyChunks = splitCaptionText(beat.storyText, 4, range.max);
+  const storyChunks = splitCaptionText(beat.storyText, 4);
 
   return frameDescriptions.map((description, panelIndex) => ({
     panelIndex,
@@ -1011,7 +1040,7 @@ export function buildReelPanelCaptions(
   }));
 }
 
-function splitCaptionText(value: string, count: number, maxWordsPerChunk?: number): string[] {
+function splitCaptionText(value: string, count: number): string[] {
   const sentences = value
     .replace(/\s+/g, ' ')
     .split(/(?<=[.!?])\s+/)
@@ -1020,33 +1049,22 @@ function splitCaptionText(value: string, count: number, maxWordsPerChunk?: numbe
 
   if (sentences.length >= count) {
     return sentences.slice(0, count - 1)
-      .concat(sentences.slice(count - 1).join(' '))
-      .map((chunk) => capWords(chunk, maxWordsPerChunk));
+      .concat(sentences.slice(count - 1).join(' '));
   }
 
   const words = value.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
   const idealChunkSize = Math.max(1, Math.ceil(words.length / count));
-  const chunkSize = maxWordsPerChunk ? Math.min(idealChunkSize, maxWordsPerChunk) : idealChunkSize;
   const chunks: string[] = [];
   for (let index = 0; index < count; index += 1) {
-    const chunk = words.slice(index * chunkSize, (index + 1) * chunkSize).join(' ');
+    const chunk = words.slice(index * idealChunkSize, (index + 1) * idealChunkSize).join(' ');
     if (chunk) chunks.push(chunk);
   }
   return chunks;
 }
 
-function capWords(value: string, maxWords?: number): string {
-  if (!maxWords) return value;
-  const words = value.trim().split(/\s+/).filter(Boolean);
-  if (words.length <= maxWords) return value;
-  return `${words.slice(0, maxWords).join(' ')}...`;
-}
-
 function cleanCaptionText(value: string): string {
-  const trimmed = value.replace(/\s+/g, ' ').trim();
-  if (trimmed.length <= 80) return trimmed;
-  return `${trimmed.slice(0, 77).trimEnd()}...`;
+  return value.replace(/\s+/g, ' ').trim();
 }
 
 export function buildFinalStoryboardImagePrompt(

@@ -63,6 +63,7 @@ export interface ReelStorySettings {
 
 export interface ReelStorySetupSettings {
   enabled: boolean;
+  publishEnabled: boolean;
   settings: ReelStorySettings;
 }
 
@@ -163,8 +164,8 @@ function normalizeTextLengthRange(value: unknown, fallback: ReelTextLengthWordRa
   const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
   const min = Number(raw.min);
   const max = Number(raw.max);
-  const normalizedMin = Number.isFinite(min) ? Math.max(1, Math.min(60, Math.round(min))) : fallback.min;
-  const normalizedMax = Number.isFinite(max) ? Math.max(normalizedMin, Math.min(80, Math.round(max))) : fallback.max;
+  const normalizedMin = Number.isFinite(min) ? Math.max(1, Math.min(200, Math.round(min))) : fallback.min;
+  const normalizedMax = Number.isFinite(max) ? Math.max(normalizedMin, Math.min(240, Math.round(max))) : fallback.max;
   return {
     min: normalizedMin,
     max: normalizedMax,

@@ -7,13 +7,23 @@ import {
   getReelStorySetupSettings,
   saveReelStorySettings,
   setReelStoryEnabled,
+  setReelStoryPublishEnabled,
 } from '@/app/actions/admin';
 import { runReelCleanup, type ReelCleanupResult } from '@/app/actions/reel-cleanup';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
+  REEL_TEXT_LENGTH_KEYS,
+  normalizeReelStorySettings,
   serializeReelStorySettings,
   type ReelStorySettings,
+  type ReelTextLengthKey,
 } from '@/lib/reel/settings';
+
+const REEL_TEXT_LENGTH_LABELS: Record<ReelTextLengthKey, string> = {
+  short: 'Short',
+  medium: 'Medium',
+  long: 'Long',
+};
 
 function ToggleRow({
   label,
@@ -56,6 +66,8 @@ export default function ReelSettings() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [toggleSaving, setToggleSaving] = useState(false);
+  const [publishEnabled, setPublishEnabled] = useState(false);
+  const [publishToggleSaving, setPublishToggleSaving] = useState(false);
   const [settingsJson, setSettingsJson] = useState(serializeReelStorySettings(DEFAULT_REEL_STORY_SETTINGS));
   const [lastSavedSettings, setLastSavedSettings] = useState<ReelStorySettings>(DEFAULT_REEL_STORY_SETTINGS);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -69,6 +81,7 @@ export default function ReelSettings() {
     getReelStorySetupSettings()
       .then((setup) => {
         setEnabled(setup.enabled);
+        setPublishEnabled(setup.publishEnabled);
         setLastSavedSettings(setup.settings);
         setSettingsJson(serializeReelStorySettings(setup.settings));
         setLoadError(null);
@@ -86,6 +99,10 @@ export default function ReelSettings() {
       return null;
     }
   }, [settingsJson]);
+  const editableSettings = useMemo(
+    () => (parsedSettings ? normalizeReelStorySettings(parsedSettings) : null),
+    [parsedSettings]
+  );
 
   const hasSettingsChanges = settingsJson.trim() !== serializeReelStorySettings(lastSavedSettings).trim();
   const parsedBatchSize = Number.parseInt(batchSizeInput, 10);
@@ -99,6 +116,17 @@ export default function ReelSettings() {
       setEnabled(next);
     } finally {
       setToggleSaving(false);
+    }
+  };
+
+  const handlePublishToggle = async () => {
+    setPublishToggleSaving(true);
+    const next = !publishEnabled;
+    try {
+      await setReelStoryPublishEnabled(next);
+      setPublishEnabled(next);
+    } finally {
+      setPublishToggleSaving(false);
     }
   };
 
@@ -119,6 +147,29 @@ export default function ReelSettings() {
     } finally {
       setSettingsSaving(false);
     }
+  };
+
+  const handleWordRangeChange = (
+    length: ReelTextLengthKey,
+    field: 'min' | 'max',
+    value: string
+  ) => {
+    if (!parsedSettings) return;
+    const nextValue = value.replace(/\D/g, '');
+    const currentRanges = parsedSettings.textLengthWordRanges ?? DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges;
+    const currentRange = currentRanges[length] ?? DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges[length];
+    const nextSettings = {
+      ...parsedSettings,
+      textLengthWordRanges: {
+        ...currentRanges,
+        [length]: {
+          ...currentRange,
+          [field]: nextValue,
+        },
+      },
+    };
+    setSettingsJson(JSON.stringify(nextSettings, null, 2));
+    setSettingsMessage(null);
   };
 
   const handleCleanup = async (mode: 'dry_run' | 'execute') => {
@@ -170,6 +221,14 @@ export default function ReelSettings() {
         onToggle={handleToggle}
       />
 
+      <ToggleRow
+        label="Allow Reel Publishing"
+        description="Shows the Publish action in completed reel editors. Export remains available through video export access."
+        checked={publishEnabled}
+        disabled={publishToggleSaving}
+        onToggle={handlePublishToggle}
+      />
+
       <div className="grid gap-4 md:grid-cols-4">
         <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
           <p className="text-xs uppercase tracking-wider text-neutral-500">Default length</p>
@@ -189,6 +248,84 @@ export default function ReelSettings() {
             {lastSavedSettings.retentionDays.free}/{lastSavedSettings.retentionDays.plus}/{lastSavedSettings.retentionDays.studio} days
           </p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-white/5 p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Reel text length</h2>
+            <p className="mt-2 max-w-2xl text-xs leading-relaxed text-neutral-400">
+              Configure the target words per image panel for each user-facing text length. Each reel beat has four panels, so the writer also receives a total beat budget based on these values.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {hasSettingsChanges && <span className="text-xs text-amber-400">Unsaved</span>}
+            <button
+              type="button"
+              onClick={handleSettingsSave}
+              disabled={settingsSaving || !hasSettingsChanges || !parsedSettings}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {settingsSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+              Save
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          {REEL_TEXT_LENGTH_KEYS.map((length) => {
+            const rawRange = parsedSettings?.textLengthWordRanges?.[length];
+            const range = editableSettings?.textLengthWordRanges[length]
+              ?? DEFAULT_REEL_STORY_SETTINGS.textLengthWordRanges[length];
+            const totalMin = range.min * (editableSettings?.panelCount ?? DEFAULT_REEL_STORY_SETTINGS.panelCount);
+            const totalMax = range.max * (editableSettings?.panelCount ?? DEFAULT_REEL_STORY_SETTINGS.panelCount);
+            const minValue = rawRange?.min ?? range.min;
+            const maxValue = rawRange?.max ?? range.max;
+
+            return (
+              <div key={length} className="rounded-xl border border-white/10 bg-neutral-950/60 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-neutral-100">{REEL_TEXT_LENGTH_LABELS[length]}</p>
+                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-neutral-400">
+                    {totalMin}-{totalMax} / beat
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wider text-neutral-500">Min / panel</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={String(minValue)}
+                      disabled={!editableSettings}
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => handleWordRangeChange(length, 'min', event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-[11px] uppercase tracking-wider text-neutral-500">Max / panel</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={String(maxValue)}
+                      disabled={!editableSettings}
+                      onFocus={(event) => event.currentTarget.select()}
+                      onChange={(event) => handleWordRangeChange(length, 'max', event.target.value)}
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+                    />
+                  </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {!editableSettings && (
+          <p className="mt-3 text-xs text-rose-300">Fix the JSON syntax error before editing text length controls.</p>
+        )}
       </div>
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-6">

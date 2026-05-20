@@ -13,17 +13,31 @@ interface UseAudioPlayerReturn {
   setVolume: (v: number) => void;
 }
 
-export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlayerReturn {
+interface UseAudioPlayerOptions {
+  onEnded?: () => void;
+}
+
+export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseAudioPlayerOptions = {}): UseAudioPlayerReturn {
   const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
   const [volume, setVolumeState] = useState(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevNodeIdRef = useRef<string | undefined>(nodeId);
   const volumeRef = useRef(volume);
+  const onEndedRef = useRef(options.onEnded);
 
   // Keep volumeRef in sync
   useEffect(() => {
     volumeRef.current = volume;
   }, [volume]);
+
+  useEffect(() => {
+    onEndedRef.current = options.onEnded;
+  }, [options.onEnded]);
+
+  const handleEnded = useCallback(() => {
+    setPlaybackState('idle');
+    onEndedRef.current?.();
+  }, []);
 
   // Stop and reset when node changes
   useEffect(() => {
@@ -50,14 +64,14 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string): UseAudioPlay
 
     const audio = new Audio(audioUrl);
     audio.volume = volumeRef.current;
-    audio.addEventListener('ended', () => setPlaybackState('idle'));
+    audio.addEventListener('ended', handleEnded);
     audioRef.current = audio;
 
     return () => {
       audio.pause();
-      audio.removeEventListener('ended', () => setPlaybackState('idle'));
+      audio.removeEventListener('ended', handleEnded);
     };
-  }, [audioUrl]);
+  }, [audioUrl, handleEnded]);
 
   // Sync volume to audio element
   useEffect(() => {

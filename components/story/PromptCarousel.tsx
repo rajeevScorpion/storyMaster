@@ -1,20 +1,28 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import { STORY_PROMPTS } from '@/lib/constants/story-prompts';
 
 interface PromptCarouselProps {
   onSelect: (prompt: string) => void;
 }
 
-function shuffle<T>(array: T[]): T[] {
+function stableShuffle<T>(array: T[]): T[] {
   const arr = [...array];
+  let seed = 0x5f3759df;
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    const j = seed % (i + 1);
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
 }
+
+const shuffledPrompts = stableShuffle(STORY_PROMPTS);
+const rowSplitIndex = Math.ceil(shuffledPrompts.length / 2);
+const PROMPT_ROWS: [string[], string[]] = [
+  shuffledPrompts.slice(0, rowSplitIndex),
+  shuffledPrompts.slice(rowSplitIndex),
+];
 
 const maskStyle = {
   maskImage: 'linear-gradient(to right, transparent, black 8%, black 92%, transparent)',
@@ -22,23 +30,12 @@ const maskStyle = {
 };
 
 export default function PromptCarousel({ onSelect }: PromptCarouselProps) {
-  const [rows, setRows] = useState<[string[], string[]]>([[], []]);
-
-  useEffect(() => {
-    const shuffled = shuffle(STORY_PROMPTS);
-    const mid = Math.ceil(shuffled.length / 2);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- shuffle must run client-only to avoid SSR hydration mismatch from Math.random
-    setRows([shuffled.slice(0, mid), shuffled.slice(mid)]);
-  }, []);
-
-  if (rows[0].length === 0) return null;
-
   return (
     <div className="space-y-3">
       {/* Row 1 — scrolls left */}
       <div className="overflow-hidden" style={maskStyle}>
         <div className="flex w-fit [animation:marquee-left_180s_linear_infinite] hover:[animation-play-state:paused] motion-reduce:[animation:none]">
-          {[...rows[0], ...rows[0]].map((prompt, i) => (
+          {[...PROMPT_ROWS[0], ...PROMPT_ROWS[0]].map((prompt, i) => (
             <button
               key={i}
               onClick={() => onSelect(prompt)}
@@ -53,7 +50,7 @@ export default function PromptCarousel({ onSelect }: PromptCarouselProps) {
       {/* Row 2 — scrolls right */}
       <div className="overflow-hidden" style={maskStyle}>
         <div className="flex w-fit [animation:marquee-right_200s_linear_infinite] hover:[animation-play-state:paused] motion-reduce:[animation:none]">
-          {[...rows[1], ...rows[1]].map((prompt, i) => (
+          {[...PROMPT_ROWS[1], ...PROMPT_ROWS[1]].map((prompt, i) => (
             <button
               key={i}
               onClick={() => onSelect(prompt)}

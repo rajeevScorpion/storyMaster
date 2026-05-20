@@ -889,7 +889,10 @@ export async function loadStory(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
             ...(jsonbNode.data.storyboardPromptText ? { storyboardPromptText: jsonbNode.data.storyboardPromptText } : {}),
-            ...(jsonbNode.data.reelCaptions ? { reelCaptions: jsonbNode.data.reelCaptions } : {}),
+            ...((!storyMap.nodes[nodeId].data.reelCaptions || storyMap.nodes[nodeId].data.reelCaptions.length === 0)
+              && jsonbNode.data.reelCaptions
+              ? { reelCaptions: jsonbNode.data.reelCaptions }
+              : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
@@ -1074,6 +1077,7 @@ export async function updateBeatMediaState(
     audioError?: string | null;
     narrationVoiceId?: string;
     characters?: Character[];
+    reelCaptions?: StoryBeat['reelCaptions'] | null;
   }
 ): Promise<void> {
   const supabase = await createClient();
@@ -1112,6 +1116,11 @@ export async function updateBeatMediaState(
   if (patch.narrationVoiceId) updateData.narration_voice_id = patch.narrationVoiceId;
   if (patch.characters) {
     updateData.characters = patch.characters as unknown as Record<string, unknown>[];
+  }
+  if ('reelCaptions' in patch) {
+    updateData.reel_captions = patch.reelCaptions
+      ? patch.reelCaptions as unknown as Record<string, unknown>[]
+      : null;
   }
 
   if (Object.keys(updateData).length === 0) return;
@@ -1175,6 +1184,7 @@ export async function updateBeatMediaState(
     ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
     ...(patch.narrationVoiceId ? { narrationVoiceId: patch.narrationVoiceId } : {}),
     ...(patch.characters ? { characters: patch.characters } : {}),
+    ...('reelCaptions' in patch ? { reelCaptions: patch.reelCaptions || undefined } : {}),
   });
 
   const patchedMap: StoryMap = {

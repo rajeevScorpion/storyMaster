@@ -8,7 +8,13 @@ import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { DEFAULT_VIDEO_EXPORT_PRESET, normalizeVideoExportPreset, type VideoExportPreset } from '@/lib/types/pricing';
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
-import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
+import {
+  DEFAULT_REEL_TEXT_OVERLAY_STYLE,
+  clampNumber,
+  getReelCaptionTopPercent,
+  normalizeReelTextOverlayStyle,
+  reelColorWithOpacity,
+} from '@/lib/reel/styles';
 
 let ffmpegInstance: FFmpeg | null = null;
 
@@ -109,6 +115,15 @@ type BeatSegment = {
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
 };
 
+type ReelCaption = NonNullable<StoryBeat['reelCaptions']>[number];
+
+type CaptionFrameSlice = {
+  duration: number;
+  activeWordIndex?: number;
+  isPanelFirst: boolean;
+  isPanelLast: boolean;
+};
+
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -136,6 +151,73 @@ function getStoryboardPanelDurationsSeconds(beat: StoryBeat, audioDuration: numb
 
   const equalDuration = audioDuration > 0 ? audioDuration / 4 : fallbackSeconds;
   return [equalDuration, equalDuration, equalDuration, equalDuration];
+}
+
+function buildCaptionFrameSlices(
+  caption: ReelCaption | undefined,
+  panelDurationSeconds: number
+): CaptionFrameSlice[] {
+  const panelDurationMs = Math.max(1, panelDurationSeconds * 1000);
+  const wordTimings = caption?.wordTimings;
+  if (!caption || !wordTimings?.length) {
+    return [{
+      duration: panelDurationSeconds,
+      isPanelFirst: true,
+      isPanelLast: true,
+    }];
+  }
+
+  const firstWordStart = wordTimings[0]?.startMs;
+  const lastWordEnd = wordTimings[wordTimings.length - 1]?.endMs;
+  const captionStartMs = typeof caption.startMs === 'number' ? caption.startMs : firstWordStart;
+  const captionEndMs = typeof caption.endMs === 'number' ? caption.endMs : lastWordEnd;
+  if (
+    typeof captionStartMs !== 'number'
+    || typeof captionEndMs !== 'number'
+    || captionEndMs <= captionStartMs
+  ) {
+    return [{
+      duration: panelDurationSeconds,
+      isPanelFirst: true,
+      isPanelLast: true,
+    }];
+  }
+
+  const scale = panelDurationMs / (captionEndMs - captionStartMs);
+  const minSliceMs = 1000 / FPS;
+  const slices: Array<{ startMs: number; endMs: number; activeWordIndex?: number }> = [];
+  let cursorMs = 0;
+
+  wordTimings.forEach((timing, activeWordIndex) => {
+    const startMs = clampNumber((timing.startMs - captionStartMs) * scale, 0, panelDurationMs);
+    const endMs = clampNumber((timing.endMs - captionStartMs) * scale, 0, panelDurationMs);
+    if (startMs > cursorMs + minSliceMs) {
+      slices.push({ startMs: cursorMs, endMs: startMs });
+    }
+    if (endMs > startMs + minSliceMs) {
+      slices.push({ startMs, endMs, activeWordIndex });
+      cursorMs = endMs;
+    }
+  });
+
+  if (cursorMs < panelDurationMs - minSliceMs) {
+    slices.push({ startMs: cursorMs, endMs: panelDurationMs });
+  }
+
+  if (slices.length === 0) {
+    return [{
+      duration: panelDurationSeconds,
+      isPanelFirst: true,
+      isPanelLast: true,
+    }];
+  }
+
+  return slices.map((slice, index) => ({
+    duration: Math.max(minSliceMs / 1000, (slice.endMs - slice.startMs) / 1000),
+    activeWordIndex: slice.activeWordIndex,
+    isPanelFirst: index === 0,
+    isPanelLast: index === slices.length - 1,
+  }));
 }
 
 function getExportCanvasSize(
@@ -317,33 +399,42 @@ function drawStoryboardPanel(
   );
 }
 
-function wrapCanvasText(
+type WrappedCanvasWord = {
+  text: string;
+  wordIndex: number;
+};
+
+function wrapCanvasWords(
   context: CanvasRenderingContext2D,
   text: string,
   maxWidth: number
-): string[] {
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let current = '';
+): WrappedCanvasWord[][] {
+  const words = text.trim().split(/\s+/).filter(Boolean).map((word, wordIndex) => ({ text: word, wordIndex }));
+  const lines: WrappedCanvasWord[][] = [];
+  let current: WrappedCanvasWord[] = [];
+
   for (const word of words) {
-    const next = current ? `${current} ${word}` : word;
-    if (context.measureText(next).width <= maxWidth || !current) {
+    const next = [...current, word];
+    const nextText = next.map((item) => item.text).join(' ');
+    if (context.measureText(nextText).width <= maxWidth || current.length === 0) {
       current = next;
     } else {
       lines.push(current);
-      current = word;
+      current = [word];
     }
   }
-  if (current) lines.push(current);
-  return lines.slice(0, 3);
+  if (current.length > 0) lines.push(current);
+  return lines;
 }
 
 function drawReelCaptionOverlay(
   context: CanvasRenderingContext2D,
   canvasSize: ExportCanvasSize,
-  captionText: string | undefined,
-  styleInput: StoryBeat['reelTextOverlayStyle']
+  caption: ReelCaption | undefined,
+  styleInput: StoryBeat['reelTextOverlayStyle'],
+  activeWordIndex?: number
 ) {
+  const captionText = caption?.text;
   if (!captionText?.trim()) return;
 
   const style = {
@@ -360,8 +451,9 @@ function drawReelCaptionOverlay(
   context.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
   context.textAlign = style.align;
   context.textBaseline = 'middle';
-  const lines = wrapCanvasText(context, captionText, maxTextWidth);
-  const textWidth = Math.min(maxTextWidth, Math.max(...lines.map((line) => context.measureText(line).width), 0));
+  const lines = wrapCanvasWords(context, captionText, maxTextWidth);
+  const lineTexts = lines.map((line) => line.map((word) => word.text).join(' '));
+  const textWidth = Math.min(maxTextWidth, Math.max(...lineTexts.map((line) => context.measureText(line).width), 0));
   const boxWidth = textWidth + horizontalPadding * 2;
   const boxHeight = lines.length * lineHeight + verticalPadding * 2;
   const x = style.align === 'left'
@@ -369,27 +461,68 @@ function drawReelCaptionOverlay(
     : style.align === 'right'
       ? canvasSize.width - boxWidth - horizontalPadding
       : (canvasSize.width - boxWidth) / 2;
-  const y = style.position === 'upper'
-    ? canvasSize.height * 0.18
-    : style.position === 'middle'
-      ? (canvasSize.height - boxHeight) / 2
-      : canvasSize.height * 0.68;
+  const safePadding = Math.max(18, Math.round(canvasSize.height * 0.025));
+  const anchorY = canvasSize.height * (getReelCaptionTopPercent(style) / 100);
+  const y = Math.max(
+    safePadding,
+    Math.min(canvasSize.height - boxHeight - safePadding, anchorY - boxHeight / 2)
+  );
   const textX = style.align === 'left'
     ? x + horizontalPadding
     : style.align === 'right'
       ? x + boxWidth - horizontalPadding
       : x + boxWidth / 2;
 
-  context.globalAlpha = style.backgroundOpacity;
-  context.fillStyle = style.backgroundColor;
+  context.fillStyle = reelColorWithOpacity(style.backgroundColor, style.backgroundOpacity);
   drawRoundedRect(context, x, y, boxWidth, boxHeight, Math.round(fontSize * 0.28));
   context.fill();
-  context.globalAlpha = 1;
+  if (typeof activeWordIndex === 'number') {
+    context.save();
+    context.shadowColor = 'transparent';
+    context.shadowBlur = 0;
+    context.shadowOffsetY = 0;
+    context.fillStyle = reelColorWithOpacity(style.wordHighlightColor, style.wordHighlightOpacity);
+
+    lines.forEach((line, lineIndex) => {
+      const activeIndex = line.findIndex((word) => word.wordIndex === activeWordIndex);
+      if (activeIndex < 0) return;
+
+      const lineText = line.map((word) => word.text).join(' ');
+      const lineWidth = context.measureText(lineText).width;
+      const lineStartX = style.align === 'left'
+        ? textX
+        : style.align === 'right'
+          ? textX - lineWidth
+          : textX - lineWidth / 2;
+      const beforeText = line.slice(0, activeIndex).map((word) => word.text).join(' ');
+      const beforeWidth = beforeText
+        ? context.measureText(`${beforeText} `).width
+        : 0;
+      const activeWord = line[activeIndex];
+      const activeWidth = context.measureText(activeWord.text).width;
+      const textY = y + verticalPadding + lineHeight * lineIndex + lineHeight / 2;
+      const highlightPaddingX = Math.round(fontSize * 0.16);
+      const highlightHeight = Math.round(fontSize * 1.18);
+      const highlightX = lineStartX + beforeWidth - highlightPaddingX;
+      const highlightY = textY - highlightHeight / 2;
+      drawRoundedRect(
+        context,
+        highlightX,
+        highlightY,
+        activeWidth + highlightPaddingX * 2,
+        highlightHeight,
+        Math.round(fontSize * 0.18)
+      );
+      context.fill();
+    });
+    context.restore();
+  }
+
   context.fillStyle = style.color;
   context.shadowColor = style.shadowColor;
   context.shadowBlur = style.shadowBlur;
   context.shadowOffsetY = 2;
-  lines.forEach((line, index) => {
+  lineTexts.forEach((line, index) => {
     const textY = y + verticalPadding + lineHeight * index + lineHeight / 2;
     context.fillText(line, textX, textY);
   });
@@ -438,8 +571,9 @@ async function renderStoryboardPanelBytes(
   canvasSize: ExportCanvasSize,
   videoExportPreset: VideoExportPreset,
   showWatermark: boolean,
-  captionText?: string,
-  textOverlayStyle?: StoryBeat['reelTextOverlayStyle']
+  caption?: ReelCaption,
+  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'],
+  activeWordIndex?: number
 ): Promise<Uint8Array> {
   const canvas = createExportCanvas(canvasSize);
   const context = canvas.getContext('2d');
@@ -448,7 +582,7 @@ async function renderStoryboardPanelBytes(
   }
 
   drawStoryboardPanel(context, image, panelIndex, canvasSize);
-  drawReelCaptionOverlay(context, canvasSize, captionText, textOverlayStyle);
+  drawReelCaptionOverlay(context, canvasSize, caption, textOverlayStyle, activeWordIndex);
   if (showWatermark) {
     drawWatermark(context, canvasSize, videoExportPreset);
   }
@@ -577,7 +711,7 @@ export function useVideoExport() {
       setState((current) => ({ ...current, phase: 'encoding', progress: 10 }));
 
       const segmentFiles: string[] = [];
-      const transientFilePatterns = [/^seg_\d+\.mp4$/, /^img_\d+(_\d+)?\.jpg$/, /^aud_\d+\.wav$/];
+      const transientFilePatterns = [/^seg_\d+\.mp4$/, /^img_\d+(?:_\d+){0,2}\.jpg$/, /^aud_\d+\.wav$/];
       let currentSegmentIndex = 0;
 
       const handleEncodingProgress = ({ progress }: { progress: number }) => {
@@ -614,11 +748,17 @@ export function useVideoExport() {
             await ffmpeg.writeFile(audioFile, await fetchFile(segment.audioUrl));
           }
 
-          const withFade = (inputLabel: string, outputLabel: string, duration: number) => {
+          const withFade = (
+            inputLabel: string,
+            outputLabel: string,
+            duration: number,
+            fadeIn = true,
+            fadeOut = true
+          ) => {
             const fade = Math.max(0, Math.min(FADE_DURATION, duration / 2 - 0.01));
-            const fadeFilter = fade > 0
-              ? `,fade=t=in:d=${fade.toFixed(3)},fade=t=out:st=${(duration - fade).toFixed(3)}:d=${fade.toFixed(3)}`
-              : '';
+            const fadeInFilter = fade > 0 && fadeIn ? `,fade=t=in:d=${fade.toFixed(3)}` : '';
+            const fadeOutFilter = fade > 0 && fadeOut ? `,fade=t=out:st=${(duration - fade).toFixed(3)}:d=${fade.toFixed(3)}` : '';
+            const fadeFilter = `${fadeInFilter}${fadeOutFilter}`;
             return `[${inputLabel}]format=yuv420p,setsar=1${fadeFilter}[${outputLabel}]`;
           };
 
@@ -627,52 +767,71 @@ export function useVideoExport() {
 
           if (segment.isStoryboard) {
             const storyboardImage = await loadImage(segment.imageUrl);
-            const panelFiles: string[] = [];
+            const frameFiles: string[] = [];
+            const frameDurations: number[] = [];
+            const frameFadeFlags: Array<{ fadeIn: boolean; fadeOut: boolean }> = [];
 
             for (let panelIndex = 0; panelIndex < 4; panelIndex += 1) {
-              const panelFile = `img_${index}_${panelIndex}.jpg`;
               const panelDuration = segment.panelDurations[panelIndex] ?? segment.panelDuration;
-              panelFiles.push(panelFile);
-              const captionText = segment.textOverlayEnabled
-                ? segment.reelCaptions?.find((caption) => caption.panelIndex === panelIndex)?.text
+              const caption = segment.textOverlayEnabled
+                ? segment.reelCaptions?.find((item) => item.panelIndex === panelIndex)
                 : undefined;
-              const panelBytes = await renderStoryboardPanelBytes(
-                storyboardImage,
-                panelIndex,
-                canvasSize,
-                videoExportPreset,
-                showWatermark,
-                captionText,
-                segment.textOverlayStyle
-              );
-              await ffmpeg.writeFile(panelFile, panelBytes);
+              const frameSlices = buildCaptionFrameSlices(caption, panelDuration);
 
-              args.push(
-                '-framerate', String(FPS),
-                '-loop', '1',
-                '-t', panelDuration.toFixed(3),
-                '-i', panelFile
-              );
+              for (let sliceIndex = 0; sliceIndex < frameSlices.length; sliceIndex += 1) {
+                const frame = frameSlices[sliceIndex];
+                const frameFile = `img_${index}_${panelIndex}_${sliceIndex}.jpg`;
+                frameFiles.push(frameFile);
+                frameDurations.push(frame.duration);
+                frameFadeFlags.push({
+                  fadeIn: frame.isPanelFirst,
+                  fadeOut: frame.isPanelLast,
+                });
+                const frameBytes = await renderStoryboardPanelBytes(
+                  storyboardImage,
+                  panelIndex,
+                  canvasSize,
+                  videoExportPreset,
+                  showWatermark,
+                  caption,
+                  segment.textOverlayStyle,
+                  frame.activeWordIndex
+                );
+                await ffmpeg.writeFile(frameFile, frameBytes);
+
+                args.push(
+                  '-framerate', String(FPS),
+                  '-loop', '1',
+                  '-t', frame.duration.toFixed(3),
+                  '-i', frameFile
+                );
+              }
             }
+
+            const storyboardDurationSeconds = frameDurations.reduce((sum, duration) => sum + duration, 0) || durationSeconds;
 
             if (audioFile) {
               args.push('-i', audioFile);
             } else {
               args.push(
                 '-f', 'lavfi',
-                '-t', durationSeconds.toFixed(3),
+                '-t', storyboardDurationSeconds.toFixed(3),
                 '-i', `anullsrc=channel_layout=stereo:sample_rate=${AUDIO_SAMPLE_RATE}`
               );
             }
 
-            const audioInputIndex = panelFiles.length;
+            const audioInputIndex = frameFiles.length;
+            const videoOutputLabels = frameFiles.map((_, frameIndex) => `v${frameIndex}`);
             const filterComplex = [
-              withFade('0:v', 'v0', segment.panelDurations[0] ?? segment.panelDuration),
-              withFade('1:v', 'v1', segment.panelDurations[1] ?? segment.panelDuration),
-              withFade('2:v', 'v2', segment.panelDurations[2] ?? segment.panelDuration),
-              withFade('3:v', 'v3', segment.panelDurations[3] ?? segment.panelDuration),
-              '[v0][v1][v2][v3]concat=n=4:v=1:a=0[vout]',
-              `[${audioInputIndex}:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${durationSeconds.toFixed(3)},atrim=duration=${durationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`,
+              ...videoOutputLabels.map((label, frameIndex) => withFade(
+                `${frameIndex}:v`,
+                label,
+                frameDurations[frameIndex] ?? segment.panelDuration,
+                frameFadeFlags[frameIndex]?.fadeIn,
+                frameFadeFlags[frameIndex]?.fadeOut
+              )),
+              `${videoOutputLabels.map((label) => `[${label}]`).join('')}concat=n=${videoOutputLabels.length}:v=1:a=0[vout]`,
+              `[${audioInputIndex}:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${storyboardDurationSeconds.toFixed(3)},atrim=duration=${storyboardDurationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`,
             ].join(';');
 
             args.push(
@@ -696,8 +855,8 @@ export function useVideoExport() {
               throw new Error(`Segment ${segment.index + 1} encoding failed (ffmpeg exit code ${exitCode}).`);
             }
 
-            for (const panelFile of panelFiles) {
-              await ffmpeg.deleteFile(panelFile);
+            for (const frameFile of frameFiles) {
+              await ffmpeg.deleteFile(frameFile);
             }
           } else {
             const imageFile = `img_${index}.jpg`;

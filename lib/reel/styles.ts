@@ -13,7 +13,10 @@ export interface ReelTextOverlayStyle {
   backgroundColor?: string;
   backgroundOpacity?: number;
   position?: 'lower' | 'middle' | 'upper';
+  verticalOffset?: number;
   align?: 'left' | 'center' | 'right';
+  wordHighlightColor?: string;
+  wordHighlightOpacity?: number;
 }
 
 export interface ReelVisualStyleRecord {
@@ -58,11 +61,90 @@ export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
   color: '#ffffff',
   shadowColor: 'rgba(0,0,0,0.72)',
   shadowBlur: 14,
-  backgroundColor: 'rgba(0,0,0,0.32)',
+  backgroundColor: '#000000',
   backgroundOpacity: 0.32,
   position: 'lower',
+  verticalOffset: 0,
   align: 'center',
+  wordHighlightColor: '#C65A2E',
+  wordHighlightOpacity: 0.72,
 };
+
+export const REEL_CAPTION_VERTICAL_OFFSET_MIN = -30;
+export const REEL_CAPTION_VERTICAL_OFFSET_MAX = 30;
+export const REEL_CAPTION_TOP_SAFE_MIN = 12;
+export const REEL_CAPTION_TOP_SAFE_MAX = 88;
+
+export function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampUnit(value: number): number {
+  return clampNumber(value, 0, 1);
+}
+
+function roundToTwo(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function parseRgbChannels(color: string): [number, number, number] | null {
+  const trimmed = color.trim();
+  const hex = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const value = hex[1];
+    const full = value.length === 3
+      ? value.split('').map((ch) => `${ch}${ch}`).join('')
+      : value;
+    return [
+      Number.parseInt(full.slice(0, 2), 16),
+      Number.parseInt(full.slice(2, 4), 16),
+      Number.parseInt(full.slice(4, 6), 16),
+    ];
+  }
+
+  const rgb = trimmed.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i);
+  if (rgb) {
+    return [
+      clampNumber(Math.round(Number(rgb[1])), 0, 255),
+      clampNumber(Math.round(Number(rgb[2])), 0, 255),
+      clampNumber(Math.round(Number(rgb[3])), 0, 255),
+    ];
+  }
+
+  return null;
+}
+
+export function reelColorWithOpacity(color: string | undefined, opacity: number | undefined): string {
+  const alpha = clampUnit(Number.isFinite(Number(opacity)) ? Number(opacity) : 1);
+  if (alpha <= 0) return 'transparent';
+  const source = color?.trim() || '#000000';
+  const rgb = parseRgbChannels(source);
+  if (rgb) {
+    return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${roundToTwo(alpha)})`;
+  }
+  return alpha >= 1 ? source : `color-mix(in srgb, ${source} ${Math.round(alpha * 100)}%, transparent)`;
+}
+
+export function reelColorInputValue(color: string | undefined, fallback = '#000000'): string {
+  const rgb = color ? parseRgbChannels(color) : null;
+  if (!rgb) return fallback;
+  return `#${rgb.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export function getReelCaptionAnchorPercent(position: ReelTextOverlayStyle['position']): number {
+  if (position === 'upper') return 20;
+  if (position === 'middle') return 50;
+  return 80;
+}
+
+export function getReelCaptionTopPercent(style: ReelTextOverlayStyle): number {
+  const normalized = normalizeReelTextOverlayStyle(style);
+  return clampNumber(
+    getReelCaptionAnchorPercent(normalized.position) + (normalized.verticalOffset ?? 0),
+    REEL_CAPTION_TOP_SAFE_MIN,
+    REEL_CAPTION_TOP_SAFE_MAX
+  );
+}
 
 const PLAN_RANK: Record<PlanKey, number> = {
   free: 0,
@@ -91,6 +173,8 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
   const fontSize = Number(raw.fontSize);
   const shadowBlur = Number(raw.shadowBlur);
   const backgroundOpacity = Number(raw.backgroundOpacity);
+  const verticalOffset = Number(raw.verticalOffset);
+  const wordHighlightOpacity = Number(raw.wordHighlightOpacity);
 
   return {
     fontFamily: typeof raw.fontFamily === 'string' && raw.fontFamily.trim()
@@ -118,7 +202,16 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
       ? Math.max(0, Math.min(1, backgroundOpacity))
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundOpacity,
     position,
+    verticalOffset: Number.isFinite(verticalOffset)
+      ? Math.round(clampNumber(verticalOffset, REEL_CAPTION_VERTICAL_OFFSET_MIN, REEL_CAPTION_VERTICAL_OFFSET_MAX))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.verticalOffset,
     align,
+    wordHighlightColor: typeof raw.wordHighlightColor === 'string' && raw.wordHighlightColor.trim()
+      ? raw.wordHighlightColor.trim()
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightColor,
+    wordHighlightOpacity: Number.isFinite(wordHighlightOpacity)
+      ? Math.max(0, Math.min(1, wordHighlightOpacity))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightOpacity,
   };
 }
 

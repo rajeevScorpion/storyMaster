@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
 import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
 import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
@@ -18,6 +18,8 @@ import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceF
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   getReelLegacyLengthForBeatCount,
+  getReelTextLengthRange,
+  normalizeReelStorySettings,
   type ReelStorySetupSettings,
   type ReelTextLengthKey,
 } from '@/lib/reel/settings';
@@ -49,8 +51,51 @@ function countWords(value: string): number {
 
 type CreationMode = 'prompt' | 'seeded' | 'reel';
 
+const REEL_SETUP_CACHE_KEY = 'kissago_reel_story_setup_cache';
+const REEL_SETUP_CACHE_TTL_MS = 5 * 60 * 1000;
+const FALLBACK_REEL_SETUP: ReelStorySetupSettings = {
+  enabled: false,
+  publishEnabled: false,
+  settings: DEFAULT_REEL_STORY_SETTINGS,
+};
+
+function readCachedReelSetup(): ReelStorySetupSettings | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(REEL_SETUP_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      cachedAt?: number;
+      setup?: Partial<ReelStorySetupSettings>;
+    };
+    if (!parsed.cachedAt || Date.now() - parsed.cachedAt > REEL_SETUP_CACHE_TTL_MS || !parsed.setup) {
+      return null;
+    }
+    return {
+      enabled: Boolean(parsed.setup.enabled),
+      publishEnabled: Boolean(parsed.setup.publishEnabled),
+      settings: normalizeReelStorySettings(parsed.setup.settings ?? DEFAULT_REEL_STORY_SETTINGS),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedReelSetup(setup: ReelStorySetupSettings): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(REEL_SETUP_CACHE_KEY, JSON.stringify({
+      cachedAt: Date.now(),
+      setup,
+    }));
+  } catch {
+    // Best-effort paint cache only.
+  }
+}
+
 export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
   const isLoading = useStoryStore((state) => state.isLoading);
@@ -80,19 +125,16 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     storyPromptOnlyModeEnabled: false,
     verticalStoriesSettingEnabled: false,
   });
-  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>({
-    enabled: false,
-    settings: DEFAULT_REEL_STORY_SETTINGS,
-  });
-  const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(DEFAULT_REEL_STORY_SETTINGS.defaultBeatCount);
-  const [reelTextLength, setReelTextLength] = useState<ReelTextLengthKey>(DEFAULT_REEL_STORY_SETTINGS.defaultTextLength);
-  const [reelTextOverlayEnabled, setReelTextOverlayEnabled] = useState(DEFAULT_REEL_STORY_SETTINGS.textOverlayDefault);
-  const [reelMoodKey, setReelMoodKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultMood);
-  const [reelVisualStyleKey, setReelVisualStyleKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle);
+  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(() => readCachedReelSetup() ?? FALLBACK_REEL_SETUP);
+  const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(reelSetup.settings.defaultBeatCount);
+  const [reelTextLength, setReelTextLength] = useState<ReelTextLengthKey>(reelSetup.settings.defaultTextLength);
+  const [reelTextOverlayEnabled, setReelTextOverlayEnabled] = useState(reelSetup.settings.textOverlayDefault);
+  const [reelMoodKey, setReelMoodKey] = useState(reelSetup.settings.defaultMood);
+  const [reelVisualStyleKey, setReelVisualStyleKey] = useState(reelSetup.settings.defaultVisualStyle);
   const [reelVisualStyleId, setReelVisualStyleId] = useState<string | null>(null);
   const [reelVisualStyleCards, setReelVisualStyleCards] = useState<ReelVisualStyleCard[]>([]);
   const [publishedMoods, setPublishedMoods] = useState<ReelMoodRecord[]>([]);
-  const [reelNarrationStyleKey, setReelNarrationStyleKey] = useState(DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle);
+  const [reelNarrationStyleKey, setReelNarrationStyleKey] = useState(reelSetup.settings.defaultNarrationStyle);
   const [reelInputMode, setReelInputMode] = useState<'prompt' | 'text'>('prompt');
   const [reelUserText, setReelUserText] = useState('');
   const [reelDistributedTexts, setReelDistributedTexts] = useState<string[][] | null>(null);
@@ -136,6 +178,12 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     ?? null;
 
   useEffect(() => {
+    if (searchParams.get('mode') === 'reel') {
+      setCreationMode('reel');
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     getStoryboardSettings()
       .then(({
         freePlusCharacterSheetsEnabled,
@@ -170,6 +218,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   useEffect(() => {
     getReelStorySetupSettings()
       .then((setup) => {
+        writeCachedReelSetup(setup);
         setReelSetup(setup);
         setReelBeatCount(setup.settings.defaultBeatCount);
         setReelTextLength(setup.settings.defaultTextLength);
@@ -179,7 +228,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         setReelNarrationStyleKey(setup.settings.defaultNarrationStyle);
       })
       .catch(() => {
-        setReelSetup({ enabled: false, settings: DEFAULT_REEL_STORY_SETTINGS });
+        setReelSetup((current) => current ?? FALLBACK_REEL_SETUP);
       });
   }, []);
 
@@ -554,7 +603,11 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     setReelDistributedTexts(null);
     setReelDistributedImagePrompts(null);
     try {
-      const result = await distributeReelTextAction({ text: reelUserText.trim(), beatCount: reelBeatCount });
+      const result = await distributeReelTextAction({
+        text: reelUserText.trim(),
+        beatCount: reelBeatCount,
+        wordsPerPanel: getReelTextLengthRange(reelSetup.settings, reelTextLength),
+      });
       setReelDistributedTexts(result.panelTexts);
       setReelDistributedImagePrompts(result.imagePrompts);
     } catch (err: unknown) {

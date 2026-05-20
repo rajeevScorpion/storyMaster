@@ -5,27 +5,43 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
+import { deleteStory } from '@/app/actions/persistence';
 import PublishDialog from './PublishDialog';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
-import ReelCaptionOverlay from './ReelCaptionOverlay';
+import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
-import { getStoryboardSettings } from '@/app/actions/admin';
+import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
+import { useVideoExport } from '@/lib/hooks/useVideoExport';
+import {
+  authorizeCurrentUserBillableAction,
+  finalizeCurrentUserBillableAction,
+  releaseCurrentUserBillableAction,
+} from '@/app/actions/pricing-enforcement';
 import StoryboardVignette from './StoryboardVignette';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import type { StoryBeat, StoryNode, StorySession } from '@/lib/types/story';
-import { normalizeReelTextOverlayStyle, type ReelTextOverlayStyle } from '@/lib/reel/styles';
+import { resolveVideoExportWatermarkVisibility, type PricingRuntimeContext } from '@/lib/types/pricing';
+import {
+  DEFAULT_REEL_TEXT_OVERLAY_STYLE,
+  REEL_CAPTION_VERTICAL_OFFSET_MAX,
+  REEL_CAPTION_VERTICAL_OFFSET_MIN,
+  normalizeReelTextOverlayStyle,
+  reelColorInputValue,
+  type ReelTextOverlayStyle,
+} from '@/lib/reel/styles';
 import {
   blobToDataUrl,
   compressImageFile,
@@ -38,6 +54,7 @@ import {
   type ImageCompressionMetadata,
   type ImageUploadOptimizationSettings,
 } from '@/lib/media/imageUploadOptimization';
+import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 
 function StoryboardCycler({
   gridUrl,
@@ -71,6 +88,7 @@ function StoryboardCycler({
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
 }) {
   const [activePanel, setActivePanel] = useState(0);
+  const [currentElapsedMs, setCurrentElapsedMs] = useState<number | null>(null);
   const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
   const hasAudio = !!audioUrl;
   const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
@@ -164,6 +182,7 @@ function StoryboardCycler({
     const id = window.setInterval(() => {
       const startedAt = playbackStartedAtRef.current ?? Date.now();
       const elapsedMs = elapsedBeforePauseRef.current + (Date.now() - startedAt);
+      setCurrentElapsedMs(elapsedMs);
       const caption = timedCaptions!.find((item) => elapsedMs >= item.startMs! && elapsedMs < item.endMs!)
         ?? timedCaptions!.find((item) => elapsedMs < item.endMs!)
         ?? timedCaptions![timedCaptions!.length - 1];
@@ -173,9 +192,11 @@ function StoryboardCycler({
     return () => window.clearInterval(id);
   }, [hasTimedCaptions, hasAudio, cycleOverride, playbackState, timedCaptions]);
 
-  const activeCaption = textOverlayEnabled
-    ? captions?.find((caption) => caption.panelIndex === activePanel)?.text
+  const activeCaptionObj = textOverlayEnabled
+    ? captions?.find((caption) => caption.panelIndex === activePanel)
     : undefined;
+  const activeCaption = activeCaptionObj?.text;
+  const activeCaptionWordTimings = activeCaptionObj?.wordTimings;
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -207,7 +228,17 @@ function StoryboardCycler({
         </AnimatePresence>
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      <ReelCaptionOverlay text={activeCaption} style={textOverlayStyle} />
+      {activeCaption && (
+        <ReelCaptionOverlay style={textOverlayStyle}>
+          <ReelTimedCaptionText
+            text={activeCaption}
+            wordTimings={activeCaptionWordTimings}
+            elapsedMs={currentElapsedMs}
+            isPlaying={playbackState === 'playing'}
+            style={textOverlayStyle}
+          />
+        </ReelCaptionOverlay>
+      )}
       {showIndicators && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
           {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
@@ -280,13 +311,26 @@ function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): st
     backgroundColor: normalized.backgroundColor,
     backgroundOpacity: normalized.backgroundOpacity,
     position: normalized.position,
+    verticalOffset: normalized.verticalOffset,
     align: normalized.align,
+    wordHighlightColor: normalized.wordHighlightColor,
+    wordHighlightOpacity: normalized.wordHighlightOpacity,
   });
 }
 
-function reelOverlayBackgroundColor(opacity: number): string {
-  const bounded = Math.max(0, Math.min(0.85, opacity));
-  return `rgba(0,0,0,${bounded.toFixed(2)})`;
+function clampReelNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeOpacityInput(value: number): number {
+  return Math.round(clampReelNumber(value, 0, 1) * 100) / 100;
+}
+
+function reelOverlayColorInputValue(
+  color: string | undefined,
+  fallback: string
+): string {
+  return reelColorInputValue(color, fallback);
 }
 
 interface ReelToolbarProps {
@@ -370,6 +414,289 @@ interface ReelCaptionStylePanelProps {
   onSave: () => void;
 }
 
+interface ReelStyleNumberInputProps {
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  label: string;
+  onCommit: (value: number) => void;
+}
+
+function ReelStyleNumberInput({
+  value,
+  min,
+  max,
+  step = 1,
+  label,
+  onCommit,
+}: ReelStyleNumberInputProps) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = useCallback(() => {
+    const parsed = Number(draft);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const rounded = step < 1
+      ? Math.round(parsed / step) * step
+      : Math.round(parsed);
+    const next = clampReelNumber(rounded, min, max);
+    onCommit(step < 1 ? normalizeOpacityInput(next) : next);
+    setDraft(String(step < 1 ? normalizeOpacityInput(next) : next));
+  }, [draft, max, min, onCommit, step, value]);
+
+  return (
+    <input
+      type="text"
+      inputMode={step < 1 ? 'decimal' : 'numeric'}
+      aria-label={label}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.currentTarget.blur();
+        }
+      }}
+      className="h-7 w-12 rounded-lg border border-white/10 bg-black/20 px-2 text-right font-sans text-[11px] tabular-nums text-neutral-200 outline-none transition-colors focus:border-emerald-400/50"
+    />
+  );
+}
+
+interface ReelStyleOpacityControlProps {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}
+
+function ReelStyleOpacityControl({ label, value, onChange }: ReelStyleOpacityControlProps) {
+  const percent = Math.round((value ?? 0) * 100);
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={value}
+        aria-label={label}
+        onChange={(event) => onChange(normalizeOpacityInput(Number(event.target.value)))}
+        className="min-w-0 flex-1 accent-emerald-400"
+      />
+      <ReelStyleNumberInput
+        value={percent}
+        min={0}
+        max={100}
+        label={`${label} percent`}
+        onCommit={(nextPercent) => onChange(normalizeOpacityInput(nextPercent / 100))}
+      />
+    </div>
+  );
+}
+
+interface ReelStyleColorControlProps {
+  label: string;
+  color: string | undefined;
+  fallback: string;
+  opacity: number;
+  onColorChange: (color: string) => void;
+  onOpacityChange: (opacity: number) => void;
+}
+
+function ReelStyleColorControl({
+  label,
+  color,
+  fallback,
+  opacity,
+  onColorChange,
+  onOpacityChange,
+}: ReelStyleColorControlProps) {
+  const colorInputValue = reelOverlayColorInputValue(color, fallback);
+  return (
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-neutral-900 px-3 py-2">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+          {label}
+        </span>
+        <input
+          type="color"
+          value={colorInputValue}
+          aria-label={`${label} color`}
+          onChange={(event) => onColorChange(event.target.value)}
+          className="h-7 w-8 cursor-pointer rounded border border-white/10 bg-transparent p-0"
+        />
+        <input
+          type="text"
+          value={color ?? fallback}
+          aria-label={`${label} hex color`}
+          onChange={(event) => onColorChange(event.target.value)}
+          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 font-sans text-[11px] text-neutral-200 outline-none transition-colors focus:border-emerald-400/50"
+        />
+      </div>
+      <ReelStyleOpacityControl
+        label={`${label} opacity`}
+        value={opacity}
+        onChange={onOpacityChange}
+      />
+    </div>
+  );
+}
+
+interface ReelCaptionStyleControlsProps {
+  normalizedStyle: ReelTextOverlayStyle;
+  onChange: (patch: ReelTextOverlayStyle) => void;
+}
+
+function ReelCaptionStyleControls({
+  normalizedStyle,
+  onChange,
+}: ReelCaptionStyleControlsProps) {
+  const fontSize = normalizedStyle.fontSize ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize;
+  const verticalOffset = normalizedStyle.verticalOffset ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.verticalOffset;
+  const backgroundOpacity = normalizedStyle.backgroundOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundOpacity;
+  const wordHighlightOpacity = normalizedStyle.wordHighlightOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightOpacity;
+
+  return (
+    <div className="space-y-2.5">
+      <div className="grid gap-2 lg:grid-cols-[auto_minmax(11rem,1fr)_auto]">
+        <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+          {([
+            ['upper', 'Top'],
+            ['middle', 'Mid'],
+            ['lower', 'Low'],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onChange({ position: value })}
+              className={`rounded-full px-2.5 py-1.5 text-[10px] font-sans uppercase tracking-wider transition-colors ${
+                normalizedStyle.position === value
+                  ? 'bg-emerald-400 text-neutral-950'
+                  : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+          <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+            Y
+          </span>
+          <input
+            type="range"
+            min={REEL_CAPTION_VERTICAL_OFFSET_MIN}
+            max={REEL_CAPTION_VERTICAL_OFFSET_MAX}
+            value={verticalOffset}
+            onChange={(event) => onChange({ verticalOffset: Number(event.target.value) })}
+            className="min-w-0 flex-1 accent-emerald-400"
+          />
+          <ReelStyleNumberInput
+            value={verticalOffset}
+            min={REEL_CAPTION_VERTICAL_OFFSET_MIN}
+            max={REEL_CAPTION_VERTICAL_OFFSET_MAX}
+            label="Caption vertical offset"
+            onCommit={(nextValue) => onChange({ verticalOffset: nextValue })}
+          />
+        </label>
+
+        <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+          {([
+            ['left', AlignLeft, 'Align left'],
+            ['center', AlignCenter, 'Align center'],
+            ['right', AlignRight, 'Align right'],
+          ] as const).map(([value, Icon, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => onChange({ align: value })}
+              className={`rounded-full p-2 transition-colors ${
+                normalizedStyle.align === value
+                  ? 'bg-emerald-400 text-neutral-950'
+                  : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+              }`}
+              title={label}
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.4fr)]">
+        <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+          <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+            Font
+          </span>
+          <select
+            value={normalizedStyle.fontFamily}
+            onChange={(event) => onChange({ fontFamily: event.target.value })}
+            className="min-w-0 flex-1 bg-transparent font-sans text-[11px] text-neutral-200 outline-none"
+          >
+            {!REEL_FONT_PRESETS.some((font) => font.value === normalizedStyle.fontFamily) && (
+              <option value={normalizedStyle.fontFamily} className="bg-neutral-900 text-neutral-100">
+                Custom
+              </option>
+            )}
+            {REEL_FONT_PRESETS.map((font) => (
+              <option key={font.value} value={font.value} className="bg-neutral-900 text-neutral-100">
+                {font.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+          <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+            Size
+          </span>
+          <input
+            type="range"
+            min={12}
+            max={42}
+            value={fontSize}
+            onChange={(event) => onChange({ fontSize: Number(event.target.value) })}
+            className="min-w-0 flex-1 accent-emerald-400"
+          />
+          <ReelStyleNumberInput
+            value={fontSize}
+            min={12}
+            max={42}
+            label="Caption font size"
+            onCommit={(nextValue) => onChange({ fontSize: nextValue })}
+          />
+        </label>
+      </div>
+
+      <div className="grid gap-2 md:grid-cols-2">
+        <ReelStyleColorControl
+          label="BG"
+          color={normalizedStyle.backgroundColor}
+          fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundColor}
+          opacity={backgroundOpacity}
+          onColorChange={(backgroundColor) => onChange({ backgroundColor })}
+          onOpacityChange={(backgroundOpacity) => onChange({ backgroundOpacity })}
+        />
+        <ReelStyleColorControl
+          label="Word"
+          color={normalizedStyle.wordHighlightColor}
+          fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightColor}
+          opacity={wordHighlightOpacity}
+          onColorChange={(wordHighlightColor) => onChange({ wordHighlightColor })}
+          onOpacityChange={(wordHighlightOpacity) => onChange({ wordHighlightOpacity })}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ReelCaptionStylePanel({
   normalizedStyle,
   hasUnsavedStyle,
@@ -403,116 +730,11 @@ function ReelCaptionStylePanel({
         )}
       </div>
 
-      <div className="space-y-2.5 px-4 py-3">
-        <div className="grid gap-2 md:grid-cols-[auto_auto_minmax(7rem,1fr)]">
-          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
-            {([
-              ['upper', 'Top'],
-              ['middle', 'Mid'],
-              ['lower', 'Low'],
-            ] as const).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => onChange({ position: value })}
-                className={`rounded-full px-2.5 py-1.5 text-[10px] font-sans uppercase tracking-wider transition-colors ${
-                  normalizedStyle.position === value
-                    ? 'bg-emerald-400 text-neutral-950'
-                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
-            {([
-              ['left', AlignLeft, 'Align left'],
-              ['center', AlignCenter, 'Align center'],
-              ['right', AlignRight, 'Align right'],
-            ] as const).map(([value, Icon, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => onChange({ align: value })}
-                className={`rounded-full p-2 transition-colors ${
-                  normalizedStyle.align === value
-                    ? 'bg-emerald-400 text-neutral-950'
-                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
-                }`}
-                title={label}
-              >
-                <Icon className="h-3.5 w-3.5" />
-              </button>
-            ))}
-          </div>
-
-          <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-            <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
-              Size
-            </span>
-            <input
-              type="range"
-              min={12}
-              max={42}
-              value={normalizedStyle.fontSize ?? 16}
-              onChange={(event) => onChange({ fontSize: Number(event.target.value) })}
-              className="min-w-0 flex-1 accent-emerald-400"
-            />
-            <span className="w-6 text-right font-sans text-[10px] tabular-nums text-neutral-400">
-              {normalizedStyle.fontSize}
-            </span>
-          </label>
-        </div>
-
-        <div className="grid gap-2 md:grid-cols-[minmax(8rem,1fr)_minmax(8rem,1fr)]">
-          <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-            <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
-              Font
-            </span>
-            <select
-              value={normalizedStyle.fontFamily}
-              onChange={(event) => onChange({ fontFamily: event.target.value })}
-              className="min-w-0 flex-1 bg-transparent font-sans text-[11px] text-neutral-200 outline-none"
-            >
-              {!REEL_FONT_PRESETS.some((font) => font.value === normalizedStyle.fontFamily) && (
-                <option value={normalizedStyle.fontFamily} className="bg-neutral-900 text-neutral-100">
-                  Custom
-                </option>
-              )}
-              {REEL_FONT_PRESETS.map((font) => (
-                <option key={font.value} value={font.value} className="bg-neutral-900 text-neutral-100">
-                  {font.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-            <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
-              BG
-            </span>
-            <input
-              type="range"
-              min={0}
-              max={0.75}
-              step={0.05}
-              value={normalizedStyle.backgroundOpacity ?? 0.32}
-              onChange={(event) => {
-                const opacity = Number(event.target.value);
-                onChange({
-                  backgroundOpacity: opacity,
-                  backgroundColor: reelOverlayBackgroundColor(opacity),
-                });
-              }}
-              className="min-w-0 flex-1 accent-emerald-400"
-            />
-            <span className="w-6 text-right font-sans text-[10px] tabular-nums text-neutral-400">
-              {Math.round((normalizedStyle.backgroundOpacity ?? 0) * 100)}
-            </span>
-          </label>
-        </div>
+      <div className="px-4 py-3">
+        <ReelCaptionStyleControls
+          normalizedStyle={normalizedStyle}
+          onChange={onChange}
+        />
 
         {message && (
           <p className={`text-xs font-sans ${saveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
@@ -977,6 +1199,7 @@ interface StoryRuntimeSettings {
   vignetteEnabled: boolean;
   vignetteAmountPercent: number;
   audioStorylinePublishEnabled: boolean;
+  reelStoryPublishEnabled: boolean;
   cloudSaveTimeoutMs: number;
   storyAssetSignedUrlSwapEnabled: boolean;
   storyIncrementalAssetSyncEnabled: boolean;
@@ -985,6 +1208,8 @@ interface StoryRuntimeSettings {
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  videoDownloadEnabled: boolean;
+  videoDownloadAdminBypass: boolean;
   promptOnlyMaxImagesPerBeat: number;
   promptOnlyImageGalleryCleanupEnabled: boolean;
   promptOnlyImageGalleryCleanupDays: number;
@@ -1031,12 +1256,14 @@ export default function StoryScreen() {
   const permanentlyDeleteCharacterReferenceSheet = useStoryStore((state) => state.permanentlyDeleteCharacterReferenceSheet);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
+  const [isAdminUser, setIsAdminUser] = useState(false);
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
     cycleOverride: false,
     cycleMs: STORYBOARD_ADVANCE_MS,
     vignetteEnabled: true,
     vignetteAmountPercent: 100,
     audioStorylinePublishEnabled: false,
+    reelStoryPublishEnabled: false,
     cloudSaveTimeoutMs: 20000,
     storyAssetSignedUrlSwapEnabled: false,
     storyIncrementalAssetSyncEnabled: false,
@@ -1045,6 +1272,8 @@ export default function StoryScreen() {
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
+    videoDownloadEnabled: false,
+    videoDownloadAdminBypass: false,
     promptOnlyMaxImagesPerBeat: 3,
     promptOnlyImageGalleryCleanupEnabled: true,
     promptOnlyImageGalleryCleanupDays: 7,
@@ -1070,6 +1299,22 @@ export default function StoryScreen() {
       })
       .catch(() => {/* use defaults */});
   }, [setSaveRuntimeSettings]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    checkIsAdmin()
+      .then((isAdmin) => {
+        if (!cancelled) setIsAdminUser(user?.id ? isAdmin : false);
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdminUser(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   // Refresh signed URLs every 50 minutes to prevent expiry
   useEffect(() => {
@@ -1149,6 +1394,8 @@ export default function StoryScreen() {
       }) : undefined}
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
+      pricing={pricing}
+      isAdminUser={isAdminUser}
       continueCoinCost={continueCoinCost}
       showCoinHint={showCoinHint}
       setPromptOnlyBeatImage={setPromptOnlyBeatImage}
@@ -1190,6 +1437,8 @@ function StoryScreenInner({
   onSave,
   lastPublishResult,
   cycleSettings,
+  pricing,
+  isAdminUser,
   continueCoinCost,
   showCoinHint,
   setPromptOnlyBeatImage,
@@ -1226,6 +1475,8 @@ function StoryScreenInner({
   onSave?: () => void;
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
   cycleSettings: StoryRuntimeSettings;
+  pricing: PricingRuntimeContext;
+  isAdminUser: boolean;
   continueCoinCost: number;
   showCoinHint: boolean;
   setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string; uploadBody?: File | Blob | string }) => Promise<void>;
@@ -1237,6 +1488,7 @@ function StoryScreenInner({
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
 }) {
+  const router = useRouter();
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const optionsContainerRef = useRef<HTMLDivElement>(null);
   const currentNodeId = session.storyMap.currentNodeId;
@@ -1248,6 +1500,9 @@ function StoryScreenInner({
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
+  const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
+  const [isDiscardingReel, setIsDiscardingReel] = useState(false);
+  const [discardReelError, setDiscardReelError] = useState<string | null>(null);
   const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
   const [isCardHovered, setIsCardHovered] = useState(false);
   const [failedImageUrl, setFailedImageUrl] = useState<string | null>(null);
@@ -1322,6 +1577,9 @@ function StoryScreenInner({
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
     [isReelStory, session.storyMap]
   );
+  const [reelPlayAllActive, setReelPlayAllActive] = useState(false);
+  const reelPlayAllNodeIdsRef = useRef<string[]>([]);
+  const pendingReelPlayAllNodeIdRef = useRef<string | null>(null);
   const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
@@ -1334,7 +1592,39 @@ function StoryScreenInner({
   const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
   const canRegenerateImage = !isPromptOnlyStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
-  const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio } = useAudioPlayer(normalizedCurrentBeat.audioUrl, currentNodeId);
+  const cancelReelPlayAll = useCallback(() => {
+    pendingReelPlayAllNodeIdRef.current = null;
+    reelPlayAllNodeIdsRef.current = [];
+    setReelPlayAllActive(false);
+  }, []);
+  const handleReelAudioEnded = useCallback(() => {
+    if (!reelPlayAllActive) return;
+
+    const nodeIds = reelPlayAllNodeIdsRef.current;
+    const currentIndex = nodeIds.indexOf(currentNodeId);
+    const nextNodeId = currentIndex >= 0 ? nodeIds[currentIndex + 1] : undefined;
+
+    if (nextNodeId) {
+      pendingReelPlayAllNodeIdRef.current = nextNodeId;
+      navigateToNode(nextNodeId);
+      return;
+    }
+
+    cancelReelPlayAll();
+  }, [cancelReelPlayAll, currentNodeId, navigateToNode, reelPlayAllActive]);
+  const { playbackState, togglePlayPause, play: playAudio } = useAudioPlayer(
+    normalizedCurrentBeat.audioUrl,
+    currentNodeId,
+    { onEnded: handleReelAudioEnded }
+  );
+  const {
+    exportVideo,
+    cancel: cancelExport,
+    isExporting,
+    progress: exportProgress,
+    phase: exportPhase,
+    error: exportError,
+  } = useVideoExport();
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
   const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat, session);
@@ -1422,6 +1712,95 @@ function StoryScreenInner({
   const hasUnsavedReelOverlayStyle = isReelStory
     && reelOverlayStyleKey(reelOverlayDraft) !== reelOverlayStyleKey(savedReelOverlayStyle);
   const isReelStyleSaving = reelStyleSaveState === 'saving';
+  const reelDistributionBeats = isReelStory && publishPath ? publishPath.beats : [];
+  const reelHasCompletePath = reelDistributionBeats.length > 0;
+  const reelHasAllImages = reelHasCompletePath && reelDistributionBeats.every((beat) => {
+    const normalizedBeat = normalizeBeatMediaFields(beat);
+    return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl) && normalizedBeat.imageStatus === 'ready';
+  });
+  const reelHasAllAudio = reelHasCompletePath && reelDistributionBeats.every((beat) => {
+    const normalizedBeat = normalizeBeatMediaFields(beat);
+    return Boolean(normalizedBeat.audioUrl) && normalizedBeat.audioStatus === 'ready';
+  });
+  const reelHasPendingWork = isGeneratingAudio || isRegeneratingImage || showPendingImageState;
+  const reelReadyForDistribution = Boolean(
+    isReelStory &&
+    isEnding &&
+    reelHasAllImages &&
+    reelHasAllAudio &&
+    !hasUnsavedReelText &&
+    !hasUnsavedReelOverlayStyle &&
+    !reelHasPendingWork
+  );
+  const reelDistributionBlockReason = !isEnding
+    ? 'Finish generating the reel first.'
+    : !reelHasAllImages
+    ? 'Reel publishing and export need an image on every beat.'
+    : !reelHasAllAudio
+    ? 'Generate narration before publishing or exporting.'
+    : hasUnsavedReelText
+    ? 'Save panel text before publishing or exporting.'
+    : hasUnsavedReelOverlayStyle
+    ? 'Save caption style before publishing or exporting.'
+    : reelHasPendingWork
+    ? 'Wait for image and narration generation to finish.'
+    : null;
+  const reelPlayableNodes = useMemo(
+    () => (reelTimelineNodes ?? []).filter((node) => {
+      const normalizedBeat = normalizeBeatMediaFields(node.data);
+      return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl)
+        && normalizedBeat.imageStatus === 'ready'
+        && Boolean(normalizedBeat.audioUrl)
+        && normalizedBeat.audioStatus === 'ready';
+    }),
+    [reelTimelineNodes]
+  );
+  const canPlayFullReel = Boolean(
+    isReelStory
+    && reelTimelineNodes?.length
+    && reelPlayableNodes.length === reelTimelineNodes.length
+    && !hasUnsavedReelText
+    && !hasUnsavedReelOverlayStyle
+    && !reelHasPendingWork
+  );
+  const reelPlayAllDisabledReason = !reelTimelineNodes?.length
+    ? 'No reel beats available yet.'
+    : reelPlayableNodes.length !== reelTimelineNodes.length
+    ? 'Generate images and narration for every beat first.'
+    : hasUnsavedReelText
+    ? 'Save panel text before playing the full reel.'
+    : hasUnsavedReelOverlayStyle
+    ? 'Save caption style before playing the full reel.'
+    : reelHasPendingWork
+    ? 'Wait for image and narration generation to finish.'
+    : 'Play reel from beginning';
+  const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
+  const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
+  const canAccessVideoExport = adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads);
+  const videoExportPreset = pricing.snapshot.videoExportPreset;
+  const showVideoWatermark = resolveVideoExportWatermarkVisibility(
+    videoExportPreset,
+    pricing.snapshot.canAccessUnbrandedExports
+  );
+  const reelPublishingEnabled = cycleSettings.reelStoryPublishEnabled;
+  const canPublishReel = Boolean(reelPublishingEnabled && !lastPublishResult && onSave && reelReadyForDistribution);
+  const canExportReelVideo = Boolean(videoDownloadGlobalOn && reelReadyForDistribution && canAccessVideoExport);
+  const reelExportBeats = reelDistributionBeats.map((beat) => {
+    const normalizedBeat = normalizeBeatMediaFields(beat);
+    return {
+      ...normalizedBeat,
+      imageUrl: normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl,
+    };
+  });
+  const exportPhaseLabel = exportPhase === 'loading'
+    ? 'Loading encoder'
+    : exportPhase === 'preparing'
+    ? 'Preparing scenes'
+    : exportPhase === 'encoding'
+    ? 'Rendering video'
+    : exportPhase === 'finalizing'
+    ? 'Finalizing file'
+    : 'Exporting video';
 
   useEffect(() => {
     setReelPanelDraft(savedReelPanelTexts);
@@ -1528,6 +1907,76 @@ function StoryScreenInner({
     void generateNarrationForNode(currentNodeId);
   }, [currentNodeId, generateNarrationForNode, hasUnsavedReelText, isReelStory]);
 
+  const handleManualNavigateToNode = useCallback((nodeId: string) => {
+    if (isReelStory) {
+      cancelReelPlayAll();
+    }
+    navigateToNode(nodeId);
+  }, [cancelReelPlayAll, isReelStory, navigateToNode]);
+
+  const handleReelNarrationToggle = useCallback(() => {
+    cancelReelPlayAll();
+    togglePlayPause();
+  }, [cancelReelPlayAll, togglePlayPause]);
+
+  const handleReelGenerateNarration = useCallback(() => {
+    cancelReelPlayAll();
+    handleGenerateNarration();
+  }, [cancelReelPlayAll, handleGenerateNarration]);
+
+  const handleToggleReelPlayAll = useCallback(() => {
+    if (!canPlayFullReel || !reelTimelineNodes?.length) return;
+
+    if (reelPlayAllActive) {
+      if (playbackState === 'playing') {
+        togglePlayPause();
+        return;
+      }
+      playAudio();
+      return;
+    }
+
+    const nodeIds = reelTimelineNodes.map((node) => node.id);
+    const firstNodeId = nodeIds[0];
+    if (!firstNodeId) return;
+
+    reelPlayAllNodeIdsRef.current = nodeIds;
+    pendingReelPlayAllNodeIdRef.current = null;
+    setReelPlayAllActive(true);
+
+    if (currentNodeId !== firstNodeId) {
+      pendingReelPlayAllNodeIdRef.current = firstNodeId;
+      navigateToNode(firstNodeId);
+      return;
+    }
+
+    playAudio();
+  }, [
+    canPlayFullReel,
+    currentNodeId,
+    navigateToNode,
+    playAudio,
+    playbackState,
+    reelPlayAllActive,
+    reelTimelineNodes,
+    togglePlayPause,
+  ]);
+
+  useEffect(() => {
+    if (!reelPlayAllActive || pendingReelPlayAllNodeIdRef.current !== currentNodeId || !normalizedCurrentBeat.audioUrl) {
+      return;
+    }
+
+    pendingReelPlayAllNodeIdRef.current = null;
+    playAudio();
+  }, [currentNodeId, normalizedCurrentBeat.audioUrl, playAudio, reelPlayAllActive]);
+
+  useEffect(() => {
+    if (!canPlayFullReel && reelPlayAllActive) {
+      cancelReelPlayAll();
+    }
+  }, [canPlayFullReel, cancelReelPlayAll, reelPlayAllActive]);
+
   // Autoplay narration in story mode when navigating to a node with audio
   useEffect(() => {
     if (prevNodeIdForAutoplay.current !== currentNodeId) {
@@ -1557,10 +2006,13 @@ function StoryScreenInner({
   const { focusedOptionIndex, focusMode } = useKeyboardNavigation({
     storyMap: session.storyMap,
     options: orderedOptions,
-    onNavigateNode: navigateToNode,
+    onNavigateNode: handleManualNavigateToNode,
     onSelectOption: continueStory,
     onToggleMinimized: () => setIsMinimized(prev => !prev),
     onToggleNarration: () => {
+      if (isReelStory) {
+        cancelReelPlayAll();
+      }
       if (isReelStory && hasUnsavedReelText) {
         setReelTextSaveState('error');
         setReelTextMessage('Save panel text before using narration.');
@@ -1999,6 +2451,86 @@ function StoryScreenInner({
     }
   }, [canOpenPromptTools, closePromptToolsModal, openPromptToolsOverview, promptToolsOpen]);
 
+  const handleExportReelVideo = useCallback(async () => {
+    if (!canExportReelVideo || isExporting) return;
+
+    const exportTitle = session.title || 'kissago-reel';
+    if (!adminBypassed) {
+      const auth = await authorizeCurrentUserBillableAction({
+        actionKey: 'export_video_future',
+        idempotencyKey: `export-reel-${session.savedStoryId ?? currentNodeId}-${Date.now()}`,
+        relatedStoryId: session.savedStoryId ?? null,
+        relatedNodeId: currentNodeId,
+        metadata: { source: 'reel_creation' },
+      });
+
+      if (auth.status === 'denied') {
+        window.open('/wallet', '_blank');
+        return;
+      }
+
+      const ok = await exportVideo(reelExportBeats, exportTitle, {
+        aspectRatio: '9:16',
+        videoExportPreset,
+        showWatermark: showVideoWatermark,
+      });
+
+      if (auth.status === 'allowed' && auth.reservationId) {
+        if (ok) {
+          await finalizeCurrentUserBillableAction({
+            reservationId: auth.reservationId,
+            storyId: session.savedStoryId ?? null,
+            relatedEntityId: currentNodeId,
+            metadata: { source: 'reel_creation' },
+          });
+        } else {
+          await releaseCurrentUserBillableAction({
+            reservationId: auth.reservationId,
+            reason: 'export_failed',
+            metadata: { source: 'reel_creation' },
+          });
+        }
+      }
+      return;
+    }
+
+    await exportVideo(reelExportBeats, exportTitle, {
+      aspectRatio: '9:16',
+      videoExportPreset,
+      showWatermark: showVideoWatermark,
+    });
+  }, [
+    adminBypassed,
+    canExportReelVideo,
+    currentNodeId,
+    exportVideo,
+    isExporting,
+    reelExportBeats,
+    session.savedStoryId,
+    session.title,
+    showVideoWatermark,
+    videoExportPreset,
+  ]);
+
+  const handleConfirmDiscardReel = useCallback(async () => {
+    if (!isReelStory || !session.savedStoryId || isDiscardingReel) return;
+
+    setIsDiscardingReel(true);
+    setDiscardReelError(null);
+    try {
+      const discardedStoryId = session.savedStoryId;
+      await deleteStory(discardedStoryId);
+      sessionStorage.setItem('kissago_skip_story_reload', discardedStoryId);
+      useMyStoriesStore.getState().removeReel(discardedStoryId);
+      resetStory();
+      router.replace('/?mode=reel');
+    } catch (error) {
+      setDiscardReelError(error instanceof Error ? error.message : 'Failed to discard this reel.');
+    } finally {
+      setIsDiscardingReel(false);
+    }
+  }, [isDiscardingReel, isReelStory, resetStory, router, session.savedStoryId]);
+
   const mainClassName = `relative z-10 flex-1 flex flex-col w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass} ${
     isReelStory
       ? 'justify-center px-4 pb-3 pt-1 md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
@@ -2073,19 +2605,40 @@ function StoryScreenInner({
       </div>
 
       <div className="flex justify-start md:h-full md:items-end md:justify-center md:pb-4">
+        <div className="flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={handleToggleReelPlayAll}
+            disabled={!canPlayFullReel}
+            title={reelPlayAllActive ? (playbackState === 'playing' ? 'Pause full reel' : 'Resume full reel') : reelPlayAllDisabledReason}
+            className={`flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-md transition-all ${
+              canPlayFullReel
+                ? reelPlayAllActive
+                  ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
+                  : 'border-emerald-500/25 bg-neutral-900/60 text-emerald-200 hover:border-emerald-400/45 hover:bg-neutral-800'
+                : 'cursor-not-allowed border-white/10 bg-neutral-900/35 text-neutral-600'
+            }`}
+          >
+            {reelPlayAllActive && playbackState === 'playing' ? (
+              <Pause className="h-5 w-5" />
+            ) : (
+              <Play className="h-5 w-5" />
+            )}
+          </button>
         <NarrationButton
           isGeneratingAudio={isGeneratingAudio}
           isAudioReady={isAudioReady}
           playbackState={playbackState}
           hasAudio={!!normalizedCurrentBeat.audioUrl}
-          onTogglePlayPause={togglePlayPause}
-          onGenerateNarration={handleGenerateNarration}
+          onTogglePlayPause={handleReelNarrationToggle}
+          onGenerateNarration={handleReelGenerateNarration}
           onClearGlow={clearAudioReady}
           storyMode={storyMode}
           onToggleStoryMode={toggleStoryMode}
           disabled={hasUnsavedReelText}
           disabledReason="Save panel text before generating narration"
         />
+        </div>
       </div>
 
       {renderReelPreview('desktop')}
@@ -2109,7 +2662,7 @@ function StoryScreenInner({
         >
           <ReelToolbar
             storyMap={session.storyMap}
-            onNodeClick={navigateToNode}
+            onNodeClick={handleManualNavigateToNode}
             focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
             nodes={reelTimelineNodes}
             isCollapsed={isMinimized}
@@ -2133,6 +2686,132 @@ function StoryScreenInner({
             />
           )}
         </motion.div>
+
+        <div className="space-y-2">
+          {lastPublishResult && (
+            <div className={`flex flex-wrap items-center gap-2 rounded-2xl border px-4 py-3 text-sm ${
+              lastPublishResult.error
+                ? 'border-rose-500/20 bg-rose-500/10 text-rose-300'
+                : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+            }`}>
+              {lastPublishResult.error ? (
+                <>
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  <span>Publishing failed - {lastPublishResult.error}</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="h-4 w-4 shrink-0" />
+                  <span>{lastPublishResult.alreadyPublished ? 'This reel is already published.' : 'Reel published.'}</span>
+                  <div className="ml-auto flex items-center gap-3">
+                    <Link
+                      href={`/storyline/${lastPublishResult.storylineId}`}
+                      className="inline-flex items-center gap-1 text-emerald-200 transition-colors hover:text-white"
+                    >
+                      View <ExternalLink className="h-3 w-3" />
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setManagedStorylineId(lastPublishResult.storylineId)}
+                      className="inline-flex items-center gap-1 text-emerald-200 transition-colors hover:text-white"
+                    >
+                      Cover <ImageIcon className="h-3 w-3" />
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {!lastPublishResult && (
+            <div className={`grid gap-2 ${reelPublishingEnabled ? 'grid-cols-3' : 'grid-cols-2'}`}>
+              {reelPublishingEnabled && (
+                <button
+                  type="button"
+                  onClick={() => canPublishReel && setShowPublishDialog(true)}
+                  disabled={!canPublishReel}
+                  title={!onSave ? 'Sign in to publish this reel.' : reelDistributionBlockReason ?? 'Publish reel'}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/15 px-4 py-2.5 text-sm font-medium text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-neutral-500"
+                >
+                  <Share2 className="h-4 w-4" />
+                  <span>Publish</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDiscardReelError(null);
+                  setShowDiscardReelDialog(true);
+                }}
+                disabled={!session.savedStoryId || isDiscardingReel}
+                title={session.savedStoryId ? 'Discard this reel draft' : 'Save must finish before this reel can be discarded.'}
+                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-2.5 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-neutral-500"
+              >
+                {isDiscardingReel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                <span>Discard</span>
+              </button>
+
+              {canExportReelVideo ? (
+                <button
+                  type="button"
+                  onClick={() => void handleExportReelVideo()}
+                  disabled={isExporting}
+                  title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
+                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors disabled:cursor-wait disabled:opacity-70 ${
+                    reelPublishingEnabled
+                      ? 'border-sky-500/30 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25'
+                      : 'border-emerald-500/35 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
+                  }`}
+                >
+                  {isExporting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>{exportPhase === 'loading' ? 'Loading' : `${exportProgress}%`}</span>
+                    </>
+                  ) : exportProgress === 100 ? (
+                    <>
+                      <Check className="h-4 w-4 text-emerald-300" />
+                      <span>Saved</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4" />
+                      <span>Export</span>
+                    </>
+                  )}
+                </button>
+              ) : reelReadyForDistribution && videoDownloadGlobalOn && !canAccessVideoExport ? (
+                <button
+                  type="button"
+                  onClick={() => window.open('/wallet', '_blank')}
+                  title="Video export is available on eligible plans."
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-200"
+                >
+                  <Lock className="h-4 w-4" />
+                  <span>Export</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  title={!videoDownloadGlobalOn ? 'Video export is disabled in Global Settings.' : reelDistributionBlockReason ?? 'Export reel video'}
+                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-neutral-500 disabled:cursor-not-allowed"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>Export</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {exportError && (
+            <div className="flex items-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>{exportError}</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   ) : null;
@@ -2749,114 +3428,11 @@ function StoryScreenInner({
                           )}
                         </div>
 
-                        <div className="mt-3 grid gap-3 md:grid-cols-[auto_auto_minmax(9rem,1fr)]">
-                          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
-                            {([
-                              ['upper', 'Top'],
-                              ['middle', 'Mid'],
-                              ['lower', 'Low'],
-                            ] as const).map(([value, label]) => (
-                              <button
-                                key={value}
-                                type="button"
-                                onClick={() => updateReelOverlayDraft({ position: value })}
-                                className={`rounded-full px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider transition-colors ${
-                                  normalizedReelOverlayDraft.position === value
-                                    ? 'bg-emerald-400 text-neutral-950'
-                                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
-                                }`}
-                              >
-                                {label}
-                              </button>
-                            ))}
-                          </div>
-
-                          <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
-                            {([
-                              ['left', AlignLeft, 'Align left'],
-                              ['center', AlignCenter, 'Align center'],
-                              ['right', AlignRight, 'Align right'],
-                            ] as const).map(([value, Icon, label]) => (
-                              <button
-                                key={value}
-                                type="button"
-                                onClick={() => updateReelOverlayDraft({ align: value })}
-                                className={`rounded-full p-2 transition-colors ${
-                                  normalizedReelOverlayDraft.align === value
-                                    ? 'bg-emerald-400 text-neutral-950'
-                                    : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
-                                }`}
-                                title={label}
-                              >
-                                <Icon className="h-4 w-4" />
-                              </button>
-                            ))}
-                          </div>
-
-                          <label className="flex min-w-0 items-center gap-3 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-                            <span className="shrink-0 font-sans text-[11px] uppercase tracking-wider text-neutral-500">
-                              Size
-                            </span>
-                            <input
-                              type="range"
-                              min={12}
-                              max={42}
-                              value={normalizedReelOverlayDraft.fontSize ?? 16}
-                              onChange={(event) => updateReelOverlayDraft({ fontSize: Number(event.target.value) })}
-                              className="min-w-0 flex-1 accent-emerald-400"
-                            />
-                            <span className="w-8 text-right font-sans text-[11px] tabular-nums text-neutral-400">
-                              {normalizedReelOverlayDraft.fontSize}
-                            </span>
-                          </label>
-                        </div>
-
-                        <div className="mt-3 grid gap-3 md:grid-cols-[minmax(10rem,1fr)_minmax(10rem,1fr)]">
-                          <label className="flex min-w-0 items-center gap-3 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-                            <span className="shrink-0 font-sans text-[11px] uppercase tracking-wider text-neutral-500">
-                              Font
-                            </span>
-                            <select
-                              value={normalizedReelOverlayDraft.fontFamily}
-                              onChange={(event) => updateReelOverlayDraft({ fontFamily: event.target.value })}
-                              className="min-w-0 flex-1 bg-transparent font-sans text-xs text-neutral-200 outline-none"
-                            >
-                              {!REEL_FONT_PRESETS.some((font) => font.value === normalizedReelOverlayDraft.fontFamily) && (
-                                <option value={normalizedReelOverlayDraft.fontFamily} className="bg-neutral-900 text-neutral-100">
-                                  Custom
-                                </option>
-                              )}
-                              {REEL_FONT_PRESETS.map((font) => (
-                                <option key={font.value} value={font.value} className="bg-neutral-900 text-neutral-100">
-                                  {font.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-
-                          <label className="flex min-w-0 items-center gap-3 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-                            <span className="shrink-0 font-sans text-[11px] uppercase tracking-wider text-neutral-500">
-                              BG
-                            </span>
-                            <input
-                              type="range"
-                              min={0}
-                              max={0.75}
-                              step={0.05}
-                              value={normalizedReelOverlayDraft.backgroundOpacity ?? 0.32}
-                              onChange={(event) => {
-                                const opacity = Number(event.target.value);
-                                updateReelOverlayDraft({
-                                  backgroundOpacity: opacity,
-                                  backgroundColor: reelOverlayBackgroundColor(opacity),
-                                });
-                              }}
-                              className="min-w-0 flex-1 accent-emerald-400"
-                            />
-                            <span className="w-8 text-right font-sans text-[11px] tabular-nums text-neutral-400">
-                              {Math.round((normalizedReelOverlayDraft.backgroundOpacity ?? 0) * 100)}
-                            </span>
-                          </label>
+                        <div className="mt-3">
+                          <ReelCaptionStyleControls
+                            normalizedStyle={normalizedReelOverlayDraft}
+                            onChange={updateReelOverlayDraft}
+                          />
                         </div>
 
                         {reelStyleMessage && (
@@ -3795,10 +4371,146 @@ function StoryScreenInner({
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showDiscardReelDialog && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[65] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+            onClick={!isDiscardingReel ? () => setShowDiscardReelDialog(false) : undefined}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="w-full max-w-md rounded-2xl border border-white/10 bg-neutral-900/95 p-6 shadow-2xl backdrop-blur-xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.22em] text-rose-300">Discard Reel</p>
+                  <h2 className="mt-2 text-xl font-serif text-neutral-100">Delete this reel draft?</h2>
+                </div>
+                {!isDiscardingReel && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDiscardReelDialog(false)}
+                    className="rounded-full p-1 text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-200"
+                    title="Close"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              <p className="text-sm leading-6 text-neutral-300">
+                This will permanently delete this reel draft and remove it from your Reels list. This cannot be undone.
+              </p>
+
+              {discardReelError && (
+                <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+                  {discardReelError}
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowDiscardReelDialog(false)}
+                  disabled={isDiscardingReel}
+                  className="px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:cursor-wait disabled:opacity-60"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleConfirmDiscardReel()}
+                  disabled={isDiscardingReel || !session.savedStoryId}
+                  className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-rose-500 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {isDiscardingReel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  Delete Permanently
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isExporting && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[60] flex items-center justify-center px-4 py-6"
+          >
+            <div className="absolute inset-0 bg-neutral-950/55 backdrop-blur-md" />
+            <motion.div
+              initial={{ opacity: 0, y: 18, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              className="relative z-10 w-full max-w-md overflow-hidden rounded-[28px] border border-white/15 bg-white/10 p-6 shadow-[0_24px_80px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+            >
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.14),_transparent_55%),linear-gradient(135deg,rgba(255,255,255,0.1),rgba(255,255,255,0.04))]" />
+              <div className="relative">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-[11px] font-sans uppercase tracking-[0.28em] text-emerald-300/90">
+                      Video Export
+                    </p>
+                    <h3 className="mt-2 text-2xl font-serif text-white">
+                      {exportPhaseLabel}
+                    </h3>
+                  </div>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white/10 text-emerald-300">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </div>
+                </div>
+
+                <p className="mt-4 text-sm font-sans leading-6 text-neutral-200/90">
+                  Keep this tab open while your reel video is being rendered. Leaving, refreshing, or closing the tab can stop the export.
+                </p>
+
+                <div className="mt-5">
+                  <div className="flex items-center justify-between text-xs font-sans uppercase tracking-[0.22em] text-neutral-300/80">
+                    <span>Progress</span>
+                    <span>{exportProgress}%</span>
+                  </div>
+                  <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/10">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${exportProgress}%` }}
+                      transition={{ duration: 0.25, ease: 'easeOut' }}
+                      className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-300"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={cancelExport}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2.5 text-sm font-sans text-neutral-100 transition-all hover:bg-white/15"
+                    title="Cancel video export"
+                  >
+                    <X className="h-4 w-4" />
+                    <span>Cancel Export</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Publish Dialog */}
       {isEnding && (
         <PublishDialog
-          isOpen={showPublishDialog}
+          isOpen={showPublishDialog && (!isReelStory || reelPublishingEnabled)}
           onClose={() => setShowPublishDialog(false)}
           endingNodeId={session.storyMap.currentNodeId}
           publishMode={canPublishAudioStoryline ? 'audio_story' : 'standard'}

@@ -193,7 +193,7 @@ Generate all {{reelBeatCount}} beats of the reel in a single response. There is 
 Rules:
 1. Return strict valid JSON only using the reel draft schema: { beatCount, beats: [{ beatIndex, title, storyText, sceneSummary, imagePrompt }] }.
 2. Produce exactly {{reelBeatCount}} beats. beatIndex starts at 1 and increments by 1.
-3. storyText is the quote itself — a single inspirational quote, statement, line, or short cluster of lines. Target {{textLengthWordRange}} words per visual panel, knowing each beat will be split across four panels for playback. Keep it narration-friendly: clean rhythm, natural pauses, no inner monologue or scene direction mixed in.
+3. storyText is the quote itself — a single inspirational quote, statement, line, or short cluster of lines. Each beat must carry enough words for {{reelPanelCount}} visual panels: target {{textLengthWordRangePerPanel}} words per panel and {{textLengthWordRangePerBeat}} words total per beat. Keep it narration-friendly: clean rhythm, natural pauses, no inner monologue or scene direction mixed in.
 4. The quotes should form a flowing emotional or thematic sequence — each one a fresh facet of the user's request, not a continuation of a plot. Avoid repeating phrasing across beats.
 5. title is 1–4 words, useful for admin previews only.
 6. sceneSummary is a short English continuity hint for the visual composer (atmosphere, mood, motif). Not user-facing.
@@ -207,8 +207,11 @@ Runtime context:
 Language: {{language}}
 User Request: {{userPrompt}}
 Reel Beat Count: {{reelBeatCount}}
+Reel Panel Count Per Beat: {{reelPanelCount}}
 Text Length: {{textLength}}
 Text Length Word Range: {{textLengthWordRange}}
+Text Length Word Range Per Panel: {{textLengthWordRangePerPanel}}
+Text Length Word Range Per Beat: {{textLengthWordRangePerBeat}}
 Text Overlay Mode: {{textOverlayMode}}
 Mood Definer: {{moodDefiner}}
 Visual Style Definer: {{visualStyleDefiner}}
@@ -678,8 +681,11 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'language', label: 'Language', description: 'Requested output language for quote text.', required: true },
       { key: 'userPrompt', label: 'User Prompt', description: 'Original reel request from the user.', required: true },
       { key: 'reelBeatCount', label: 'Reel Beat Count', description: 'Configured reel beat count, 1 to 3.', required: true },
+      { key: 'reelPanelCount', label: 'Reel Panel Count', description: 'Storyboard/caption panels per beat.', required: false },
       { key: 'textLength', label: 'Text Length', description: 'Short, medium, or long visible text amount per panel.', required: true },
       { key: 'textLengthWordRange', label: 'Text Word Range', description: 'Target per-panel word range for reel captions/narration.', required: true },
+      { key: 'textLengthWordRangePerPanel', label: 'Text Word Range Per Panel', description: 'Target words per individual image panel.', required: false },
+      { key: 'textLengthWordRangePerBeat', label: 'Text Word Range Per Beat', description: 'Target total words per generated reel beat.', required: false },
       { key: 'textOverlayMode', label: 'Text Overlay Mode', description: 'Whether player/export overlay text is enabled.', required: true },
       { key: 'moodDefiner', label: 'Mood Definer', description: 'Admin-defined mood prompt fragment.', required: true },
       { key: 'visualStyleDefiner', label: 'Visual Style Definer', description: 'Admin-defined visual style prompt fragment.', required: true },

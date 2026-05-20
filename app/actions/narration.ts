@@ -919,6 +919,7 @@ export async function generateAndPersistNarration(
               audioStatus: 'ready',
               audioError: null,
               narrationVoiceId: voiceName,
+              ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
             });
             if (audioPayload.reelCaptions?.length) {
               const admin = createAdminClient();

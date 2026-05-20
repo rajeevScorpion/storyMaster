@@ -52,7 +52,7 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
-import ReelCaptionOverlay from './ReelCaptionOverlay';
+import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
@@ -181,7 +181,6 @@ function StoryboardCycler({
     : undefined;
   const activeCaption = activeCaptionObj?.text;
   const activeCaptionWordTimings = activeCaptionObj?.wordTimings;
-  const wordHighlightBg = textOverlayStyle?.backgroundColor ?? 'rgba(0,0,0,0.55)';
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -208,27 +207,13 @@ function StoryboardCycler({
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeCaption && (
         <ReelCaptionOverlay style={textOverlayStyle}>
-          {activeCaptionWordTimings && currentElapsedMs !== null && playbackState === 'playing'
-            ? (() => {
-                const tokens = activeCaption.split(/(\s+)/);
-                let wordIdx = 0;
-                return tokens.map((token, i) => {
-                  if (/^\s+$/.test(token)) return <span key={i}>{token}</span>;
-                  const timing = activeCaptionWordTimings[wordIdx++];
-                  const isActive = timing != null
-                    && currentElapsedMs >= timing.startMs
-                    && currentElapsedMs < timing.endMs;
-                  return (
-                    <span
-                      key={i}
-                      style={isActive ? { backgroundColor: wordHighlightBg, borderRadius: '4px', padding: '0 3px' } : undefined}
-                    >
-                      {token}
-                    </span>
-                  );
-                });
-              })()
-            : activeCaption}
+          <ReelTimedCaptionText
+            text={activeCaption}
+            wordTimings={activeCaptionWordTimings}
+            elapsedMs={currentElapsedMs}
+            isPlaying={playbackState === 'playing'}
+            style={textOverlayStyle}
+          />
         </ReelCaptionOverlay>
       )}
       <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
