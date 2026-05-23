@@ -12,11 +12,16 @@ export interface ReelTextOverlayStyle {
   shadowBlur?: number;
   backgroundColor?: string;
   backgroundOpacity?: number;
+  backgroundBlur?: number;
   position?: 'lower' | 'middle' | 'upper';
   verticalOffset?: number;
   align?: 'left' | 'center' | 'right';
   wordHighlightColor?: string;
   wordHighlightOpacity?: number;
+  wordHighlightPaddingX?: number;
+  wordHighlightPaddingY?: number;
+  wordHighlightBorderRadius?: number;
+  wordHighlightWordSpacing?: number;
 }
 
 export interface ReelVisualStyleRecord {
@@ -54,8 +59,18 @@ export interface ReelVisualStyleRuntime {
   noFaceDefault: boolean;
 }
 
+export const REEL_TEXT_FONT_PRESETS = [
+  { label: 'Inter', value: 'var(--font-sans), Inter, system-ui, sans-serif' },
+  { label: 'Playfair', value: 'var(--font-serif), Georgia, Cambria, serif' },
+  { label: 'Bebas', value: 'var(--font-reel-bebas), Impact, sans-serif' },
+  { label: 'Oswald', value: 'var(--font-reel-oswald), Arial Narrow, sans-serif' },
+  { label: 'Montserrat', value: 'var(--font-reel-montserrat), Arial, sans-serif' },
+  { label: 'Poppins', value: 'var(--font-reel-poppins), Arial, sans-serif' },
+  { label: 'Lora', value: 'var(--font-reel-lora), Georgia, serif' },
+] as const;
+
 export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
-  fontFamily: 'Inter, system-ui, sans-serif',
+  fontFamily: REEL_TEXT_FONT_PRESETS[0].value,
   fontSize: 16,
   fontWeight: 600,
   color: '#ffffff',
@@ -63,15 +78,30 @@ export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
   shadowBlur: 14,
   backgroundColor: '#000000',
   backgroundOpacity: 0.32,
+  backgroundBlur: 4,
   position: 'lower',
   verticalOffset: 0,
   align: 'center',
   wordHighlightColor: '#C65A2E',
   wordHighlightOpacity: 0.72,
+  wordHighlightPaddingX: 3,
+  wordHighlightPaddingY: 1,
+  wordHighlightBorderRadius: 4,
+  wordHighlightWordSpacing: 4,
 };
 
 export const REEL_CAPTION_VERTICAL_OFFSET_MIN = -30;
 export const REEL_CAPTION_VERTICAL_OFFSET_MAX = 30;
+export const REEL_CAPTION_BACKGROUND_BLUR_MIN = 0;
+export const REEL_CAPTION_BACKGROUND_BLUR_MAX = 24;
+export const REEL_WORD_HIGHLIGHT_PADDING_X_MIN = 0;
+export const REEL_WORD_HIGHLIGHT_PADDING_X_MAX = 18;
+export const REEL_WORD_HIGHLIGHT_PADDING_Y_MIN = 0;
+export const REEL_WORD_HIGHLIGHT_PADDING_Y_MAX = 12;
+export const REEL_WORD_HIGHLIGHT_RADIUS_MIN = 0;
+export const REEL_WORD_HIGHLIGHT_RADIUS_MAX = 24;
+export const REEL_WORD_HIGHLIGHT_WORD_SPACING_MIN = 0;
+export const REEL_WORD_HIGHLIGHT_WORD_SPACING_MAX = 28;
 export const REEL_CAPTION_TOP_SAFE_MIN = 12;
 export const REEL_CAPTION_TOP_SAFE_MAX = 88;
 
@@ -87,7 +117,34 @@ function roundToTwo(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function parseRgbChannels(color: string): [number, number, number] | null {
+function compactFontFamily(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, '');
+}
+
+function normalizeReelTextFontFamily(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily;
+  }
+
+  const fontFamily = value.trim();
+  if (REEL_TEXT_FONT_PRESETS.some((font) => font.value === fontFamily)) {
+    return fontFamily;
+  }
+
+  const legacyAliases = [
+    { legacy: 'Inter, system-ui, sans-serif', preset: REEL_TEXT_FONT_PRESETS[0].value },
+    { legacy: 'Georgia, Cambria, Times New Roman, serif', preset: REEL_TEXT_FONT_PRESETS[1].value },
+    { legacy: 'Georgia, Cambria, serif', preset: REEL_TEXT_FONT_PRESETS[1].value },
+    { legacy: 'Arial, Helvetica, sans-serif', preset: REEL_TEXT_FONT_PRESETS[4].value },
+    { legacy: 'Verdana, Geneva, sans-serif', preset: REEL_TEXT_FONT_PRESETS[5].value },
+  ];
+  const compact = compactFontFamily(fontFamily);
+  const match = legacyAliases.find((alias) => compactFontFamily(alias.legacy) === compact);
+  return match?.preset ?? fontFamily;
+}
+
+export function reelColorToRgb(color: string | undefined): [number, number, number] | null {
+  if (!color) return null;
   const trimmed = color.trim();
   const hex = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
   if (hex) {
@@ -114,11 +171,15 @@ function parseRgbChannels(color: string): [number, number, number] | null {
   return null;
 }
 
+export function reelRgbToHex(rgb: [number, number, number]): string {
+  return `#${rgb.map((channel) => clampNumber(Math.round(channel), 0, 255).toString(16).padStart(2, '0')).join('')}`;
+}
+
 export function reelColorWithOpacity(color: string | undefined, opacity: number | undefined): string {
   const alpha = clampUnit(Number.isFinite(Number(opacity)) ? Number(opacity) : 1);
   if (alpha <= 0) return 'transparent';
   const source = color?.trim() || '#000000';
-  const rgb = parseRgbChannels(source);
+  const rgb = reelColorToRgb(source);
   if (rgb) {
     return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${roundToTwo(alpha)})`;
   }
@@ -126,9 +187,9 @@ export function reelColorWithOpacity(color: string | undefined, opacity: number 
 }
 
 export function reelColorInputValue(color: string | undefined, fallback = '#000000'): string {
-  const rgb = color ? parseRgbChannels(color) : null;
+  const rgb = reelColorToRgb(color);
   if (!rgb) return fallback;
-  return `#${rgb.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+  return reelRgbToHex(rgb);
 }
 
 export function getReelCaptionAnchorPercent(position: ReelTextOverlayStyle['position']): number {
@@ -173,13 +234,16 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
   const fontSize = Number(raw.fontSize);
   const shadowBlur = Number(raw.shadowBlur);
   const backgroundOpacity = Number(raw.backgroundOpacity);
+  const backgroundBlur = Number(raw.backgroundBlur);
   const verticalOffset = Number(raw.verticalOffset);
   const wordHighlightOpacity = Number(raw.wordHighlightOpacity);
+  const wordHighlightPaddingX = Number(raw.wordHighlightPaddingX);
+  const wordHighlightPaddingY = Number(raw.wordHighlightPaddingY);
+  const wordHighlightBorderRadius = Number(raw.wordHighlightBorderRadius);
+  const wordHighlightWordSpacing = Number(raw.wordHighlightWordSpacing);
 
   return {
-    fontFamily: typeof raw.fontFamily === 'string' && raw.fontFamily.trim()
-      ? raw.fontFamily.trim()
-      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily,
+    fontFamily: normalizeReelTextFontFamily(raw.fontFamily),
     fontSize: Number.isFinite(fontSize)
       ? Math.max(8, Math.min(80, Math.round(fontSize)))
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize,
@@ -201,6 +265,9 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
     backgroundOpacity: Number.isFinite(backgroundOpacity)
       ? Math.max(0, Math.min(1, backgroundOpacity))
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundOpacity,
+    backgroundBlur: Number.isFinite(backgroundBlur)
+      ? Math.round(clampNumber(backgroundBlur, REEL_CAPTION_BACKGROUND_BLUR_MIN, REEL_CAPTION_BACKGROUND_BLUR_MAX))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundBlur,
     position,
     verticalOffset: Number.isFinite(verticalOffset)
       ? Math.round(clampNumber(verticalOffset, REEL_CAPTION_VERTICAL_OFFSET_MIN, REEL_CAPTION_VERTICAL_OFFSET_MAX))
@@ -212,6 +279,18 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
     wordHighlightOpacity: Number.isFinite(wordHighlightOpacity)
       ? Math.max(0, Math.min(1, wordHighlightOpacity))
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightOpacity,
+    wordHighlightPaddingX: Number.isFinite(wordHighlightPaddingX)
+      ? Math.round(clampNumber(wordHighlightPaddingX, REEL_WORD_HIGHLIGHT_PADDING_X_MIN, REEL_WORD_HIGHLIGHT_PADDING_X_MAX))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingX,
+    wordHighlightPaddingY: Number.isFinite(wordHighlightPaddingY)
+      ? Math.round(clampNumber(wordHighlightPaddingY, REEL_WORD_HIGHLIGHT_PADDING_Y_MIN, REEL_WORD_HIGHLIGHT_PADDING_Y_MAX))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingY,
+    wordHighlightBorderRadius: Number.isFinite(wordHighlightBorderRadius)
+      ? Math.round(clampNumber(wordHighlightBorderRadius, REEL_WORD_HIGHLIGHT_RADIUS_MIN, REEL_WORD_HIGHLIGHT_RADIUS_MAX))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightBorderRadius,
+    wordHighlightWordSpacing: Number.isFinite(wordHighlightWordSpacing)
+      ? Math.round(clampNumber(wordHighlightWordSpacing, REEL_WORD_HIGHLIGHT_WORD_SPACING_MIN, REEL_WORD_HIGHLIGHT_WORD_SPACING_MAX))
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightWordSpacing,
   };
 }
 

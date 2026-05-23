@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -36,10 +36,24 @@ import type { StoryBeat, StoryNode, StorySession } from '@/lib/types/story';
 import { resolveVideoExportWatermarkVisibility, type PricingRuntimeContext } from '@/lib/types/pricing';
 import {
   DEFAULT_REEL_TEXT_OVERLAY_STYLE,
+  REEL_CAPTION_BACKGROUND_BLUR_MAX,
+  REEL_CAPTION_BACKGROUND_BLUR_MIN,
   REEL_CAPTION_VERTICAL_OFFSET_MAX,
   REEL_CAPTION_VERTICAL_OFFSET_MIN,
+  REEL_TEXT_FONT_PRESETS,
+  REEL_WORD_HIGHLIGHT_PADDING_X_MAX,
+  REEL_WORD_HIGHLIGHT_PADDING_X_MIN,
+  REEL_WORD_HIGHLIGHT_PADDING_Y_MAX,
+  REEL_WORD_HIGHLIGHT_PADDING_Y_MIN,
+  REEL_WORD_HIGHLIGHT_RADIUS_MAX,
+  REEL_WORD_HIGHLIGHT_RADIUS_MIN,
+  REEL_WORD_HIGHLIGHT_WORD_SPACING_MAX,
+  REEL_WORD_HIGHLIGHT_WORD_SPACING_MIN,
   normalizeReelTextOverlayStyle,
+  reelColorWithOpacity,
   reelColorInputValue,
+  reelColorToRgb,
+  reelRgbToHex,
   type ReelTextOverlayStyle,
 } from '@/lib/reel/styles';
 import {
@@ -292,13 +306,6 @@ function getReelPanelTexts(beat: Pick<StoryBeat, 'storyText' | 'reelCaptions'>):
   });
 }
 
-const REEL_FONT_PRESETS = [
-  { label: 'Inter', value: 'Inter, system-ui, sans-serif' },
-  { label: 'Serif', value: 'Georgia, Cambria, Times New Roman, serif' },
-  { label: 'Clean', value: 'Arial, Helvetica, sans-serif' },
-  { label: 'Rounded', value: 'Verdana, Geneva, sans-serif' },
-] as const;
-
 function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): string {
   const normalized = normalizeReelTextOverlayStyle(style);
   return JSON.stringify({
@@ -310,11 +317,16 @@ function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): st
     shadowBlur: normalized.shadowBlur,
     backgroundColor: normalized.backgroundColor,
     backgroundOpacity: normalized.backgroundOpacity,
+    backgroundBlur: normalized.backgroundBlur,
     position: normalized.position,
     verticalOffset: normalized.verticalOffset,
     align: normalized.align,
     wordHighlightColor: normalized.wordHighlightColor,
     wordHighlightOpacity: normalized.wordHighlightOpacity,
+    wordHighlightPaddingX: normalized.wordHighlightPaddingX,
+    wordHighlightPaddingY: normalized.wordHighlightPaddingY,
+    wordHighlightBorderRadius: normalized.wordHighlightBorderRadius,
+    wordHighlightWordSpacing: normalized.wordHighlightWordSpacing,
   });
 }
 
@@ -410,8 +422,11 @@ interface ReelCaptionStylePanelProps {
   isSavingStyle: boolean;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   message: string | null;
+  isCollapsed: boolean;
   onChange: (patch: ReelTextOverlayStyle) => void;
+  onCancel: () => void;
   onSave: () => void;
+  onToggleCollapsed: () => void;
 }
 
 interface ReelStyleNumberInputProps {
@@ -469,32 +484,130 @@ function ReelStyleNumberInput({
   );
 }
 
-interface ReelStyleOpacityControlProps {
+interface ReelStyleSliderControlProps {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+}
+
+function ReelStyleSliderControl({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: ReelStyleSliderControlProps) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="w-10 shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+        {label}
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="min-w-0 flex-1 accent-emerald-400"
+      />
+      <ReelStyleNumberInput
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        label={label}
+        onCommit={onChange}
+      />
+    </div>
+  );
+}
+
+interface ReelIconSliderControlProps {
+  icon: LucideIcon;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (value: number) => void;
+}
+
+function ReelIconSliderControl({
+  icon: Icon,
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: ReelIconSliderControlProps) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden="true" />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={label}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="min-w-0 flex-1 accent-emerald-400"
+      />
+      <ReelStyleNumberInput
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        label={label}
+        onCommit={onChange}
+      />
+    </div>
+  );
+}
+
+const REEL_COLOR_SWATCHES = [
+  '#000000',
+  '#ffffff',
+  '#C65A2E',
+  '#00D49B',
+  '#2563EB',
+  '#A855F7',
+  '#F59E0B',
+  '#EF4444',
+] as const;
+
+interface ReelRgbChannelControlProps {
   label: string;
   value: number;
   onChange: (value: number) => void;
 }
 
-function ReelStyleOpacityControl({ label, value, onChange }: ReelStyleOpacityControlProps) {
-  const percent = Math.round((value ?? 0) * 100);
+function ReelRgbChannelControl({ label, value, onChange }: ReelRgbChannelControlProps) {
   return (
-    <div className="flex min-w-0 items-center gap-2">
+    <div className="grid grid-cols-[1rem_minmax(0,1fr)_3rem] items-center gap-2">
+      <span className="font-sans text-[10px] uppercase text-neutral-500">{label}</span>
       <input
         type="range"
         min={0}
-        max={1}
-        step={0.05}
+        max={255}
         value={value}
-        aria-label={label}
-        onChange={(event) => onChange(normalizeOpacityInput(Number(event.target.value)))}
-        className="min-w-0 flex-1 accent-emerald-400"
+        aria-label={`${label} channel`}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="min-w-0 accent-emerald-400"
       />
       <ReelStyleNumberInput
-        value={percent}
+        value={value}
         min={0}
-        max={100}
-        label={`${label} percent`}
-        onCommit={(nextPercent) => onChange(normalizeOpacityInput(nextPercent / 100))}
+        max={255}
+        label={`${label} channel value`}
+        onCommit={onChange}
       />
     </div>
   );
@@ -505,8 +618,19 @@ interface ReelStyleColorControlProps {
   color: string | undefined;
   fallback: string;
   opacity: number;
+  blur?: number;
+  sampleText?: string;
+  samplePaddingX?: number;
+  samplePaddingY?: number;
+  sampleBorderRadius?: number;
+  sampleWordSpacing?: number;
+  onSamplePaddingXChange?: (padding: number) => void;
+  onSamplePaddingYChange?: (padding: number) => void;
+  onSampleBorderRadiusChange?: (radius: number) => void;
+  onSampleWordSpacingChange?: (spacing: number) => void;
   onColorChange: (color: string) => void;
   onOpacityChange: (opacity: number) => void;
+  onBlurChange?: (blur: number) => void;
 }
 
 function ReelStyleColorControl({
@@ -514,23 +638,83 @@ function ReelStyleColorControl({
   color,
   fallback,
   opacity,
+  blur,
+  sampleText,
+  samplePaddingX,
+  samplePaddingY,
+  sampleBorderRadius,
+  sampleWordSpacing,
+  onSamplePaddingXChange,
+  onSamplePaddingYChange,
+  onSampleBorderRadiusChange,
+  onSampleWordSpacingChange,
   onColorChange,
   onOpacityChange,
+  onBlurChange,
 }: ReelStyleColorControlProps) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const colorInputValue = reelOverlayColorInputValue(color, fallback);
+  const rgb: [number, number, number] = reelColorToRgb(colorInputValue) ?? [0, 0, 0];
+  const opacityPercent = Math.round((opacity ?? 0) * 100);
+  const showSample = Boolean(sampleText);
+  const normalizedSamplePaddingX = samplePaddingX ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingX;
+  const normalizedSamplePaddingY = samplePaddingY ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingY;
+  const normalizedSampleBorderRadius = sampleBorderRadius ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightBorderRadius;
+  const normalizedSampleWordSpacing = sampleWordSpacing ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightWordSpacing;
+  const setRgbChannel = (index: 0 | 1 | 2, value: number) => {
+    const next: [number, number, number] = [...rgb] as [number, number, number];
+    next[index] = clampReelNumber(Math.round(value), 0, 255);
+    onColorChange(reelRgbToHex(next));
+  };
+
   return (
     <div className="min-w-0 rounded-2xl border border-white/10 bg-neutral-900 px-3 py-2">
       <div className="mb-2 flex items-center gap-2">
-        <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
-          {label}
-        </span>
-        <input
-          type="color"
-          value={colorInputValue}
-          aria-label={`${label} color`}
-          onChange={(event) => onColorChange(event.target.value)}
-          className="h-7 w-8 cursor-pointer rounded border border-white/10 bg-transparent p-0"
-        />
+        {showSample ? (
+          <span
+            className="min-w-0 shrink-0 whitespace-nowrap font-sans text-[10px] font-semibold uppercase tracking-wider text-white"
+            style={{ isolation: 'isolate' }}
+          >
+            {sampleText?.split(/\s+/).filter(Boolean).map((word, index) => (
+              <span
+                key={`${word}-${index}`}
+                className="relative inline-block"
+                style={{
+                  marginLeft: index > 0 ? `${normalizedSampleWordSpacing - normalizedSamplePaddingX * 2}px` : undefined,
+                  padding: `${normalizedSamplePaddingY}px ${normalizedSamplePaddingX}px`,
+                }}
+              >
+                <span
+                  aria-hidden
+                  className="absolute"
+                  style={{
+                    backgroundColor: reelColorWithOpacity(color, opacity),
+                    borderRadius: `${normalizedSampleBorderRadius}px`,
+                    inset: 0,
+                    zIndex: -1,
+                  }}
+                />
+                {word}
+              </span>
+            ))}
+          </span>
+        ) : (
+          <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+            {label}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => setPickerOpen((current) => !current)}
+          aria-label={`${label} color picker`}
+          aria-expanded={pickerOpen}
+          className="h-7 w-8 shrink-0 rounded-lg border border-white/15 bg-neutral-950 p-1 shadow-inner transition-colors hover:border-emerald-400/50"
+        >
+          <span
+            className="block h-full w-full rounded-md"
+            style={{ backgroundColor: colorInputValue }}
+          />
+        </button>
         <input
           type="text"
           value={color ?? fallback}
@@ -539,11 +723,205 @@ function ReelStyleColorControl({
           className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 font-sans text-[11px] text-neutral-200 outline-none transition-colors focus:border-emerald-400/50"
         />
       </div>
-      <ReelStyleOpacityControl
-        label={`${label} opacity`}
-        value={opacity}
-        onChange={onOpacityChange}
-      />
+      {typeof blur === 'number' && onBlurChange && (
+        <div className="grid grid-cols-2 gap-2">
+          <ReelIconSliderControl
+            icon={Blend}
+            label={`${label} opacity`}
+            value={opacityPercent}
+            min={0}
+            max={100}
+            step={5}
+            onChange={(nextPercent) => onOpacityChange(normalizeOpacityInput(nextPercent / 100))}
+          />
+          <ReelIconSliderControl
+            icon={Focus}
+            label={`${label} blur`}
+            value={blur}
+            min={REEL_CAPTION_BACKGROUND_BLUR_MIN}
+            max={REEL_CAPTION_BACKGROUND_BLUR_MAX}
+            onChange={(nextBlur) => onBlurChange(Math.round(nextBlur))}
+          />
+        </div>
+      )}
+      {!(typeof blur === 'number' && onBlurChange) && (
+        <ReelIconSliderControl
+          icon={Blend}
+          label={`${label} opacity`}
+          value={opacityPercent}
+          min={0}
+          max={100}
+          step={5}
+          onChange={(nextPercent) => onOpacityChange(normalizeOpacityInput(nextPercent / 100))}
+        />
+      )}
+      {typeof samplePaddingX === 'number'
+        && typeof samplePaddingY === 'number'
+        && typeof sampleBorderRadius === 'number'
+        && typeof sampleWordSpacing === 'number'
+        && onSamplePaddingXChange
+        && onSamplePaddingYChange
+        && onSampleBorderRadiusChange
+        && onSampleWordSpacingChange
+        && (
+          <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(min(100%,7.5rem),1fr))] gap-2">
+            <ReelIconSliderControl
+              icon={UnfoldHorizontal}
+              label={`${label} horizontal padding`}
+              value={samplePaddingX}
+              min={REEL_WORD_HIGHLIGHT_PADDING_X_MIN}
+              max={REEL_WORD_HIGHLIGHT_PADDING_X_MAX}
+              onChange={(nextPadding) => onSamplePaddingXChange(Math.round(nextPadding))}
+            />
+            <ReelIconSliderControl
+              icon={UnfoldVertical}
+              label={`${label} vertical padding`}
+              value={samplePaddingY}
+              min={REEL_WORD_HIGHLIGHT_PADDING_Y_MIN}
+              max={REEL_WORD_HIGHLIGHT_PADDING_Y_MAX}
+              onChange={(nextPadding) => onSamplePaddingYChange(Math.round(nextPadding))}
+            />
+            <ReelIconSliderControl
+              icon={Radius}
+              label={`${label} border radius`}
+              value={sampleBorderRadius}
+              min={REEL_WORD_HIGHLIGHT_RADIUS_MIN}
+              max={REEL_WORD_HIGHLIGHT_RADIUS_MAX}
+              onChange={(nextRadius) => onSampleBorderRadiusChange(Math.round(nextRadius))}
+            />
+            <ReelIconSliderControl
+              icon={StretchHorizontal}
+              label={`${label} word spacing`}
+              value={sampleWordSpacing}
+              min={REEL_WORD_HIGHLIGHT_WORD_SPACING_MIN}
+              max={REEL_WORD_HIGHLIGHT_WORD_SPACING_MAX}
+              onChange={(nextSpacing) => onSampleWordSpacingChange(Math.round(nextSpacing))}
+            />
+          </div>
+        )}
+      {pickerOpen && (
+        <div className="mt-3 rounded-2xl border border-white/12 bg-neutral-950 p-3 shadow-2xl shadow-black/40">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="font-sans text-[10px] uppercase tracking-[0.22em] text-neutral-500">
+              {label} color
+            </span>
+            <button
+              type="button"
+              onClick={() => setPickerOpen(false)}
+              className="rounded-full border border-white/10 px-2 py-1 font-sans text-[10px] uppercase tracking-wider text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-100"
+            >
+              Done
+            </button>
+          </div>
+          <div className="mb-3 grid grid-cols-8 gap-1.5">
+            {REEL_COLOR_SWATCHES.map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                aria-label={`Use ${swatch}`}
+                onClick={() => onColorChange(swatch)}
+                className={`h-6 rounded-md border transition-transform hover:scale-110 ${
+                  colorInputValue.toLowerCase() === swatch.toLowerCase()
+                    ? 'border-emerald-300'
+                    : 'border-white/15'
+                }`}
+                style={{ backgroundColor: swatch }}
+              />
+            ))}
+          </div>
+          <label className="mb-3 flex items-center gap-2">
+            <span className="w-8 shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+              Hex
+            </span>
+            <input
+              type="text"
+              value={color ?? fallback}
+              onChange={(event) => onColorChange(event.target.value)}
+              className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/25 px-2 py-1.5 font-sans text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-400/50"
+            />
+          </label>
+          <div className="space-y-2">
+            <ReelRgbChannelControl label="R" value={rgb[0]} onChange={(value) => setRgbChannel(0, value)} />
+            <ReelRgbChannelControl label="G" value={rgb[1]} onChange={(value) => setRgbChannel(1, value)} />
+            <ReelRgbChannelControl label="B" value={rgb[2]} onChange={(value) => setRgbChannel(2, value)} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ReelFontDropdownProps {
+  value: string | undefined;
+  onChange: (fontFamily: string) => void;
+}
+
+function ReelFontDropdown({ value, onChange }: ReelFontDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const selected = REEL_TEXT_FONT_PRESETS.find((font) => font.value === value);
+  const selectedLabel = selected?.label ?? 'Custom';
+  const options = selected
+    ? REEL_TEXT_FONT_PRESETS
+    : [
+        { label: 'Custom', value: value ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily },
+        ...REEL_TEXT_FONT_PRESETS,
+      ];
+
+  return (
+    <div
+      className="relative min-w-0 flex-1"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className="flex min-h-7 w-full items-center justify-between gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-left font-sans text-[11px] text-neutral-100 outline-none transition-colors hover:border-white/20 focus:border-emerald-400/50"
+      >
+        <span className="min-w-0 truncate" style={{ fontFamily: value }}>
+          {selectedLabel}
+        </span>
+        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-neutral-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-50 overflow-hidden rounded-2xl border border-white/12 bg-neutral-950 p-1.5 shadow-2xl shadow-black/60"
+        >
+          {options.map((font) => {
+            const active = font.value === value;
+            return (
+              <button
+                key={`${font.label}-${font.value}`}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(font.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
+                  active
+                    ? 'bg-emerald-400 text-neutral-950'
+                    : 'text-neutral-200 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <span className="min-w-0 truncate" style={{ fontFamily: font.value }}>
+                  {font.label}
+                </span>
+                {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -560,12 +938,17 @@ function ReelCaptionStyleControls({
   const fontSize = normalizedStyle.fontSize ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize;
   const verticalOffset = normalizedStyle.verticalOffset ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.verticalOffset;
   const backgroundOpacity = normalizedStyle.backgroundOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundOpacity;
+  const backgroundBlur = normalizedStyle.backgroundBlur ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundBlur;
   const wordHighlightOpacity = normalizedStyle.wordHighlightOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightOpacity;
+  const wordHighlightPaddingX = normalizedStyle.wordHighlightPaddingX ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingX;
+  const wordHighlightPaddingY = normalizedStyle.wordHighlightPaddingY ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingY;
+  const wordHighlightBorderRadius = normalizedStyle.wordHighlightBorderRadius ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightBorderRadius;
+  const wordHighlightWordSpacing = normalizedStyle.wordHighlightWordSpacing ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightWordSpacing;
 
   return (
     <div className="space-y-2.5">
-      <div className="grid gap-2 lg:grid-cols-[auto_minmax(11rem,1fr)_auto]">
-        <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+        <div className="flex min-w-0 rounded-full border border-white/10 bg-neutral-900 p-0.5">
           {([
             ['upper', 'Top'],
             ['middle', 'Mid'],
@@ -575,7 +958,7 @@ function ReelCaptionStyleControls({
               key={value}
               type="button"
               onClick={() => onChange({ position: value })}
-              className={`rounded-full px-2.5 py-1.5 text-[10px] font-sans uppercase tracking-wider transition-colors ${
+              className={`flex-1 rounded-full px-2.5 py-1.5 text-[10px] font-sans uppercase tracking-wider transition-colors ${
                 normalizedStyle.position === value
                   ? 'bg-emerald-400 text-neutral-950'
                   : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
@@ -586,28 +969,7 @@ function ReelCaptionStyleControls({
           ))}
         </div>
 
-        <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
-          <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
-            Y
-          </span>
-          <input
-            type="range"
-            min={REEL_CAPTION_VERTICAL_OFFSET_MIN}
-            max={REEL_CAPTION_VERTICAL_OFFSET_MAX}
-            value={verticalOffset}
-            onChange={(event) => onChange({ verticalOffset: Number(event.target.value) })}
-            className="min-w-0 flex-1 accent-emerald-400"
-          />
-          <ReelStyleNumberInput
-            value={verticalOffset}
-            min={REEL_CAPTION_VERTICAL_OFFSET_MIN}
-            max={REEL_CAPTION_VERTICAL_OFFSET_MAX}
-            label="Caption vertical offset"
-            onCommit={(nextValue) => onChange({ verticalOffset: nextValue })}
-          />
-        </label>
-
-        <div className="flex rounded-full border border-white/10 bg-neutral-900 p-0.5">
+        <div className="flex shrink-0 rounded-full border border-white/10 bg-neutral-900 p-0.5">
           {([
             ['left', AlignLeft, 'Align left'],
             ['center', AlignCenter, 'Align center'],
@@ -630,30 +992,29 @@ function ReelCaptionStyleControls({
         </div>
       </div>
 
-      <div className="grid gap-2 md:grid-cols-[minmax(10rem,1fr)_minmax(12rem,1.4fr)]">
-        <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex min-w-0 items-center gap-1.5 rounded-full border border-white/10 bg-neutral-900 px-2.5 py-2">
           <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
-            Font
+            Y
           </span>
-          <select
-            value={normalizedStyle.fontFamily}
-            onChange={(event) => onChange({ fontFamily: event.target.value })}
-            className="min-w-0 flex-1 bg-transparent font-sans text-[11px] text-neutral-200 outline-none"
-          >
-            {!REEL_FONT_PRESETS.some((font) => font.value === normalizedStyle.fontFamily) && (
-              <option value={normalizedStyle.fontFamily} className="bg-neutral-900 text-neutral-100">
-                Custom
-              </option>
-            )}
-            {REEL_FONT_PRESETS.map((font) => (
-              <option key={font.value} value={font.value} className="bg-neutral-900 text-neutral-100">
-                {font.label}
-              </option>
-            ))}
-          </select>
+          <input
+            type="range"
+            min={REEL_CAPTION_VERTICAL_OFFSET_MIN}
+            max={REEL_CAPTION_VERTICAL_OFFSET_MAX}
+            value={verticalOffset}
+            onChange={(event) => onChange({ verticalOffset: Number(event.target.value) })}
+            className="min-w-0 flex-1 accent-emerald-400"
+          />
+          <ReelStyleNumberInput
+            value={verticalOffset}
+            min={REEL_CAPTION_VERTICAL_OFFSET_MIN}
+            max={REEL_CAPTION_VERTICAL_OFFSET_MAX}
+            label="Caption vertical offset"
+            onCommit={(nextValue) => onChange({ verticalOffset: nextValue })}
+          />
         </label>
 
-        <label className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+        <label className="flex min-w-0 items-center gap-1.5 rounded-full border border-white/10 bg-neutral-900 px-2.5 py-2">
           <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
             Size
           </span>
@@ -675,22 +1036,43 @@ function ReelCaptionStyleControls({
         </label>
       </div>
 
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="flex min-w-0 items-center gap-2 rounded-full border border-white/10 bg-neutral-900 px-3 py-2">
+        <span className="shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+          Font
+        </span>
+        <ReelFontDropdown
+          value={normalizedStyle.fontFamily}
+          onChange={(fontFamily) => onChange({ fontFamily })}
+        />
+      </div>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-2">
         <ReelStyleColorControl
           label="BG"
           color={normalizedStyle.backgroundColor}
           fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundColor}
           opacity={backgroundOpacity}
+          blur={backgroundBlur}
           onColorChange={(backgroundColor) => onChange({ backgroundColor })}
           onOpacityChange={(backgroundOpacity) => onChange({ backgroundOpacity })}
+          onBlurChange={(backgroundBlur) => onChange({ backgroundBlur })}
         />
         <ReelStyleColorControl
-          label="Word"
+          label="Word highlight"
           color={normalizedStyle.wordHighlightColor}
           fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightColor}
           opacity={wordHighlightOpacity}
+          sampleText="Word highlight"
+          samplePaddingX={wordHighlightPaddingX}
+          samplePaddingY={wordHighlightPaddingY}
+          sampleBorderRadius={wordHighlightBorderRadius}
+          sampleWordSpacing={wordHighlightWordSpacing}
           onColorChange={(wordHighlightColor) => onChange({ wordHighlightColor })}
           onOpacityChange={(wordHighlightOpacity) => onChange({ wordHighlightOpacity })}
+          onSamplePaddingXChange={(wordHighlightPaddingX) => onChange({ wordHighlightPaddingX })}
+          onSamplePaddingYChange={(wordHighlightPaddingY) => onChange({ wordHighlightPaddingY })}
+          onSampleBorderRadiusChange={(wordHighlightBorderRadius) => onChange({ wordHighlightBorderRadius })}
+          onSampleWordSpacingChange={(wordHighlightWordSpacing) => onChange({ wordHighlightWordSpacing })}
         />
       </div>
     </div>
@@ -703,45 +1085,76 @@ function ReelCaptionStylePanel({
   isSavingStyle,
   saveState,
   message,
+  isCollapsed,
   onChange,
+  onCancel,
   onSave,
+  onToggleCollapsed,
 }: ReelCaptionStylePanelProps) {
+  const showControls = hasUnsavedStyle || !isCollapsed;
+
   return (
     <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+      <div className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${showControls ? 'border-b border-white/10' : ''}`}>
         <div className="flex items-center gap-2 font-sans text-[10px] uppercase tracking-[0.24em] text-neutral-400">
           <Type className="h-3.5 w-3.5 text-emerald-300/80" />
           Caption style
         </div>
-        {hasUnsavedStyle && (
+        {hasUnsavedStyle ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isSavingStyle}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={isSavingStyle}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-70"
+            >
+              {isSavingStyle ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Save className="h-3 w-3" />
+              )}
+              Save
+            </button>
+          </div>
+        ) : (
           <button
             type="button"
-            onClick={onSave}
-            disabled={isSavingStyle}
-            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-70"
+            onClick={onToggleCollapsed}
+            aria-expanded={!isCollapsed}
+            className="rounded-full bg-white/5 p-2 text-neutral-300 transition-colors hover:bg-white/10 hover:text-white"
+            title={isCollapsed ? 'Show caption style' : 'Hide caption style'}
           >
-            {isSavingStyle ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+            {isCollapsed ? (
+              <ChevronUp className="h-4 w-4" />
             ) : (
-              <Save className="h-3 w-3" />
+              <ChevronDown className="h-4 w-4" />
             )}
-            Save
           </button>
         )}
       </div>
 
-      <div className="px-4 py-3">
-        <ReelCaptionStyleControls
-          normalizedStyle={normalizedStyle}
-          onChange={onChange}
-        />
+      {showControls && (
+        <div className="px-4 py-3">
+          <ReelCaptionStyleControls
+            normalizedStyle={normalizedStyle}
+            onChange={onChange}
+          />
 
-        {message && (
-          <p className={`text-xs font-sans ${saveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
-            {message}
-          </p>
-        )}
-      </div>
+          {saveState === 'error' && message && (
+            <p className="text-xs font-sans text-rose-300">
+              {message}
+            </p>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -1498,6 +1911,7 @@ function StoryScreenInner({
       : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isReelCaptionStyleCollapsed, setIsReelCaptionStyleCollapsed] = useState(false);
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
@@ -1876,6 +2290,12 @@ function StoryScreenInner({
     setReelStyleMessage(null);
   }, []);
 
+  const handleCancelReelOverlayStyle = useCallback(() => {
+    setReelOverlayDraft(savedReelOverlayStyle);
+    setReelStyleSaveState('idle');
+    setReelStyleMessage(null);
+  }, [savedReelOverlayStyle]);
+
   const handleSaveReelOverlayStyle = useCallback(async () => {
     if (!isReelStory || !hasUnsavedReelOverlayStyle || isReelStyleSaving) return;
 
@@ -1885,7 +2305,7 @@ function StoryScreenInner({
     try {
       await updateReelTextOverlayStyle(reelOverlayDraft);
       setReelStyleSaveState('saved');
-      setReelStyleMessage('Style saved.');
+      setReelStyleMessage(null);
     } catch (error) {
       setReelStyleSaveState('error');
       setReelStyleMessage(error instanceof Error ? error.message : 'Failed to save text style.');
@@ -2650,8 +3070,11 @@ function StoryScreenInner({
           isSavingStyle={isReelStyleSaving}
           saveState={reelStyleSaveState}
           message={reelStyleMessage}
+          isCollapsed={isReelCaptionStyleCollapsed}
           onChange={updateReelOverlayDraft}
+          onCancel={handleCancelReelOverlayStyle}
           onSave={handleSaveReelOverlayStyle}
+          onToggleCollapsed={() => setIsReelCaptionStyleCollapsed((current) => !current)}
         />
 
         <motion.div
@@ -3412,19 +3835,29 @@ function StoryScreenInner({
                             Caption style
                           </div>
                           {hasUnsavedReelOverlayStyle && (
-                            <button
-                              type="button"
-                              onClick={handleSaveReelOverlayStyle}
-                              disabled={isReelStyleSaving}
-                              className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-70"
-                            >
-                              {isReelStyleSaving ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <Save className="h-3.5 w-3.5" />
-                              )}
-                              Save style
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={handleCancelReelOverlayStyle}
+                                disabled={isReelStyleSaving}
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSaveReelOverlayStyle}
+                                disabled={isReelStyleSaving}
+                                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1.5 text-[11px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-70"
+                              >
+                                {isReelStyleSaving ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Save className="h-3.5 w-3.5" />
+                                )}
+                                Save style
+                              </button>
+                            </div>
                           )}
                         </div>
 
@@ -3435,10 +3868,8 @@ function StoryScreenInner({
                           />
                         </div>
 
-                        {reelStyleMessage && (
-                          <p className={`mt-3 text-xs font-sans ${
-                            reelStyleSaveState === 'error' ? 'text-rose-300' : 'text-emerald-300'
-                          }`}>
+                        {reelStyleSaveState === 'error' && reelStyleMessage && (
+                          <p className="mt-3 text-xs font-sans text-rose-300">
                             {reelStyleMessage}
                           </p>
                         )}

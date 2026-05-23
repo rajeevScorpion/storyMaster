@@ -348,6 +348,50 @@ function createExportCanvas(canvasSize: ExportCanvasSize): HTMLCanvasElement {
   return canvas;
 }
 
+async function waitForExportFonts(): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts?.ready) return;
+  await document.fonts.ready.catch(() => undefined);
+}
+
+function resolveCanvasFontFamily(fontFamily: string | undefined): string {
+  if (!fontFamily || typeof window === 'undefined') {
+    return fontFamily || DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily;
+  }
+
+  return fontFamily.replace(/var\((--[^),\s]+)(?:,[^)]+)?\)/g, (_match, variableName: string) => {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(variableName).trim();
+    return value || DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily;
+  });
+}
+
+function drawBlurredRoundedBackdrop(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+  blur: number
+) {
+  if (blur <= 0) return;
+
+  const source = createExportCanvas({
+    width: context.canvas.width,
+    height: context.canvas.height,
+  });
+  const sourceContext = source.getContext('2d');
+  if (!sourceContext) return;
+  sourceContext.drawImage(context.canvas, 0, 0);
+
+  context.save();
+  drawRoundedRect(context, x, y, width, height, radius);
+  context.clip();
+  context.filter = `blur(${blur}px)`;
+  context.drawImage(source, 0, 0);
+  context.filter = 'none';
+  context.restore();
+}
+
 function drawContainedImage(
   context: CanvasRenderingContext2D,
   image: HTMLImageElement,
@@ -404,10 +448,25 @@ type WrappedCanvasWord = {
   wordIndex: number;
 };
 
+function measureCanvasWordLine(
+  context: CanvasRenderingContext2D,
+  line: WrappedCanvasWord[],
+  highlightPaddingX: number,
+  wordSpacing: number
+): number {
+  return line.reduce((total, word, index) => (
+    total
+      + context.measureText(word.text).width
+      + (index === 0 ? highlightPaddingX * 2 : wordSpacing)
+  ), 0);
+}
+
 function wrapCanvasWords(
   context: CanvasRenderingContext2D,
   text: string,
-  maxWidth: number
+  maxWidth: number,
+  highlightPaddingX: number,
+  wordSpacing: number
 ): WrappedCanvasWord[][] {
   const words = text.trim().split(/\s+/).filter(Boolean).map((word, wordIndex) => ({ text: word, wordIndex }));
   const lines: WrappedCanvasWord[][] = [];
@@ -415,8 +474,7 @@ function wrapCanvasWords(
 
   for (const word of words) {
     const next = [...current, word];
-    const nextText = next.map((item) => item.text).join(' ');
-    if (context.measureText(nextText).width <= maxWidth || current.length === 0) {
+    if (measureCanvasWordLine(context, next, highlightPaddingX, wordSpacing) <= maxWidth || current.length === 0) {
       current = next;
     } else {
       lines.push(current);
@@ -442,18 +500,25 @@ function drawReelCaptionOverlay(
     ...normalizeReelTextOverlayStyle(styleInput),
   };
   const fontSize = Math.max(22, Math.round(canvasSize.width * 0.055 * (style.fontSize / DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize)));
-  const lineHeight = Math.round(fontSize * 1.2);
+  const styleFontSize = style.fontSize || DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize;
+  const highlightPaddingX = Math.round(fontSize * ((style.wordHighlightPaddingX ?? 0) / styleFontSize));
+  const highlightPaddingY = Math.round(fontSize * ((style.wordHighlightPaddingY ?? 0) / styleFontSize));
+  const highlightBorderRadius = Math.round(fontSize * ((style.wordHighlightBorderRadius ?? 0) / styleFontSize));
+  const wordSpacing = Math.round(fontSize * ((style.wordHighlightWordSpacing ?? 0) / styleFontSize));
+  const baseLineHeight = Math.round(fontSize * 1.2);
+  const lineHeight = baseLineHeight + highlightPaddingY * 2;
   const horizontalPadding = Math.round(canvasSize.width * 0.045);
   const verticalPadding = Math.round(fontSize * 0.42);
   const maxTextWidth = canvasSize.width - horizontalPadding * 4;
+  const backgroundBlur = style.backgroundBlur ?? 0;
 
   context.save();
-  context.font = `${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
-  context.textAlign = style.align;
+  context.font = `${style.fontWeight} ${fontSize}px ${resolveCanvasFontFamily(style.fontFamily)}`;
+  context.textAlign = 'left';
   context.textBaseline = 'middle';
-  const lines = wrapCanvasWords(context, captionText, maxTextWidth);
-  const lineTexts = lines.map((line) => line.map((word) => word.text).join(' '));
-  const textWidth = Math.min(maxTextWidth, Math.max(...lineTexts.map((line) => context.measureText(line).width), 0));
+  const lines = wrapCanvasWords(context, captionText, maxTextWidth, highlightPaddingX, wordSpacing);
+  const lineWidths = lines.map((line) => measureCanvasWordLine(context, line, highlightPaddingX, wordSpacing));
+  const textWidth = Math.min(maxTextWidth, Math.max(...lineWidths, 0));
   const boxWidth = textWidth + horizontalPadding * 2;
   const boxHeight = lines.length * lineHeight + verticalPadding * 2;
   const x = style.align === 'left'
@@ -467,15 +532,17 @@ function drawReelCaptionOverlay(
     safePadding,
     Math.min(canvasSize.height - boxHeight - safePadding, anchorY - boxHeight / 2)
   );
-  const textX = style.align === 'left'
-    ? x + horizontalPadding
-    : style.align === 'right'
-      ? x + boxWidth - horizontalPadding
-      : x + boxWidth / 2;
+  const contentLeft = x + horizontalPadding;
+  const contentRight = x + boxWidth - horizontalPadding;
+  const contentCenter = x + boxWidth / 2;
 
-  context.fillStyle = reelColorWithOpacity(style.backgroundColor, style.backgroundOpacity);
-  drawRoundedRect(context, x, y, boxWidth, boxHeight, Math.round(fontSize * 0.28));
-  context.fill();
+  const boxRadius = Math.round(fontSize * 0.28);
+  drawBlurredRoundedBackdrop(context, x, y, boxWidth, boxHeight, boxRadius, backgroundBlur);
+  if ((style.backgroundOpacity ?? 0) > 0) {
+    context.fillStyle = reelColorWithOpacity(style.backgroundColor, style.backgroundOpacity);
+    drawRoundedRect(context, x, y, boxWidth, boxHeight, boxRadius);
+    context.fill();
+  }
   if (typeof activeWordIndex === 'number') {
     context.save();
     context.shadowColor = 'transparent';
@@ -487,23 +554,21 @@ function drawReelCaptionOverlay(
       const activeIndex = line.findIndex((word) => word.wordIndex === activeWordIndex);
       if (activeIndex < 0) return;
 
-      const lineText = line.map((word) => word.text).join(' ');
-      const lineWidth = context.measureText(lineText).width;
+      const lineWidth = lineWidths[lineIndex] ?? 0;
       const lineStartX = style.align === 'left'
-        ? textX
+        ? contentLeft
         : style.align === 'right'
-          ? textX - lineWidth
-          : textX - lineWidth / 2;
-      const beforeText = line.slice(0, activeIndex).map((word) => word.text).join(' ');
-      const beforeWidth = beforeText
-        ? context.measureText(`${beforeText} `).width
-        : 0;
+          ? contentRight - lineWidth
+          : contentCenter - lineWidth / 2;
+      const beforeWidth = line.slice(0, activeIndex).reduce(
+        (total, word) => total + context.measureText(word.text).width + wordSpacing,
+        0
+      );
       const activeWord = line[activeIndex];
       const activeWidth = context.measureText(activeWord.text).width;
       const textY = y + verticalPadding + lineHeight * lineIndex + lineHeight / 2;
-      const highlightPaddingX = Math.round(fontSize * 0.16);
-      const highlightHeight = Math.round(fontSize * 1.18);
-      const highlightX = lineStartX + beforeWidth - highlightPaddingX;
+      const highlightHeight = lineHeight;
+      const highlightX = lineStartX + beforeWidth;
       const highlightY = textY - highlightHeight / 2;
       drawRoundedRect(
         context,
@@ -511,7 +576,7 @@ function drawReelCaptionOverlay(
         highlightY,
         activeWidth + highlightPaddingX * 2,
         highlightHeight,
-        Math.round(fontSize * 0.18)
+        highlightBorderRadius
       );
       context.fill();
     });
@@ -522,9 +587,20 @@ function drawReelCaptionOverlay(
   context.shadowColor = style.shadowColor;
   context.shadowBlur = style.shadowBlur;
   context.shadowOffsetY = 2;
-  lineTexts.forEach((line, index) => {
-    const textY = y + verticalPadding + lineHeight * index + lineHeight / 2;
-    context.fillText(line, textX, textY);
+  lines.forEach((line, lineIndex) => {
+    const lineWidth = lineWidths[lineIndex] ?? 0;
+    let cursorX = style.align === 'left'
+      ? contentLeft
+      : style.align === 'right'
+        ? contentRight - lineWidth
+        : contentCenter - lineWidth / 2;
+    const textY = y + verticalPadding + lineHeight * lineIndex + lineHeight / 2;
+
+    line.forEach((word, wordIndex) => {
+      const wordWidth = context.measureText(word.text).width;
+      context.fillText(word.text, cursorX + highlightPaddingX, textY);
+      cursorX += wordWidth + (wordIndex < line.length - 1 ? wordSpacing : 0);
+    });
   });
   context.restore();
 }
@@ -680,6 +756,7 @@ export function useVideoExport() {
       }
 
       setState((current) => ({ ...current, phase: 'preparing', progress: 5 }));
+      await waitForExportFonts();
 
       const segments: BeatSegment[] = await Promise.all(
         videoBeats.map(async (beat, index) => {

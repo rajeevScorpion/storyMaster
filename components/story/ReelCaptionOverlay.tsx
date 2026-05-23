@@ -32,20 +32,27 @@ export function ReelTimedCaptionText({
   style,
 }: ReelTimedCaptionTextProps) {
   const normalized = normalizeReelTextOverlayStyle(style);
-  if (!wordTimings?.length || elapsedMs === null || !isPlaying) {
+  if (!wordTimings?.length) {
     return <>{text}</>;
   }
 
   const highlightBg = reelColorWithOpacity(normalized.wordHighlightColor, normalized.wordHighlightOpacity);
+  const highlightPaddingX = normalized.wordHighlightPaddingX ?? 0;
+  const highlightPaddingY = normalized.wordHighlightPaddingY ?? 0;
+  const highlightBorderRadius = normalized.wordHighlightBorderRadius ?? 0;
+  const wordSpacing = normalized.wordHighlightWordSpacing ?? 0;
   const tokens = text.split(/(\s+)/);
   let wordIdx = 0;
 
   return (
     <>
       {tokens.map((token, index) => {
-        if (/^\s+$/.test(token)) return <span key={index}>{token}</span>;
+        if (/^\s+$/.test(token)) return null;
+        const currentWordIndex = wordIdx;
         const timing = wordTimings[wordIdx++];
         const isActive = timing != null
+          && isPlaying
+          && elapsedMs !== null
           && elapsedMs >= timing.startMs
           && elapsedMs < timing.endMs;
 
@@ -53,13 +60,21 @@ export function ReelTimedCaptionText({
           <span
             key={index}
             className="relative inline-block"
-            style={{ padding: '0 3px', margin: '0 -3px' }}
+            style={{
+              marginLeft: currentWordIndex > 0 ? `${wordSpacing - highlightPaddingX * 2}px` : undefined,
+              padding: `${highlightPaddingY}px ${highlightPaddingX}px`,
+            }}
           >
             {isActive && (
               <span
                 aria-hidden
-                className="absolute inset-0 rounded"
-                style={{ backgroundColor: highlightBg }}
+                className="absolute rounded"
+                style={{
+                  backgroundColor: highlightBg,
+                  borderRadius: `${highlightBorderRadius}px`,
+                  inset: 0,
+                  zIndex: -1,
+                }}
               />
             )}
             <span className="relative z-[1]">{token}</span>
@@ -86,6 +101,8 @@ export default function ReelCaptionOverlay({
       ? 'justify-end text-right'
       : 'justify-center text-center';
   const topPercent = getReelCaptionTopPercent(normalized);
+  const backgroundBlur = normalized.backgroundBlur ?? 0;
+  const hasBackdrop = (normalized.backgroundOpacity ?? 0) > 0 || backgroundBlur > 0;
 
   return (
     <div
@@ -102,8 +119,11 @@ export default function ReelCaptionOverlay({
             ? `0 2px ${normalized.shadowBlur ?? 12}px ${normalized.shadowColor}`
             : undefined,
           backgroundColor: reelColorWithOpacity(normalized.backgroundColor, normalized.backgroundOpacity),
+          backdropFilter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
+          WebkitBackdropFilter: backgroundBlur > 0 ? `blur(${backgroundBlur}px)` : undefined,
+          isolation: 'isolate',
         }}
-        className="max-w-xl rounded-lg px-3 py-2 leading-snug text-white shadow-lg backdrop-blur-sm"
+        className={`max-w-xl rounded-lg px-3 py-2 leading-snug text-white ${hasBackdrop ? 'shadow-lg' : ''}`}
       >
         {content}
       </div>
