@@ -2891,6 +2891,7 @@ function StoryScreenInner({
 
       const ok = await exportVideo(reelExportBeats, exportTitle, {
         aspectRatio: '9:16',
+        exportKind: 'reel',
         videoExportPreset,
         showWatermark: showVideoWatermark,
       });
@@ -2916,6 +2917,7 @@ function StoryScreenInner({
 
     await exportVideo(reelExportBeats, exportTitle, {
       aspectRatio: '9:16',
+      exportKind: 'reel',
       videoExportPreset,
       showWatermark: showVideoWatermark,
     });
