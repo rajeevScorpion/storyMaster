@@ -17,13 +17,14 @@ import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
+import ReelCanvasPreview from './ReelCanvasPreview';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
-import { useVideoExport } from '@/lib/hooks/useVideoExport';
+import { useReelVideoExport } from '@/lib/hooks/useReelVideoExport';
 import {
   authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
@@ -56,6 +57,16 @@ import {
   reelRgbToHex,
   type ReelTextOverlayStyle,
 } from '@/lib/reel/styles';
+import {
+  DEFAULT_REEL_TRANSITION_SETTINGS,
+  REEL_TRANSITION_DURATION_MAX_MS,
+  REEL_TRANSITION_DURATION_MIN_MS,
+  REEL_TRANSITION_REGISTRY,
+  REEL_TRANSITION_TYPES,
+  normalizeReelTransitionSettings,
+  reelTransitionSettingsKey,
+  type ReelTransitionSettings,
+} from '@/lib/reel/transitions';
 import {
   blobToDataUrl,
   compressImageFile,
@@ -1159,6 +1170,135 @@ function ReelCaptionStylePanel({
   );
 }
 
+interface ReelTransitionPanelProps {
+  settings: ReelTransitionSettings;
+  hasUnsavedSettings: boolean;
+  isSaving: boolean;
+  error: string | null;
+  isCollapsed: boolean;
+  onChange: (settings: ReelTransitionSettings) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  onToggleCollapsed: () => void;
+}
+
+function ReelTransitionPanel({
+  settings,
+  hasUnsavedSettings,
+  isSaving,
+  error,
+  isCollapsed,
+  onChange,
+  onCancel,
+  onSave,
+  onToggleCollapsed,
+}: ReelTransitionPanelProps) {
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const showControls = hasUnsavedSettings || !isCollapsed;
+  const selected = REEL_TRANSITION_REGISTRY[settings.type];
+
+  return (
+    <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
+      <div className={`flex items-center justify-between gap-3 px-4 py-3 ${showControls ? 'border-b border-white/10' : ''}`}>
+        <div className="flex items-center gap-2 font-sans text-[10px] uppercase tracking-[0.24em] text-neutral-400">
+          <Blend className="h-3.5 w-3.5 text-emerald-300/80" />
+          Transitions
+        </div>
+        {hasUnsavedSettings ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isSaving}
+              className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-sans uppercase tracking-wider text-neutral-300 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-60"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={isSaving}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-sans uppercase tracking-wider text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:opacity-60"
+            >
+              {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              Save
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            aria-expanded={!isCollapsed}
+            className="rounded-full bg-white/5 p-2 text-neutral-300 transition-colors hover:bg-white/10 hover:text-white"
+            title={isCollapsed ? 'Show transitions' : 'Hide transitions'}
+          >
+            {isCollapsed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+        )}
+      </div>
+
+      {showControls && (
+        <div className="space-y-3 px-4 py-3">
+          <div
+            className="relative"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropdownOpen(false);
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setDropdownOpen((current) => !current)}
+              aria-haspopup="listbox"
+              aria-expanded={dropdownOpen}
+              className="flex min-h-10 w-full items-center justify-between rounded-full border border-white/10 bg-neutral-900 px-4 font-sans text-xs text-neutral-100 transition-colors hover:border-white/20"
+            >
+              <span>{selected.label}</span>
+              <ChevronDown className={`h-4 w-4 text-neutral-500 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {dropdownOpen && (
+              <div role="listbox" className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-50 rounded-2xl border border-white/10 bg-neutral-950 p-1.5 shadow-2xl">
+                {REEL_TRANSITION_TYPES.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    role="option"
+                    aria-selected={settings.type === type}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      const durationMs = type === 'fast-cut'
+                        ? REEL_TRANSITION_REGISTRY[type].defaultDurationMs
+                        : settings.durationMs;
+                      onChange(normalizeReelTransitionSettings({ type, durationMs }));
+                      setDropdownOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
+                      settings.type === type ? 'bg-emerald-400 text-neutral-950' : 'text-neutral-200 hover:bg-white/10'
+                    }`}
+                  >
+                    {REEL_TRANSITION_REGISTRY[type].label}
+                    {settings.type === type && <Check className="h-3.5 w-3.5" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <ReelStyleSliderControl
+            label="Duration (ms)"
+            value={settings.durationMs}
+            min={REEL_TRANSITION_DURATION_MIN_MS}
+            max={REEL_TRANSITION_DURATION_MAX_MS}
+            step={50}
+            onChange={(durationMs) => onChange(normalizeReelTransitionSettings({ ...settings, durationMs }))}
+          />
+
+          {error && <p className="text-xs font-sans text-rose-300">{error}</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
 interface ReelPanelEditorProps {
   panelDrafts: string[];
   hasUnsavedText: boolean;
@@ -1647,6 +1787,7 @@ export default function StoryScreen() {
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
   const updateReelTextOverlayStyle = useStoryStore((state) => state.updateReelTextOverlayStyle);
+  const updateReelTransitionSettings = useStoryStore((state) => state.updateReelTransitionSettings);
   const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
   const storyMode = useStoryStore((state) => state.storyMode);
@@ -1792,6 +1933,7 @@ export default function StoryScreen() {
       generateNarrationForNode={generateNarrationForNode}
       updateReelPanelCaptions={updateReelPanelCaptions}
       updateReelTextOverlayStyle={updateReelTextOverlayStyle}
+      updateReelTransitionSettings={updateReelTransitionSettings}
       regenerateImageForNode={regenerateImageForNode}
       clearAudioReady={clearAudioReady}
       storyMode={storyMode}
@@ -1840,6 +1982,7 @@ function StoryScreenInner({
   generateNarrationForNode,
   updateReelPanelCaptions,
   updateReelTextOverlayStyle,
+  updateReelTransitionSettings,
   regenerateImageForNode,
   clearAudioReady,
   storyMode,
@@ -1878,6 +2021,7 @@ function StoryScreenInner({
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
+  updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   storyMode: boolean;
@@ -1912,6 +2056,7 @@ function StoryScreenInner({
 
   const [isMinimized, setIsMinimized] = useState(false);
   const [isReelCaptionStyleCollapsed, setIsReelCaptionStyleCollapsed] = useState(false);
+  const [isReelTransitionPanelCollapsed, setIsReelTransitionPanelCollapsed] = useState(false);
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
@@ -2026,7 +2171,13 @@ function StoryScreenInner({
 
     cancelReelPlayAll();
   }, [cancelReelPlayAll, currentNodeId, navigateToNode, reelPlayAllActive]);
-  const { playbackState, togglePlayPause, play: playAudio } = useAudioPlayer(
+  const {
+    playbackState,
+    togglePlayPause,
+    play: playAudio,
+    currentTimeMs: reelAudioTimeMs,
+    durationMs: reelAudioDurationMs,
+  } = useAudioPlayer(
     normalizedCurrentBeat.audioUrl,
     currentNodeId,
     { onEnded: handleReelAudioEnded }
@@ -2038,7 +2189,10 @@ function StoryScreenInner({
     progress: exportProgress,
     phase: exportPhase,
     error: exportError,
-  } = useVideoExport();
+    engine: exportEngine,
+    stage: exportStage,
+    fallbackReason: exportFallbackReason,
+  } = useReelVideoExport();
   const isAudioReady = audioReadyNodeId === currentNodeId;
   const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
   const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat, session);
@@ -2110,9 +2264,24 @@ function StoryScreenInner({
   const [reelOverlayDraft, setReelOverlayDraft] = useState<ReelTextOverlayStyle>(savedReelOverlayStyle);
   const [reelStyleSaveState, setReelStyleSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [reelStyleMessage, setReelStyleMessage] = useState<string | null>(null);
+  const savedReelTransitionSettings = useMemo(
+    () => normalizeReelTransitionSettings(
+      session.storyConfig.reel.transitionSettings ?? DEFAULT_REEL_TRANSITION_SETTINGS
+    ),
+    [session.storyConfig.reel.transitionSettings]
+  );
+  const [reelTransitionDraft, setReelTransitionDraft] = useState<ReelTransitionSettings>(
+    savedReelTransitionSettings
+  );
+  const [reelTransitionSaveState, setReelTransitionSaveState] = useState<'idle' | 'saving' | 'error'>('idle');
+  const [reelTransitionMessage, setReelTransitionMessage] = useState<string | null>(null);
   const normalizedReelOverlayDraft = useMemo(
     () => normalizeReelTextOverlayStyle(reelOverlayDraft),
     [reelOverlayDraft]
+  );
+  const normalizedReelTransitionDraft = useMemo(
+    () => normalizeReelTransitionSettings(reelTransitionDraft),
+    [reelTransitionDraft]
   );
   const hasReelAudio = Boolean(
     normalizedCurrentBeat.audioUrl
@@ -2126,6 +2295,9 @@ function StoryScreenInner({
   const hasUnsavedReelOverlayStyle = isReelStory
     && reelOverlayStyleKey(reelOverlayDraft) !== reelOverlayStyleKey(savedReelOverlayStyle);
   const isReelStyleSaving = reelStyleSaveState === 'saving';
+  const hasUnsavedReelTransitionSettings = isReelStory
+    && reelTransitionSettingsKey(reelTransitionDraft) !== reelTransitionSettingsKey(savedReelTransitionSettings);
+  const isReelTransitionSaving = reelTransitionSaveState === 'saving';
   const reelDistributionBeats = isReelStory && publishPath ? publishPath.beats : [];
   const reelHasCompletePath = reelDistributionBeats.length > 0;
   const reelHasAllImages = reelHasCompletePath && reelDistributionBeats.every((beat) => {
@@ -2144,6 +2316,7 @@ function StoryScreenInner({
     reelHasAllAudio &&
     !hasUnsavedReelText &&
     !hasUnsavedReelOverlayStyle &&
+    !hasUnsavedReelTransitionSettings &&
     !reelHasPendingWork
   );
   const reelDistributionBlockReason = !isEnding
@@ -2156,6 +2329,8 @@ function StoryScreenInner({
     ? 'Save panel text before publishing or exporting.'
     : hasUnsavedReelOverlayStyle
     ? 'Save caption style before publishing or exporting.'
+    : hasUnsavedReelTransitionSettings
+    ? 'Save transitions before publishing or exporting.'
     : reelHasPendingWork
     ? 'Wait for image and narration generation to finish.'
     : null;
@@ -2169,12 +2344,25 @@ function StoryScreenInner({
     }),
     [reelTimelineNodes]
   );
+  const reelPreviewSequence = useMemo(
+    () => reelPlayableNodes.map((node) => {
+      const beat = normalizeBeatMediaFields(node.data);
+      return {
+        beat,
+        imageUrl: (beat.imageUrl || beat.persistedImageUrl)!,
+        audioUrl: beat.audioUrl,
+        nodeId: node.id,
+      };
+    }),
+    [reelPlayableNodes]
+  );
   const canPlayFullReel = Boolean(
     isReelStory
     && reelTimelineNodes?.length
     && reelPlayableNodes.length === reelTimelineNodes.length
     && !hasUnsavedReelText
     && !hasUnsavedReelOverlayStyle
+    && !hasUnsavedReelTransitionSettings
     && !reelHasPendingWork
   );
   const reelPlayAllDisabledReason = !reelTimelineNodes?.length
@@ -2185,6 +2373,8 @@ function StoryScreenInner({
     ? 'Save panel text before playing the full reel.'
     : hasUnsavedReelOverlayStyle
     ? 'Save caption style before playing the full reel.'
+    : hasUnsavedReelTransitionSettings
+    ? 'Save transitions before playing the full reel.'
     : reelHasPendingWork
     ? 'Wait for image and narration generation to finish.'
     : 'Play reel from beginning';
@@ -2206,15 +2396,39 @@ function StoryScreenInner({
       imageUrl: normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl,
     };
   });
-  const exportPhaseLabel = exportPhase === 'loading'
-    ? 'Loading encoder'
-    : exportPhase === 'preparing'
-    ? 'Preparing scenes'
-    : exportPhase === 'encoding'
-    ? 'Rendering video'
-    : exportPhase === 'finalizing'
-    ? 'Finalizing file'
-    : 'Exporting video';
+  const isCompatibilityExport = exportEngine === 'compatibility';
+  const exportPhaseLabel = exportStage === 'checking'
+    ? 'Checking fast export'
+    : exportStage === 'preparing'
+    ? 'Preparing reel assets'
+    : exportStage === 'rendering'
+    ? 'Rendering reel frames'
+    : exportStage === 'audio'
+    ? 'Adding narration'
+    : exportStage === 'finalizing'
+    ? 'Finishing video'
+    : exportStage === 'compatibility-loading'
+    ? 'Loading compatibility encoder'
+    : exportStage === 'compatibility-preparing'
+    ? 'Preparing compatibility frames'
+    : exportStage === 'compatibility-rendering'
+    ? 'Encoding compatibility video'
+    : 'Finishing compatibility video';
+  const exportSteps = isCompatibilityExport
+    ? [
+        { key: 'compatibility-loading', label: 'Load' },
+        { key: 'compatibility-preparing', label: 'Frames' },
+        { key: 'compatibility-rendering', label: 'Encode' },
+        { key: 'compatibility-finalizing', label: 'Finish' },
+      ]
+    : [
+        { key: 'checking', label: 'Check' },
+        { key: 'preparing', label: 'Assets' },
+        { key: 'rendering', label: 'Frames' },
+        { key: 'audio', label: 'Audio' },
+        { key: 'finalizing', label: 'Finish' },
+      ];
+  const activeExportStepIndex = Math.max(0, exportSteps.findIndex((step) => step.key === exportStage));
 
   useEffect(() => {
     setReelPanelDraft(savedReelPanelTexts);
@@ -2227,6 +2441,12 @@ function StoryScreenInner({
     setReelStyleSaveState('idle');
     setReelStyleMessage(null);
   }, [savedReelOverlayStyle]);
+
+  useEffect(() => {
+    setReelTransitionDraft(savedReelTransitionSettings);
+    setReelTransitionSaveState('idle');
+    setReelTransitionMessage(null);
+  }, [savedReelTransitionSettings]);
 
   const updateReelPanelDraft = useCallback((panelIndex: number, value: string) => {
     setReelPanelDraft((current) =>
@@ -2316,6 +2536,38 @@ function StoryScreenInner({
     isReelStyleSaving,
     reelOverlayDraft,
     updateReelTextOverlayStyle,
+  ]);
+
+  const updateReelTransitionDraft = useCallback((settings: ReelTransitionSettings) => {
+    setReelTransitionDraft(normalizeReelTransitionSettings(settings));
+    setReelTransitionSaveState('idle');
+    setReelTransitionMessage(null);
+  }, []);
+
+  const handleCancelReelTransitionSettings = useCallback(() => {
+    setReelTransitionDraft(savedReelTransitionSettings);
+    setReelTransitionSaveState('idle');
+    setReelTransitionMessage(null);
+  }, [savedReelTransitionSettings]);
+
+  const handleSaveReelTransitionSettings = useCallback(async () => {
+    if (!isReelStory || !hasUnsavedReelTransitionSettings || isReelTransitionSaving) return;
+
+    setReelTransitionSaveState('saving');
+    setReelTransitionMessage(null);
+    try {
+      await updateReelTransitionSettings(normalizedReelTransitionDraft);
+      setReelTransitionSaveState('idle');
+    } catch (error) {
+      setReelTransitionSaveState('error');
+      setReelTransitionMessage(error instanceof Error ? error.message : 'Failed to save transitions.');
+    }
+  }, [
+    hasUnsavedReelTransitionSettings,
+    isReelStory,
+    isReelTransitionSaving,
+    normalizedReelTransitionDraft,
+    updateReelTransitionSettings,
   ]);
 
   const handleGenerateNarration = useCallback(() => {
@@ -2891,9 +3143,13 @@ function StoryScreenInner({
 
       const ok = await exportVideo(reelExportBeats, exportTitle, {
         aspectRatio: '9:16',
-        exportKind: 'reel',
         videoExportPreset,
         showWatermark: showVideoWatermark,
+        textOverlayEnabled: session.storyConfig.reel.textOverlayEnabled !== false,
+        textOverlayStyle: normalizedReelOverlayDraft,
+        transitionSettings: normalizedReelTransitionDraft,
+        vignetteEnabled: cycleSettings.vignetteEnabled,
+        vignetteAmountPercent: cycleSettings.vignetteAmountPercent,
       });
 
       if (auth.status === 'allowed' && auth.reservationId) {
@@ -2917,18 +3173,27 @@ function StoryScreenInner({
 
     await exportVideo(reelExportBeats, exportTitle, {
       aspectRatio: '9:16',
-      exportKind: 'reel',
       videoExportPreset,
       showWatermark: showVideoWatermark,
+      textOverlayEnabled: session.storyConfig.reel.textOverlayEnabled !== false,
+      textOverlayStyle: normalizedReelOverlayDraft,
+      transitionSettings: normalizedReelTransitionDraft,
+      vignetteEnabled: cycleSettings.vignetteEnabled,
+      vignetteAmountPercent: cycleSettings.vignetteAmountPercent,
     });
   }, [
     adminBypassed,
     canExportReelVideo,
+    cycleSettings.vignetteAmountPercent,
+    cycleSettings.vignetteEnabled,
     currentNodeId,
     exportVideo,
     isExporting,
+    normalizedReelOverlayDraft,
+    normalizedReelTransitionDraft,
     reelExportBeats,
     session.savedStoryId,
+    session.storyConfig.reel.textOverlayEnabled,
     session.title,
     showVideoWatermark,
     videoExportPreset,
@@ -2968,18 +3233,20 @@ function StoryScreenInner({
       }`}
     >
       {isStoryboard ? (
-        <StoryboardCycler
-          key={`reel-${surface}:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-          gridUrl={normalizedCurrentBeat.imageUrl!}
-          audioUrl={normalizedCurrentBeat.audioUrl}
-          cycleOverride={cycleSettings.cycleOverride}
-          cycleMs={cycleSettings.cycleMs}
+        <ReelCanvasPreview
+          key={`reel-${surface}:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}`}
+          beat={normalizedCurrentBeat}
+          imageUrl={normalizedCurrentBeat.imageUrl!}
+          audioDurationMs={reelAudioDurationMs}
+          elapsedMs={reelAudioTimeMs}
+          sequence={reelPlayAllActive ? reelPreviewSequence : undefined}
+          currentNodeId={currentNodeId}
+          playAllActive={reelPlayAllActive}
           vignetteEnabled={cycleSettings.vignetteEnabled}
           vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
-          playbackState={playbackState}
-          captions={normalizedCurrentBeat.reelCaptions}
           textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
           textOverlayStyle={reelOverlayDraft}
+          transitionSettings={normalizedReelTransitionDraft}
           onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
           onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
         />
@@ -3077,6 +3344,18 @@ function StoryScreenInner({
           onCancel={handleCancelReelOverlayStyle}
           onSave={handleSaveReelOverlayStyle}
           onToggleCollapsed={() => setIsReelCaptionStyleCollapsed((current) => !current)}
+        />
+
+        <ReelTransitionPanel
+          settings={normalizedReelTransitionDraft}
+          hasUnsavedSettings={hasUnsavedReelTransitionSettings}
+          isSaving={isReelTransitionSaving}
+          error={reelTransitionMessage}
+          isCollapsed={isReelTransitionPanelCollapsed}
+          onChange={updateReelTransitionDraft}
+          onCancel={handleCancelReelTransitionSettings}
+          onSave={handleSaveReelTransitionSettings}
+          onToggleCollapsed={() => setIsReelTransitionPanelCollapsed((current) => !current)}
         />
 
         <motion.div
@@ -4908,9 +5187,47 @@ function StoryScreenInner({
                   Keep this tab open while your reel video is being rendered. Leaving, refreshing, or closing the tab can stop the export.
                 </p>
 
+                {isCompatibilityExport && (
+                  <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-3.5 py-3 text-sm font-sans text-amber-100">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                      <div>
+                        <p>Fast export was unavailable. Continuing with compatibility export, which takes longer.</p>
+                        {process.env.NODE_ENV !== 'production' && exportFallbackReason && (
+                          <p className="mt-1 line-clamp-2 text-xs text-amber-100/65" title={exportFallbackReason}>
+                            {exportFallbackReason}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className={`mt-5 grid gap-1.5 ${isCompatibilityExport ? 'grid-cols-4' : 'grid-cols-5'}`}>
+                  {exportSteps.map((step, index) => {
+                    const isActive = index === activeExportStepIndex;
+                    const isComplete = index < activeExportStepIndex;
+                    return (
+                      <div
+                        key={step.key}
+                        className={`rounded-xl border px-2 py-2 text-center text-[10px] font-sans uppercase tracking-[0.14em] ${
+                          isActive
+                            ? 'border-emerald-400/35 bg-emerald-400/15 text-emerald-200'
+                            : isComplete
+                            ? 'border-white/10 bg-white/10 text-neutral-200'
+                            : 'border-white/10 bg-white/[0.04] text-neutral-500'
+                        }`}
+                      >
+                        {isComplete ? <Check className="mx-auto mb-1 h-3 w-3" /> : null}
+                        {step.label}
+                      </div>
+                    );
+                  })}
+                </div>
+
                 <div className="mt-5">
                   <div className="flex items-center justify-between text-xs font-sans uppercase tracking-[0.22em] text-neutral-300/80">
-                    <span>Progress</span>
+                    <span>{isCompatibilityExport ? 'Compatibility Progress' : 'Progress'}</span>
                     <span>{exportProgress}%</span>
                   </div>
                   <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-white/10">

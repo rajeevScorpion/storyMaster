@@ -22,6 +22,7 @@ import {
   normalizeReelTextLength,
 } from '@/lib/reel/settings';
 import { normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
+import { DEFAULT_REEL_TRANSITION_SETTINGS, normalizeReelTransitionSettings } from '@/lib/reel/transitions';
 import type {
   NarrationGenderBucket,
   NarrationLanguageCode,
@@ -113,6 +114,7 @@ export const DEFAULT_REEL_CONFIG: ReelStoryConfig = {
   textOverlayEnabled: DEFAULT_REEL_STORY_SETTINGS.textOverlayDefault,
   visualStyleId: null,
   textOverlayStyle: normalizeReelTextOverlayStyle(null),
+  transitionSettings: DEFAULT_REEL_TRANSITION_SETTINGS,
   moodKey: DEFAULT_REEL_STORY_SETTINGS.defaultMood,
   visualStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle,
   narrationStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle,
@@ -367,6 +369,7 @@ function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null): ReelStory
     textOverlayEnabled: input?.textOverlayEnabled !== false,
     visualStyleId: sanitizeText(input?.visualStyleId) || null,
     textOverlayStyle: normalizeReelTextOverlayStyle(input?.textOverlayStyle),
+    transitionSettings: normalizeReelTransitionSettings(input?.transitionSettings),
     moodKey: sanitizeText(input?.moodKey) || DEFAULT_REEL_CONFIG.moodKey,
     visualStyleKey: sanitizeText(input?.visualStyleKey) || DEFAULT_REEL_CONFIG.visualStyleKey,
     narrationStyleKey: sanitizeText(input?.narrationStyleKey) || DEFAULT_REEL_CONFIG.narrationStyleKey,

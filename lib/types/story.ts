@@ -2,6 +2,7 @@ import type { BeatMediaStatus } from './beat-media';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
 import type { ReelLengthKey, ReelTextLengthKey } from '@/lib/reel/settings';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
+import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 
 export interface CharacterSheetGalleryEntry {
   url: string;
@@ -211,6 +212,7 @@ export interface ReelStoryConfig {
   textOverlayEnabled: boolean;
   visualStyleId?: string | null;
   textOverlayStyle?: ReelTextOverlayStyle;
+  transitionSettings?: ReelTransitionSettings;
   moodKey: string;
   visualStyleKey: string;
   narrationStyleKey: string;

@@ -25,6 +25,7 @@ import {
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, isReelStoryConfig, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { DEFAULT_REEL_STORY_SETTINGS, findReelDefiner, normalizeReelStorySettings } from '@/lib/reel/settings';
 import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
+import { normalizeReelTransitionSettings, type ReelTransitionSettings } from '@/lib/reel/transitions';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import {
@@ -141,6 +142,7 @@ interface StoryState {
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
+  updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
@@ -3577,6 +3579,53 @@ export const useStoryStore = create<StoryState>()(
             isSaving: false,
             saveStatus: 'unsaved',
             error: error instanceof Error ? error.message : 'Failed to save reel text style.',
+          });
+          throw error;
+        }
+      },
+
+      updateReelTransitionSettings: async (settings: ReelTransitionSettings) => {
+        const { session } = get();
+        if (!session || !isReelStoryConfig(session.storyConfig)) {
+          return;
+        }
+
+        const transitionSettings = normalizeReelTransitionSettings(settings);
+        const nextStoryConfig = normalizeStoryConfig({
+          ...session.storyConfig,
+          reel: {
+            ...session.storyConfig.reel,
+            transitionSettings,
+          },
+        });
+        const nextSession = {
+          ...session,
+          storyConfig: nextStoryConfig,
+        };
+
+        updateStoreSaveUi({
+          session: nextSession,
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+        });
+
+        if (!session.savedStoryId) {
+          return;
+        }
+
+        try {
+          await saveStoryAction(nextSession, nextSession.storyMap);
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'saved',
+            error: null,
+          });
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to save reel transitions.',
           });
           throw error;
         }
