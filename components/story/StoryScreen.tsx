@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo, type ChangeEvent, type CSSProperties } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
@@ -364,6 +364,7 @@ interface ReelToolbarProps {
   canOpenPromptTools: boolean;
   promptToolsOpen: boolean;
   onTogglePromptTools: () => void;
+  actions?: ReactNode;
 }
 
 function ReelToolbar({
@@ -374,9 +375,10 @@ function ReelToolbar({
   canOpenPromptTools,
   promptToolsOpen,
   onTogglePromptTools,
+  actions,
 }: ReelToolbarProps) {
   return (
-    <div className="relative z-30 flex min-h-14 items-center justify-between gap-3 border border-white/10 bg-neutral-950 px-4 py-2.5 shadow-2xl rounded-3xl">
+    <div className="relative z-30 flex min-h-10 items-center justify-between gap-3 px-1 py-1">
       <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
         <Timeline
           storyMap={storyMap}
@@ -393,17 +395,18 @@ function ReelToolbar({
           disabled={!canOpenPromptTools}
           aria-expanded={promptToolsOpen}
           aria-haspopup="dialog"
-          className={`p-2 rounded-full transition-colors ${
+          className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${
             !canOpenPromptTools
-              ? 'cursor-not-allowed bg-white/5 text-neutral-700'
+              ? 'cursor-not-allowed border-white/5 bg-white/[0.03] text-neutral-700'
               : promptToolsOpen
-              ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
-              : 'bg-white/5 hover:bg-white/10 text-neutral-300'
+              ? 'border-sky-400/25 bg-sky-500/20 text-sky-200 hover:bg-sky-500/25'
+              : 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10'
           }`}
           title={canOpenPromptTools ? 'Prompt and image tools' : 'No prompt tools available'}
         >
           <Layers className="w-4 h-4" />
         </button>
+        {actions}
       </div>
     </div>
   );
@@ -415,14 +418,13 @@ type ReelEditorDestination = ReelEditorSection | 'voice';
 const REEL_EDITOR_DESTINATIONS: Array<{
   id: ReelEditorDestination;
   label: string;
-  compactLabel: string;
   icon: LucideIcon;
   disabled?: boolean;
 }> = [
-  { id: 'text', label: 'Panel Text', compactLabel: 'Text', icon: BookOpen },
-  { id: 'style', label: 'Caption Style', compactLabel: 'Style', icon: Type },
-  { id: 'transitions', label: 'Transitions', compactLabel: 'Transitions', icon: Blend },
-  { id: 'voice', label: 'Voice / Narration', compactLabel: 'Voice', icon: Volume2, disabled: true },
+  { id: 'text', label: 'Panel Text', icon: BookOpen },
+  { id: 'style', label: 'Caption Style', icon: Type },
+  { id: 'transitions', label: 'Transitions', icon: Blend },
+  { id: 'voice', label: 'Voice / Narration', icon: Volume2, disabled: true },
 ];
 
 interface ReelCaptionStylePanelProps {
@@ -431,6 +433,7 @@ interface ReelCaptionStylePanelProps {
   isSavingStyle: boolean;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   message: string | null;
+  embedded?: boolean;
   onChange: (patch: ReelTextOverlayStyle) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -1092,12 +1095,13 @@ function ReelCaptionStylePanel({
   isSavingStyle,
   saveState,
   message,
+  embedded = false,
   onChange,
   onCancel,
   onSave,
 }: ReelCaptionStylePanelProps) {
   return (
-    <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
+    <section className={embedded ? 'bg-neutral-950' : 'rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl'}>
       {hasUnsavedStyle && (
         <div className="flex justify-end border-b border-white/10 px-4 py-3">
           <div className="flex items-center gap-2">
@@ -1147,6 +1151,7 @@ interface ReelTransitionPanelProps {
   hasUnsavedSettings: boolean;
   isSaving: boolean;
   error: string | null;
+  embedded?: boolean;
   onChange: (settings: ReelTransitionSettings) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -1157,6 +1162,7 @@ function ReelTransitionPanel({
   hasUnsavedSettings,
   isSaving,
   error,
+  embedded = false,
   onChange,
   onCancel,
   onSave,
@@ -1165,7 +1171,7 @@ function ReelTransitionPanel({
   const selected = REEL_TRANSITION_REGISTRY[settings.type];
 
   return (
-    <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
+    <section className={embedded ? 'bg-neutral-950' : 'rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl'}>
       {hasUnsavedSettings && (
         <div className="flex justify-end border-b border-white/10 px-4 py-3">
           <div className="flex items-center gap-2">
@@ -1294,7 +1300,7 @@ function ReelPanelEditor({
         </div>
       </div>
 
-      <div className="flex min-h-12 flex-wrap items-center gap-2 border-t border-white/10 px-4 py-3">
+      {(hasUnsavedText || message) && <div className="flex min-h-12 flex-wrap items-center gap-2 border-t border-white/10 px-4 py-3">
         {hasUnsavedText && saveState !== 'warning' && (
           <>
             <button
@@ -1356,7 +1362,7 @@ function ReelPanelEditor({
             {message}
           </p>
         )}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -2002,6 +2008,8 @@ function StoryScreenInner({
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeReelEditorSection, setActiveReelEditorSection] = useState<ReelEditorSection>('text');
   const [reelEditorNavigationMessage, setReelEditorNavigationMessage] = useState<string | null>(null);
+  const reelSettingsScrollRef = useRef<HTMLDivElement>(null);
+  const [reelSettingsFade, setReelSettingsFade] = useState({ top: false, bottom: false });
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
@@ -2409,6 +2417,53 @@ function StoryScreenInner({
     setReelTransitionSaveState('idle');
     setReelTransitionMessage(null);
   }, [savedReelTransitionSettings]);
+
+  const updateReelSettingsFade = useCallback(() => {
+    const element = reelSettingsScrollRef.current;
+    if (!element) return;
+    const next = {
+      top: element.scrollTop > 1,
+      bottom: element.scrollTop + element.clientHeight < element.scrollHeight - 1,
+    };
+    setReelSettingsFade((current) => (
+      current.top === next.top && current.bottom === next.bottom ? current : next
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (!isReelStory) return;
+    const element = reelSettingsScrollRef.current;
+    if (!element) return;
+    element.scrollTop = 0;
+    updateReelSettingsFade();
+  }, [activeReelEditorSection, isReelStory, updateReelSettingsFade]);
+
+  useEffect(() => {
+    if (!isReelStory) return;
+    const element = reelSettingsScrollRef.current;
+    if (!element) return;
+    updateReelSettingsFade();
+    const observer = new ResizeObserver(updateReelSettingsFade);
+    observer.observe(element);
+    if (element.firstElementChild instanceof HTMLElement) {
+      observer.observe(element.firstElementChild);
+    }
+    window.addEventListener('resize', updateReelSettingsFade);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateReelSettingsFade);
+    };
+  }, [
+    activeReelEditorSection,
+    hasUnsavedReelOverlayStyle,
+    hasUnsavedReelText,
+    hasUnsavedReelTransitionSettings,
+    isReelStory,
+    reelStyleMessage,
+    reelTextMessage,
+    reelTransitionMessage,
+    updateReelSettingsFade,
+  ]);
 
   const updateReelPanelDraft = useCallback((panelIndex: number, value: string) => {
     setReelPanelDraft((current) =>
@@ -3318,62 +3373,62 @@ function StoryScreenInner({
     return false;
   };
 
-  const renderReelDestinationButton = (
-    destination: (typeof REEL_EDITOR_DESTINATIONS)[number],
-    tabs: boolean
-  ) => {
+  const renderReelDestinationButton = (destination: (typeof REEL_EDITOR_DESTINATIONS)[number]) => {
     const Icon = destination.icon;
     const active = destination.id === activeReelEditorSection;
     const hasChanges = reelSectionHasChanges(destination.id);
     const panelId = `reel-editor-panel-${destination.id}`;
+    const isFirstDestination = destination.id === REEL_EDITOR_DESTINATIONS[0].id;
     return (
       <button
-        key={`${tabs ? 'mobile' : 'desktop'}-${destination.id}`}
-        id={tabs ? `reel-editor-tab-${destination.id}` : undefined}
+        key={destination.id}
+        id={`reel-editor-tab-${destination.id}`}
         type="button"
-        role={tabs ? 'tab' : undefined}
-        aria-selected={tabs ? active : undefined}
-        aria-expanded={!tabs && !destination.disabled ? active : undefined}
+        role="tab"
+        aria-selected={active}
         aria-controls={!destination.disabled ? panelId : undefined}
         aria-disabled={destination.disabled || undefined}
         aria-label={destination.disabled ? `${destination.label} (coming soon)` : destination.label}
-        disabled={destination.disabled}
+        title={destination.disabled ? `${destination.label} (coming soon)` : destination.label}
         onClick={() => {
           if (!destination.disabled && destination.id !== 'voice') {
             selectReelEditorSection(destination.id);
           }
         }}
-        className={`flex shrink-0 items-center gap-2 border font-sans uppercase tracking-[0.2em] transition-colors ${
-          tabs
-            ? 'min-h-10 rounded-full px-3 text-[10px]'
-            : 'min-h-12 w-full rounded-2xl px-4 text-[10px]'
+        className={`relative flex h-11 w-12 shrink-0 items-center justify-center transition-colors ${
+          isFirstDestination ? 'rounded-tl-[1.45rem] rounded-tr-xl' : 'rounded-t-xl'
         } ${
           destination.disabled
-            ? 'cursor-not-allowed border-white/5 bg-neutral-950/60 text-neutral-600'
+            ? 'cursor-not-allowed text-neutral-600'
             : active
-            ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'
-            : 'border-white/10 bg-neutral-950 text-neutral-400 hover:bg-white/5 hover:text-white'
+            ? 'z-20 bg-neutral-950 text-emerald-200'
+            : 'text-neutral-400 hover:bg-white/[0.05] hover:text-white'
         }`}
       >
-        <Icon className={`h-3.5 w-3.5 ${active ? 'text-emerald-300' : ''}`} />
-        <span>{tabs ? destination.compactLabel : destination.label}</span>
+        <Icon className={`h-4 w-4 ${active ? 'text-emerald-300' : ''}`} />
+        <span className="sr-only">{destination.label}</span>
+        {active && (
+          <>
+            <span aria-hidden="true" className="absolute inset-x-3 top-0 h-px rounded-full bg-emerald-300/90 shadow-[0_0_8px_rgba(52,211,153,0.7)]" />
+            <span aria-hidden="true" className="absolute -bottom-px inset-x-0 h-0.5 bg-neutral-950" />
+            {!isFirstDestination && (
+              <span aria-hidden="true" className="pointer-events-none absolute -bottom-px -left-2 h-2 w-2 rounded-br-lg shadow-[4px_4px_0_4px_#0a0a0a]" />
+            )}
+            <span aria-hidden="true" className="pointer-events-none absolute -bottom-px -right-2 h-2 w-2 rounded-bl-lg shadow-[-4px_4px_0_4px_#0a0a0a]" />
+          </>
+        )}
         {hasChanges && (
-          <span className="ml-auto rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[9px] tracking-wider text-amber-200">
-            Unsaved
-          </span>
+          <span
+            aria-hidden="true"
+            className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-amber-300"
+          />
         )}
-        {destination.disabled && (
-          <span className="ml-auto rounded-full border border-white/10 px-1.5 py-0.5 text-[9px] tracking-wider">
-            Soon
-          </span>
-        )}
-        {!tabs && active && !destination.disabled && <ChevronDown className="ml-auto h-3.5 w-3.5" />}
       </button>
     );
   };
 
   const reelSettingsContent = activeReelEditorSection === 'text' ? (
-    <section id="reel-editor-panel-text" role="tabpanel" aria-labelledby="reel-editor-tab-text" className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
+    <section id="reel-editor-panel-text" role="tabpanel" aria-labelledby="reel-editor-tab-text" className="bg-neutral-950">
       <ReelPanelEditor
         panelDrafts={reelPanelDraft}
         hasUnsavedText={hasUnsavedReelText}
@@ -3394,6 +3449,7 @@ function StoryScreenInner({
         isSavingStyle={isReelStyleSaving}
         saveState={reelStyleSaveState}
         message={reelStyleMessage}
+        embedded
         onChange={updateReelOverlayDraft}
         onCancel={handleCancelReelOverlayStyle}
         onSave={handleSaveReelOverlayStyle}
@@ -3406,6 +3462,7 @@ function StoryScreenInner({
         hasUnsavedSettings={hasUnsavedReelTransitionSettings}
         isSaving={isReelTransitionSaving}
         error={reelTransitionMessage}
+        embedded
         onChange={updateReelTransitionDraft}
         onCancel={handleCancelReelTransitionSettings}
         onSave={handleSaveReelTransitionSettings}
@@ -3413,8 +3470,78 @@ function StoryScreenInner({
     </div>
   );
 
+  const reelToolbarActions = (
+    <>
+      {reelPublishingEnabled && (
+        <button
+          type="button"
+          onClick={() => canPublishReel && setShowPublishDialog(true)}
+          disabled={!canPublishReel}
+          aria-label="Publish reel"
+          title={!onSave ? 'Sign in to publish this reel.' : reelDistributionBlockReason ?? 'Publish reel'}
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-white/[0.03] disabled:text-neutral-600"
+        >
+          <Share2 className="h-4 w-4" />
+        </button>
+      )}
+
+      {canExportReelVideo ? (
+        <button
+          type="button"
+          onClick={() => void handleExportReelVideo()}
+          disabled={isExporting}
+          aria-label={isExporting ? `Exporting reel video, ${exportProgress} percent` : 'Export reel video'}
+          title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-wait disabled:opacity-70"
+        >
+          {isExporting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : exportProgress === 100 ? (
+            <Check className="h-4 w-4" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
+        </button>
+      ) : reelReadyForDistribution && videoDownloadGlobalOn && !canAccessVideoExport ? (
+        <button
+          type="button"
+          onClick={() => window.open('/wallet', '_blank')}
+          aria-label="Export reel video, upgrade required"
+          title="Video export is available on eligible plans."
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-200"
+        >
+          <Lock className="h-4 w-4" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled
+          aria-label="Export reel video unavailable"
+          title={!videoDownloadGlobalOn ? 'Video export is disabled in Global Settings.' : reelDistributionBlockReason ?? 'Export reel video'}
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/5 bg-white/[0.03] text-neutral-600 disabled:cursor-not-allowed"
+        >
+          <Download className="h-4 w-4" />
+        </button>
+      )}
+
+      <button
+        type="button"
+        onClick={() => {
+          setDiscardReelError(null);
+          setShowDiscardReelDialog(true);
+        }}
+        disabled={!session.savedStoryId || isDiscardingReel}
+        aria-label="Discard reel draft"
+        title={session.savedStoryId ? 'Discard this reel draft' : 'Save must finish before this reel can be discarded.'}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-rose-500/20 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-white/[0.03] disabled:text-neutral-600"
+      >
+        {isDiscardingReel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+      </button>
+    </>
+  );
+
   const reelEditorLayout = isReelStory ? (
-    <div className="flex min-h-0 w-full flex-1 flex-col gap-3 md:h-[min(80dvh,calc(100dvh-7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6">
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-3 md:h-[min(80dvh,calc(100dvh_-_7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6">
       <div className="relative shrink-0 md:hidden">
         {renderReelPreview('mobile')}
         <div
@@ -3431,7 +3558,7 @@ function StoryScreenInner({
 
       {renderReelPreview('desktop')}
 
-      <div className="flex min-h-0 w-full flex-1 flex-col gap-2 md:h-full md:self-stretch">
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-2 md:h-full md:self-stretch md:justify-end">
         <ReelToolbar
           storyMap={session.storyMap}
           onNodeClick={handleManualNavigateToNode}
@@ -3440,11 +3567,8 @@ function StoryScreenInner({
           canOpenPromptTools={canOpenPromptTools}
           promptToolsOpen={promptToolsOpen}
           onTogglePromptTools={togglePromptTools}
+          actions={reelToolbarActions}
         />
-
-        <div role="tablist" aria-label="Reel settings" className="flex shrink-0 gap-2 overflow-x-auto py-1 scrollbar-none md:hidden">
-          {REEL_EDITOR_DESTINATIONS.map((destination) => renderReelDestinationButton(destination, true))}
-        </div>
 
         {reelEditorNavigationMessage && (
           <p role="alert" className="shrink-0 rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs font-sans text-amber-200">
@@ -3452,135 +3576,76 @@ function StoryScreenInner({
           </p>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-none">
-          <div className="hidden space-y-2 pb-3 md:block" aria-label="Reel settings sections">
-            {REEL_EDITOR_DESTINATIONS.map((destination) => renderReelDestinationButton(destination, false))}
+        {lastPublishResult && (
+          <div className={`flex shrink-0 flex-wrap items-center gap-2 rounded-2xl border px-4 py-3 text-sm ${
+            lastPublishResult.error
+              ? 'border-rose-500/20 bg-rose-500/10 text-rose-300'
+              : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+          }`}>
+            {lastPublishResult.error ? (
+              <>
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Publishing failed - {lastPublishResult.error}</span>
+              </>
+            ) : (
+              <>
+                <Share2 className="h-4 w-4 shrink-0" />
+                <span>{lastPublishResult.alreadyPublished ? 'This reel is already published.' : 'Reel published.'}</span>
+                <div className="ml-auto flex items-center gap-3">
+                  <Link
+                    href={`/storyline/${lastPublishResult.storylineId}`}
+                    className="inline-flex items-center gap-1 text-emerald-200 transition-colors hover:text-white"
+                  >
+                    View <ExternalLink className="h-3 w-3" />
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setManagedStorylineId(lastPublishResult.storylineId)}
+                    className="inline-flex items-center gap-1 text-emerald-200 transition-colors hover:text-white"
+                  >
+                    Cover <ImageIcon className="h-3 w-3" />
+                  </button>
+                </div>
+              </>
+            )}
           </div>
-          {reelSettingsContent}
-        </div>
+        )}
 
-        <div className="space-y-2">
-          {lastPublishResult && (
-            <div className={`flex flex-wrap items-center gap-2 rounded-2xl border px-4 py-3 text-sm ${
-              lastPublishResult.error
-                ? 'border-rose-500/20 bg-rose-500/10 text-rose-300'
-                : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-            }`}>
-              {lastPublishResult.error ? (
-                <>
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                  <span>Publishing failed - {lastPublishResult.error}</span>
-                </>
-              ) : (
-                <>
-                  <Share2 className="h-4 w-4 shrink-0" />
-                  <span>{lastPublishResult.alreadyPublished ? 'This reel is already published.' : 'Reel published.'}</span>
-                  <div className="ml-auto flex items-center gap-3">
-                    <Link
-                      href={`/storyline/${lastPublishResult.storylineId}`}
-                      className="inline-flex items-center gap-1 text-emerald-200 transition-colors hover:text-white"
-                    >
-                      View <ExternalLink className="h-3 w-3" />
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => setManagedStorylineId(lastPublishResult.storylineId)}
-                      className="inline-flex items-center gap-1 text-emerald-200 transition-colors hover:text-white"
-                    >
-                      Cover <ImageIcon className="h-3 w-3" />
-                    </button>
-                  </div>
-                </>
-              )}
+        {exportError && (
+          <div className="flex shrink-0 items-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{exportError}</span>
+          </div>
+        )}
+
+        <div className="flex min-h-0 flex-1 flex-col md:flex-none">
+          <div className="relative z-20 flex w-fit shrink-0 items-end rounded-t-3xl border border-b-0 border-white/10 bg-neutral-900/80 pr-1 pt-1 shadow-[0_-10px_24px_rgba(0,0,0,0.12)]">
+            <div role="tablist" aria-label="Reel settings" className="flex items-end">
+              {REEL_EDITOR_DESTINATIONS.map((destination) => renderReelDestinationButton(destination))}
             </div>
-          )}
-
-          <div className={`grid gap-2 ${reelPublishingEnabled ? 'grid-cols-3' : 'grid-cols-2'}`}>
-              {reelPublishingEnabled && (
-                <button
-                  type="button"
-                  onClick={() => canPublishReel && setShowPublishDialog(true)}
-                  disabled={!canPublishReel}
-                  title={!onSave ? 'Sign in to publish this reel.' : reelDistributionBlockReason ?? 'Publish reel'}
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-emerald-500/30 bg-emerald-500/15 px-4 py-2.5 text-sm font-medium text-emerald-100 transition-colors hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-neutral-500"
-                >
-                  <Share2 className="h-4 w-4" />
-                  <span>Publish</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  setDiscardReelError(null);
-                  setShowDiscardReelDialog(true);
-                }}
-                disabled={!session.savedStoryId || isDiscardingReel}
-                title={session.savedStoryId ? 'Discard this reel draft' : 'Save must finish before this reel can be discarded.'}
-                className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-rose-500/25 bg-rose-500/10 px-4 py-2.5 text-sm font-medium text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-neutral-500"
-              >
-                {isDiscardingReel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                <span>Discard</span>
-              </button>
-
-              {canExportReelVideo ? (
-                <button
-                  type="button"
-                  onClick={() => void handleExportReelVideo()}
-                  disabled={isExporting}
-                  title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
-                  className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border px-4 py-2.5 text-sm font-medium transition-colors disabled:cursor-wait disabled:opacity-70 ${
-                    reelPublishingEnabled
-                      ? 'border-sky-500/30 bg-sky-500/15 text-sky-100 hover:bg-sky-500/25'
-                      : 'border-emerald-500/35 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
-                  }`}
-                >
-                  {isExporting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span>{exportPhase === 'loading' ? 'Loading' : `${exportProgress}%`}</span>
-                    </>
-                  ) : exportProgress === 100 ? (
-                    <>
-                      <Check className="h-4 w-4 text-emerald-300" />
-                      <span>Saved</span>
-                    </>
-                  ) : (
-                    <>
-                      <Download className="h-4 w-4" />
-                      <span>Export</span>
-                    </>
-                  )}
-                </button>
-              ) : reelReadyForDistribution && videoDownloadGlobalOn && !canAccessVideoExport ? (
-                <button
-                  type="button"
-                  onClick={() => window.open('/wallet', '_blank')}
-                  title="Video export is available on eligible plans."
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-200"
-                >
-                  <Lock className="h-4 w-4" />
-                  <span>Export</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  title={!videoDownloadGlobalOn ? 'Video export is disabled in Global Settings.' : reelDistributionBlockReason ?? 'Export reel video'}
-                  className="inline-flex min-h-11 items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-medium text-neutral-500 disabled:cursor-not-allowed"
-                >
-                  <Download className="h-4 w-4" />
-                  <span>Export</span>
-                </button>
-              )}
           </div>
 
-          {exportError && (
-            <div className="flex items-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              <span>{exportError}</span>
+          <div className="relative -mt-px min-h-0 flex-1 overflow-hidden rounded-b-3xl rounded-tr-3xl border border-white/10 bg-neutral-950 shadow-2xl md:flex-none">
+            <div
+              ref={reelSettingsScrollRef}
+              onScroll={updateReelSettingsFade}
+              className="h-full overflow-y-auto scrollbar-none md:h-auto md:max-h-[calc(min(80dvh,calc(100dvh_-_7rem))_-_6.5rem)]"
+            >
+              {reelSettingsContent}
             </div>
-          )}
+            <div
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-x-0 top-0 z-10 h-10 bg-gradient-to-b from-neutral-950 via-neutral-950/80 to-transparent transition-opacity duration-200 ${
+                reelSettingsFade.top ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+            <div
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-x-0 bottom-0 z-10 h-10 bg-gradient-to-t from-neutral-950 via-neutral-950/80 to-transparent transition-opacity duration-200 ${
+                reelSettingsFade.bottom ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+          </div>
         </div>
       </div>
     </div>
