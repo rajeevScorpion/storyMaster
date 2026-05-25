@@ -361,12 +361,9 @@ interface ReelToolbarProps {
   onNodeClick: (nodeId: string) => void;
   focusedNodeId?: string;
   nodes?: StoryNode[];
-  isCollapsed: boolean;
-  onToggleCollapsed: () => void;
   canOpenPromptTools: boolean;
   promptToolsOpen: boolean;
   onTogglePromptTools: () => void;
-  className?: string;
 }
 
 function ReelToolbar({
@@ -374,15 +371,12 @@ function ReelToolbar({
   onNodeClick,
   focusedNodeId,
   nodes,
-  isCollapsed,
-  onToggleCollapsed,
   canOpenPromptTools,
   promptToolsOpen,
   onTogglePromptTools,
-  className,
 }: ReelToolbarProps) {
   return (
-    <div className={`relative z-30 flex min-h-14 items-center justify-between gap-3 border-b border-white/10 bg-neutral-950 px-4 py-2.5 ${className ?? ''}`}>
+    <div className="relative z-30 flex min-h-14 items-center justify-between gap-3 border border-white/10 bg-neutral-950 px-4 py-2.5 shadow-2xl rounded-3xl">
       <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
         <Timeline
           storyMap={storyMap}
@@ -393,18 +387,6 @@ function ReelToolbar({
         />
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="p-2 rounded-full bg-white/5 hover:bg-white/10 text-neutral-300 transition-colors"
-          title={isCollapsed ? 'Show text' : 'Hide text'}
-        >
-          {isCollapsed ? (
-            <ChevronUp className="w-4 h-4" />
-          ) : (
-            <ChevronDown className="w-4 h-4" />
-          )}
-        </button>
         <button
           type="button"
           onClick={onTogglePromptTools}
@@ -427,17 +409,31 @@ function ReelToolbar({
   );
 }
 
+type ReelEditorSection = 'text' | 'style' | 'transitions';
+type ReelEditorDestination = ReelEditorSection | 'voice';
+
+const REEL_EDITOR_DESTINATIONS: Array<{
+  id: ReelEditorDestination;
+  label: string;
+  compactLabel: string;
+  icon: LucideIcon;
+  disabled?: boolean;
+}> = [
+  { id: 'text', label: 'Panel Text', compactLabel: 'Text', icon: BookOpen },
+  { id: 'style', label: 'Caption Style', compactLabel: 'Style', icon: Type },
+  { id: 'transitions', label: 'Transitions', compactLabel: 'Transitions', icon: Blend },
+  { id: 'voice', label: 'Voice / Narration', compactLabel: 'Voice', icon: Volume2, disabled: true },
+];
+
 interface ReelCaptionStylePanelProps {
   normalizedStyle: ReelTextOverlayStyle;
   hasUnsavedStyle: boolean;
   isSavingStyle: boolean;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   message: string | null;
-  isCollapsed: boolean;
   onChange: (patch: ReelTextOverlayStyle) => void;
   onCancel: () => void;
   onSave: () => void;
-  onToggleCollapsed: () => void;
 }
 
 interface ReelStyleNumberInputProps {
@@ -1096,22 +1092,14 @@ function ReelCaptionStylePanel({
   isSavingStyle,
   saveState,
   message,
-  isCollapsed,
   onChange,
   onCancel,
   onSave,
-  onToggleCollapsed,
 }: ReelCaptionStylePanelProps) {
-  const showControls = hasUnsavedStyle || !isCollapsed;
-
   return (
     <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
-      <div className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${showControls ? 'border-b border-white/10' : ''}`}>
-        <div className="flex items-center gap-2 font-sans text-[10px] uppercase tracking-[0.24em] text-neutral-400">
-          <Type className="h-3.5 w-3.5 text-emerald-300/80" />
-          Caption style
-        </div>
-        {hasUnsavedStyle ? (
+      {hasUnsavedStyle && (
+        <div className="flex justify-end border-b border-white/10 px-4 py-3">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -1135,37 +1123,21 @@ function ReelCaptionStylePanel({
               Save
             </button>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            aria-expanded={!isCollapsed}
-            className="rounded-full bg-white/5 p-2 text-neutral-300 transition-colors hover:bg-white/10 hover:text-white"
-            title={isCollapsed ? 'Show caption style' : 'Hide caption style'}
-          >
-            {isCollapsed ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-          </button>
-        )}
-      </div>
-
-      {showControls && (
-        <div className="px-4 py-3">
-          <ReelCaptionStyleControls
-            normalizedStyle={normalizedStyle}
-            onChange={onChange}
-          />
-
-          {saveState === 'error' && message && (
-            <p className="text-xs font-sans text-rose-300">
-              {message}
-            </p>
-          )}
         </div>
       )}
+
+      <div className="px-4 py-3">
+        <ReelCaptionStyleControls
+          normalizedStyle={normalizedStyle}
+          onChange={onChange}
+        />
+
+        {saveState === 'error' && message && (
+          <p className="mt-3 text-xs font-sans text-rose-300">
+            {message}
+          </p>
+        )}
+      </div>
     </section>
   );
 }
@@ -1175,11 +1147,9 @@ interface ReelTransitionPanelProps {
   hasUnsavedSettings: boolean;
   isSaving: boolean;
   error: string | null;
-  isCollapsed: boolean;
   onChange: (settings: ReelTransitionSettings) => void;
   onCancel: () => void;
   onSave: () => void;
-  onToggleCollapsed: () => void;
 }
 
 function ReelTransitionPanel({
@@ -1187,24 +1157,17 @@ function ReelTransitionPanel({
   hasUnsavedSettings,
   isSaving,
   error,
-  isCollapsed,
   onChange,
   onCancel,
   onSave,
-  onToggleCollapsed,
 }: ReelTransitionPanelProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const showControls = hasUnsavedSettings || !isCollapsed;
   const selected = REEL_TRANSITION_REGISTRY[settings.type];
 
   return (
     <section className="rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
-      <div className={`flex items-center justify-between gap-3 px-4 py-3 ${showControls ? 'border-b border-white/10' : ''}`}>
-        <div className="flex items-center gap-2 font-sans text-[10px] uppercase tracking-[0.24em] text-neutral-400">
-          <Blend className="h-3.5 w-3.5 text-emerald-300/80" />
-          Transitions
-        </div>
-        {hasUnsavedSettings ? (
+      {hasUnsavedSettings && (
+        <div className="flex justify-end border-b border-white/10 px-4 py-3">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -1224,21 +1187,10 @@ function ReelTransitionPanel({
               Save
             </button>
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            aria-expanded={!isCollapsed}
-            className="rounded-full bg-white/5 p-2 text-neutral-300 transition-colors hover:bg-white/10 hover:text-white"
-            title={isCollapsed ? 'Show transitions' : 'Hide transitions'}
-          >
-            {isCollapsed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          </button>
-        )}
-      </div>
+        </div>
+      )}
 
-      {showControls && (
-        <div className="space-y-3 px-4 py-3">
+      <div className="space-y-3 px-4 py-3">
           <div
             className="relative"
             onBlur={(event) => {
@@ -1292,9 +1244,8 @@ function ReelTransitionPanel({
             onChange={(durationMs) => onChange(normalizeReelTransitionSettings({ ...settings, durationMs }))}
           />
 
-          {error && <p className="text-xs font-sans text-rose-300">{error}</p>}
-        </div>
-      )}
+        {error && <p className="text-xs font-sans text-rose-300">{error}</p>}
+      </div>
     </section>
   );
 }
@@ -1324,13 +1275,7 @@ function ReelPanelEditor({
 }: ReelPanelEditorProps) {
   return (
     <div className="bg-neutral-950">
-      <div
-        className="max-h-[12.25rem] overflow-y-auto scrollbar-none px-4 py-3"
-        style={{
-          maskImage: 'linear-gradient(to bottom, black 0%, black 82%, transparent 100%)',
-          WebkitMaskImage: 'linear-gradient(to bottom, black 0%, black 82%, transparent 100%)',
-        }}
-      >
+      <div className="px-4 py-3">
         <div className="space-y-3">
           {panelDrafts.map((text, panelIndex) => (
             <label key={panelIndex} className="block">
@@ -2055,8 +2000,8 @@ function StoryScreenInner({
       : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
-  const [isReelCaptionStyleCollapsed, setIsReelCaptionStyleCollapsed] = useState(false);
-  const [isReelTransitionPanelCollapsed, setIsReelTransitionPanelCollapsed] = useState(false);
+  const [activeReelEditorSection, setActiveReelEditorSection] = useState<ReelEditorSection>('text');
+  const [reelEditorNavigationMessage, setReelEditorNavigationMessage] = useState<string | null>(null);
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
@@ -2298,6 +2243,22 @@ function StoryScreenInner({
   const hasUnsavedReelTransitionSettings = isReelStory
     && reelTransitionSettingsKey(reelTransitionDraft) !== reelTransitionSettingsKey(savedReelTransitionSettings);
   const isReelTransitionSaving = reelTransitionSaveState === 'saving';
+  const activeReelSectionHasUnsavedChanges = activeReelEditorSection === 'text'
+    ? hasUnsavedReelText
+    : activeReelEditorSection === 'style'
+    ? hasUnsavedReelOverlayStyle
+    : hasUnsavedReelTransitionSettings;
+  const activeReelSectionIsSaving = activeReelEditorSection === 'text'
+    ? isReelTextSaving
+    : activeReelEditorSection === 'style'
+    ? isReelStyleSaving
+    : isReelTransitionSaving;
+  const activeReelSectionLabel = activeReelEditorSection === 'text'
+    ? 'panel text'
+    : activeReelEditorSection === 'style'
+    ? 'caption style'
+    : 'transitions';
+  const reelEditorNavigationBlocked = activeReelSectionHasUnsavedChanges || activeReelSectionIsSaving;
   const reelDistributionBeats = isReelStory && publishPath ? publishPath.beats : [];
   const reelHasCompletePath = reelDistributionBeats.length > 0;
   const reelHasAllImages = reelHasCompletePath && reelDistributionBeats.every((beat) => {
@@ -2434,6 +2395,7 @@ function StoryScreenInner({
     setReelPanelDraft(savedReelPanelTexts);
     setReelTextSaveState('idle');
     setReelTextMessage(null);
+    setReelEditorNavigationMessage(null);
   }, [currentNodeId, savedReelPanelTexts]);
 
   useEffect(() => {
@@ -2458,6 +2420,16 @@ function StoryScreenInner({
     setReelTextMessage(null);
   }, []);
 
+  const selectReelEditorSection = useCallback((section: ReelEditorSection) => {
+    if (section === activeReelEditorSection) return;
+    if (reelEditorNavigationBlocked) {
+      setReelEditorNavigationMessage(`Save or cancel your ${activeReelSectionLabel} changes before opening another setting.`);
+      return;
+    }
+    setActiveReelEditorSection(section);
+    setReelEditorNavigationMessage(null);
+  }, [activeReelEditorSection, activeReelSectionLabel, reelEditorNavigationBlocked]);
+
   const handleSaveReelText = useCallback(async (confirmClearNarration = false) => {
     if (!isReelStory || !hasUnsavedReelText || isReelTextSaving) return;
 
@@ -2476,6 +2448,7 @@ function StoryScreenInner({
       setReelTextMessage(result.clearedNarration
         ? 'Text saved. Narration was cleared.'
         : 'Text saved.');
+      setReelEditorNavigationMessage(null);
     } catch (error) {
       setReelTextSaveState('error');
       setReelTextMessage(error instanceof Error ? error.message : 'Failed to save reel text.');
@@ -2499,6 +2472,7 @@ function StoryScreenInner({
     setReelPanelDraft(savedReelPanelTexts);
     setReelTextSaveState('idle');
     setReelTextMessage(null);
+    setReelEditorNavigationMessage(null);
   }, [savedReelPanelTexts]);
 
   const updateReelOverlayDraft = useCallback((patch: ReelTextOverlayStyle) => {
@@ -2514,6 +2488,7 @@ function StoryScreenInner({
     setReelOverlayDraft(savedReelOverlayStyle);
     setReelStyleSaveState('idle');
     setReelStyleMessage(null);
+    setReelEditorNavigationMessage(null);
   }, [savedReelOverlayStyle]);
 
   const handleSaveReelOverlayStyle = useCallback(async () => {
@@ -2526,6 +2501,7 @@ function StoryScreenInner({
       await updateReelTextOverlayStyle(reelOverlayDraft);
       setReelStyleSaveState('saved');
       setReelStyleMessage(null);
+      setReelEditorNavigationMessage(null);
     } catch (error) {
       setReelStyleSaveState('error');
       setReelStyleMessage(error instanceof Error ? error.message : 'Failed to save text style.');
@@ -2548,6 +2524,7 @@ function StoryScreenInner({
     setReelTransitionDraft(savedReelTransitionSettings);
     setReelTransitionSaveState('idle');
     setReelTransitionMessage(null);
+    setReelEditorNavigationMessage(null);
   }, [savedReelTransitionSettings]);
 
   const handleSaveReelTransitionSettings = useCallback(async () => {
@@ -2558,6 +2535,7 @@ function StoryScreenInner({
     try {
       await updateReelTransitionSettings(normalizedReelTransitionDraft);
       setReelTransitionSaveState('idle');
+      setReelEditorNavigationMessage(null);
     } catch (error) {
       setReelTransitionSaveState('error');
       setReelTransitionMessage(error instanceof Error ? error.message : 'Failed to save transitions.');
@@ -2581,10 +2559,14 @@ function StoryScreenInner({
 
   const handleManualNavigateToNode = useCallback((nodeId: string) => {
     if (isReelStory) {
+      if (reelEditorNavigationBlocked) {
+        setReelEditorNavigationMessage(`Save or cancel your ${activeReelSectionLabel} changes before switching beats.`);
+        return;
+      }
       cancelReelPlayAll();
     }
     navigateToNode(nodeId);
-  }, [cancelReelPlayAll, isReelStory, navigateToNode]);
+  }, [activeReelSectionLabel, cancelReelPlayAll, isReelStory, navigateToNode, reelEditorNavigationBlocked]);
 
   const handleReelNarrationToggle = useCallback(() => {
     cancelReelPlayAll();
@@ -2680,7 +2662,9 @@ function StoryScreenInner({
     options: orderedOptions,
     onNavigateNode: handleManualNavigateToNode,
     onSelectOption: continueStory,
-    onToggleMinimized: () => setIsMinimized(prev => !prev),
+    onToggleMinimized: () => {
+      if (!isReelStory) setIsMinimized(prev => !prev);
+    },
     onToggleNarration: () => {
       if (isReelStory) {
         cancelReelPlayAll();
@@ -3220,7 +3204,7 @@ function StoryScreenInner({
 
   const mainClassName = `relative z-10 flex-1 flex flex-col w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass} ${
     isReelStory
-      ? 'justify-center px-4 pb-3 pt-1 md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
+      ? 'justify-start overflow-hidden px-3 pb-2 pt-0 md:justify-center md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
       : 'justify-end px-4 pb-[31px] pt-1 md:p-12 max-w-5xl mx-auto'
   }`;
 
@@ -3228,9 +3212,12 @@ function StoryScreenInner({
     <div
       className={`relative mx-auto aspect-[9/16] overflow-hidden border border-white/15 bg-neutral-950/50 shadow-2xl ${
         surface === 'desktop'
-          ? 'hidden h-[80dvh] max-h-[calc(100dvh-7rem)] rounded-[28px] md:block'
-          : 'w-full max-w-[19rem] rounded-[24px] md:hidden'
+          ? 'hidden h-full rounded-[28px] md:block'
+          : 'max-w-[19rem] rounded-[24px] md:hidden'
       }`}
+      style={surface === 'mobile' ? {
+        width: 'min(calc(100vw - 1.5rem), 19rem, calc(max(13rem, calc(100dvh - 19rem)) * 9 / 16))',
+      } : undefined}
     >
       {isStoryboard ? (
         <ReelCanvasPreview
@@ -3287,109 +3274,190 @@ function StoryScreenInner({
     </div>
   );
 
+  const renderReelPlaybackControls = () => (
+    <div className="flex flex-col items-center gap-2">
+      <button
+        type="button"
+        onClick={handleToggleReelPlayAll}
+        disabled={!canPlayFullReel}
+        title={reelPlayAllActive ? (playbackState === 'playing' ? 'Pause full reel' : 'Resume full reel') : reelPlayAllDisabledReason}
+        className={`flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-md transition-all ${
+          canPlayFullReel
+            ? reelPlayAllActive
+              ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
+              : 'border-emerald-500/25 bg-neutral-900/60 text-emerald-200 hover:border-emerald-400/45 hover:bg-neutral-800'
+            : 'cursor-not-allowed border-white/10 bg-neutral-900/35 text-neutral-600'
+        }`}
+      >
+        {reelPlayAllActive && playbackState === 'playing' ? (
+          <Pause className="h-5 w-5" />
+        ) : (
+          <Play className="h-5 w-5" />
+        )}
+      </button>
+      <NarrationButton
+        isGeneratingAudio={isGeneratingAudio}
+        isAudioReady={isAudioReady}
+        playbackState={playbackState}
+        hasAudio={!!normalizedCurrentBeat.audioUrl}
+        onTogglePlayPause={handleReelNarrationToggle}
+        onGenerateNarration={handleReelGenerateNarration}
+        onClearGlow={clearAudioReady}
+        storyMode={storyMode}
+        onToggleStoryMode={toggleStoryMode}
+        disabled={hasUnsavedReelText}
+        disabledReason="Save panel text before generating narration"
+      />
+    </div>
+  );
+
+  const reelSectionHasChanges = (section: ReelEditorDestination): boolean => {
+    if (section === 'text') return hasUnsavedReelText;
+    if (section === 'style') return hasUnsavedReelOverlayStyle;
+    if (section === 'transitions') return hasUnsavedReelTransitionSettings;
+    return false;
+  };
+
+  const renderReelDestinationButton = (
+    destination: (typeof REEL_EDITOR_DESTINATIONS)[number],
+    tabs: boolean
+  ) => {
+    const Icon = destination.icon;
+    const active = destination.id === activeReelEditorSection;
+    const hasChanges = reelSectionHasChanges(destination.id);
+    const panelId = `reel-editor-panel-${destination.id}`;
+    return (
+      <button
+        key={`${tabs ? 'mobile' : 'desktop'}-${destination.id}`}
+        id={tabs ? `reel-editor-tab-${destination.id}` : undefined}
+        type="button"
+        role={tabs ? 'tab' : undefined}
+        aria-selected={tabs ? active : undefined}
+        aria-expanded={!tabs && !destination.disabled ? active : undefined}
+        aria-controls={!destination.disabled ? panelId : undefined}
+        aria-disabled={destination.disabled || undefined}
+        aria-label={destination.disabled ? `${destination.label} (coming soon)` : destination.label}
+        disabled={destination.disabled}
+        onClick={() => {
+          if (!destination.disabled && destination.id !== 'voice') {
+            selectReelEditorSection(destination.id);
+          }
+        }}
+        className={`flex shrink-0 items-center gap-2 border font-sans uppercase tracking-[0.2em] transition-colors ${
+          tabs
+            ? 'min-h-10 rounded-full px-3 text-[10px]'
+            : 'min-h-12 w-full rounded-2xl px-4 text-[10px]'
+        } ${
+          destination.disabled
+            ? 'cursor-not-allowed border-white/5 bg-neutral-950/60 text-neutral-600'
+            : active
+            ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'
+            : 'border-white/10 bg-neutral-950 text-neutral-400 hover:bg-white/5 hover:text-white'
+        }`}
+      >
+        <Icon className={`h-3.5 w-3.5 ${active ? 'text-emerald-300' : ''}`} />
+        <span>{tabs ? destination.compactLabel : destination.label}</span>
+        {hasChanges && (
+          <span className="ml-auto rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[9px] tracking-wider text-amber-200">
+            Unsaved
+          </span>
+        )}
+        {destination.disabled && (
+          <span className="ml-auto rounded-full border border-white/10 px-1.5 py-0.5 text-[9px] tracking-wider">
+            Soon
+          </span>
+        )}
+        {!tabs && active && !destination.disabled && <ChevronDown className="ml-auto h-3.5 w-3.5" />}
+      </button>
+    );
+  };
+
+  const reelSettingsContent = activeReelEditorSection === 'text' ? (
+    <section id="reel-editor-panel-text" role="tabpanel" aria-labelledby="reel-editor-tab-text" className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl">
+      <ReelPanelEditor
+        panelDrafts={reelPanelDraft}
+        hasUnsavedText={hasUnsavedReelText}
+        isTextSaving={isReelTextSaving}
+        saveState={reelTextSaveState}
+        message={reelTextMessage}
+        onPanelChange={updateReelPanelDraft}
+        onSaveText={handleSaveReelText}
+        onCancelChanges={handleCancelReelTextChanges}
+        onCancelWarning={handleCancelReelTextWarning}
+      />
+    </section>
+  ) : activeReelEditorSection === 'style' ? (
+    <div id="reel-editor-panel-style" role="tabpanel" aria-labelledby="reel-editor-tab-style">
+      <ReelCaptionStylePanel
+        normalizedStyle={normalizedReelOverlayDraft}
+        hasUnsavedStyle={hasUnsavedReelOverlayStyle}
+        isSavingStyle={isReelStyleSaving}
+        saveState={reelStyleSaveState}
+        message={reelStyleMessage}
+        onChange={updateReelOverlayDraft}
+        onCancel={handleCancelReelOverlayStyle}
+        onSave={handleSaveReelOverlayStyle}
+      />
+    </div>
+  ) : (
+    <div id="reel-editor-panel-transitions" role="tabpanel" aria-labelledby="reel-editor-tab-transitions">
+      <ReelTransitionPanel
+        settings={normalizedReelTransitionDraft}
+        hasUnsavedSettings={hasUnsavedReelTransitionSettings}
+        isSaving={isReelTransitionSaving}
+        error={reelTransitionMessage}
+        onChange={updateReelTransitionDraft}
+        onCancel={handleCancelReelTransitionSettings}
+        onSave={handleSaveReelTransitionSettings}
+      />
+    </div>
+  );
+
   const reelEditorLayout = isReelStory ? (
-    <div className="flex min-h-0 w-full flex-col gap-4 md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-end md:justify-center md:gap-6">
-      <div className="md:hidden">
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-3 md:h-[min(80dvh,calc(100dvh-7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6">
+      <div className="relative shrink-0 md:hidden">
         {renderReelPreview('mobile')}
+        <div
+          className="absolute bottom-3 z-20"
+          style={{ left: 'max(0.25rem, calc(50% - 12.75rem))' }}
+        >
+          {renderReelPlaybackControls()}
+        </div>
       </div>
 
-      <div className="flex justify-start md:h-full md:items-end md:justify-center md:pb-4">
-        <div className="flex flex-col items-center gap-2">
-          <button
-            type="button"
-            onClick={handleToggleReelPlayAll}
-            disabled={!canPlayFullReel}
-            title={reelPlayAllActive ? (playbackState === 'playing' ? 'Pause full reel' : 'Resume full reel') : reelPlayAllDisabledReason}
-            className={`flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-md transition-all ${
-              canPlayFullReel
-                ? reelPlayAllActive
-                  ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
-                  : 'border-emerald-500/25 bg-neutral-900/60 text-emerald-200 hover:border-emerald-400/45 hover:bg-neutral-800'
-                : 'cursor-not-allowed border-white/10 bg-neutral-900/35 text-neutral-600'
-            }`}
-          >
-            {reelPlayAllActive && playbackState === 'playing' ? (
-              <Pause className="h-5 w-5" />
-            ) : (
-              <Play className="h-5 w-5" />
-            )}
-          </button>
-        <NarrationButton
-          isGeneratingAudio={isGeneratingAudio}
-          isAudioReady={isAudioReady}
-          playbackState={playbackState}
-          hasAudio={!!normalizedCurrentBeat.audioUrl}
-          onTogglePlayPause={handleReelNarrationToggle}
-          onGenerateNarration={handleReelGenerateNarration}
-          onClearGlow={clearAudioReady}
-          storyMode={storyMode}
-          onToggleStoryMode={toggleStoryMode}
-          disabled={hasUnsavedReelText}
-          disabledReason="Save panel text before generating narration"
-        />
-        </div>
+      <div className="hidden h-full items-end justify-center pb-4 md:flex">
+        {renderReelPlaybackControls()}
       </div>
 
       {renderReelPreview('desktop')}
 
-      <div className="flex min-h-0 w-full flex-col gap-3 md:self-end">
-        <ReelCaptionStylePanel
-          normalizedStyle={normalizedReelOverlayDraft}
-          hasUnsavedStyle={hasUnsavedReelOverlayStyle}
-          isSavingStyle={isReelStyleSaving}
-          saveState={reelStyleSaveState}
-          message={reelStyleMessage}
-          isCollapsed={isReelCaptionStyleCollapsed}
-          onChange={updateReelOverlayDraft}
-          onCancel={handleCancelReelOverlayStyle}
-          onSave={handleSaveReelOverlayStyle}
-          onToggleCollapsed={() => setIsReelCaptionStyleCollapsed((current) => !current)}
+      <div className="flex min-h-0 w-full flex-1 flex-col gap-2 md:h-full md:self-stretch">
+        <ReelToolbar
+          storyMap={session.storyMap}
+          onNodeClick={handleManualNavigateToNode}
+          focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+          nodes={reelTimelineNodes}
+          canOpenPromptTools={canOpenPromptTools}
+          promptToolsOpen={promptToolsOpen}
+          onTogglePromptTools={togglePromptTools}
         />
 
-        <ReelTransitionPanel
-          settings={normalizedReelTransitionDraft}
-          hasUnsavedSettings={hasUnsavedReelTransitionSettings}
-          isSaving={isReelTransitionSaving}
-          error={reelTransitionMessage}
-          isCollapsed={isReelTransitionPanelCollapsed}
-          onChange={updateReelTransitionDraft}
-          onCancel={handleCancelReelTransitionSettings}
-          onSave={handleSaveReelTransitionSettings}
-          onToggleCollapsed={() => setIsReelTransitionPanelCollapsed((current) => !current)}
-        />
+        <div role="tablist" aria-label="Reel settings" className="flex shrink-0 gap-2 overflow-x-auto py-1 scrollbar-none md:hidden">
+          {REEL_EDITOR_DESTINATIONS.map((destination) => renderReelDestinationButton(destination, true))}
+        </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-          className="touch-visible relative z-20 w-full overflow-hidden rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl"
-        >
-          <ReelToolbar
-            storyMap={session.storyMap}
-            onNodeClick={handleManualNavigateToNode}
-            focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
-            nodes={reelTimelineNodes}
-            isCollapsed={isMinimized}
-            onToggleCollapsed={() => setIsMinimized((prev) => !prev)}
-            canOpenPromptTools={canOpenPromptTools}
-            promptToolsOpen={promptToolsOpen}
-            onTogglePromptTools={togglePromptTools}
-            className={isMinimized ? 'border-b-0 rounded-3xl' : ''}
-          />
-          {!isMinimized && (
-            <ReelPanelEditor
-              panelDrafts={reelPanelDraft}
-              hasUnsavedText={hasUnsavedReelText}
-              isTextSaving={isReelTextSaving}
-              saveState={reelTextSaveState}
-              message={reelTextMessage}
-              onPanelChange={updateReelPanelDraft}
-              onSaveText={handleSaveReelText}
-              onCancelChanges={handleCancelReelTextChanges}
-              onCancelWarning={handleCancelReelTextWarning}
-            />
-          )}
-        </motion.div>
+        {reelEditorNavigationMessage && (
+          <p role="alert" className="shrink-0 rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs font-sans text-amber-200">
+            {reelEditorNavigationMessage}
+          </p>
+        )}
+
+        <div className="min-h-0 flex-1 overflow-y-auto scrollbar-none">
+          <div className="hidden space-y-2 pb-3 md:block" aria-label="Reel settings sections">
+            {REEL_EDITOR_DESTINATIONS.map((destination) => renderReelDestinationButton(destination, false))}
+          </div>
+          {reelSettingsContent}
+        </div>
 
         <div className="space-y-2">
           {lastPublishResult && (
@@ -3427,8 +3495,7 @@ function StoryScreenInner({
             </div>
           )}
 
-          {!lastPublishResult && (
-            <div className={`grid gap-2 ${reelPublishingEnabled ? 'grid-cols-3' : 'grid-cols-2'}`}>
+          <div className={`grid gap-2 ${reelPublishingEnabled ? 'grid-cols-3' : 'grid-cols-2'}`}>
               {reelPublishingEnabled && (
                 <button
                   type="button"
@@ -3506,8 +3573,7 @@ function StoryScreenInner({
                   <span>Export</span>
                 </button>
               )}
-            </div>
-          )}
+          </div>
 
           {exportError && (
             <div className="flex items-center gap-2 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
@@ -3536,8 +3602,29 @@ function StoryScreenInner({
             }}
             className={isVerticalStory ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
-            <div className={isVerticalStory ? 'absolute inset-0 md:scale-110 md:blur-2xl' : 'contents'}>
-            {isStoryboard ? (
+            <div className={isReelStory
+              ? 'absolute inset-0 scale-110 opacity-70 blur-2xl'
+              : isVerticalStory
+              ? 'absolute inset-0 md:scale-110 md:blur-2xl'
+              : 'contents'}
+            >
+            {isReelStory && isStoryboard ? (
+              <ReelCanvasPreview
+                key={`reel-backdrop:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}`}
+                surface="backdrop"
+                beat={normalizedCurrentBeat}
+                imageUrl={normalizedCurrentBeat.imageUrl!}
+                audioDurationMs={reelAudioDurationMs}
+                elapsedMs={reelAudioTimeMs}
+                sequence={reelPlayAllActive ? reelPreviewSequence : undefined}
+                currentNodeId={currentNodeId}
+                playAllActive={reelPlayAllActive}
+                vignetteEnabled={false}
+                vignetteAmountPercent={0}
+                textOverlayEnabled={false}
+                transitionSettings={normalizedReelTransitionDraft}
+              />
+            ) : isStoryboard ? (
               <StoryboardCycler
                 key={`${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                 gridUrl={normalizedCurrentBeat.imageUrl!}
@@ -3549,7 +3636,7 @@ function StoryScreenInner({
                 playbackState={playbackState}
                 captions={normalizedCurrentBeat.reelCaptions}
                 textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
+                textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
               />
@@ -3647,7 +3734,7 @@ function StoryScreenInner({
 
       {/* Header */}
       <header className={`${headerGradientClass} transition-opacity duration-300 ${chromeVisibilityClass}`}>
-        <div className="order-2 flex min-w-0 items-start gap-2 self-stretch md:order-1 md:items-center md:gap-3 md:self-auto">
+        <div className={`order-2 min-w-0 items-start gap-2 self-stretch md:order-1 md:items-center md:gap-3 md:self-auto ${isReelStory ? 'hidden md:flex' : 'flex'}`}>
           <BookOpen className="hidden h-6 w-6 shrink-0 text-emerald-400 md:block" />
           <h1 className="min-w-0 max-w-[calc(100vw-2rem)] text-lg font-serif leading-snug tracking-wide text-neutral-200 md:text-xl">
             {session.title || "Kissago"}

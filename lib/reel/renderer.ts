@@ -24,6 +24,7 @@ export interface ReelRenderOptions {
   vignetteAmountPercent?: number;
   watermark?: boolean;
   watermarkPreset?: VideoExportPreset;
+  visualFit?: 'fill' | 'cover';
 }
 
 export type ReelImageAssets = Map<string, ImageBitmap>;
@@ -69,7 +70,8 @@ function drawPanel(
   width: number,
   height: number,
   offsetX = 0,
-  alpha = 1
+  alpha = 1,
+  visualFit: ReelRenderOptions['visualFit'] = 'fill'
 ) {
   const sourceWidth = image.width;
   const sourceHeight = image.height;
@@ -78,15 +80,33 @@ function drawPanel(
   const cropScale = 0.5 - STORYBOARD_PANEL_CROP_INSET_RATIO;
   const xFactor = col * 0.5 + STORYBOARD_PANEL_CROP_INSET_RATIO / 2;
   const yFactor = row * 0.5 + STORYBOARD_PANEL_CROP_INSET_RATIO / 2;
+  let sourceX = sourceWidth * xFactor;
+  let sourceY = sourceHeight * yFactor;
+  let panelWidth = sourceWidth * cropScale;
+  let panelHeight = sourceHeight * cropScale;
+
+  if (visualFit === 'cover' && width > 0 && height > 0) {
+    const sourceAspect = panelWidth / panelHeight;
+    const targetAspect = width / height;
+    if (sourceAspect > targetAspect) {
+      const fittedWidth = panelHeight * targetAspect;
+      sourceX += (panelWidth - fittedWidth) / 2;
+      panelWidth = fittedWidth;
+    } else if (sourceAspect < targetAspect) {
+      const fittedHeight = panelWidth / targetAspect;
+      sourceY += (panelHeight - fittedHeight) / 2;
+      panelHeight = fittedHeight;
+    }
+  }
 
   context.save();
   context.globalAlpha = alpha;
   context.drawImage(
     image,
-    sourceWidth * xFactor,
-    sourceHeight * yFactor,
-    sourceWidth * cropScale,
-    sourceHeight * cropScale,
+    sourceX,
+    sourceY,
+    panelWidth,
+    panelHeight,
     offsetX,
     0,
     width,
@@ -99,7 +119,8 @@ function drawVisuals(
   context: CanvasRenderingContext2D,
   timeline: ReelTimeline,
   assets: ReelImageAssets,
-  timeMs: number
+  timeMs: number,
+  visualFit: ReelRenderOptions['visualFit'] = 'fill'
 ) {
   const width = context.canvas.width;
   const height = context.canvas.height;
@@ -113,29 +134,29 @@ function drawVisuals(
 
   const transition = getReelTransitionAtTime(timeline, timeMs);
   if (!transition) {
-    drawPanel(context, image, scene, width, height);
+    drawPanel(context, image, scene, width, height, 0, 1, visualFit);
     return;
   }
 
   const fromImage = assets.get(transition.from.imageUrl);
   const toImage = assets.get(transition.to.imageUrl);
   if (!fromImage || !toImage) {
-    drawPanel(context, image, scene, width, height);
+    drawPanel(context, image, scene, width, height, 0, 1, visualFit);
     return;
   }
   const progress = clamp01(transition.progress);
 
   switch (timeline.transitionSettings.type) {
     case 'blend':
-      drawPanel(context, fromImage, transition.from, width, height);
-      drawPanel(context, toImage, transition.to, width, height, 0, progress);
+      drawPanel(context, fromImage, transition.from, width, height, 0, 1, visualFit);
+      drawPanel(context, toImage, transition.to, width, height, 0, progress, visualFit);
       break;
     case 'fade-black':
     case 'fade-white': {
       const midpointProgress = progress < 0.5 ? progress * 2 : (progress - 0.5) * 2;
       const color = timeline.transitionSettings.type === 'fade-white' ? '#ffffff' : '#000000';
       if (progress < 0.5) {
-        drawPanel(context, fromImage, transition.from, width, height);
+        drawPanel(context, fromImage, transition.from, width, height, 0, 1, visualFit);
         context.fillStyle = color;
         context.globalAlpha = midpointProgress;
         context.fillRect(0, 0, width, height);
@@ -144,22 +165,22 @@ function drawVisuals(
         context.globalAlpha = 1;
         context.fillRect(0, 0, width, height);
         context.globalAlpha = 1;
-        drawPanel(context, toImage, transition.to, width, height, 0, midpointProgress);
+        drawPanel(context, toImage, transition.to, width, height, 0, midpointProgress, visualFit);
       }
       context.globalAlpha = 1;
       break;
     }
     case 'slide-left':
-      drawPanel(context, fromImage, transition.from, width, height, -width * progress);
-      drawPanel(context, toImage, transition.to, width, height, width * (1 - progress));
+      drawPanel(context, fromImage, transition.from, width, height, -width * progress, 1, visualFit);
+      drawPanel(context, toImage, transition.to, width, height, width * (1 - progress), 1, visualFit);
       break;
     case 'slide-right':
-      drawPanel(context, fromImage, transition.from, width, height, width * progress);
-      drawPanel(context, toImage, transition.to, width, height, -width * (1 - progress));
+      drawPanel(context, fromImage, transition.from, width, height, width * progress, 1, visualFit);
+      drawPanel(context, toImage, transition.to, width, height, -width * (1 - progress), 1, visualFit);
       break;
     case 'fast-cut':
     default:
-      drawPanel(context, image, scene, width, height);
+      drawPanel(context, image, scene, width, height, 0, 1, visualFit);
       break;
   }
 }
@@ -350,7 +371,7 @@ export function drawReelFrame(
   options: ReelRenderOptions = {}
 ) {
   const clampedTimeMs = Math.max(0, Math.min(timeMs, timeline.totalDurationMs));
-  drawVisuals(context, timeline, assets, clampedTimeMs);
+  drawVisuals(context, timeline, assets, clampedTimeMs, options.visualFit);
   if (options.vignetteEnabled) {
     drawVignette(context, options.vignetteAmountPercent ?? 100);
   }

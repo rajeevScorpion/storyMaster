@@ -26,6 +26,7 @@ interface ReelCanvasPreviewProps {
   sequence?: ReelPreviewBeat[];
   currentNodeId?: string;
   playAllActive?: boolean;
+  surface?: 'preview' | 'backdrop';
   onImageLoad?: () => void;
   onImageError?: () => void;
 }
@@ -73,14 +74,17 @@ export default function ReelCanvasPreview({
   sequence,
   currentNodeId,
   playAllActive = false,
+  surface = 'preview',
   onImageLoad,
   onImageError,
 }: ReelCanvasPreviewProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const onImageLoadRef = useRef(onImageLoad);
   const onImageErrorRef = useRef(onImageError);
   const [assets, setAssets] = useState<ReelImageAssets | null>(null);
   const [sequenceDurationsMs, setSequenceDurationsMs] = useState<number[]>([]);
+  const [backdropSize, setBackdropSize] = useState({ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT });
   const previewSequence = useMemo(() => (
     playAllActive && sequence?.length
       ? sequence
@@ -113,6 +117,27 @@ export default function ReelCanvasPreview({
   const absoluteElapsedMs = playAllActive
     ? timeline.beatDurationsMs.slice(0, activeIndex).reduce((sum, durationMs) => sum + durationMs, 0) + elapsedMs
     : elapsedMs;
+  const isBackdrop = surface === 'backdrop';
+
+  useEffect(() => {
+    if (!isBackdrop || !containerRef.current) return;
+    const container = containerRef.current;
+    const updateSize = () => {
+      const { width, height } = container.getBoundingClientRect();
+      const scale = Math.min(window.devicePixelRatio || 1, 2);
+      const next = {
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+      };
+      setBackdropSize((current) => (
+        current.width === next.width && current.height === next.height ? current : next
+      ));
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [isBackdrop]);
 
   useEffect(() => {
     onImageLoadRef.current = onImageLoad;
@@ -161,24 +186,26 @@ export default function ReelCanvasPreview({
     const context = canvas?.getContext('2d');
     if (!canvas || !context || !assets) return;
     drawReelFrame(context, timeline, assets, absoluteElapsedMs, {
-      textOverlayEnabled,
+      textOverlayEnabled: !isBackdrop && textOverlayEnabled,
       textOverlayStyle,
-      vignetteEnabled,
+      vignetteEnabled: !isBackdrop && vignetteEnabled,
       vignetteAmountPercent,
+      visualFit: isBackdrop ? 'cover' : 'fill',
     });
-  }, [absoluteElapsedMs, assets, textOverlayEnabled, textOverlayStyle, timeline, vignetteAmountPercent, vignetteEnabled]);
+  }, [absoluteElapsedMs, assets, isBackdrop, textOverlayEnabled, textOverlayStyle, timeline, vignetteAmountPercent, vignetteEnabled]);
 
   const activePanel = getReelSceneAtTime(timeline, absoluteElapsedMs)?.panelIndex ?? 0;
+  const canvasSize = isBackdrop ? backdropSize : { width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT };
 
   return (
-    <div className="absolute inset-0">
+    <div ref={containerRef} aria-hidden={isBackdrop || undefined} className="absolute inset-0">
       <canvas
         ref={canvasRef}
-        width={PREVIEW_WIDTH}
-        height={PREVIEW_HEIGHT}
+        width={canvasSize.width}
+        height={canvasSize.height}
         className="h-full w-full"
       />
-      <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
+      {!isBackdrop && <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
         {[0, 1, 2, 3].map((panelIndex) => (
           <div
             key={panelIndex}
@@ -187,7 +214,7 @@ export default function ReelCanvasPreview({
             }`}
           />
         ))}
-      </div>
+      </div>}
     </div>
   );
 }
