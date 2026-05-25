@@ -4731,9 +4731,38 @@ function StoryScreenInner({
                   const activeStorageKey = getActiveGalleryStorageKey(normalizedCurrentBeat);
                   const optimizationSettings = cycleSettings.imageUploadOptimizationSettings;
                   const compressionEnabled = getAssetTypeCompressionEnabled('storyboard_image', optimizationSettings);
+                  const activeImagePreviewUrl = displayImageUrl && !gallery.some((entry) => (
+                    entry.storageKey === activeStorageKey || entry.url === displayImageUrl
+                  ))
+                    ? displayImageUrl
+                    : null;
 
                   return (
                     <>
+                      {activeImagePreviewUrl && (
+                        <div className="mb-5">
+                          <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                            Current Image
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-3">
+                            <div className={`relative overflow-hidden rounded-xl border border-emerald-400/70 ring-2 ring-emerald-400/40 ${
+                              isVerticalStory ? 'aspect-[9/16] w-20' : 'aspect-video w-32'
+                            }`}>
+                              <Image
+                                src={activeImagePreviewUrl}
+                                alt="Current beat image"
+                                fill
+                                className="object-cover"
+                                unoptimized
+                              />
+                              <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                Active
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {gallery.length > 0 && (
                         <div>
                           <div className="flex items-center justify-between">
@@ -4861,7 +4890,7 @@ function StoryScreenInner({
                             type="button"
                             onClick={() => void handlePromptOnlyDelete()}
                             className="inline-flex items-center gap-2 rounded-full border border-rose-500/25 bg-rose-500/10 px-4 py-2 text-sm text-rose-100 transition-colors hover:bg-rose-500/20"
-                            title="Clear active image (keeps it in the gallery)"
+                            title={activeImagePreviewUrl ? 'Clear active image' : 'Clear active image (keeps it in saved images)'}
                           >
                             <Trash2 className="h-4 w-4" />
                             Clear Active
