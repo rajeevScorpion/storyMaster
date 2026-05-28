@@ -1,6 +1,7 @@
 import type { BeatMediaStatus } from './beat-media';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
 import type { ReelLengthKey, ReelTextLengthKey } from '@/lib/reel/settings';
+import type { ReelNarrationSettings } from '@/lib/reel/narration';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 
@@ -216,6 +217,7 @@ export interface ReelStoryConfig {
   moodKey: string;
   visualStyleKey: string;
   narrationStyleKey: string;
+  narrationSettings: ReelNarrationSettings;
   brandingEnabled: boolean;
 }
 

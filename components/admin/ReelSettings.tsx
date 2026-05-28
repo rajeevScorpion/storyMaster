@@ -11,6 +11,13 @@ import {
 } from '@/app/actions/admin';
 import { runReelCleanup, type ReelCleanupResult } from '@/app/actions/reel-cleanup';
 import {
+  DEFAULT_REEL_NARRATION_ADMIN_SETTINGS,
+  SYSTEM_NARRATION_PRESETS,
+  type PronunciationDictionaryLocator,
+  type ReelNarrationAdminSettings,
+  type NarrationVoiceOption,
+} from '@/lib/reel/narration';
+import {
   DEFAULT_REEL_STORY_SETTINGS,
   REEL_TEXT_LENGTH_KEYS,
   normalizeReelStorySettings,
@@ -61,6 +68,50 @@ function formatResultLabel(result: ReelCleanupResult): string {
   return result.mode === 'dry_run' ? 'Dry run complete' : 'Cleanup complete';
 }
 
+function formatAllowedVoices(voices: NarrationVoiceOption[]): string {
+  return voices
+    .map((voice) => [voice.voiceId, voice.label, voice.description ?? ''].join('|').replace(/\|+$/g, ''))
+    .join('\n');
+}
+
+function parseAllowedVoices(value: string): NarrationVoiceOption[] {
+  const voices = value
+    .split(/\r?\n/)
+    .map((line): NarrationVoiceOption | null => {
+      const [voiceId = '', label = '', description = ''] = line.split('|').map((part) => part.trim());
+      if (!voiceId) return null;
+      const voice: NarrationVoiceOption = {
+        voiceId,
+        label: label || voiceId,
+      };
+      if (description) voice.description = description;
+      return voice;
+    })
+    .filter((voice): voice is NarrationVoiceOption => Boolean(voice));
+
+  return voices.length > 0 ? voices : DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices;
+}
+
+function formatDictionaryLocators(locators: PronunciationDictionaryLocator[]): string {
+  return locators
+    .map((locator) => `${locator.pronunciation_dictionary_id}|${locator.version_id}`)
+    .join('\n');
+}
+
+function parseDictionaryLocators(value: string): PronunciationDictionaryLocator[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => {
+      const [id = '', versionId = ''] = line.split('|').map((part) => part.trim());
+      if (!id || !versionId) return null;
+      return {
+        pronunciation_dictionary_id: id,
+        version_id: versionId,
+      };
+    })
+    .filter((locator): locator is PronunciationDictionaryLocator => Boolean(locator));
+}
+
 export default function ReelSettings() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -107,6 +158,9 @@ export default function ReelSettings() {
   const hasSettingsChanges = settingsJson.trim() !== serializeReelStorySettings(lastSavedSettings).trim();
   const parsedBatchSize = Number.parseInt(batchSizeInput, 10);
   const batchSizeIsValid = Number.isFinite(parsedBatchSize) && parsedBatchSize >= 1 && parsedBatchSize <= 100;
+  const narrationSettings = editableSettings?.narration ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
+  const enabledSystemPresetIds = new Set(narrationSettings.enabledSystemPresetIds);
+  const enabledSystemPresets = SYSTEM_NARRATION_PRESETS.filter((preset) => enabledSystemPresetIds.has(preset.id));
 
   const handleToggle = async () => {
     setToggleSaving(true);
@@ -170,6 +224,40 @@ export default function ReelSettings() {
     };
     setSettingsJson(JSON.stringify(nextSettings, null, 2));
     setSettingsMessage(null);
+  };
+
+  const updateReelSettingsDraft = (updater: (settings: ReelStorySettings) => ReelStorySettings) => {
+    if (!parsedSettings) return;
+    const nextSettings = updater(normalizeReelStorySettings(parsedSettings));
+    setSettingsJson(JSON.stringify(nextSettings, null, 2));
+    setSettingsMessage(null);
+  };
+
+  const updateNarrationSettings = (patch: Partial<ReelNarrationAdminSettings>) => {
+    updateReelSettingsDraft((settings) => ({
+      ...settings,
+      narration: {
+        ...settings.narration,
+        ...patch,
+      },
+    }));
+  };
+
+  const toggleSystemPreset = (presetId: string) => {
+    if (!editableSettings) return;
+    const current = new Set(editableSettings.narration.enabledSystemPresetIds);
+    if (current.has(presetId)) {
+      current.delete(presetId);
+    } else {
+      current.add(presetId);
+    }
+    const enabledSystemPresetIds = Array.from(current);
+    updateNarrationSettings({
+      enabledSystemPresetIds,
+      defaultPresetId: enabledSystemPresetIds.includes(editableSettings.narration.defaultPresetId)
+        ? editableSettings.narration.defaultPresetId
+        : enabledSystemPresetIds[0] ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.defaultPresetId,
+    });
   };
 
   const handleCleanup = async (mode: 'dry_run' | 'execute') => {
@@ -248,6 +336,207 @@ export default function ReelSettings() {
             {lastSavedSettings.retentionDays.free}/{lastSavedSettings.retentionDays.plus}/{lastSavedSettings.retentionDays.studio} days
           </p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-white/5 p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Reel narration defaults</h2>
+            <p className="mt-2 max-w-2xl text-xs leading-relaxed text-neutral-400">
+              Manage the global voice models, preset availability, fallback voice, and pronunciation settings used by Kissago Reels.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {hasSettingsChanges && <span className="text-xs text-amber-400">Unsaved</span>}
+            <button
+              type="button"
+              onClick={handleSettingsSave}
+              disabled={settingsSaving || !hasSettingsChanges || !parsedSettings}
+              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {settingsSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+              Save
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Default provider</span>
+            <select
+              value={narrationSettings.defaultProvider}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ defaultProvider: event.target.value as ReelNarrationAdminSettings['defaultProvider'] })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            >
+              <option value="elevenlabs">ElevenLabs</option>
+              <option value="gemini_tts">Gemini TTS</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Fallback provider</span>
+            <select
+              value={narrationSettings.fallbackProvider}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ fallbackProvider: event.target.value as ReelNarrationAdminSettings['fallbackProvider'] })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            >
+              <option value="gemini_tts">Gemini TTS</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Default preset</span>
+            <select
+              value={narrationSettings.defaultPresetId}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ defaultPresetId: event.target.value })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            >
+              {(enabledSystemPresets.length > 0 ? enabledSystemPresets : SYSTEM_NARRATION_PRESETS).map((preset) => (
+                <option key={preset.id} value={preset.id}>{preset.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Default voice ID</span>
+            <input
+              type="text"
+              value={narrationSettings.defaultVoiceId}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ defaultVoiceId: event.target.value })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Base model</span>
+            <input
+              type="text"
+              value={narrationSettings.defaultElevenLabsModel}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ defaultElevenLabsModel: event.target.value })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Preview model</span>
+            <input
+              type="text"
+              value={narrationSettings.previewElevenLabsModel}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ previewElevenLabsModel: event.target.value })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Final model</span>
+            <input
+              type="text"
+              value={narrationSettings.finalElevenLabsModel}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ finalElevenLabsModel: event.target.value })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Gemini fallback voice</span>
+            <input
+              type="text"
+              value={narrationSettings.fallbackGeminiVoice}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ fallbackGeminiVoice: event.target.value })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Max narration characters</span>
+            <input
+              type="number"
+              min={200}
+              max={20000}
+              value={narrationSettings.maxNarrationLength}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ maxNarrationLength: Number(event.target.value) })}
+              className="mt-1 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-neutral-950/60 p-4 text-sm text-neutral-200">
+            <span>Expressive tags</span>
+            <input
+              type="checkbox"
+              checked={narrationSettings.expressiveTagsEnabled}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ expressiveTagsEnabled: event.target.checked })}
+              className="h-4 w-4 accent-emerald-500"
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-neutral-950/60 p-4 text-sm text-neutral-200">
+            <span>Pronunciation dictionaries</span>
+            <input
+              type="checkbox"
+              checked={narrationSettings.pronunciationDictionaryEnabled}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ pronunciationDictionaryEnabled: event.target.checked })}
+              className="h-4 w-4 accent-emerald-500"
+            />
+          </label>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Allowed ElevenLabs voices</span>
+            <textarea
+              value={formatAllowedVoices(narrationSettings.allowedElevenLabsVoices)}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ allowedElevenLabsVoices: parseAllowedVoices(event.target.value) })}
+              spellCheck={false}
+              className="mt-1 min-h-28 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Pronunciation locators</span>
+            <textarea
+              value={formatDictionaryLocators(narrationSettings.pronunciationDictionaryLocators)}
+              disabled={!editableSettings}
+              onChange={(event) => updateNarrationSettings({ pronunciationDictionaryLocators: parseDictionaryLocators(event.target.value) })}
+              spellCheck={false}
+              className="mt-1 min-h-28 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+            />
+          </label>
+        </div>
+
+        <div className="mt-5">
+          <p className="text-[11px] uppercase tracking-wider text-neutral-500">Enabled system presets</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {SYSTEM_NARRATION_PRESETS.map((preset) => (
+              <label key={preset.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-neutral-950/60 px-3 py-2 text-sm text-neutral-200">
+                <input
+                  type="checkbox"
+                  checked={enabledSystemPresetIds.has(preset.id)}
+                  disabled={!editableSettings}
+                  onChange={() => toggleSystemPreset(preset.id)}
+                  className="h-4 w-4 accent-emerald-500"
+                />
+                <span>{preset.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {!editableSettings && (
+          <p className="mt-3 text-xs text-rose-300">Fix the JSON syntax error before editing narration controls.</p>
+        )}
       </div>
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-6">

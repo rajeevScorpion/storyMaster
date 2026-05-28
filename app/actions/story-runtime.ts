@@ -1387,6 +1387,9 @@ function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
           `- Reel Visual Style Key: ${cfg.reel.visualStyleKey}`,
           `- Reel Visual Style Id: ${cfg.reel.visualStyleId || 'none'}`,
           `- Reel Narration Style Key: ${cfg.reel.narrationStyleKey}`,
+          `- Reel Narration Preset Id: ${cfg.reel.narrationSettings.presetId || 'none'}`,
+          `- Reel Narration Voice: ${cfg.reel.narrationSettings.voiceId}`,
+          `- Reel Narration Language: ${cfg.reel.narrationSettings.language}`,
           '- Reel Orientation: 9:16',
           '- Reel Storyboard Panels Per Beat: 4',
         ]

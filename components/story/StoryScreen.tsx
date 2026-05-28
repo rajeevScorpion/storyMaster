@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -24,6 +24,15 @@ import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
+import {
+  deleteNarrationPresetAction,
+  duplicateNarrationPresetAction,
+  listNarrationPresetsAction,
+  previewReelNarrationAction,
+  saveDefaultNarrationPresetAction,
+  saveNarrationSettingsAsPresetAction,
+  updateNarrationPresetAction,
+} from '@/app/actions/reel-narration';
 import { useReelVideoExport } from '@/lib/hooks/useReelVideoExport';
 import {
   authorizeCurrentUserBillableAction,
@@ -80,6 +89,14 @@ import {
   type ImageUploadOptimizationSettings,
 } from '@/lib/media/imageUploadOptimization';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
+import {
+  applyPresetToNarrationSettings,
+  normalizeReelNarrationSettings,
+  storyLanguageToNarrationLanguage,
+  type NarrationPreset,
+  type ReelNarrationAdminSettings,
+  type ReelNarrationSettings,
+} from '@/lib/reel/narration';
 
 function StoryboardCycler({
   gridUrl,
@@ -341,6 +358,32 @@ function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): st
   });
 }
 
+function reelNarrationSettingsKey(settings: ReelNarrationSettings | null | undefined): string {
+  const normalized = normalizeReelNarrationSettings(settings);
+  return JSON.stringify({
+    provider: normalized.provider,
+    fallbackProvider: normalized.fallbackProvider,
+    language: normalized.language,
+    voiceId: normalized.voiceId,
+    model: normalized.model,
+    presetId: normalized.presetId,
+    speed: normalized.speed,
+    stability: normalized.stability,
+    similarityBoost: normalized.similarityBoost,
+    style: normalized.style,
+    speakerBoost: normalized.speakerBoost,
+    emotionalIntensity: normalized.emotionalIntensity,
+    pacing: normalized.pacing,
+    tone: normalized.tone,
+    deliveryStyle: normalized.deliveryStyle,
+    narrationInstruction: normalized.narrationInstruction,
+    languageMode: normalized.languageMode,
+    useExpressiveTags: normalized.useExpressiveTags,
+    usePronunciationDictionary: normalized.usePronunciationDictionary,
+    pauseStyle: normalized.pauseStyle,
+  });
+}
+
 function clampReelNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -412,8 +455,8 @@ function ReelToolbar({
   );
 }
 
-type ReelEditorSection = 'text' | 'style' | 'transitions';
-type ReelEditorDestination = ReelEditorSection | 'voice';
+type ReelEditorSection = 'text' | 'style' | 'transitions' | 'voice';
+type ReelEditorDestination = ReelEditorSection;
 
 const REEL_EDITOR_DESTINATIONS: Array<{
   id: ReelEditorDestination;
@@ -424,7 +467,7 @@ const REEL_EDITOR_DESTINATIONS: Array<{
   { id: 'text', label: 'Panel Text', icon: BookOpen },
   { id: 'style', label: 'Caption Style', icon: Type },
   { id: 'transitions', label: 'Transitions', icon: Blend },
-  { id: 'voice', label: 'Voice / Narration', icon: Volume2, disabled: true },
+  { id: 'voice', label: 'Voice / Narration', icon: Volume2 },
 ];
 
 interface ReelCaptionStylePanelProps {
@@ -1737,6 +1780,7 @@ export default function StoryScreen() {
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
+  const updateReelNarrationSettings = useStoryStore((state) => state.updateReelNarrationSettings);
   const updateReelTextOverlayStyle = useStoryStore((state) => state.updateReelTextOverlayStyle);
   const updateReelTransitionSettings = useStoryStore((state) => state.updateReelTransitionSettings);
   const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
@@ -1883,6 +1927,7 @@ export default function StoryScreen() {
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
       updateReelPanelCaptions={updateReelPanelCaptions}
+      updateReelNarrationSettings={updateReelNarrationSettings}
       updateReelTextOverlayStyle={updateReelTextOverlayStyle}
       updateReelTransitionSettings={updateReelTransitionSettings}
       regenerateImageForNode={regenerateImageForNode}
@@ -1932,6 +1977,7 @@ function StoryScreenInner({
   audioReadyNodeId,
   generateNarrationForNode,
   updateReelPanelCaptions,
+  updateReelNarrationSettings,
   updateReelTextOverlayStyle,
   updateReelTransitionSettings,
   regenerateImageForNode,
@@ -1971,6 +2017,7 @@ function StoryScreenInner({
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
+  updateReelNarrationSettings: (settings: ReelNarrationSettings) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
@@ -2010,6 +2057,39 @@ function StoryScreenInner({
   const [reelEditorNavigationMessage, setReelEditorNavigationMessage] = useState<string | null>(null);
   const reelSettingsScrollRef = useRef<HTMLDivElement>(null);
   const [reelSettingsFade, setReelSettingsFade] = useState({ top: false, bottom: false });
+  const [narrationPresets, setNarrationPresets] = useState<NarrationPreset[]>([]);
+  const [reelNarrationAdminSettings, setReelNarrationAdminSettings] = useState<ReelNarrationAdminSettings | null>(null);
+  const [reelNarrationDraft, setReelNarrationDraft] = useState<ReelNarrationSettings>(() =>
+    normalizeReelNarrationSettings(session.storyConfig.reel.narrationSettings, {
+      storyLanguage: session.storyConfig.language,
+    })
+  );
+  const [reelNarrationAdvancedOpen, setReelNarrationAdvancedOpen] = useState(false);
+  const [reelNarrationSaveState, setReelNarrationSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [reelNarrationMessage, setReelNarrationMessage] = useState<string | null>(null);
+  const [isPreviewingReelNarration, setIsPreviewingReelNarration] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    listNarrationPresetsAction()
+      .then(({ presets, adminSettings }) => {
+        if (cancelled) return;
+        setNarrationPresets(presets);
+        setReelNarrationAdminSettings(adminSettings);
+        setReelNarrationDraft((current) => normalizeReelNarrationSettings(current, {
+          storyLanguage: session.storyConfig.language,
+          adminSettings,
+        }));
+      })
+      .catch(() => {
+        if (!cancelled) setNarrationPresets([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session.storyConfig.language]);
+
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
@@ -2223,6 +2303,13 @@ function StoryScreenInner({
     ),
     [session.storyConfig.reel.transitionSettings]
   );
+  const savedReelNarrationSettings = useMemo(
+    () => normalizeReelNarrationSettings(session.storyConfig.reel.narrationSettings, {
+      storyLanguage: session.storyConfig.language,
+      adminSettings: reelNarrationAdminSettings ?? undefined,
+    }),
+    [reelNarrationAdminSettings, session.storyConfig.language, session.storyConfig.reel.narrationSettings]
+  );
   const [reelTransitionDraft, setReelTransitionDraft] = useState<ReelTransitionSettings>(
     savedReelTransitionSettings
   );
@@ -2251,20 +2338,29 @@ function StoryScreenInner({
   const hasUnsavedReelTransitionSettings = isReelStory
     && reelTransitionSettingsKey(reelTransitionDraft) !== reelTransitionSettingsKey(savedReelTransitionSettings);
   const isReelTransitionSaving = reelTransitionSaveState === 'saving';
+  const hasUnsavedReelNarrationSettings = isReelStory
+    && reelNarrationSettingsKey(reelNarrationDraft) !== reelNarrationSettingsKey(savedReelNarrationSettings);
+  const isReelNarrationSaving = reelNarrationSaveState === 'saving';
   const activeReelSectionHasUnsavedChanges = activeReelEditorSection === 'text'
     ? hasUnsavedReelText
     : activeReelEditorSection === 'style'
     ? hasUnsavedReelOverlayStyle
+    : activeReelEditorSection === 'voice'
+    ? hasUnsavedReelNarrationSettings
     : hasUnsavedReelTransitionSettings;
   const activeReelSectionIsSaving = activeReelEditorSection === 'text'
     ? isReelTextSaving
     : activeReelEditorSection === 'style'
     ? isReelStyleSaving
+    : activeReelEditorSection === 'voice'
+    ? isReelNarrationSaving
     : isReelTransitionSaving;
   const activeReelSectionLabel = activeReelEditorSection === 'text'
     ? 'panel text'
     : activeReelEditorSection === 'style'
     ? 'caption style'
+    : activeReelEditorSection === 'voice'
+    ? 'voice'
     : 'transitions';
   const reelEditorNavigationBlocked = activeReelSectionHasUnsavedChanges || activeReelSectionIsSaving;
   const reelDistributionBeats = isReelStory && publishPath ? publishPath.beats : [];
@@ -2286,6 +2382,7 @@ function StoryScreenInner({
     !hasUnsavedReelText &&
     !hasUnsavedReelOverlayStyle &&
     !hasUnsavedReelTransitionSettings &&
+    !hasUnsavedReelNarrationSettings &&
     !reelHasPendingWork
   );
   const reelDistributionBlockReason = !isEnding
@@ -2300,6 +2397,8 @@ function StoryScreenInner({
     ? 'Save caption style before publishing or exporting.'
     : hasUnsavedReelTransitionSettings
     ? 'Save transitions before publishing or exporting.'
+    : hasUnsavedReelNarrationSettings
+    ? 'Save voice settings before publishing or exporting.'
     : reelHasPendingWork
     ? 'Wait for image and narration generation to finish.'
     : null;
@@ -2332,6 +2431,7 @@ function StoryScreenInner({
     && !hasUnsavedReelText
     && !hasUnsavedReelOverlayStyle
     && !hasUnsavedReelTransitionSettings
+    && !hasUnsavedReelNarrationSettings
     && !reelHasPendingWork
   );
   const reelPlayAllDisabledReason = !reelTimelineNodes?.length
@@ -2344,6 +2444,8 @@ function StoryScreenInner({
     ? 'Save caption style before playing the full reel.'
     : hasUnsavedReelTransitionSettings
     ? 'Save transitions before playing the full reel.'
+    : hasUnsavedReelNarrationSettings
+    ? 'Save voice settings before playing the full reel.'
     : reelHasPendingWork
     ? 'Wait for image and narration generation to finish.'
     : 'Play reel from beginning';
@@ -2417,6 +2519,12 @@ function StoryScreenInner({
     setReelTransitionSaveState('idle');
     setReelTransitionMessage(null);
   }, [savedReelTransitionSettings]);
+
+  useEffect(() => {
+    setReelNarrationDraft(savedReelNarrationSettings);
+    setReelNarrationSaveState('idle');
+    setReelNarrationMessage(null);
+  }, [savedReelNarrationSettings]);
 
   const updateReelSettingsFade = useCallback(() => {
     const element = reelSettingsScrollRef.current;
@@ -2603,14 +2711,190 @@ function StoryScreenInner({
     updateReelTransitionSettings,
   ]);
 
+  const updateReelNarrationDraft = useCallback((patch: Partial<ReelNarrationSettings>) => {
+    setReelNarrationDraft((current) => normalizeReelNarrationSettings({
+      ...current,
+      ...patch,
+    }, {
+      storyLanguage: session.storyConfig.language,
+      adminSettings: reelNarrationAdminSettings ?? undefined,
+    }));
+    setReelNarrationSaveState('idle');
+    setReelNarrationMessage(null);
+  }, [reelNarrationAdminSettings, session.storyConfig.language]);
+
+  const handleCancelReelNarrationSettings = useCallback(() => {
+    setReelNarrationDraft(savedReelNarrationSettings);
+    setReelNarrationSaveState('idle');
+    setReelNarrationMessage(null);
+    setReelEditorNavigationMessage(null);
+  }, [savedReelNarrationSettings]);
+
+  const handleReelNarrationPresetChange = useCallback((presetId: string) => {
+    const preset = narrationPresets.find((item) => item.id === presetId);
+    if (!preset) {
+      updateReelNarrationDraft({ presetId: null });
+      return;
+    }
+    setReelNarrationDraft((current) => applyPresetToNarrationSettings(
+      current,
+      preset,
+      reelNarrationAdminSettings ?? undefined
+    ));
+    setReelNarrationSaveState('idle');
+    setReelNarrationMessage(null);
+  }, [narrationPresets, reelNarrationAdminSettings, updateReelNarrationDraft]);
+
+  const handlePreviewReelNarrationSettings = useCallback(async () => {
+    if (isPreviewingReelNarration) return;
+    setIsPreviewingReelNarration(true);
+    setReelNarrationMessage(null);
+    try {
+      const result = await previewReelNarrationAction({
+        text: normalizedCurrentBeat.storyText,
+        settings: reelNarrationDraft,
+        storyLanguage: session.storyConfig.language,
+      });
+      setReelNarrationDraft(result.settings);
+      const audio = new Audio(result.audioUrl);
+      await audio.play();
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to preview voice.');
+    } finally {
+      setIsPreviewingReelNarration(false);
+    }
+  }, [isPreviewingReelNarration, normalizedCurrentBeat.storyText, reelNarrationDraft, session.storyConfig.language]);
+
+  const handleSaveReelNarrationSettings = useCallback(async () => {
+    if (!isReelStory || !hasUnsavedReelNarrationSettings || isReelNarrationSaving) return;
+
+    setReelNarrationSaveState('saving');
+    setReelNarrationMessage(null);
+    try {
+      const result = await updateReelNarrationSettings(reelNarrationDraft);
+      setReelNarrationSaveState('idle');
+      setReelNarrationMessage(result.clearedNarration ? 'Voice saved. Existing narration was cleared.' : 'Voice saved.');
+      setReelEditorNavigationMessage(null);
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to save voice settings.');
+    }
+  }, [
+    hasUnsavedReelNarrationSettings,
+    isReelNarrationSaving,
+    isReelStory,
+    reelNarrationDraft,
+    updateReelNarrationSettings,
+  ]);
+
+  const handleSaveReelNarrationPreset = useCallback(async () => {
+    const name = window.prompt('Preset name', 'My Kissago Voice');
+    if (!name?.trim()) return;
+    setReelNarrationMessage(null);
+    try {
+      const created = await saveNarrationSettingsAsPresetAction({
+        settings: reelNarrationDraft,
+        name: name.trim(),
+      });
+      setNarrationPresets((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setReelNarrationDraft((current) => normalizeReelNarrationSettings({
+        ...current,
+        presetId: created.id,
+      }, {
+        storyLanguage: session.storyConfig.language,
+        adminSettings: reelNarrationAdminSettings ?? undefined,
+      }));
+      setReelNarrationMessage('Preset saved.');
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to save preset.');
+    }
+  }, [reelNarrationAdminSettings, reelNarrationDraft, session.storyConfig.language]);
+
+  const handleUpdateReelNarrationPreset = useCallback(async () => {
+    if (!reelNarrationDraft.presetId) return;
+    const preset = narrationPresets.find((item) => item.id === reelNarrationDraft.presetId);
+    if (!preset || preset.presetScope !== 'user') return;
+    try {
+      const updated = await updateNarrationPresetAction(preset.id, {
+        ...preset,
+        ...reelNarrationDraft,
+      });
+      setNarrationPresets((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setReelNarrationMessage('Preset updated.');
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to update preset.');
+    }
+  }, [narrationPresets, reelNarrationDraft]);
+
+  const handleSetDefaultReelNarrationPreset = useCallback(async () => {
+    if (!reelNarrationDraft.presetId) return;
+    const preset = narrationPresets.find((item) => item.id === reelNarrationDraft.presetId);
+    if (!preset || preset.presetScope !== 'user') return;
+    try {
+      await saveDefaultNarrationPresetAction(preset.id);
+      setNarrationPresets((current) => current.map((item) => (
+        item.presetScope === 'user'
+          ? { ...item, isDefault: item.id === preset.id }
+          : item
+      )));
+      setReelNarrationMessage('Default preset updated.');
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to set default preset.');
+    }
+  }, [narrationPresets, reelNarrationDraft.presetId]);
+
+  const handleDuplicateReelNarrationPreset = useCallback(async () => {
+    if (!reelNarrationDraft.presetId) return;
+    try {
+      const copy = await duplicateNarrationPresetAction(reelNarrationDraft.presetId);
+      setNarrationPresets((current) => [...current, copy].sort((a, b) => a.name.localeCompare(b.name)));
+      setReelNarrationDraft((current) => normalizeReelNarrationSettings({
+        ...current,
+        presetId: copy.id,
+      }, {
+        storyLanguage: session.storyConfig.language,
+        adminSettings: reelNarrationAdminSettings ?? undefined,
+      }));
+      setReelNarrationMessage('Preset duplicated.');
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to duplicate preset.');
+    }
+  }, [reelNarrationAdminSettings, reelNarrationDraft.presetId, session.storyConfig.language]);
+
+  const handleDeleteReelNarrationPreset = useCallback(async () => {
+    if (!reelNarrationDraft.presetId) return;
+    const preset = narrationPresets.find((item) => item.id === reelNarrationDraft.presetId);
+    if (!preset || preset.presetScope !== 'user') return;
+    try {
+      await deleteNarrationPresetAction(preset.id);
+      setNarrationPresets((current) => current.filter((item) => item.id !== preset.id));
+      updateReelNarrationDraft({ presetId: null });
+      setReelNarrationMessage('Preset deleted.');
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to delete preset.');
+    }
+  }, [narrationPresets, reelNarrationDraft.presetId, updateReelNarrationDraft]);
+
   const handleGenerateNarration = useCallback(() => {
     if (isReelStory && hasUnsavedReelText) {
       setReelTextSaveState('error');
       setReelTextMessage('Save panel text before generating narration.');
       return;
     }
+    if (isReelStory && hasUnsavedReelNarrationSettings) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage('Save voice settings before generating narration.');
+      setActiveReelEditorSection('voice');
+      return;
+    }
     void generateNarrationForNode(currentNodeId);
-  }, [currentNodeId, generateNarrationForNode, hasUnsavedReelText, isReelStory]);
+  }, [currentNodeId, generateNarrationForNode, hasUnsavedReelNarrationSettings, hasUnsavedReelText, isReelStory]);
 
   const handleManualNavigateToNode = useCallback((nodeId: string) => {
     if (isReelStory) {
@@ -3360,8 +3644,8 @@ function StoryScreenInner({
         onClearGlow={clearAudioReady}
         storyMode={storyMode}
         onToggleStoryMode={toggleStoryMode}
-        disabled={hasUnsavedReelText}
-        disabledReason="Save panel text before generating narration"
+        disabled={hasUnsavedReelText || hasUnsavedReelNarrationSettings}
+        disabledReason={hasUnsavedReelNarrationSettings ? 'Save voice settings before generating narration' : 'Save panel text before generating narration'}
       />
     </div>
   );
@@ -3370,6 +3654,7 @@ function StoryScreenInner({
     if (section === 'text') return hasUnsavedReelText;
     if (section === 'style') return hasUnsavedReelOverlayStyle;
     if (section === 'transitions') return hasUnsavedReelTransitionSettings;
+    if (section === 'voice') return hasUnsavedReelNarrationSettings;
     return false;
   };
 
@@ -3391,7 +3676,7 @@ function StoryScreenInner({
         aria-label={destination.disabled ? `${destination.label} (coming soon)` : destination.label}
         title={destination.disabled ? `${destination.label} (coming soon)` : destination.label}
         onClick={() => {
-          if (!destination.disabled && destination.id !== 'voice') {
+          if (!destination.disabled) {
             selectReelEditorSection(destination.id);
           }
         }}
@@ -3455,7 +3740,7 @@ function StoryScreenInner({
         onSave={handleSaveReelOverlayStyle}
       />
     </div>
-  ) : (
+  ) : activeReelEditorSection === 'transitions' ? (
     <div id="reel-editor-panel-transitions" role="tabpanel" aria-labelledby="reel-editor-tab-transitions">
       <ReelTransitionPanel
         settings={normalizedReelTransitionDraft}
@@ -3468,6 +3753,297 @@ function StoryScreenInner({
         onSave={handleSaveReelTransitionSettings}
       />
     </div>
+  ) : (
+    <section id="reel-editor-panel-voice" role="tabpanel" aria-labelledby="reel-editor-tab-voice" className="bg-neutral-950 px-4 py-4">
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 font-sans text-[11px] uppercase tracking-[0.22em] text-neutral-400">
+            <Volume2 className="h-4 w-4 text-emerald-300/80" />
+            Voice
+          </div>
+          <button
+            type="button"
+            onClick={() => setReelNarrationAdvancedOpen((value) => !value)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-neutral-300 transition-colors hover:bg-white/10"
+            title={reelNarrationAdvancedOpen ? 'Hide advanced voice controls' : 'Show advanced voice controls'}
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid gap-3">
+          <label className="space-y-1">
+            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Language</span>
+            <select
+              value={reelNarrationDraft.language}
+              onChange={(event) => updateReelNarrationDraft({
+                language: event.target.value,
+                languageSource: 'user_selected',
+              })}
+              className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
+            >
+              <option value={storyLanguageToNarrationLanguage(session.storyConfig.language)}>
+                Reel language ({session.storyConfig.language})
+              </option>
+              <option value="en-IN">English</option>
+              <option value="hi-IN">Hindi</option>
+              <option value="ur-PK">Urdu</option>
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice</span>
+            <select
+              value={reelNarrationDraft.voiceId}
+              onChange={(event) => updateReelNarrationDraft({ voiceId: event.target.value })}
+              className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
+            >
+              {(reelNarrationAdminSettings?.allowedElevenLabsVoices ?? []).map((voice) => (
+                <option key={voice.voiceId} value={voice.voiceId}>{voice.label}</option>
+              ))}
+              {!reelNarrationAdminSettings?.allowedElevenLabsVoices.some((voice) => voice.voiceId === reelNarrationDraft.voiceId) && (
+                <option value={reelNarrationDraft.voiceId}>{reelNarrationDraft.voiceId}</option>
+              )}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preset</span>
+            <select
+              value={reelNarrationDraft.presetId || ''}
+              onChange={(event) => handleReelNarrationPresetChange(event.target.value)}
+              className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
+            >
+              <option value="">Custom</option>
+              {narrationPresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>{preset.name}</option>
+              ))}
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+              <span>Speed</span>
+              <span>{reelNarrationDraft.speed.toFixed(2)}x</span>
+            </span>
+            <input
+              type="range"
+              min={0.7}
+              max={1.2}
+              step={0.01}
+              value={reelNarrationDraft.speed}
+              onChange={(event) => updateReelNarrationDraft({ speed: Number(event.target.value) })}
+              className="w-full accent-emerald-500"
+            />
+          </label>
+
+          <label className="space-y-1">
+            <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+              <span>Emotion</span>
+              <span>{Math.round(reelNarrationDraft.emotionalIntensity * 100)}%</span>
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={reelNarrationDraft.emotionalIntensity}
+              onChange={(event) => updateReelNarrationDraft({ emotionalIntensity: Number(event.target.value) })}
+              className="w-full accent-emerald-500"
+            />
+          </label>
+        </div>
+
+        {reelNarrationAdvancedOpen && (
+          <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/70 p-3">
+            <label className="space-y-1">
+              <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Model</span>
+              <input
+                value={reelNarrationDraft.model}
+                onChange={(event) => updateReelNarrationDraft({ model: event.target.value })}
+                className="w-full rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
+              />
+            </label>
+            <div className="grid gap-3">
+              {[
+                ['Stability', 'stability', reelNarrationDraft.stability],
+                ['Clarity', 'similarityBoost', reelNarrationDraft.similarityBoost],
+                ['Style', 'style', reelNarrationDraft.style],
+              ].map(([label, key, value]) => (
+                <label key={key} className="space-y-1">
+                  <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+                    <span>{label}</span>
+                    <span>{Math.round(Number(value) * 100)}%</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={Number(value)}
+                    onChange={(event) => updateReelNarrationDraft({ [key]: Number(event.target.value) } as Partial<ReelNarrationSettings>)}
+                    className="w-full accent-emerald-500"
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="grid gap-2">
+              <label className="flex items-center justify-between rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200">
+                <span>Speaker boost</span>
+                <input
+                  type="checkbox"
+                  checked={reelNarrationDraft.speakerBoost}
+                  onChange={(event) => updateReelNarrationDraft({ speakerBoost: event.target.checked })}
+                  className="h-4 w-4 accent-emerald-500"
+                />
+              </label>
+              <label className="flex items-center justify-between rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200">
+                <span>Expressive tags</span>
+                <input
+                  type="checkbox"
+                  checked={reelNarrationDraft.useExpressiveTags}
+                  disabled={reelNarrationAdminSettings?.expressiveTagsEnabled === false}
+                  onChange={(event) => updateReelNarrationDraft({ useExpressiveTags: event.target.checked })}
+                  className="h-4 w-4 accent-emerald-500 disabled:opacity-40"
+                />
+              </label>
+              <label className="flex items-center justify-between rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200">
+                <span>Pronunciation dictionary</span>
+                <input
+                  type="checkbox"
+                  checked={reelNarrationDraft.usePronunciationDictionary}
+                  disabled={reelNarrationAdminSettings?.pronunciationDictionaryEnabled !== true}
+                  onChange={(event) => updateReelNarrationDraft({ usePronunciationDictionary: event.target.checked })}
+                  className="h-4 w-4 accent-emerald-500 disabled:opacity-40"
+                />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="space-y-1">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Pacing</span>
+                <select
+                  value={reelNarrationDraft.pacing}
+                  onChange={(event) => updateReelNarrationDraft({ pacing: event.target.value })}
+                  className="w-full rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+                >
+                  <option value="very_slow">Very slow</option>
+                  <option value="slow">Slow</option>
+                  <option value="gentle">Gentle</option>
+                  <option value="steady">Steady</option>
+                  <option value="dynamic">Dynamic</option>
+                </select>
+              </label>
+              <label className="space-y-1">
+                <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Pause</span>
+                <select
+                  value={reelNarrationDraft.pauseStyle}
+                  onChange={(event) => updateReelNarrationDraft({ pauseStyle: event.target.value })}
+                  className="w-full rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+                >
+                  <option value="short">Short</option>
+                  <option value="natural">Natural</option>
+                  <option value="long">Long</option>
+                </select>
+              </label>
+            </div>
+            <label className="space-y-1">
+              <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Direction</span>
+              <textarea
+                value={reelNarrationDraft.narrationInstruction}
+                onChange={(event) => updateReelNarrationDraft({ narrationInstruction: event.target.value })}
+                rows={3}
+                className="w-full resize-none rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
+              />
+            </label>
+            <div className="rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-xs text-neutral-400">
+              Fallback: Gemini TTS
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handlePreviewReelNarrationSettings()}
+            disabled={isPreviewingReelNarration}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+          >
+            {isPreviewingReelNarration ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            Preview
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSaveReelNarrationSettings()}
+            disabled={!hasUnsavedReelNarrationSettings || isReelNarrationSaving}
+            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-medium text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isReelNarrationSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={handleCancelReelNarrationSettings}
+            disabled={!hasUnsavedReelNarrationSettings || isReelNarrationSaving}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void handleSaveReelNarrationPreset()}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10"
+          >
+            <Save className="h-4 w-4" />
+            Save preset
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDuplicateReelNarrationPreset()}
+            disabled={!reelNarrationDraft.presetId}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Copy className="h-4 w-4" />
+            Duplicate
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleUpdateReelNarrationPreset()}
+            disabled={!narrationPresets.some((preset) => preset.id === reelNarrationDraft.presetId && preset.presetScope === 'user')}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCcw className="h-4 w-4" />
+            Update preset
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSetDefaultReelNarrationPreset()}
+            disabled={!narrationPresets.some((preset) => preset.id === reelNarrationDraft.presetId && preset.presetScope === 'user' && !preset.isDefault)}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Check className="h-4 w-4" />
+            Set default
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDeleteReelNarrationPreset()}
+            disabled={!narrationPresets.some((preset) => preset.id === reelNarrationDraft.presetId && preset.presetScope === 'user')}
+            className="inline-flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
+        </div>
+
+        {reelNarrationMessage && (
+          <p className={`text-xs ${reelNarrationSaveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
+            {reelNarrationMessage}
+          </p>
+        )}
+      </div>
+    </section>
   );
 
   const reelToolbarActions = (

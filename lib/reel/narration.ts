@@ -1,0 +1,851 @@
+import type { StoryLanguage } from '@/lib/types/story';
+
+export type NarrationProvider = 'elevenlabs' | 'gemini_tts';
+export type NarrationFallbackProvider = 'gemini_tts';
+export type NarrationPresetScope = 'system' | 'user';
+export type NarrationPresetVisibility = 'private' | 'public';
+export type NarrationLanguageMode = 'reel_language' | 'auto' | 'custom';
+export type NarrationGenerationMode = 'preview' | 'final';
+
+export interface NarrationVoiceOption {
+  voiceId: string;
+  label: string;
+  description?: string;
+}
+
+export interface PronunciationDictionaryLocator {
+  pronunciation_dictionary_id: string;
+  version_id: string;
+}
+
+export interface ReelNarrationAdminSettings {
+  defaultProvider: NarrationProvider;
+  fallbackProvider: NarrationFallbackProvider;
+  defaultPresetId: string;
+  enabledSystemPresetIds: string[];
+  defaultVoiceId: string;
+  allowedElevenLabsVoices: NarrationVoiceOption[];
+  defaultElevenLabsModel: string;
+  previewElevenLabsModel: string;
+  finalElevenLabsModel: string;
+  fallbackGeminiVoice: string;
+  maxNarrationLength: number;
+  expressiveTagsEnabled: boolean;
+  pronunciationDictionaryEnabled: boolean;
+  pronunciationDictionaryLocators: PronunciationDictionaryLocator[];
+}
+
+export interface ReelNarrationSettings {
+  provider: NarrationProvider;
+  fallbackProvider: NarrationFallbackProvider;
+  language: string;
+  languageSource: 'reel_language' | 'user_selected' | 'auto_detected';
+  detectedLanguage: string | null;
+  isMixedLanguage: boolean;
+  voiceId: string;
+  model: string;
+  presetId: string | null;
+  speed: number;
+  stability: number;
+  similarityBoost: number;
+  style: number;
+  speakerBoost: boolean;
+  emotionalIntensity: number;
+  pacing: string;
+  tone: string;
+  deliveryStyle: string;
+  narrationInstruction: string;
+  languageMode: NarrationLanguageMode;
+  useExpressiveTags: boolean;
+  usePronunciationDictionary: boolean;
+  pauseStyle: string;
+}
+
+export interface NarrationPreset {
+  id: string;
+  userId: string | null;
+  name: string;
+  description: string | null;
+  provider: NarrationProvider;
+  model: string;
+  voiceId: string;
+  languageMode: NarrationLanguageMode;
+  speed: number;
+  stability: number;
+  similarityBoost: number;
+  style: number;
+  speakerBoost: boolean;
+  tone: string;
+  emotionalIntensity: number;
+  pacing: string;
+  deliveryStyle: string;
+  narrationInstruction: string;
+  presetScope: NarrationPresetScope;
+  presetVisibility: NarrationPresetVisibility;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NarrationLanguageDetection {
+  selectedLanguage: string;
+  detectedLanguage: string | null;
+  isMixedLanguage: boolean;
+  notice: string | null;
+}
+
+export interface NarrationPerformanceScript {
+  text: string;
+  deliveryInstruction: string;
+  language: NarrationLanguageDetection;
+  expressiveTagsUsed: boolean;
+  modelSupportsExpressiveTags: boolean;
+}
+
+const SYSTEM_PRESET_IDS = {
+  knowledgeable: '11111111-1111-4111-8111-111111111111',
+  philosophical: '22222222-2222-4222-8222-222222222222',
+  softNoir: '33333333-3333-4333-8333-333333333333',
+  whispering: '44444444-4444-4444-8444-444444444444',
+  dramatic: '55555555-5555-4555-8555-555555555555',
+  affectionateStoryteller: '66666666-6666-4666-8666-666666666666',
+  sageNarrator: '77777777-7777-4777-8777-777777777777',
+  melancholicPoet: '88888888-8888-4888-8888-888888888888',
+  hopefulMentor: '99999999-9999-4999-8999-999999999999',
+  mysticDocumentary: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  cinematicTrailerSoft: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  gentleHindiKahani: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  urduPoeticNoir: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  childlikeWonder: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  mythicEpic: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+} as const;
+
+function isoNow(): string {
+  return new Date(0).toISOString();
+}
+
+function preset(input: Omit<NarrationPreset, 'userId' | 'provider' | 'model' | 'voiceId' | 'languageMode' | 'presetScope' | 'presetVisibility' | 'isDefault' | 'createdAt' | 'updatedAt'> & {
+  model?: string;
+  voiceId?: string;
+  languageMode?: NarrationLanguageMode;
+  isDefault?: boolean;
+}): NarrationPreset {
+  return {
+    userId: null,
+    provider: 'elevenlabs',
+    model: input.model ?? 'eleven_multilingual_v2',
+    voiceId: input.voiceId ?? 'EXAVITQu4vr4xnSDxMaL',
+    languageMode: input.languageMode ?? 'reel_language',
+    presetScope: 'system',
+    presetVisibility: 'public',
+    isDefault: input.isDefault ?? false,
+    createdAt: isoNow(),
+    updatedAt: isoNow(),
+    ...input,
+  };
+}
+
+export const SYSTEM_NARRATION_PRESETS: NarrationPreset[] = [
+  preset({
+    id: SYSTEM_PRESET_IDS.knowledgeable,
+    name: 'Knowledgeable',
+    description: 'Calm, clear, confident explanation with gentle authority.',
+    speed: 0.95,
+    stability: 0.75,
+    similarityBoost: 0.8,
+    style: 0.15,
+    speakerBoost: true,
+    tone: 'clear, grounded, thoughtful',
+    emotionalIntensity: 0.35,
+    pacing: 'steady',
+    deliveryStyle: 'informed storyteller',
+    narrationInstruction: 'Sound warm, precise, and trustworthy. Keep pauses short and purposeful.',
+    isDefault: true,
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.philosophical,
+    name: 'Philosophical',
+    description: 'Reflective, intimate, and spacious for meaning-heavy reels.',
+    speed: 0.86,
+    stability: 0.62,
+    similarityBoost: 0.78,
+    style: 0.32,
+    speakerBoost: true,
+    tone: 'reflective, soft, searching',
+    emotionalIntensity: 0.5,
+    pacing: 'slow',
+    deliveryStyle: 'philosophical narrator',
+    narrationInstruction: 'Let ideas breathe. Use gentle pauses after images and questions.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.softNoir,
+    name: 'Soft Noir',
+    description: 'Low, cinematic, and intimate without becoming harsh.',
+    speed: 0.82,
+    stability: 0.55,
+    similarityBoost: 0.76,
+    style: 0.42,
+    speakerBoost: true,
+    tone: 'low, smoky, intimate',
+    emotionalIntensity: 0.55,
+    pacing: 'slow',
+    deliveryStyle: 'soft noir narrator',
+    narrationInstruction: 'Keep the voice close and low. Add suspense through pauses, not volume.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.whispering,
+    name: 'Whispering',
+    description: 'Breathy, close, and delicate for quiet emotional reels.',
+    speed: 0.78,
+    stability: 0.5,
+    similarityBoost: 0.72,
+    style: 0.55,
+    speakerBoost: true,
+    tone: 'hushed, tender, close',
+    emotionalIntensity: 0.62,
+    pacing: 'very_slow',
+    deliveryStyle: 'whispered storyteller',
+    narrationInstruction: 'Use a soft near-whisper. Keep consonants clear and avoid melodrama.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.dramatic,
+    name: 'Dramatic',
+    description: 'Emotion-forward, cinematic, and high contrast.',
+    speed: 0.9,
+    stability: 0.42,
+    similarityBoost: 0.75,
+    style: 0.65,
+    speakerBoost: true,
+    tone: 'dramatic, cinematic, emotionally charged',
+    emotionalIntensity: 0.78,
+    pacing: 'dynamic',
+    deliveryStyle: 'dramatic narrator',
+    narrationInstruction: 'Lean into emotion and contrast, but keep the delivery smooth and reel-friendly.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.affectionateStoryteller,
+    name: 'Affectionate Storyteller',
+    description: 'Warm, caring, and personal with soft emotional lift.',
+    speed: 0.88,
+    stability: 0.68,
+    similarityBoost: 0.8,
+    style: 0.28,
+    speakerBoost: true,
+    tone: 'affectionate, warm, reassuring',
+    emotionalIntensity: 0.55,
+    pacing: 'gentle',
+    deliveryStyle: 'affectionate storyteller',
+    narrationInstruction: 'Sound like you are telling something precious to someone you care about.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.sageNarrator,
+    name: 'Sage Narrator',
+    description: 'Wise, grounded, and unhurried.',
+    speed: 0.84,
+    stability: 0.7,
+    similarityBoost: 0.82,
+    style: 0.25,
+    speakerBoost: true,
+    tone: 'wise, grounded, compassionate',
+    emotionalIntensity: 0.45,
+    pacing: 'slow',
+    deliveryStyle: 'sage narrator',
+    narrationInstruction: 'Speak with mature calm. Let each line feel earned.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.melancholicPoet,
+    name: 'Melancholic Poet',
+    description: 'Soft sadness, poetic rhythm, and careful silence.',
+    speed: 0.8,
+    stability: 0.56,
+    similarityBoost: 0.78,
+    style: 0.4,
+    speakerBoost: true,
+    tone: 'melancholic, lyrical, tender',
+    emotionalIntensity: 0.65,
+    pacing: 'slow',
+    deliveryStyle: 'poetic narrator',
+    narrationInstruction: 'Use a lyrical cadence with gentle ache. Avoid theatrical overstatement.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.hopefulMentor,
+    name: 'Hopeful Mentor',
+    description: 'Encouraging, bright, and steady.',
+    speed: 0.94,
+    stability: 0.7,
+    similarityBoost: 0.82,
+    style: 0.25,
+    speakerBoost: true,
+    tone: 'hopeful, steady, encouraging',
+    emotionalIntensity: 0.48,
+    pacing: 'steady',
+    deliveryStyle: 'hopeful mentor',
+    narrationInstruction: 'Carry quiet optimism. Make the final line feel like a hand on the shoulder.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.mysticDocumentary,
+    name: 'Mystic Documentary',
+    description: 'Documentary clarity with mystical wonder.',
+    speed: 0.86,
+    stability: 0.64,
+    similarityBoost: 0.8,
+    style: 0.35,
+    speakerBoost: true,
+    tone: 'mystic, observant, cinematic',
+    emotionalIntensity: 0.55,
+    pacing: 'measured',
+    deliveryStyle: 'mystic documentary narrator',
+    narrationInstruction: 'Balance factual calm with a quiet sense of mystery and awe.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.cinematicTrailerSoft,
+    name: 'Cinematic Trailer Soft',
+    description: 'Trailer-like lift with a softer emotional edge.',
+    speed: 0.92,
+    stability: 0.48,
+    similarityBoost: 0.78,
+    style: 0.55,
+    speakerBoost: true,
+    tone: 'cinematic, spacious, stirring',
+    emotionalIntensity: 0.68,
+    pacing: 'dynamic',
+    deliveryStyle: 'soft cinematic trailer',
+    narrationInstruction: 'Use trailer pacing and weight, but keep the voice intimate and restrained.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.gentleHindiKahani,
+    name: 'Gentle Hindi Kahani',
+    description: 'Warm Hindi storytelling with gentle pauses.',
+    speed: 0.88,
+    stability: 0.68,
+    similarityBoost: 0.82,
+    style: 0.3,
+    speakerBoost: true,
+    tone: 'narm, kahani-jaisa, affectionate',
+    emotionalIntensity: 0.52,
+    pacing: 'gentle',
+    deliveryStyle: 'Hindi kahani narrator',
+    narrationInstruction: 'Narrate like a gentle Hindi kahani. Keep mixed Hindi-English words natural.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.urduPoeticNoir,
+    name: 'Urdu Poetic Noir',
+    description: 'Poetic Urdu/Hindustani mood with noir softness.',
+    speed: 0.82,
+    stability: 0.56,
+    similarityBoost: 0.78,
+    style: 0.44,
+    speakerBoost: true,
+    tone: 'poetic, noir, mehsoos',
+    emotionalIntensity: 0.64,
+    pacing: 'slow',
+    deliveryStyle: 'Urdu poetic narrator',
+    narrationInstruction: 'Keep the cadence poetic and intimate. Preserve Urdu/Hindustani words gracefully.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.childlikeWonder,
+    name: 'Childlike Wonder',
+    description: 'Soft wonder, curiosity, and innocent warmth.',
+    speed: 0.96,
+    stability: 0.66,
+    similarityBoost: 0.8,
+    style: 0.34,
+    speakerBoost: true,
+    tone: 'curious, bright, gentle',
+    emotionalIntensity: 0.5,
+    pacing: 'light',
+    deliveryStyle: 'wonder-filled storyteller',
+    narrationInstruction: 'Bring a small smile into the voice. Keep the wonder sincere and unforced.',
+  }),
+  preset({
+    id: SYSTEM_PRESET_IDS.mythicEpic,
+    name: 'Mythic Epic',
+    description: 'Grand, ancient, and emotionally resonant.',
+    speed: 0.9,
+    stability: 0.5,
+    similarityBoost: 0.8,
+    style: 0.58,
+    speakerBoost: true,
+    tone: 'mythic, grand, resonant',
+    emotionalIntensity: 0.72,
+    pacing: 'measured',
+    deliveryStyle: 'mythic epic narrator',
+    narrationInstruction: 'Give the lines ancient weight. Let pauses create scale.',
+  }),
+];
+
+export const DEFAULT_REEL_NARRATION_ADMIN_SETTINGS: ReelNarrationAdminSettings = {
+  defaultProvider: 'elevenlabs',
+  fallbackProvider: 'gemini_tts',
+  defaultPresetId: SYSTEM_PRESET_IDS.knowledgeable,
+  enabledSystemPresetIds: SYSTEM_NARRATION_PRESETS.map((preset) => preset.id),
+  defaultVoiceId: 'EXAVITQu4vr4xnSDxMaL',
+  allowedElevenLabsVoices: [
+    {
+      voiceId: 'EXAVITQu4vr4xnSDxMaL',
+      label: 'Bella',
+      description: 'Soft, warm default ElevenLabs voice',
+    },
+  ],
+  defaultElevenLabsModel: 'eleven_multilingual_v2',
+  previewElevenLabsModel: 'eleven_flash_v2_5',
+  finalElevenLabsModel: 'eleven_multilingual_v2',
+  fallbackGeminiVoice: 'Sulafat',
+  maxNarrationLength: 5000,
+  expressiveTagsEnabled: true,
+  pronunciationDictionaryEnabled: false,
+  pronunciationDictionaryLocators: [],
+};
+
+export const DEFAULT_REEL_NARRATION_SETTINGS: ReelNarrationSettings = {
+  provider: 'elevenlabs',
+  fallbackProvider: 'gemini_tts',
+  language: 'en-IN',
+  languageSource: 'reel_language',
+  detectedLanguage: null,
+  isMixedLanguage: false,
+  voiceId: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.defaultVoiceId,
+  model: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.finalElevenLabsModel,
+  presetId: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.defaultPresetId,
+  speed: SYSTEM_NARRATION_PRESETS[0].speed,
+  stability: SYSTEM_NARRATION_PRESETS[0].stability,
+  similarityBoost: SYSTEM_NARRATION_PRESETS[0].similarityBoost,
+  style: SYSTEM_NARRATION_PRESETS[0].style,
+  speakerBoost: SYSTEM_NARRATION_PRESETS[0].speakerBoost,
+  emotionalIntensity: SYSTEM_NARRATION_PRESETS[0].emotionalIntensity,
+  pacing: SYSTEM_NARRATION_PRESETS[0].pacing,
+  tone: SYSTEM_NARRATION_PRESETS[0].tone,
+  deliveryStyle: SYSTEM_NARRATION_PRESETS[0].deliveryStyle,
+  narrationInstruction: SYSTEM_NARRATION_PRESETS[0].narrationInstruction,
+  languageMode: 'reel_language',
+  useExpressiveTags: true,
+  usePronunciationDictionary: false,
+  pauseStyle: 'natural',
+};
+
+function cleanString(value: unknown, fallback = ''): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function normalizeNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Number(parsed.toFixed(3))));
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return fallback;
+}
+
+function normalizeProvider(value: unknown, fallback: NarrationProvider): NarrationProvider {
+  return value === 'gemini_tts' || value === 'elevenlabs' ? value : fallback;
+}
+
+function normalizeFallbackProvider(value: unknown): NarrationFallbackProvider {
+  return value === 'gemini_tts' ? 'gemini_tts' : 'gemini_tts';
+}
+
+function normalizeLanguageMode(value: unknown): NarrationLanguageMode {
+  if (value === 'auto' || value === 'custom' || value === 'reel_language') return value;
+  return 'reel_language';
+}
+
+function normalizePresetScope(value: unknown): NarrationPresetScope {
+  return value === 'user' ? 'user' : 'system';
+}
+
+function normalizePresetVisibility(value: unknown): NarrationPresetVisibility {
+  return value === 'public' ? 'public' : 'private';
+}
+
+function normalizeVoiceOptions(value: unknown): NarrationVoiceOption[] {
+  if (!Array.isArray(value)) return DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices;
+  const options = value
+    .map((entry) => {
+      if (typeof entry === 'string') {
+        const voiceId = entry.trim();
+        return voiceId ? { voiceId, label: voiceId } : null;
+      }
+      if (!entry || typeof entry !== 'object') return null;
+      const raw = entry as Record<string, unknown>;
+      const voiceId = cleanString(raw.voiceId || raw.voice_id);
+      if (!voiceId) return null;
+      return {
+        voiceId,
+        label: cleanString(raw.label, voiceId),
+        description: cleanString(raw.description) || undefined,
+      };
+    })
+    .filter((entry): entry is NarrationVoiceOption => Boolean(entry));
+  return options.length > 0 ? options : DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices;
+}
+
+function normalizeDictionaryLocators(value: unknown): PronunciationDictionaryLocator[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const raw = entry as Record<string, unknown>;
+      const id = cleanString(raw.pronunciation_dictionary_id || raw.id);
+      const versionId = cleanString(raw.version_id || raw.versionId);
+      if (!id || !versionId) return null;
+      return {
+        pronunciation_dictionary_id: id,
+        version_id: versionId,
+      };
+    })
+    .filter((entry): entry is PronunciationDictionaryLocator => Boolean(entry));
+}
+
+export function normalizeReelNarrationAdminSettings(
+  input: unknown,
+  legacyElevenLabs?: { enabled?: boolean; voiceId?: string; modelId?: string } | null
+): ReelNarrationAdminSettings {
+  const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const defaults = DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
+  const legacyVoice = cleanString(legacyElevenLabs?.voiceId, defaults.defaultVoiceId);
+  const legacyModel = cleanString(legacyElevenLabs?.modelId, defaults.finalElevenLabsModel);
+  const allowedVoices = normalizeVoiceOptions(raw.allowedElevenLabsVoices);
+  const defaultVoiceId = cleanString(raw.defaultVoiceId, legacyVoice);
+  const enabledSystemPresetIds = Array.isArray(raw.enabledSystemPresetIds)
+    ? raw.enabledSystemPresetIds.map((value) => cleanString(value)).filter(Boolean)
+    : defaults.enabledSystemPresetIds;
+
+  return {
+    defaultProvider: normalizeProvider(raw.defaultProvider, legacyElevenLabs?.enabled === false ? 'gemini_tts' : defaults.defaultProvider),
+    fallbackProvider: normalizeFallbackProvider(raw.fallbackProvider),
+    defaultPresetId: cleanString(raw.defaultPresetId, defaults.defaultPresetId),
+    enabledSystemPresetIds: enabledSystemPresetIds.length > 0 ? enabledSystemPresetIds : defaults.enabledSystemPresetIds,
+    defaultVoiceId,
+    allowedElevenLabsVoices: allowedVoices.some((voice) => voice.voiceId === defaultVoiceId)
+      ? allowedVoices
+      : [{ voiceId: defaultVoiceId, label: defaultVoiceId }, ...allowedVoices],
+    defaultElevenLabsModel: cleanString(raw.defaultElevenLabsModel, legacyModel),
+    previewElevenLabsModel: cleanString(raw.previewElevenLabsModel, defaults.previewElevenLabsModel),
+    finalElevenLabsModel: cleanString(raw.finalElevenLabsModel, legacyModel),
+    fallbackGeminiVoice: cleanString(raw.fallbackGeminiVoice, defaults.fallbackGeminiVoice),
+    maxNarrationLength: Math.round(normalizeNumber(raw.maxNarrationLength, defaults.maxNarrationLength, 200, 20000)),
+    expressiveTagsEnabled: normalizeBoolean(raw.expressiveTagsEnabled, defaults.expressiveTagsEnabled),
+    pronunciationDictionaryEnabled: normalizeBoolean(raw.pronunciationDictionaryEnabled, defaults.pronunciationDictionaryEnabled),
+    pronunciationDictionaryLocators: normalizeDictionaryLocators(raw.pronunciationDictionaryLocators),
+  };
+}
+
+export function normalizeNarrationPreset(input: unknown): NarrationPreset {
+  const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const fallback = SYSTEM_NARRATION_PRESETS[0];
+  return {
+    id: cleanString(raw.id, fallback.id),
+    userId: cleanString(raw.userId ?? raw.user_id) || null,
+    name: cleanString(raw.name, fallback.name),
+    description: cleanString(raw.description) || null,
+    provider: normalizeProvider(raw.provider, fallback.provider),
+    model: cleanString(raw.model, fallback.model),
+    voiceId: cleanString(raw.voiceId ?? raw.voice_id, fallback.voiceId),
+    languageMode: normalizeLanguageMode(raw.languageMode ?? raw.language_mode),
+    speed: normalizeNumber(raw.speed, fallback.speed, 0.5, 2),
+    stability: normalizeNumber(raw.stability, fallback.stability, 0, 1),
+    similarityBoost: normalizeNumber(raw.similarityBoost ?? raw.similarity_boost, fallback.similarityBoost, 0, 1),
+    style: normalizeNumber(raw.style, fallback.style, 0, 1),
+    speakerBoost: normalizeBoolean(raw.speakerBoost ?? raw.speaker_boost, fallback.speakerBoost),
+    tone: cleanString(raw.tone, fallback.tone),
+    emotionalIntensity: normalizeNumber(raw.emotionalIntensity ?? raw.emotional_intensity, fallback.emotionalIntensity, 0, 1),
+    pacing: cleanString(raw.pacing, fallback.pacing),
+    deliveryStyle: cleanString(raw.deliveryStyle ?? raw.delivery_style, fallback.deliveryStyle),
+    narrationInstruction: cleanString(raw.narrationInstruction ?? raw.narration_instruction, fallback.narrationInstruction),
+    presetScope: normalizePresetScope(raw.presetScope ?? raw.preset_scope),
+    presetVisibility: normalizePresetVisibility(raw.presetVisibility ?? raw.preset_visibility),
+    isDefault: normalizeBoolean(raw.isDefault ?? raw.is_default, false),
+    createdAt: cleanString(raw.createdAt ?? raw.created_at, fallback.createdAt),
+    updatedAt: cleanString(raw.updatedAt ?? raw.updated_at, fallback.updatedAt),
+  };
+}
+
+export function storyLanguageToNarrationLanguage(language: StoryLanguage | string | null | undefined): string {
+  if (language === 'hindi') return 'hi-IN';
+  return 'en-IN';
+}
+
+export function toElevenLabsLanguageCode(language: string | null | undefined): string | null {
+  const normalized = cleanString(language).toLowerCase();
+  if (!normalized) return null;
+  if (normalized.startsWith('hi')) return 'hi';
+  if (normalized.startsWith('ur')) return 'ur';
+  if (normalized.startsWith('en')) return 'en';
+  return normalized.split('-')[0] || null;
+}
+
+export function getEnabledSystemNarrationPresets(adminSettings: ReelNarrationAdminSettings): NarrationPreset[] {
+  const enabled = new Set(adminSettings.enabledSystemPresetIds);
+  return SYSTEM_NARRATION_PRESETS.filter((preset) => enabled.has(preset.id));
+}
+
+export function getNarrationPresetById(id: string | null | undefined): NarrationPreset | null {
+  if (!id) return null;
+  return SYSTEM_NARRATION_PRESETS.find((preset) => preset.id === id) ?? null;
+}
+
+export function normalizeReelNarrationSettings(
+  input: unknown,
+  options: {
+    storyLanguage?: StoryLanguage | string | null;
+    adminSettings?: ReelNarrationAdminSettings;
+    preset?: NarrationPreset | null;
+  } = {}
+): ReelNarrationSettings {
+  const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const adminSettings = options.adminSettings ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
+  const defaultPreset = options.preset
+    ?? getNarrationPresetById(cleanString(raw.presetId ?? raw.preset_id, adminSettings.defaultPresetId))
+    ?? getNarrationPresetById(adminSettings.defaultPresetId)
+    ?? SYSTEM_NARRATION_PRESETS[0];
+  const fallback = {
+    ...DEFAULT_REEL_NARRATION_SETTINGS,
+    provider: adminSettings.defaultProvider,
+    fallbackProvider: adminSettings.fallbackProvider,
+    language: storyLanguageToNarrationLanguage(options.storyLanguage),
+    voiceId: defaultPreset.voiceId || adminSettings.defaultVoiceId,
+    model: defaultPreset.model || adminSettings.finalElevenLabsModel,
+    presetId: defaultPreset.id,
+    speed: defaultPreset.speed,
+    stability: defaultPreset.stability,
+    similarityBoost: defaultPreset.similarityBoost,
+    style: defaultPreset.style,
+    speakerBoost: defaultPreset.speakerBoost,
+    emotionalIntensity: defaultPreset.emotionalIntensity,
+    pacing: defaultPreset.pacing,
+    tone: defaultPreset.tone,
+    deliveryStyle: defaultPreset.deliveryStyle,
+    narrationInstruction: defaultPreset.narrationInstruction,
+    languageMode: defaultPreset.languageMode,
+    useExpressiveTags: adminSettings.expressiveTagsEnabled,
+    usePronunciationDictionary: adminSettings.pronunciationDictionaryEnabled,
+  } satisfies ReelNarrationSettings;
+
+  return {
+    provider: normalizeProvider(raw.provider, fallback.provider),
+    fallbackProvider: normalizeFallbackProvider(raw.fallbackProvider ?? raw.fallback_provider ?? fallback.fallbackProvider),
+    language: cleanString(raw.language, fallback.language),
+    languageSource: raw.languageSource === 'user_selected' || raw.language_source === 'user_selected'
+      ? 'user_selected'
+      : raw.languageSource === 'auto_detected' || raw.language_source === 'auto_detected'
+      ? 'auto_detected'
+      : 'reel_language',
+    detectedLanguage: cleanString(raw.detectedLanguage ?? raw.detected_language) || null,
+    isMixedLanguage: normalizeBoolean(raw.isMixedLanguage ?? raw.is_mixed_language, fallback.isMixedLanguage),
+    voiceId: cleanString(raw.voiceId ?? raw.voice_id, fallback.voiceId),
+    model: cleanString(raw.model, fallback.model),
+    presetId: cleanString(raw.presetId ?? raw.preset_id, fallback.presetId ?? '') || null,
+    speed: normalizeNumber(raw.speed, fallback.speed, 0.5, 2),
+    stability: normalizeNumber(raw.stability, fallback.stability, 0, 1),
+    similarityBoost: normalizeNumber(raw.similarityBoost ?? raw.similarity_boost, fallback.similarityBoost, 0, 1),
+    style: normalizeNumber(raw.style, fallback.style, 0, 1),
+    speakerBoost: normalizeBoolean(raw.speakerBoost ?? raw.speaker_boost, fallback.speakerBoost),
+    emotionalIntensity: normalizeNumber(raw.emotionalIntensity ?? raw.emotional_intensity, fallback.emotionalIntensity, 0, 1),
+    pacing: cleanString(raw.pacing, fallback.pacing),
+    tone: cleanString(raw.tone, fallback.tone),
+    deliveryStyle: cleanString(raw.deliveryStyle ?? raw.delivery_style, fallback.deliveryStyle),
+    narrationInstruction: cleanString(raw.narrationInstruction ?? raw.narration_instruction, fallback.narrationInstruction),
+    languageMode: normalizeLanguageMode(raw.languageMode ?? raw.language_mode ?? fallback.languageMode),
+    useExpressiveTags: normalizeBoolean(raw.useExpressiveTags ?? raw.use_expressive_tags, fallback.useExpressiveTags),
+    usePronunciationDictionary: normalizeBoolean(raw.usePronunciationDictionary ?? raw.use_pronunciation_dictionary, fallback.usePronunciationDictionary),
+    pauseStyle: cleanString(raw.pauseStyle ?? raw.pause_style, fallback.pauseStyle),
+  };
+}
+
+export function applyPresetToNarrationSettings(
+  settings: ReelNarrationSettings,
+  preset: NarrationPreset,
+  adminSettings: ReelNarrationAdminSettings = DEFAULT_REEL_NARRATION_ADMIN_SETTINGS
+): ReelNarrationSettings {
+  return normalizeReelNarrationSettings(
+    {
+      ...settings,
+      provider: preset.provider,
+      presetId: preset.id,
+      model: preset.model || settings.model,
+      voiceId: preset.voiceId || settings.voiceId,
+      languageMode: preset.languageMode,
+      speed: preset.speed,
+      stability: preset.stability,
+      similarityBoost: preset.similarityBoost,
+      style: preset.style,
+      speakerBoost: preset.speakerBoost,
+      tone: preset.tone,
+      emotionalIntensity: preset.emotionalIntensity,
+      pacing: preset.pacing,
+      deliveryStyle: preset.deliveryStyle,
+      narrationInstruction: preset.narrationInstruction,
+    },
+    { adminSettings, preset }
+  );
+}
+
+export function detectNarrationLanguage(text: string, selectedLanguage: string): NarrationLanguageDetection {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) {
+    return {
+      selectedLanguage,
+      detectedLanguage: null,
+      isMixedLanguage: false,
+      notice: null,
+    };
+  }
+
+  const devanagari = (compact.match(/[\u0900-\u097F]/g) || []).length;
+  const arabic = (compact.match(/[\u0600-\u06FF]/g) || []).length;
+  const latinLetters = (compact.match(/[A-Za-z]/g) || []).length;
+  const hinglishMarkers = /\b(dil|kahani|zindagi|pyaar|safar|yaad|sapna|khushi|dard|roshni|andhera|rishta|awaaz)\b/i.test(compact);
+  const hasIndic = devanagari > 0 || arabic > 0 || hinglishMarkers;
+  const hasLatin = latinLetters > 0;
+  const isMixedLanguage = (hasIndic && hasLatin) || (devanagari > 0 && arabic > 0);
+  let detectedLanguage: string | null = null;
+
+  if (devanagari > arabic && devanagari > latinLetters * 0.25) {
+    detectedLanguage = 'hi-IN';
+  } else if (arabic > devanagari && arabic > latinLetters * 0.2) {
+    detectedLanguage = 'ur-PK';
+  } else if (hinglishMarkers && hasLatin) {
+    detectedLanguage = 'hi-IN';
+  } else if (latinLetters > 0) {
+    detectedLanguage = selectedLanguage.toLowerCase().startsWith('hi') && hinglishMarkers ? 'hi-IN' : 'en-IN';
+  }
+
+  const selectedRoot = selectedLanguage.slice(0, 2).toLowerCase();
+  const detectedRoot = detectedLanguage?.slice(0, 2).toLowerCase();
+  const differs = Boolean(detectedRoot && selectedRoot && detectedRoot !== selectedRoot);
+
+  return {
+    selectedLanguage,
+    detectedLanguage,
+    isMixedLanguage,
+    notice: differs || isMixedLanguage
+      ? `Selected ${selectedLanguage}; detected ${detectedLanguage ?? 'mixed/unknown'}${isMixedLanguage ? ' with mixed-language narration' : ''}.`
+      : null,
+  };
+}
+
+export function elevenLabsModelSupportsExpressiveTags(model: string | null | undefined): boolean {
+  const normalized = cleanString(model).toLowerCase();
+  return normalized.includes('v3') || normalized.includes('alpha') || normalized.includes('expressive');
+}
+
+function stripExpressiveTags(text: string): string {
+  return text
+    .replace(/\[(?:whisper|softly|pause|sigh|warmly|slowly|breath|dramatic|gentle)[^\]]*\]/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function paceText(text: string, pacing: string, pauseStyle: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (!normalized) return normalized;
+  const sentenceBreak = pacing === 'very_slow' || pacing === 'slow' ? '\n\n' : '\n';
+  const paced = normalized.replace(/([.!?])\s+/g, `$1${sentenceBreak}`);
+  if (pauseStyle === 'long') {
+    return paced.replace(/,\s+/g, ', ... ');
+  }
+  if (pauseStyle === 'short') {
+    return paced.replace(/;\s+/g, ', ');
+  }
+  return paced;
+}
+
+export function buildNarrationDeliveryInstruction(
+  settings: ReelNarrationSettings,
+  preset?: NarrationPreset | null
+): string {
+  const source = preset ?? getNarrationPresetById(settings.presetId);
+  return [
+    source?.narrationInstruction || settings.narrationInstruction,
+    `Tone: ${settings.tone}.`,
+    `Delivery: ${settings.deliveryStyle}.`,
+    `Pacing: ${settings.pacing}; pause style: ${settings.pauseStyle}.`,
+    `Emotional intensity: ${Math.round(settings.emotionalIntensity * 100)}%.`,
+  ].filter(Boolean).join(' ');
+}
+
+export function buildNarrationPerformanceScript(input: {
+  text: string;
+  settings: ReelNarrationSettings;
+  preset?: NarrationPreset | null;
+  provider: NarrationProvider;
+  adminSettings?: ReelNarrationAdminSettings;
+  generationMode?: NarrationGenerationMode;
+}): NarrationPerformanceScript {
+  const adminSettings = input.adminSettings ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
+  const language = detectNarrationLanguage(input.text, input.settings.language);
+  const deliveryInstruction = buildNarrationDeliveryInstruction(input.settings, input.preset);
+  const supportsExpressiveTags = input.provider === 'elevenlabs'
+    && adminSettings.expressiveTagsEnabled
+    && input.settings.useExpressiveTags
+    && elevenLabsModelSupportsExpressiveTags(input.settings.model);
+  const pacedText = paceText(input.text, input.settings.pacing, input.settings.pauseStyle);
+
+  if (input.provider === 'gemini_tts') {
+    return {
+      text: stripExpressiveTags(pacedText),
+      deliveryInstruction,
+      language,
+      expressiveTagsUsed: false,
+      modelSupportsExpressiveTags: false,
+    };
+  }
+
+  if (!supportsExpressiveTags) {
+    return {
+      text: stripExpressiveTags(pacedText),
+      deliveryInstruction,
+      language,
+      expressiveTagsUsed: false,
+      modelSupportsExpressiveTags: false,
+    };
+  }
+
+  const tag = input.settings.emotionalIntensity > 0.65
+    ? '[warmly, with feeling]'
+    : input.settings.pacing === 'very_slow' || input.settings.pacing === 'slow'
+    ? '[softly, slowly]'
+    : '[gently]';
+
+  return {
+    text: `${tag}\n${pacedText}`.trim(),
+    deliveryInstruction,
+    language,
+    expressiveTagsUsed: true,
+    modelSupportsExpressiveTags: true,
+  };
+}
+
+export function buildPresetInputFromSettings(
+  settings: ReelNarrationSettings,
+  name: string,
+  description = ''
+): Omit<NarrationPreset, 'id' | 'userId' | 'presetScope' | 'presetVisibility' | 'isDefault' | 'createdAt' | 'updatedAt'> {
+  return {
+    name,
+    description,
+    provider: settings.provider,
+    model: settings.model,
+    voiceId: settings.voiceId,
+    languageMode: settings.languageMode,
+    speed: settings.speed,
+    stability: settings.stability,
+    similarityBoost: settings.similarityBoost,
+    style: settings.style,
+    speakerBoost: settings.speakerBoost,
+    tone: settings.tone,
+    emotionalIntensity: settings.emotionalIntensity,
+    pacing: settings.pacing,
+    deliveryStyle: settings.deliveryStyle,
+    narrationInstruction: settings.narrationInstruction,
+  };
+}

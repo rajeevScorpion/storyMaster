@@ -244,6 +244,83 @@ export interface DbNarrationVoiceSample {
   updated_at: string;
 }
 
+export interface DbNarrationPreset {
+  id: string;
+  user_id: string | null;
+  name: string;
+  description: string | null;
+  provider: 'elevenlabs' | 'gemini_tts';
+  model: string;
+  voice_id: string;
+  language_mode: 'reel_language' | 'auto' | 'custom';
+  speed: number;
+  stability: number;
+  similarity_boost: number;
+  style: number;
+  speaker_boost: boolean;
+  tone: string;
+  emotional_intensity: number;
+  pacing: string;
+  delivery_style: string;
+  narration_instruction: string;
+  preset_scope: 'system' | 'user';
+  preset_visibility: 'private' | 'public';
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbReelNarrationSettings {
+  story_id: string;
+  user_id: string;
+  provider: 'elevenlabs' | 'gemini_tts';
+  fallback_provider: 'gemini_tts';
+  language: string;
+  language_source: 'reel_language' | 'user_selected' | 'auto_detected';
+  detected_language: string | null;
+  is_mixed_language: boolean;
+  voice_id: string;
+  model: string;
+  preset_id: string | null;
+  speed: number;
+  stability: number;
+  similarity_boost: number;
+  style: number;
+  speaker_boost: boolean;
+  emotional_intensity: number;
+  pacing: string;
+  tone: string;
+  delivery_style: string;
+  narration_instruction: string;
+  language_mode: 'reel_language' | 'auto' | 'custom';
+  use_expressive_tags: boolean;
+  use_pronunciation_dictionary: boolean;
+  pause_style: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbNarrationGenerationLog {
+  id: string;
+  user_id: string | null;
+  story_id: string | null;
+  node_id: string | null;
+  generation_mode: 'preview' | 'final';
+  provider_used: 'elevenlabs' | 'gemini_tts';
+  fallback_used: boolean;
+  selected_voice: string | null;
+  selected_model: string | null;
+  language: string | null;
+  detected_language: string | null;
+  is_mixed_language: boolean;
+  preset_id: string | null;
+  generation_duration_ms: number | null;
+  error_message: string | null;
+  generated_audio_storage_path: string | null;
+  estimated_cost_metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface DbManagedPage {
   page_key: string;
   title: string;

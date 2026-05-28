@@ -21,6 +21,7 @@ import {
   normalizeReelLength,
   normalizeReelTextLength,
 } from '@/lib/reel/settings';
+import { normalizeReelNarrationSettings } from '@/lib/reel/narration';
 import { normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import { DEFAULT_REEL_TRANSITION_SETTINGS, normalizeReelTransitionSettings } from '@/lib/reel/transitions';
 import type {
@@ -118,6 +119,10 @@ export const DEFAULT_REEL_CONFIG: ReelStoryConfig = {
   moodKey: DEFAULT_REEL_STORY_SETTINGS.defaultMood,
   visualStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultVisualStyle,
   narrationStyleKey: DEFAULT_REEL_STORY_SETTINGS.defaultNarrationStyle,
+  narrationSettings: normalizeReelNarrationSettings(null, {
+    storyLanguage: 'english',
+    adminSettings: DEFAULT_REEL_STORY_SETTINGS.narration,
+  }),
   brandingEnabled: true,
 };
 
@@ -186,7 +191,7 @@ type RawStoryConfig = Partial<StoryConfig> & {
 
 export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig {
   const storyKind = normalizeStoryKind(input?.storyKind ?? input?.story_kind);
-  const reel = normalizeReelConfig(input?.reel);
+  const reel = normalizeReelConfig(input?.reel, input?.language);
   const visualSettings: VisualSettings = {
     preset: input?.visualSettings?.preset || DEFAULT_VISUAL_SETTINGS.preset,
     theme: input?.visualSettings?.theme || DEFAULT_VISUAL_SETTINGS.theme,
@@ -354,7 +359,7 @@ function normalizeStoryKind(value?: string | null): StoryConfig['storyKind'] {
   return value === 'reel' ? 'reel' : 'story';
 }
 
-function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null): ReelStoryConfig {
+function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null, storyLanguage?: StoryConfig['language']): ReelStoryConfig {
   const legacyLength = normalizeReelLength(input?.length);
   const beatCountCandidate = Number(input?.beatCount);
   const beatCount = beatCountCandidate === 1 || beatCountCandidate === 2 || beatCountCandidate === 3
@@ -373,6 +378,10 @@ function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null): ReelStory
     moodKey: sanitizeText(input?.moodKey) || DEFAULT_REEL_CONFIG.moodKey,
     visualStyleKey: sanitizeText(input?.visualStyleKey) || DEFAULT_REEL_CONFIG.visualStyleKey,
     narrationStyleKey: sanitizeText(input?.narrationStyleKey) || DEFAULT_REEL_CONFIG.narrationStyleKey,
+    narrationSettings: normalizeReelNarrationSettings(input?.narrationSettings, {
+      storyLanguage: input?.narrationSettings?.language || storyLanguage || DEFAULT_STORY_CONFIG.language,
+      adminSettings: DEFAULT_REEL_STORY_SETTINGS.narration,
+    }),
     brandingEnabled: input?.brandingEnabled !== false,
   };
 }

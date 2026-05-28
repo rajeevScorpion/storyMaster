@@ -7,6 +7,11 @@ import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
 import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
+import {
+  listNarrationPresetsAction,
+  previewReelNarrationAction,
+  saveNarrationSettingsAsPresetAction,
+} from '@/app/actions/reel-narration';
 import { generateSeedPlanPreview, distributeReelTextAction } from '@/app/actions/story-runtime';
 import {
   authorizeCurrentUserBillableAction,
@@ -23,9 +28,17 @@ import {
   type ReelStorySetupSettings,
   type ReelTextLengthKey,
 } from '@/lib/reel/settings';
+import {
+  applyPresetToNarrationSettings,
+  normalizeReelNarrationSettings,
+  storyLanguageToNarrationLanguage,
+  type NarrationPreset,
+  type ReelNarrationAdminSettings,
+  type ReelNarrationSettings,
+} from '@/lib/reel/narration';
 import type { ReelVisualStyleCard } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Play, Save, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
@@ -125,7 +138,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
     storyPromptOnlyModeEnabled: false,
     verticalStoriesSettingEnabled: false,
   });
-  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(() => readCachedReelSetup() ?? FALLBACK_REEL_SETUP);
+  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(FALLBACK_REEL_SETUP);
   const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(reelSetup.settings.defaultBeatCount);
   const [reelTextLength, setReelTextLength] = useState<ReelTextLengthKey>(reelSetup.settings.defaultTextLength);
   const [reelTextOverlayEnabled, setReelTextOverlayEnabled] = useState(reelSetup.settings.textOverlayDefault);
@@ -139,6 +152,17 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [reelUserText, setReelUserText] = useState('');
   const [reelDistributedTexts, setReelDistributedTexts] = useState<string[][] | null>(null);
   const [reelDistributedImagePrompts, setReelDistributedImagePrompts] = useState<string[] | null>(null);
+  const [narrationPresets, setNarrationPresets] = useState<NarrationPreset[]>([]);
+  const [reelNarrationAdminSettings, setReelNarrationAdminSettings] = useState<ReelNarrationAdminSettings>(reelSetup.settings.narration);
+  const [reelNarrationSettings, setReelNarrationSettings] = useState<ReelNarrationSettings>(() =>
+    normalizeReelNarrationSettings(null, {
+      storyLanguage: language,
+      adminSettings: reelSetup.settings.narration,
+    })
+  );
+  const [isPreviewingNarration, setIsPreviewingNarration] = useState(false);
+  const [narrationPreviewError, setNarrationPreviewError] = useState<string | null>(null);
+  const [narrationPresetMessage, setNarrationPresetMessage] = useState<string | null>(null);
   const [isDistributing, setIsDistributing] = useState(false);
   const [distributeError, setDistributeError] = useState<string | null>(null);
   const [isVerticalStory, setIsVerticalStory] = useState(false);
@@ -216,21 +240,71 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   }, []);
 
   useEffect(() => {
+    const cached = readCachedReelSetup();
+    if (cached) {
+      setReelSetup(cached);
+    }
+  }, []);
+
+  useEffect(() => {
     getReelStorySetupSettings()
       .then((setup) => {
         writeCachedReelSetup(setup);
         setReelSetup(setup);
+        setReelNarrationAdminSettings(setup.settings.narration);
         setReelBeatCount(setup.settings.defaultBeatCount);
         setReelTextLength(setup.settings.defaultTextLength);
         setReelTextOverlayEnabled(setup.settings.textOverlayDefault);
         setReelMoodKey(setup.settings.defaultMood);
         setReelVisualStyleKey(setup.settings.defaultVisualStyle);
         setReelNarrationStyleKey(setup.settings.defaultNarrationStyle);
+        setReelNarrationSettings((current) => normalizeReelNarrationSettings(current, {
+          adminSettings: setup.settings.narration,
+        }));
       })
       .catch(() => {
         setReelSetup((current) => current ?? FALLBACK_REEL_SETUP);
       });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listNarrationPresetsAction()
+      .then(({ presets, adminSettings }) => {
+        if (cancelled) return;
+        setNarrationPresets(presets);
+        setReelNarrationAdminSettings(adminSettings);
+        setReelNarrationSettings((current) => {
+          const normalized = normalizeReelNarrationSettings(current, {
+            storyLanguage: language,
+            adminSettings,
+          });
+          const preferredDefault = presets.find((preset) => preset.presetScope === 'user' && preset.isDefault)
+            ?? presets.find((preset) => preset.id === adminSettings.defaultPresetId);
+          const canApplyPreferredDefault = !current.presetId || current.presetId === adminSettings.defaultPresetId;
+          return preferredDefault && canApplyPreferredDefault
+            ? applyPresetToNarrationSettings(normalized, preferredDefault, adminSettings)
+            : normalized;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setNarrationPresets([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [language]);
+
+  useEffect(() => {
+    setReelNarrationSettings((current) => normalizeReelNarrationSettings({
+      ...current,
+      language: storyLanguageToNarrationLanguage(language),
+      languageSource: 'reel_language',
+    }, {
+      storyLanguage: language,
+      adminSettings: reelNarrationAdminSettings,
+    }));
+  }, [language, reelNarrationAdminSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -316,6 +390,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
             setReelVisualStyleKey(config.reel.visualStyleKey);
             setReelVisualStyleId(config.reel.visualStyleId || null);
             setReelNarrationStyleKey(config.reel.narrationStyleKey);
+            setReelNarrationSettings(config.reel.narrationSettings);
             setWorkingTitle(config.authoring.workingTitle || '');
             setSourceText(config.authoring.sourceText || '');
             setGuidanceText(config.authoring.guidanceText || '');
@@ -410,6 +485,14 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
           moodKey: reelMoodKey,
           visualStyleKey: selectedStyle?.slug ?? reelVisualStyleKey,
           narrationStyleKey: reelNarrationStyleKey,
+          narrationSettings: normalizeReelNarrationSettings({
+            ...reelNarrationSettings,
+            language: storyLanguageToNarrationLanguage(language),
+            languageSource: 'reel_language',
+          }, {
+            storyLanguage: language,
+            adminSettings: reelNarrationAdminSettings,
+          }),
           brandingEnabled: true,
         },
         portraitReferences: buildPortraitReferences(),
@@ -615,6 +698,68 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
       setDistributeError(msg);
     } finally {
       setIsDistributing(false);
+    }
+  };
+
+  const handleReelNarrationPresetChange = (presetId: string) => {
+    const preset = narrationPresets.find((item) => item.id === presetId);
+    if (!preset) {
+      setReelNarrationSettings((current) => normalizeReelNarrationSettings({
+        ...current,
+        presetId: null,
+      }, {
+        storyLanguage: language,
+        adminSettings: reelNarrationAdminSettings,
+      }));
+      return;
+    }
+    setReelNarrationSettings((current) => applyPresetToNarrationSettings(current, preset, reelNarrationAdminSettings));
+  };
+
+  const handlePreviewReelNarration = async () => {
+    if (isPreviewingNarration) return;
+    setIsPreviewingNarration(true);
+    setNarrationPreviewError(null);
+    setNarrationPresetMessage(null);
+    try {
+      const text = (reelInputMode === 'text' ? reelUserText : prompt).trim()
+        || 'Every quiet moment has a story waiting inside it.';
+      const result = await previewReelNarrationAction({
+        text,
+        settings: reelNarrationSettings,
+        storyLanguage: language,
+      });
+      setReelNarrationSettings(result.settings);
+      const audio = new Audio(result.audioUrl);
+      await audio.play();
+    } catch (error) {
+      setNarrationPreviewError(error instanceof Error ? error.message : 'Failed to preview narration.');
+    } finally {
+      setIsPreviewingNarration(false);
+    }
+  };
+
+  const handleSaveReelNarrationPreset = async () => {
+    setNarrationPresetMessage(null);
+    setNarrationPreviewError(null);
+    const name = window.prompt('Preset name', 'My Kissago Voice');
+    if (!name?.trim()) return;
+    try {
+      const created = await saveNarrationSettingsAsPresetAction({
+        settings: reelNarrationSettings,
+        name: name.trim(),
+      });
+      setNarrationPresets((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setReelNarrationSettings((current) => normalizeReelNarrationSettings({
+        ...current,
+        presetId: created.id,
+      }, {
+        storyLanguage: language,
+        adminSettings: reelNarrationAdminSettings,
+      }));
+      setNarrationPresetMessage('Preset saved.');
+    } catch (error) {
+      setNarrationPreviewError(error instanceof Error ? error.message : 'Failed to save preset.');
     }
   };
 
@@ -892,6 +1037,129 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                                 className="h-4 w-4 accent-emerald-500"
                               />
                             </label>
+                          </div>
+
+                          <div className="rounded-xl border border-white/10 bg-neutral-800/70 p-3">
+                            <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+                              <Volume2 className="h-4 w-4 text-emerald-300" />
+                              Voice
+                            </div>
+                            <div className="grid gap-2 md:grid-cols-3">
+                              <div className="space-y-1">
+                                <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Language</label>
+                                <select
+                                  value={language}
+                                  onChange={(event) => {
+                                    setLanguage(event.target.value as StoryLanguage);
+                                    clearSeedPreview();
+                                  }}
+                                  className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+                                >
+                                  <option value="english">English</option>
+                                  <option value="hindi">Hindi</option>
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice</label>
+                                <select
+                                  value={reelNarrationSettings.voiceId}
+                                  onChange={(event) => setReelNarrationSettings((current) => normalizeReelNarrationSettings({
+                                    ...current,
+                                    voiceId: event.target.value,
+                                  }, {
+                                    storyLanguage: language,
+                                    adminSettings: reelNarrationAdminSettings,
+                                  }))}
+                                  className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+                                >
+                                  {reelNarrationAdminSettings.allowedElevenLabsVoices.map((voice) => (
+                                    <option key={voice.voiceId} value={voice.voiceId}>{voice.label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preset</label>
+                                <select
+                                  value={reelNarrationSettings.presetId || ''}
+                                  onChange={(event) => handleReelNarrationPresetChange(event.target.value)}
+                                  className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
+                                >
+                                  <option value="">Custom</option>
+                                  {narrationPresets.map((preset) => (
+                                    <option key={preset.id} value={preset.id}>{preset.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+                              <label className="space-y-1">
+                                <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+                                  <span>Speed</span>
+                                  <span>{reelNarrationSettings.speed.toFixed(2)}x</span>
+                                </span>
+                                <input
+                                  type="range"
+                                  min={0.7}
+                                  max={1.2}
+                                  step={0.01}
+                                  value={reelNarrationSettings.speed}
+                                  onChange={(event) => setReelNarrationSettings((current) => normalizeReelNarrationSettings({
+                                    ...current,
+                                    speed: Number(event.target.value),
+                                  }, {
+                                    storyLanguage: language,
+                                    adminSettings: reelNarrationAdminSettings,
+                                  }))}
+                                  className="w-full accent-emerald-500"
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+                                  <span>Emotion</span>
+                                  <span>{Math.round(reelNarrationSettings.emotionalIntensity * 100)}%</span>
+                                </span>
+                                <input
+                                  type="range"
+                                  min={0}
+                                  max={1}
+                                  step={0.01}
+                                  value={reelNarrationSettings.emotionalIntensity}
+                                  onChange={(event) => setReelNarrationSettings((current) => normalizeReelNarrationSettings({
+                                    ...current,
+                                    emotionalIntensity: Number(event.target.value),
+                                  }, {
+                                    storyLanguage: language,
+                                    adminSettings: reelNarrationAdminSettings,
+                                  }))}
+                                  className="w-full accent-emerald-500"
+                                />
+                              </label>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void handlePreviewReelNarration()}
+                                  disabled={isPreviewingNarration || isLoading}
+                                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-neutral-900 text-neutral-100 transition-colors hover:bg-neutral-700 disabled:cursor-wait disabled:opacity-60"
+                                  title="Preview voice"
+                                >
+                                  <Play className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleSaveReelNarrationPreset()}
+                                  disabled={isLoading}
+                                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-neutral-900 text-neutral-100 transition-colors hover:bg-neutral-700 disabled:opacity-60"
+                                  title="Save as preset"
+                                >
+                                  <Save className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+                            {(narrationPreviewError || narrationPresetMessage) && (
+                              <p className={`mt-2 text-xs ${narrationPreviewError ? 'text-rose-300' : 'text-emerald-300'}`}>
+                                {narrationPreviewError || narrationPresetMessage}
+                              </p>
+                            )}
                           </div>
 
                           {/* Mood pill selector */}

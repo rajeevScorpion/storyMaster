@@ -1,4 +1,9 @@
 import type { PlanKey } from '@/lib/types/pricing';
+import {
+  DEFAULT_REEL_NARRATION_ADMIN_SETTINGS,
+  normalizeReelNarrationAdminSettings,
+  type ReelNarrationAdminSettings,
+} from '@/lib/reel/narration';
 
 export const REEL_LENGTH_KEYS = ['short', 'medium', 'long'] as const;
 export type ReelLengthKey = (typeof REEL_LENGTH_KEYS)[number];
@@ -56,6 +61,7 @@ export interface ReelStorySettings {
   retentionDays: ReelRetentionDays;
   textLengthWordRanges: ReelTextLengthWordRanges;
   elevenLabs: ReelElevenLabsSettings;
+  narration: ReelNarrationAdminSettings;
   moods: ReelDefiner[];
   visualStyles: ReelDefiner[];
   narrationStyles: ReelDefiner[];
@@ -91,6 +97,7 @@ export const DEFAULT_REEL_STORY_SETTINGS: ReelStorySettings = {
     voiceId: 'EXAVITQu4vr4xnSDxMaL',
     modelId: 'eleven_multilingual_v2',
   },
+  narration: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS,
   moods: [
     { key: 'playful', label: 'Playful', prompt: 'bright, curious, quick emotional turns' },
     { key: 'cozy', label: 'Cozy', prompt: 'warm, intimate, gentle emotional rhythm' },
@@ -234,6 +241,7 @@ export function normalizeReelStorySettings(input: unknown): ReelStorySettings {
     retentionDays: normalizeRetentionDays(raw.retentionDays),
     textLengthWordRanges: normalizeTextLengthWordRanges(raw.textLengthWordRanges),
     elevenLabs: normalizeElevenLabsSettings(raw.elevenLabs),
+    narration: normalizeReelNarrationAdminSettings(raw.narration, normalizeElevenLabsSettings(raw.elevenLabs)),
     moods,
     visualStyles,
     narrationStyles,
