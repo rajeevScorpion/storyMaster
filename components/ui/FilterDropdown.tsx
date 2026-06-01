@@ -30,6 +30,7 @@ export default function FilterDropdown({
   ariaLabel?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [opensUp, setOpensUp] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -44,6 +45,16 @@ export default function FilterDropdown({
 
   const selected = options.find((o) => o.value === value);
   const isForm = size === 'form';
+  const updatePlacement = () => {
+    if (!ref.current || typeof window === 'undefined') return;
+
+    const rect = ref.current.getBoundingClientRect();
+    const estimatedOptionHeight = isForm ? 44 : 36;
+    const estimatedMenuHeight = Math.min(options.length * estimatedOptionHeight + 16, 280);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    setOpensUp(spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow);
+  };
   const containerClassName = [
     'relative',
     fullWidth ? 'w-full' : '',
@@ -56,16 +67,18 @@ export default function FilterDropdown({
     isOpen
       ? 'border-emerald-500/40 text-emerald-300'
       : 'border-white/10 text-neutral-200 hover:border-white/20',
-    mode === 'popover' && isOpen ? 'rounded-b-none' : '',
-    mode === 'inline' && isOpen ? 'rounded-b-none' : '',
+    isOpen ? (opensUp ? 'rounded-t-none' : 'rounded-b-none') : '',
   ].join(' ');
   const menuWrapperClassName = [
-    'absolute top-full left-0 z-50 -mt-px overflow-hidden',
+    'absolute left-0 z-50 overflow-hidden',
+    opensUp ? 'bottom-full mb-1' : 'top-full -mt-px',
     mode === 'inline' || fullWidth ? 'w-full' : 'w-max min-w-full',
   ].join(' ');
   const menuClassName = [
-    'bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
-    isForm ? 'rounded-2xl rounded-t-none py-1.5' : 'rounded-xl rounded-t-none py-1',
+    'max-h-72 overflow-y-auto bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
+    isForm
+      ? opensUp ? 'rounded-2xl rounded-b-none py-1.5' : 'rounded-2xl rounded-t-none py-1.5'
+      : opensUp ? 'rounded-xl rounded-b-none py-1' : 'rounded-xl rounded-t-none py-1',
   ].join(' ');
   const optionClassName = [
     'w-full flex items-center gap-2 transition-colors',
@@ -76,7 +89,12 @@ export default function FilterDropdown({
     <div ref={ref} className={containerClassName}>
       <button
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          if (!isOpen) {
+            updatePlacement();
+          }
+          setIsOpen(!isOpen);
+        }}
         className={triggerClassName}
         aria-expanded={isOpen}
         aria-haspopup="listbox"

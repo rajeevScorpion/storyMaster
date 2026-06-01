@@ -21,7 +21,6 @@ import {
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
 import {
-  DEFAULT_REEL_STORY_SETTINGS,
   getReelLegacyLengthForBeatCount,
   getReelTextLengthRange,
   normalizeReelStorySettings,
@@ -38,12 +37,21 @@ import {
 } from '@/lib/reel/narration';
 import type { ReelVisualStyleCard } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
+import type { PricingRuntimeContext } from '@/lib/types/pricing';
 import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Play, Save, Volume2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
+import {
+  FALLBACK_REEL_SETUP,
+  DEFAULT_LANDING_INITIAL_DATA,
+  DEFAULT_LANDING_SETUP_SETTINGS,
+  getDefaultNarrationVoiceSelection,
+  normalizeLandingInitialData,
+  type LandingInitialData,
+} from '@/lib/story/landing-ui';
 import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
@@ -51,6 +59,8 @@ import type {
 
 interface LandingScreenProps {
   onBegin?: (prompt: string, config?: StoryConfig) => void;
+  initialData?: LandingInitialData | null;
+  initialPricing?: PricingRuntimeContext | null;
 }
 
 function countWords(value: string): number {
@@ -66,11 +76,6 @@ type CreationMode = 'prompt' | 'seeded' | 'reel';
 
 const REEL_SETUP_CACHE_KEY = 'kissago_reel_story_setup_cache';
 const REEL_SETUP_CACHE_TTL_MS = 5 * 60 * 1000;
-const FALLBACK_REEL_SETUP: ReelStorySetupSettings = {
-  enabled: false,
-  publishEnabled: false,
-  settings: DEFAULT_REEL_STORY_SETTINGS,
-};
 
 function readCachedReelSetup(): ReelStorySetupSettings | null {
   if (typeof window === 'undefined') return null;
@@ -87,7 +92,7 @@ function readCachedReelSetup(): ReelStorySetupSettings | null {
     return {
       enabled: Boolean(parsed.setup.enabled),
       publishEnabled: Boolean(parsed.setup.publishEnabled),
-      settings: normalizeReelStorySettings(parsed.setup.settings ?? DEFAULT_REEL_STORY_SETTINGS),
+      settings: normalizeReelStorySettings(parsed.setup.settings ?? FALLBACK_REEL_SETUP.settings),
     };
   } catch {
     return null;
@@ -106,13 +111,15 @@ function writeCachedReelSetup(setup: ReelStorySetupSettings): void {
   }
 }
 
-export default function LandingScreen({ onBegin }: LandingScreenProps) {
+export default function LandingScreen({ onBegin, initialData, initialPricing }: LandingScreenProps) {
+  const [initialLandingData] = useState(() => normalizeLandingInitialData(initialData ?? DEFAULT_LANDING_INITIAL_DATA));
   const router = useRouter();
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
   const isLoading = useStoryStore((state) => state.isLoading);
-  const { data: pricing } = usePricingRuntime();
+  const pricingRuntime = usePricingRuntime();
+  const pricing = pricingRuntime.isLoading && initialPricing ? initialPricing : pricingRuntime.data;
 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [language, setLanguage] = useState<StoryLanguage>('english');
@@ -130,15 +137,10 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [seedPreview, setSeedPreview] = useState<SeedPlan | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
-  const [authoringWordCap, setAuthoringWordCap] = useState(500);
+  const [authoringWordCap, setAuthoringWordCap] = useState(initialLandingData.authoringWordCap);
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
-  const [setupSettings, setSetupSettings] = useState({
-    freePlusCharacterSheetsEnabled: false,
-    creatorCharacterSheetsEnabled: false,
-    storyPromptOnlyModeEnabled: false,
-    verticalStoriesSettingEnabled: false,
-  });
-  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(FALLBACK_REEL_SETUP);
+  const [setupSettings, setSetupSettings] = useState(initialLandingData.setupSettings);
+  const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
   const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(reelSetup.settings.defaultBeatCount);
   const [reelTextLength, setReelTextLength] = useState<ReelTextLengthKey>(reelSetup.settings.defaultTextLength);
   const [reelTextOverlayEnabled, setReelTextOverlayEnabled] = useState(reelSetup.settings.textOverlayDefault);
@@ -169,14 +171,13 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
   );
-  const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(null);
+  const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(
+    initialLandingData.narrationVoiceConfig
+  );
   const [narrationVoiceSelection, setNarrationVoiceSelection] = useState<{
     genderBucket: NarrationGenderBucket;
     voiceId: string;
-  }>({
-    genderBucket: 'female',
-    voiceId: '',
-  });
+  }>(() => getDefaultNarrationVoiceSelection(initialLandingData.narrationVoiceConfig));
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const isReelMode = creationMode === 'reel';
@@ -228,23 +229,23 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
         setAuthoringWordCap(nextAuthoringWordCap);
       })
       .catch(() => {
-        setSetupSettings({
-          freePlusCharacterSheetsEnabled: false,
-          creatorCharacterSheetsEnabled: false,
-          storyPromptOnlyModeEnabled: false,
-          verticalStoriesSettingEnabled: false,
-        });
+        setSetupSettings(DEFAULT_LANDING_SETUP_SETTINGS);
         setIsVerticalStory(false);
-        setAuthoringWordCap(500);
+        setAuthoringWordCap(DEFAULT_LANDING_INITIAL_DATA.authoringWordCap);
       });
   }, []);
 
   useEffect(() => {
+    if (initialData?.reelSetup) {
+      writeCachedReelSetup(initialLandingData.reelSetup);
+      return;
+    }
+
     const cached = readCachedReelSetup();
     if (cached) {
       setReelSetup(cached);
     }
-  }, []);
+  }, [initialData?.reelSetup, initialLandingData.reelSetup]);
 
   useEffect(() => {
     getReelStorySetupSettings()
@@ -795,7 +796,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
   };
 
   return (
-    <div className="bg-neutral-950 relative overflow-hidden">
+    <div className="bg-neutral-950 relative overflow-x-hidden">
       <div
         aria-hidden="true"
         className="pointer-events-none fixed inset-x-0 top-0 z-30 h-32 bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-40 md:h-48"
@@ -840,7 +841,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                         : 'text-neutral-300 hover:text-white'
                     }`}
                   >
-                    Prompt Story
+                    Quick Story
                   </button>
                   <button
                     type="button"
@@ -855,7 +856,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                         : 'text-neutral-300 hover:text-white'
                     }`}
                   >
-                    Seed From Story
+                    Seed Story
                   </button>
                   {reelSetup.enabled && (
                     <button
@@ -874,7 +875,7 @@ export default function LandingScreen({ onBegin }: LandingScreenProps) {
                           : 'text-neutral-300 hover:text-white'
                       }`}
                     >
-                      Reel Story
+                      Reels
                     </button>
                   )}
                 </div>
