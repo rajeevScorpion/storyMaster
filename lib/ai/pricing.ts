@@ -10,7 +10,7 @@ export type GeminiImageSize = '512' | '0.5K' | '1K' | '2K' | '4K';
 
 const DEFAULT_IMAGE_SIZE: GeminiImageSize = '1K';
 
-// Gemini Developer API standard paid-tier pricing as of April 2026 (USD).
+// Gemini Developer API standard paid-tier pricing as of June 2026 (USD).
 // Source: https://ai.google.dev/pricing
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // 3.x Pro models
@@ -18,6 +18,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-3.1-pro-preview':       { inputPerMToken: 2.00, outputPerMToken: 12.00 },
 
   // 3.x Flash models
+  'gemini-3.5-flash':             { inputPerMToken: 1.50, outputPerMToken: 9.00 },
+  'gemini-3.1-flash-lite':        { inputPerMToken: 0.25, outputPerMToken: 1.50 },
   'gemini-3-flash-preview':       { inputPerMToken: 0.50, outputPerMToken: 3.00 },
   'gemini-3.1-flash-lite-preview': { inputPerMToken: 0.25, outputPerMToken: 1.50 },
 
@@ -27,6 +29,18 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   'gemini-2.5-flash-lite':        { inputPerMToken: 0.10, outputPerMToken: 0.40 },
 
   // Image generation (native Gemini)
+  'gemini-3.1-flash-image': {
+    inputPerMToken: 0.50,
+    outputPerMToken: 3.00,
+    perImage: 0.067,
+    imageOutputBySize: {
+      '512': 0.045,
+      '0.5K': 0.045,
+      '1K': 0.067,
+      '2K': 0.101,
+      '4K': 0.151,
+    },
+  },
   'gemini-3.1-flash-image-preview': {
     inputPerMToken: 0.50,
     outputPerMToken: 3.00,
@@ -37,6 +51,16 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
       '1K': 0.067,
       '2K': 0.101,
       '4K': 0.151,
+    },
+  },
+  'gemini-3-pro-image': {
+    inputPerMToken: 2.00,
+    outputPerMToken: 12.00,
+    perImage: 0.134,
+    imageOutputBySize: {
+      '1K': 0.134,
+      '2K': 0.134,
+      '4K': 0.240,
     },
   },
   'gemini-3-pro-image-preview': {

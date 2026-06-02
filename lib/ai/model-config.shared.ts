@@ -22,6 +22,10 @@ export interface ModelConfig {
   updatedAt: string;
 }
 
+export const DEFAULT_TEXT_MODEL_ID = 'gemini-3.5-flash';
+export const DEFAULT_IMAGE_MODEL_ID = 'gemini-3.1-flash-image';
+export const DEFAULT_TTS_MODEL_ID = 'gemini-3.1-flash-tts-preview';
+
 export const TASK_DEFINITIONS: {
   key: TaskKey;
   label: string;
@@ -43,38 +47,37 @@ export const TASK_DEFINITIONS: {
 ];
 
 export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: number | null }> = {
-  story_generation: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
-  reel_story_generation: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
-  seed_plan_generation: { modelId: 'gemini-3.1-pro-preview', temperature: 0.3 },
-  seeded_beat_materialization: { modelId: 'gemini-3.1-pro-preview', temperature: 0.4 },
-  visual_prompt: { modelId: 'gemini-3.1-pro-preview', temperature: 0.7 },
-  reel_visual_prompt: { modelId: 'gemini-3.1-pro-preview', temperature: 0.5 },
-  image_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
-  reel_image_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
-  portrait_generation: { modelId: 'gemini-3.1-flash-image-preview', temperature: null },
+  story_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.7 },
+  reel_story_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.7 },
+  seed_plan_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
+  seeded_beat_materialization: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.4 },
+  visual_prompt: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.7 },
+  reel_visual_prompt: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.5 },
+  image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
+  reel_image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
+  portrait_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
   graphic_style_extraction: { modelId: 'gemini-2.5-flash', temperature: 0.4 },
-  tts: { modelId: 'gemini-2.5-flash-preview-tts', temperature: null },
-  reel_tts: { modelId: 'gemini-2.5-flash-preview-tts', temperature: null },
-  voice_selection: { modelId: 'gemini-3.1-pro-preview', temperature: 0.3 },
+  tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
+  reel_tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
+  voice_selection: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
 };
 
 // Known Gemini models for the playground dropdown
 export const KNOWN_MODELS = {
   text: [
+    'gemini-3.5-flash',
     'gemini-3.1-pro-preview',
-    'gemini-3-flash-preview',
-    'gemini-3.1-flash-lite-preview',
+    'gemini-3.1-flash-lite',
     'gemini-2.5-pro',
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
   ],
   image: [
-    'gemini-3.1-flash-image-preview',
-    'gemini-3-pro-image-preview',
+    'gemini-3.1-flash-image',
+    'gemini-3-pro-image',
     'gemini-2.5-flash-image',
   ],
   tts: [
-    'gemini-2.5-flash-preview-tts',
-    'gemini-2.5-pro-preview-tts',
+    'gemini-3.1-flash-tts-preview',
   ],
 };

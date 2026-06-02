@@ -149,7 +149,7 @@ ON CONFLICT (action_key) DO NOTHING;
 
 INSERT INTO public.model_config (task_key, model_id, temperature)
 VALUES
-  ('reel_story_generation', 'gemini-3.1-pro-preview', 0.7),
-  ('reel_visual_prompt', 'gemini-3.1-pro-preview', 0.5),
-  ('reel_tts', 'gemini-2.5-flash-preview-tts', NULL)
+  ('reel_story_generation', 'gemini-3.5-flash', 0.7),
+  ('reel_visual_prompt', 'gemini-3.5-flash', 0.5),
+  ('reel_tts', 'gemini-3.1-flash-tts-preview', NULL)
 ON CONFLICT (task_key) DO NOTHING;

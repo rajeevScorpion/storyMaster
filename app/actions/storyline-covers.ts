@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { callGeminiImage } from '@/app/actions/gemini-proxy';
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
+import { DEFAULT_IMAGE_MODEL_ID } from '@/lib/ai/model-config.shared';
 import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -771,7 +772,7 @@ export async function generateDraftStoryCoverImage(input: {
     throw new Error(authorizationErrorMessage(authorization.reason));
   }
 
-  const model = await getFeatureFlagValue('cover_generation_model') || 'gemini-3.1-flash-image-preview';
+  const model = await getFeatureFlagValue('cover_generation_model') || DEFAULT_IMAGE_MODEL_ID;
   const aspectRatio = input.kind === 'reel' ? '9:16' : '16:9';
 
   try {

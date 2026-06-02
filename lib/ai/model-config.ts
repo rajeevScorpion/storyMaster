@@ -3,7 +3,16 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 // Re-export shared types and constants for server-side consumers
-export { type TaskKey, type ModelConfig, TASK_DEFINITIONS, DEFAULT_MODELS, KNOWN_MODELS } from './model-config.shared';
+export {
+  type TaskKey,
+  type ModelConfig,
+  TASK_DEFINITIONS,
+  DEFAULT_MODELS,
+  KNOWN_MODELS,
+  DEFAULT_TEXT_MODEL_ID,
+  DEFAULT_IMAGE_MODEL_ID,
+  DEFAULT_TTS_MODEL_ID,
+} from './model-config.shared';
 import { type TaskKey, type ModelConfig, DEFAULT_MODELS } from './model-config.shared';
 
 // ── In-memory cache (60s TTL) ──────────────────────────────────

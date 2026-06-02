@@ -27,9 +27,9 @@ create index if not exists model_config_history_task_key_idx
 
 -- Seed with current hardcoded defaults (skip if already seeded)
 insert into public.model_config (task_key, model_id, temperature) values
-  ('story_generation', 'gemini-3.1-pro-preview', 0.7),
-  ('visual_prompt', 'gemini-3.1-pro-preview', 0.7),
-  ('image_generation', 'gemini-3.1-flash-image-preview', null),
-  ('tts', 'gemini-2.5-flash-preview-tts', null),
-  ('voice_selection', 'gemini-3.1-pro-preview', 0.3)
+  ('story_generation', 'gemini-3.5-flash', 0.7),
+  ('visual_prompt', 'gemini-3.5-flash', 0.7),
+  ('image_generation', 'gemini-3.1-flash-image', null),
+  ('tts', 'gemini-3.1-flash-tts-preview', null),
+  ('voice_selection', 'gemini-3.5-flash', 0.3)
 on conflict (task_key) do nothing;

@@ -34,7 +34,11 @@ import {
 } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
-import type { TaskKey } from '@/lib/ai/model-config.shared';
+import {
+  DEFAULT_IMAGE_MODEL_ID,
+  DEFAULT_TEXT_MODEL_ID,
+  type TaskKey,
+} from '@/lib/ai/model-config.shared';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   findReelDefiner,
@@ -250,7 +254,7 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
 
   const text = await callGeminiText({
     task: 'seed_plan_generation',
-    model: input.modelOverrides?.seedPlanModel || 'gemini-3.1-pro-preview',
+    model: input.modelOverrides?.seedPlanModel || DEFAULT_TEXT_MODEL_ID,
     prompt,
     temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
     telemetry: input.costTelemetry,
@@ -301,7 +305,7 @@ export async function materializeSeededBeat(
   const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
     const text = await callGeminiText({
       task: 'seeded_beat_materialization',
-      model: modelOverrides?.seededBeatModel || 'gemini-3.1-pro-preview',
+      model: modelOverrides?.seededBeatModel || DEFAULT_TEXT_MODEL_ID,
       prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
       temperature: modelOverrides?.seededBeatTemperature ?? 0.4,
       telemetry: costTelemetry,
@@ -424,7 +428,7 @@ export async function generateStoryBeat(
       async () => {
         const text = await callGeminiText({
           task: 'story_generation',
-          model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+          model: modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
           prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
           temperature: modelOverrides?.storyTemperature ?? 0.7,
           telemetry: costTelemetry,
@@ -518,7 +522,7 @@ export async function distributeReelTextAction(input: {
 
   const raw = await callGeminiText({
     task: 'reel_story_generation',
-    model: 'gemini-3.1-pro-preview',
+    model: DEFAULT_TEXT_MODEL_ID,
     prompt,
     temperature: 0.5,
   });
@@ -628,7 +632,7 @@ export async function generateReelDraft(
     { beatCount, language: lang },
     () => callGeminiText({
       task: 'reel_story_generation',
-      model: modelOverrides?.reelStoryModel || modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+      model: modelOverrides?.reelStoryModel || modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
       prompt,
       temperature: modelOverrides?.reelStoryTemperature ?? modelOverrides?.storyTemperature ?? 0.7,
       telemetry: costTelemetry,
@@ -871,8 +875,8 @@ export async function composeStoryboardPlan(
         text = await callGeminiText({
           task: promptTask,
           model: isReel
-            ? modelOverrides?.reelComposerModel || modelOverrides?.composerModel || 'gemini-3.1-pro-preview'
-            : modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
+            ? modelOverrides?.reelComposerModel || modelOverrides?.composerModel || DEFAULT_TEXT_MODEL_ID
+            : modelOverrides?.composerModel || DEFAULT_TEXT_MODEL_ID,
           prompt,
           temperature: isReel
             ? modelOverrides?.reelComposerTemperature ?? modelOverrides?.composerTemperature ?? 0.5
@@ -1172,8 +1176,8 @@ export async function generateImage(
       },
       async () => {
         const imageModel = imageTask === 'reel_image_generation'
-          ? modelOverrides?.reelImageModel || modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview'
-          : modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview';
+          ? modelOverrides?.reelImageModel || modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID
+          : modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID;
         const referenceParts = await resolveReferenceImageParts(referenceImages);
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
@@ -1320,7 +1324,7 @@ export async function generateCharacterPortrait(
           promptOverride
         );
 
-        const portraitModel = modelOverrides?.portraitModel || 'gemini-3.1-flash-image-preview';
+        const portraitModel = modelOverrides?.portraitModel || DEFAULT_IMAGE_MODEL_ID;
         const result = await callGeminiImage({
           task: 'portrait_generation',
           model: portraitModel,

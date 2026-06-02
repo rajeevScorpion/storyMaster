@@ -9,6 +9,7 @@ import {
   getDefaultPromptBody,
   resolvePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
+import { DEFAULT_IMAGE_MODEL_ID, DEFAULT_TEXT_MODEL_ID } from '@/lib/ai/model-config.shared';
 
 import { IMAGE_MAX_WIDTH, IMAGE_MAX_HEIGHT, IMAGE_QUALITY } from '@/lib/constants/media';
 
@@ -173,7 +174,7 @@ export async function generateStoryBeat(
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
     const response = await ai.models.generateContent({
-      model: modelOverrides?.storyModel || 'gemini-3.1-pro-preview',
+      model: modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
       contents: prompt,
       config: {
         systemInstruction: STORY_MASTER_SYSTEM_PROMPT,
@@ -212,7 +213,7 @@ export async function generateImage(prompt: string, characters: any[], visualSty
     `;
 
     const composerResponse = await ai.models.generateContent({
-      model: modelOverrides?.composerModel || 'gemini-3.1-pro-preview',
+      model: modelOverrides?.composerModel || DEFAULT_TEXT_MODEL_ID,
       contents: composerPrompt,
       config: {
         temperature: modelOverrides?.composerTemperature ?? 0.7,
@@ -222,7 +223,7 @@ export async function generateImage(prompt: string, characters: any[], visualSty
     const finalImagePrompt = composerResponse.text || prompt;
 
     const response = await ai.models.generateContent({
-      model: modelOverrides?.imageModel || 'gemini-3.1-flash-image-preview',
+      model: modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID,
       contents: finalImagePrompt,
       config: {
         imageConfig: {

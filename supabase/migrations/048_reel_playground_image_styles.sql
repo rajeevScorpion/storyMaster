@@ -3,7 +3,7 @@
 -- Do not apply automatically from Codex.
 
 INSERT INTO public.model_config (task_key, model_id, temperature)
-VALUES ('reel_image_generation', 'gemini-3.1-flash-image-preview', NULL)
+VALUES ('reel_image_generation', 'gemini-3.1-flash-image', NULL)
 ON CONFLICT (task_key) DO NOTHING;
 
 ALTER TABLE public.media_assets

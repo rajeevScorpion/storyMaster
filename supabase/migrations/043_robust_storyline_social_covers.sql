@@ -214,7 +214,7 @@ VALUES
   ('allow_youtube_thumbnail_upload', true, NULL),
   ('default_story_cover_template_enabled', true, NULL),
   ('default_audio_story_cover_template_enabled', true, NULL),
-  ('cover_generation_model', true, 'gemini-3.1-flash-image-preview'),
+  ('cover_generation_model', true, 'gemini-3.1-flash-image'),
   ('cover_generation_storage_bucket', true, 'public-storylines'),
   ('max_cover_generation_retries', true, '1')
 ON CONFLICT (flag_key) DO NOTHING;
