@@ -8,6 +8,7 @@ export interface ReelTextOverlayStyle {
   fontSize?: number;
   fontWeight?: string | number;
   color?: string;
+  textOpacity?: number;
   shadowColor?: string;
   shadowBlur?: number;
   backgroundColor?: string;
@@ -74,6 +75,7 @@ export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
   fontSize: 16,
   fontWeight: 600,
   color: '#ffffff',
+  textOpacity: 1,
   shadowColor: 'rgba(0,0,0,0.72)',
   shadowBlur: 14,
   backgroundColor: '#000000',
@@ -232,6 +234,7 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
     ? raw.align
     : DEFAULT_REEL_TEXT_OVERLAY_STYLE.align;
   const fontSize = Number(raw.fontSize);
+  const textOpacity = Number(raw.textOpacity);
   const shadowBlur = Number(raw.shadowBlur);
   const backgroundOpacity = Number(raw.backgroundOpacity);
   const backgroundBlur = Number(raw.backgroundBlur);
@@ -253,6 +256,9 @@ export function normalizeReelTextOverlayStyle(value: unknown): ReelTextOverlaySt
     color: typeof raw.color === 'string' && raw.color.trim()
       ? raw.color.trim()
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.color,
+    textOpacity: Number.isFinite(textOpacity)
+      ? clampUnit(textOpacity)
+      : DEFAULT_REEL_TEXT_OVERLAY_STYLE.textOpacity,
     shadowColor: typeof raw.shadowColor === 'string' && raw.shadowColor.trim()
       ? raw.shadowColor.trim()
       : DEFAULT_REEL_TEXT_OVERLAY_STYLE.shadowColor,

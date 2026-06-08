@@ -341,6 +341,7 @@ function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): st
     fontSize: normalized.fontSize,
     fontWeight: normalized.fontWeight,
     color: normalized.color,
+    textOpacity: normalized.textOpacity,
     shadowColor: normalized.shadowColor,
     shadowBlur: normalized.shadowBlur,
     backgroundColor: normalized.backgroundColor,
@@ -465,18 +466,20 @@ const REEL_EDITOR_DESTINATIONS: Array<{
   disabled?: boolean;
 }> = [
   { id: 'text', label: 'Panel Text', icon: BookOpen },
-  { id: 'style', label: 'Caption Style', icon: Type },
+  { id: 'style', label: 'Text Settings', icon: Type },
   { id: 'transitions', label: 'Transitions', icon: Blend },
   { id: 'voice', label: 'Voice / Narration', icon: Volume2 },
 ];
 
 interface ReelCaptionStylePanelProps {
+  textOverlayEnabled: boolean;
   normalizedStyle: ReelTextOverlayStyle;
   hasUnsavedStyle: boolean;
   isSavingStyle: boolean;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   message: string | null;
   embedded?: boolean;
+  onEnabledChange: (enabled: boolean) => void;
   onChange: (patch: ReelTextOverlayStyle) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -980,16 +983,21 @@ function ReelFontDropdown({ value, onChange }: ReelFontDropdownProps) {
 }
 
 interface ReelCaptionStyleControlsProps {
+  textOverlayEnabled: boolean;
   normalizedStyle: ReelTextOverlayStyle;
+  onEnabledChange: (enabled: boolean) => void;
   onChange: (patch: ReelTextOverlayStyle) => void;
 }
 
 function ReelCaptionStyleControls({
+  textOverlayEnabled,
   normalizedStyle,
+  onEnabledChange,
   onChange,
 }: ReelCaptionStyleControlsProps) {
   const fontSize = normalizedStyle.fontSize ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize;
   const verticalOffset = normalizedStyle.verticalOffset ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.verticalOffset;
+  const textOpacity = normalizedStyle.textOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.textOpacity;
   const backgroundOpacity = normalizedStyle.backgroundOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundOpacity;
   const backgroundBlur = normalizedStyle.backgroundBlur ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.backgroundBlur;
   const wordHighlightOpacity = normalizedStyle.wordHighlightOpacity ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightOpacity;
@@ -1000,6 +1008,27 @@ function ReelCaptionStyleControls({
 
   return (
     <div className="space-y-2.5">
+      <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-neutral-900 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="font-sans text-[10px] uppercase tracking-wider text-neutral-500">Captions</p>
+          <p className="mt-0.5 text-xs text-neutral-300">{textOverlayEnabled ? 'Shown on reel' : 'Hidden from reel'}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onEnabledChange(!textOverlayEnabled)}
+          className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+            textOverlayEnabled
+              ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+              : 'justify-start border-white/10 bg-neutral-800'
+          }`}
+          role="switch"
+          aria-checked={textOverlayEnabled}
+          aria-label="Show reel captions"
+        >
+          <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+        </button>
+      </div>
+
       <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
         <div className="flex min-w-0 rounded-full border border-white/10 bg-neutral-900 p-0.5">
           {([
@@ -1099,6 +1128,15 @@ function ReelCaptionStyleControls({
         />
       </div>
 
+      <ReelStyleColorControl
+        label="Text"
+        color={normalizedStyle.color}
+        fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.color}
+        opacity={textOpacity}
+        onColorChange={(color) => onChange({ color })}
+        onOpacityChange={(nextTextOpacity) => onChange({ textOpacity: nextTextOpacity })}
+      />
+
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16rem),1fr))] gap-2">
         <ReelStyleColorControl
           label="BG"
@@ -1133,12 +1171,14 @@ function ReelCaptionStyleControls({
 }
 
 function ReelCaptionStylePanel({
+  textOverlayEnabled,
   normalizedStyle,
   hasUnsavedStyle,
   isSavingStyle,
   saveState,
   message,
   embedded = false,
+  onEnabledChange,
   onChange,
   onCancel,
   onSave,
@@ -1175,7 +1215,9 @@ function ReelCaptionStylePanel({
 
       <div className="px-4 py-3">
         <ReelCaptionStyleControls
+          textOverlayEnabled={textOverlayEnabled}
           normalizedStyle={normalizedStyle}
+          onEnabledChange={onEnabledChange}
           onChange={onChange}
         />
 
@@ -1781,7 +1823,7 @@ export default function StoryScreen() {
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
   const updateReelNarrationSettings = useStoryStore((state) => state.updateReelNarrationSettings);
-  const updateReelTextOverlayStyle = useStoryStore((state) => state.updateReelTextOverlayStyle);
+  const updateReelTextOverlaySettings = useStoryStore((state) => state.updateReelTextOverlaySettings);
   const updateReelTransitionSettings = useStoryStore((state) => state.updateReelTransitionSettings);
   const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
@@ -1928,7 +1970,7 @@ export default function StoryScreen() {
       generateNarrationForNode={generateNarrationForNode}
       updateReelPanelCaptions={updateReelPanelCaptions}
       updateReelNarrationSettings={updateReelNarrationSettings}
-      updateReelTextOverlayStyle={updateReelTextOverlayStyle}
+      updateReelTextOverlaySettings={updateReelTextOverlaySettings}
       updateReelTransitionSettings={updateReelTransitionSettings}
       regenerateImageForNode={regenerateImageForNode}
       clearAudioReady={clearAudioReady}
@@ -1978,7 +2020,7 @@ function StoryScreenInner({
   generateNarrationForNode,
   updateReelPanelCaptions,
   updateReelNarrationSettings,
-  updateReelTextOverlayStyle,
+  updateReelTextOverlaySettings,
   updateReelTransitionSettings,
   regenerateImageForNode,
   clearAudioReady,
@@ -2018,7 +2060,7 @@ function StoryScreenInner({
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
   updateReelNarrationSettings: (settings: ReelNarrationSettings) => Promise<{ clearedNarration: boolean }>;
-  updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
+  updateReelTextOverlaySettings: (settings: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => Promise<void>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
@@ -2291,9 +2333,13 @@ function StoryScreenInner({
     ),
     [normalizedCurrentBeat.reelTextOverlayStyle, session.storyConfig.reel.textOverlayStyle]
   );
+  const savedReelOverlayEnabled = typeof normalizedCurrentBeat.reelTextOverlayEnabled === 'boolean'
+    ? normalizedCurrentBeat.reelTextOverlayEnabled
+    : session.storyConfig.reel.textOverlayEnabled !== false;
   const [reelPanelDraft, setReelPanelDraft] = useState<string[]>(savedReelPanelTexts);
   const [reelTextSaveState, setReelTextSaveState] = useState<'idle' | 'saving' | 'warning' | 'saved' | 'error'>('idle');
   const [reelTextMessage, setReelTextMessage] = useState<string | null>(null);
+  const [reelOverlayEnabledDraft, setReelOverlayEnabledDraft] = useState(savedReelOverlayEnabled);
   const [reelOverlayDraft, setReelOverlayDraft] = useState<ReelTextOverlayStyle>(savedReelOverlayStyle);
   const [reelStyleSaveState, setReelStyleSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [reelStyleMessage, setReelStyleMessage] = useState<string | null>(null);
@@ -2333,7 +2379,10 @@ function StoryScreenInner({
   );
   const isReelTextSaving = reelTextSaveState === 'saving';
   const hasUnsavedReelOverlayStyle = isReelStory
-    && reelOverlayStyleKey(reelOverlayDraft) !== reelOverlayStyleKey(savedReelOverlayStyle);
+    && (
+      reelOverlayEnabledDraft !== savedReelOverlayEnabled
+      || reelOverlayStyleKey(reelOverlayDraft) !== reelOverlayStyleKey(savedReelOverlayStyle)
+    );
   const isReelStyleSaving = reelStyleSaveState === 'saving';
   const hasUnsavedReelTransitionSettings = isReelStory
     && reelTransitionSettingsKey(reelTransitionDraft) !== reelTransitionSettingsKey(savedReelTransitionSettings);
@@ -2358,7 +2407,7 @@ function StoryScreenInner({
   const activeReelSectionLabel = activeReelEditorSection === 'text'
     ? 'panel text'
     : activeReelEditorSection === 'style'
-    ? 'caption style'
+    ? 'text settings'
     : activeReelEditorSection === 'voice'
     ? 'voice'
     : 'transitions';
@@ -2394,7 +2443,7 @@ function StoryScreenInner({
     : hasUnsavedReelText
     ? 'Save panel text before publishing or exporting.'
     : hasUnsavedReelOverlayStyle
-    ? 'Save caption style before publishing or exporting.'
+    ? 'Save text settings before publishing or exporting.'
     : hasUnsavedReelTransitionSettings
     ? 'Save transitions before publishing or exporting.'
     : hasUnsavedReelNarrationSettings
@@ -2441,7 +2490,7 @@ function StoryScreenInner({
     : hasUnsavedReelText
     ? 'Save panel text before playing the full reel.'
     : hasUnsavedReelOverlayStyle
-    ? 'Save caption style before playing the full reel.'
+    ? 'Save text settings before playing the full reel.'
     : hasUnsavedReelTransitionSettings
     ? 'Save transitions before playing the full reel.'
     : hasUnsavedReelNarrationSettings
@@ -2509,10 +2558,11 @@ function StoryScreenInner({
   }, [currentNodeId, savedReelPanelTexts]);
 
   useEffect(() => {
+    setReelOverlayEnabledDraft(savedReelOverlayEnabled);
     setReelOverlayDraft(savedReelOverlayStyle);
     setReelStyleSaveState('idle');
     setReelStyleMessage(null);
-  }, [savedReelOverlayStyle]);
+  }, [savedReelOverlayEnabled, savedReelOverlayStyle]);
 
   useEffect(() => {
     setReelTransitionDraft(savedReelTransitionSettings);
@@ -2647,12 +2697,19 @@ function StoryScreenInner({
     setReelStyleMessage(null);
   }, []);
 
+  const updateReelOverlayEnabledDraft = useCallback((enabled: boolean) => {
+    setReelOverlayEnabledDraft(enabled);
+    setReelStyleSaveState('idle');
+    setReelStyleMessage(null);
+  }, []);
+
   const handleCancelReelOverlayStyle = useCallback(() => {
+    setReelOverlayEnabledDraft(savedReelOverlayEnabled);
     setReelOverlayDraft(savedReelOverlayStyle);
     setReelStyleSaveState('idle');
     setReelStyleMessage(null);
     setReelEditorNavigationMessage(null);
-  }, [savedReelOverlayStyle]);
+  }, [savedReelOverlayEnabled, savedReelOverlayStyle]);
 
   const handleSaveReelOverlayStyle = useCallback(async () => {
     if (!isReelStory || !hasUnsavedReelOverlayStyle || isReelStyleSaving) return;
@@ -2661,20 +2718,24 @@ function StoryScreenInner({
     setReelStyleMessage(null);
 
     try {
-      await updateReelTextOverlayStyle(reelOverlayDraft);
+      await updateReelTextOverlaySettings({
+        enabled: reelOverlayEnabledDraft,
+        style: reelOverlayDraft,
+      });
       setReelStyleSaveState('saved');
       setReelStyleMessage(null);
       setReelEditorNavigationMessage(null);
     } catch (error) {
       setReelStyleSaveState('error');
-      setReelStyleMessage(error instanceof Error ? error.message : 'Failed to save text style.');
+      setReelStyleMessage(error instanceof Error ? error.message : 'Failed to save text settings.');
     }
   }, [
     hasUnsavedReelOverlayStyle,
     isReelStory,
     isReelStyleSaving,
+    reelOverlayEnabledDraft,
     reelOverlayDraft,
-    updateReelTextOverlayStyle,
+    updateReelTextOverlaySettings,
   ]);
 
   const updateReelTransitionDraft = useCallback((settings: ReelTransitionSettings) => {
@@ -3468,7 +3529,7 @@ function StoryScreenInner({
         aspectRatio: '9:16',
         videoExportPreset,
         showWatermark: showVideoWatermark,
-        textOverlayEnabled: session.storyConfig.reel.textOverlayEnabled !== false,
+        textOverlayEnabled: reelOverlayEnabledDraft,
         textOverlayStyle: normalizedReelOverlayDraft,
         transitionSettings: normalizedReelTransitionDraft,
         vignetteEnabled: cycleSettings.vignetteEnabled,
@@ -3498,7 +3559,7 @@ function StoryScreenInner({
       aspectRatio: '9:16',
       videoExportPreset,
       showWatermark: showVideoWatermark,
-      textOverlayEnabled: session.storyConfig.reel.textOverlayEnabled !== false,
+      textOverlayEnabled: reelOverlayEnabledDraft,
       textOverlayStyle: normalizedReelOverlayDraft,
       transitionSettings: normalizedReelTransitionDraft,
       vignetteEnabled: cycleSettings.vignetteEnabled,
@@ -3514,9 +3575,9 @@ function StoryScreenInner({
     isExporting,
     normalizedReelOverlayDraft,
     normalizedReelTransitionDraft,
+    reelOverlayEnabledDraft,
     reelExportBeats,
     session.savedStoryId,
-    session.storyConfig.reel.textOverlayEnabled,
     session.title,
     showVideoWatermark,
     videoExportPreset,
@@ -3570,7 +3631,7 @@ function StoryScreenInner({
           playAllActive={reelPlayAllActive}
           vignetteEnabled={cycleSettings.vignetteEnabled}
           vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
-          textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+          textOverlayEnabled={reelOverlayEnabledDraft}
           textOverlayStyle={reelOverlayDraft}
           transitionSettings={normalizedReelTransitionDraft}
           onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
@@ -3729,12 +3790,14 @@ function StoryScreenInner({
   ) : activeReelEditorSection === 'style' ? (
     <div id="reel-editor-panel-style" role="tabpanel" aria-labelledby="reel-editor-tab-style">
       <ReelCaptionStylePanel
+        textOverlayEnabled={reelOverlayEnabledDraft}
         normalizedStyle={normalizedReelOverlayDraft}
         hasUnsavedStyle={hasUnsavedReelOverlayStyle}
         isSavingStyle={isReelStyleSaving}
         saveState={reelStyleSaveState}
         message={reelStyleMessage}
         embedded
+        onEnabledChange={updateReelOverlayEnabledDraft}
         onChange={updateReelOverlayDraft}
         onCancel={handleCancelReelOverlayStyle}
         onSave={handleSaveReelOverlayStyle}
@@ -4276,8 +4339,8 @@ function StoryScreenInner({
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
                 captions={normalizedCurrentBeat.reelCaptions}
-                textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                textOverlayStyle={normalizedCurrentBeat.reelTextOverlayStyle}
+                textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+                textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
               />
@@ -4309,7 +4372,7 @@ function StoryScreenInner({
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
                       captions={normalizedCurrentBeat.reelCaptions}
-                      textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+                      textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                       textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
@@ -4459,7 +4522,7 @@ function StoryScreenInner({
                   playbackState={playbackState}
                   imageClassName="mobile-scene-shuttle"
                   captions={normalizedCurrentBeat.reelCaptions}
-                  textOverlayEnabled={normalizedCurrentBeat.reelTextOverlayEnabled !== false}
+                  textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                   textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
@@ -4841,7 +4904,7 @@ function StoryScreenInner({
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="flex items-center gap-2 font-sans text-[11px] uppercase tracking-[0.22em] text-neutral-400">
                             <Type className="h-4 w-4 text-emerald-300/80" />
-                            Caption style
+                            Text settings
                           </div>
                           {hasUnsavedReelOverlayStyle && (
                             <div className="flex items-center gap-2">
@@ -4864,7 +4927,7 @@ function StoryScreenInner({
                                 ) : (
                                   <Save className="h-3.5 w-3.5" />
                                 )}
-                                Save style
+                                Save settings
                               </button>
                             </div>
                           )}
@@ -4872,7 +4935,9 @@ function StoryScreenInner({
 
                         <div className="mt-3">
                           <ReelCaptionStyleControls
+                            textOverlayEnabled={reelOverlayEnabledDraft}
                             normalizedStyle={normalizedReelOverlayDraft}
+                            onEnabledChange={updateReelOverlayEnabledDraft}
                             onChange={updateReelOverlayDraft}
                           />
                         </div>

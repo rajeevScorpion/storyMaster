@@ -132,7 +132,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   ageGroup: 'all_ages',
   settingCountry: 'generic',
   maxBeats: 6,
-  imageGenerationMode: 'generate',
+  imageGenerationMode: 'prompt_only',
   isVerticalStory: false,
   aspectRatio: '16:9',
   visualSettings: DEFAULT_VISUAL_SETTINGS,

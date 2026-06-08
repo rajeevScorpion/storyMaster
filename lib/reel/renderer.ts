@@ -323,7 +323,7 @@ function drawCaption(
         );
         context.fill();
       }
-      context.fillStyle = style.color ?? '#ffffff';
+      context.fillStyle = reelColorWithOpacity(style.color, style.textOpacity);
       context.shadowColor = style.shadowColor ?? 'transparent';
       context.shadowBlur = Math.round((style.shadowBlur ?? 0) * scale);
       context.shadowOffsetY = Math.round(2 * scale);

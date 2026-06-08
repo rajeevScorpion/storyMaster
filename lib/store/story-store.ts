@@ -144,6 +144,7 @@ interface StoryState {
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
   updateReelNarrationSettings: (settings: ReelNarrationSettings) => Promise<{ clearedNarration: boolean }>;
+  updateReelTextOverlaySettings: (settings: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => Promise<void>;
   updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
@@ -3589,17 +3590,19 @@ export const useStoryStore = create<StoryState>()(
         return { clearedNarration };
       },
 
-      updateReelTextOverlayStyle: async (style: StoryBeat['reelTextOverlayStyle']) => {
+      updateReelTextOverlaySettings: async ({ enabled, style }: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => {
         const { session } = get();
         if (!session || !isReelStoryConfig(session.storyConfig)) {
           return;
         }
 
+        const normalizedEnabled = Boolean(enabled);
         const normalizedStyle = normalizeReelTextOverlayStyle(style ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE);
         const nextStoryConfig = normalizeStoryConfig({
           ...session.storyConfig,
           reel: {
             ...session.storyConfig.reel,
+            textOverlayEnabled: normalizedEnabled,
             textOverlayStyle: normalizedStyle,
           },
         });
@@ -3612,6 +3615,7 @@ export const useStoryStore = create<StoryState>()(
                 ...node,
                 data: normalizeBeatMediaFields({
                   ...node.data,
+                  reelTextOverlayEnabled: normalizedEnabled,
                   reelTextOverlayStyle: normalizedStyle,
                 }),
               },
@@ -3645,6 +3649,7 @@ export const useStoryStore = create<StoryState>()(
               ...latestSession.storyConfig,
               reel: {
                 ...latestSession.storyConfig.reel,
+                textOverlayEnabled: normalizedEnabled,
                 textOverlayStyle: normalizedStyle,
               },
             });
@@ -3657,6 +3662,7 @@ export const useStoryStore = create<StoryState>()(
                     ...node,
                     data: normalizeBeatMediaFields({
                       ...node.data,
+                      reelTextOverlayEnabled: normalizedEnabled,
                       reelTextOverlayStyle: normalizedStyle,
                     }),
                   },
@@ -3690,6 +3696,14 @@ export const useStoryStore = create<StoryState>()(
           });
           throw error;
         }
+      },
+
+      updateReelTextOverlayStyle: async (style: StoryBeat['reelTextOverlayStyle']) => {
+        const { session } = get();
+        await get().updateReelTextOverlaySettings({
+          enabled: session?.storyConfig.reel.textOverlayEnabled !== false,
+          style,
+        });
       },
 
       updateReelTransitionSettings: async (settings: ReelTransitionSettings) => {

@@ -111,7 +111,7 @@ export default function ReelCaptionOverlay({
     >
       <div
         style={{
-          color: normalized.color,
+          color: reelColorWithOpacity(normalized.color, normalized.textOpacity),
           fontFamily: normalized.fontFamily,
           fontSize: normalized.fontSize ? `${normalized.fontSize}px` : undefined,
           fontWeight: normalized.fontWeight,

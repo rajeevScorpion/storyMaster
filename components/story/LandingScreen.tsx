@@ -1,17 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
 import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
 import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
-import {
-  listNarrationPresetsAction,
-  previewReelNarrationAction,
-  saveNarrationSettingsAsPresetAction,
-} from '@/app/actions/reel-narration';
 import { generateSeedPlanPreview, distributeReelTextAction } from '@/app/actions/story-runtime';
 import {
   authorizeCurrentUserBillableAction,
@@ -28,21 +23,17 @@ import {
   type ReelTextLengthKey,
 } from '@/lib/reel/settings';
 import {
-  applyPresetToNarrationSettings,
   normalizeReelNarrationSettings,
-  storyLanguageToNarrationLanguage,
-  type NarrationPreset,
-  type ReelNarrationAdminSettings,
-  type ReelNarrationSettings,
 } from '@/lib/reel/narration';
 import type { ReelVisualStyleCard } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Play, Save, Volume2 } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
 import {
   FALLBACK_REEL_SETUP,
@@ -111,6 +102,98 @@ function writeCachedReelSetup(setup: ReelStorySetupSettings): void {
   }
 }
 
+function InfoPopover({
+  title,
+  ariaLabel,
+  children,
+}: {
+  title: string;
+  ariaLabel: string;
+  children: ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={rootRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-neutral-900/80 text-neutral-500 transition-colors hover:border-emerald-400/40 hover:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
+        aria-label={ariaLabel}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+      >
+        <Info className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+
+      <AnimatePresence>
+        {isOpen && (
+          <>
+            <motion.button
+              type="button"
+              aria-label={`Close ${title} details`}
+              className="fixed inset-0 z-[65] bg-black/40 sm:hidden"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsOpen(false)}
+            />
+            <motion.div
+              id={panelId}
+              role="dialog"
+              aria-label={title}
+              initial={{ opacity: 0, y: 8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              className="fixed inset-x-3 bottom-3 z-[70] max-h-[75vh] overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-4 text-left shadow-2xl shadow-black/50 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:w-80"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-medium text-neutral-100">{title}</p>
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200"
+                  aria-label={`Close ${title} details`}
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="mt-3 space-y-3 text-sm leading-relaxed text-neutral-400">
+                {children}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
 export default function LandingScreen({ onBegin, initialData, initialPricing }: LandingScreenProps) {
   const [initialLandingData] = useState(() => normalizeLandingInitialData(initialData ?? DEFAULT_LANDING_INITIAL_DATA));
   const router = useRouter();
@@ -143,28 +226,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
   const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(reelSetup.settings.defaultBeatCount);
   const [reelTextLength, setReelTextLength] = useState<ReelTextLengthKey>(reelSetup.settings.defaultTextLength);
-  const [reelTextOverlayEnabled, setReelTextOverlayEnabled] = useState(reelSetup.settings.textOverlayDefault);
   const [reelMoodKey, setReelMoodKey] = useState(reelSetup.settings.defaultMood);
   const [reelVisualStyleKey, setReelVisualStyleKey] = useState(reelSetup.settings.defaultVisualStyle);
   const [reelVisualStyleId, setReelVisualStyleId] = useState<string | null>(null);
   const [reelVisualStyleCards, setReelVisualStyleCards] = useState<ReelVisualStyleCard[]>([]);
   const [publishedMoods, setPublishedMoods] = useState<ReelMoodRecord[]>([]);
-  const [reelNarrationStyleKey, setReelNarrationStyleKey] = useState(reelSetup.settings.defaultNarrationStyle);
   const [reelInputMode, setReelInputMode] = useState<'prompt' | 'text'>('prompt');
   const [reelUserText, setReelUserText] = useState('');
   const [reelDistributedTexts, setReelDistributedTexts] = useState<string[][] | null>(null);
   const [reelDistributedImagePrompts, setReelDistributedImagePrompts] = useState<string[] | null>(null);
-  const [narrationPresets, setNarrationPresets] = useState<NarrationPreset[]>([]);
-  const [reelNarrationAdminSettings, setReelNarrationAdminSettings] = useState<ReelNarrationAdminSettings>(reelSetup.settings.narration);
-  const [reelNarrationSettings, setReelNarrationSettings] = useState<ReelNarrationSettings>(() =>
-    normalizeReelNarrationSettings(null, {
-      storyLanguage: language,
-      adminSettings: reelSetup.settings.narration,
-    })
-  );
-  const [isPreviewingNarration, setIsPreviewingNarration] = useState(false);
-  const [narrationPreviewError, setNarrationPreviewError] = useState<string | null>(null);
-  const [narrationPresetMessage, setNarrationPresetMessage] = useState<string | null>(null);
   const [isDistributing, setIsDistributing] = useState(false);
   const [distributeError, setDistributeError] = useState<string | null>(null);
   const [isVerticalStory, setIsVerticalStory] = useState(false);
@@ -252,60 +322,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       .then((setup) => {
         writeCachedReelSetup(setup);
         setReelSetup(setup);
-        setReelNarrationAdminSettings(setup.settings.narration);
         setReelBeatCount(setup.settings.defaultBeatCount);
         setReelTextLength(setup.settings.defaultTextLength);
-        setReelTextOverlayEnabled(setup.settings.textOverlayDefault);
         setReelMoodKey(setup.settings.defaultMood);
         setReelVisualStyleKey(setup.settings.defaultVisualStyle);
-        setReelNarrationStyleKey(setup.settings.defaultNarrationStyle);
-        setReelNarrationSettings((current) => normalizeReelNarrationSettings(current, {
-          adminSettings: setup.settings.narration,
-        }));
       })
       .catch(() => {
         setReelSetup((current) => current ?? FALLBACK_REEL_SETUP);
       });
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    listNarrationPresetsAction()
-      .then(({ presets, adminSettings }) => {
-        if (cancelled) return;
-        setNarrationPresets(presets);
-        setReelNarrationAdminSettings(adminSettings);
-        setReelNarrationSettings((current) => {
-          const normalized = normalizeReelNarrationSettings(current, {
-            storyLanguage: language,
-            adminSettings,
-          });
-          const preferredDefault = presets.find((preset) => preset.presetScope === 'user' && preset.isDefault)
-            ?? presets.find((preset) => preset.id === adminSettings.defaultPresetId);
-          const canApplyPreferredDefault = !current.presetId || current.presetId === adminSettings.defaultPresetId;
-          return preferredDefault && canApplyPreferredDefault
-            ? applyPresetToNarrationSettings(normalized, preferredDefault, adminSettings)
-            : normalized;
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setNarrationPresets([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [language]);
-
-  useEffect(() => {
-    setReelNarrationSettings((current) => normalizeReelNarrationSettings({
-      ...current,
-      language: storyLanguageToNarrationLanguage(language),
-      languageSource: 'reel_language',
-    }, {
-      storyLanguage: language,
-      adminSettings: reelNarrationAdminSettings,
-    }));
-  }, [language, reelNarrationAdminSettings]);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,18 +411,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setAuthoringMode(config.authoring.mode);
             setReelBeatCount(config.reel.beatCount);
             setReelTextLength(config.reel.textLength);
-            setReelTextOverlayEnabled(config.reel.textOverlayEnabled);
             setReelMoodKey(config.reel.moodKey);
             setReelVisualStyleKey(config.reel.visualStyleKey);
             setReelVisualStyleId(config.reel.visualStyleId || null);
-            setReelNarrationStyleKey(config.reel.narrationStyleKey);
-            setReelNarrationSettings(config.reel.narrationSettings);
             setWorkingTitle(config.authoring.workingTitle || '');
             setSourceText(config.authoring.sourceText || '');
             setGuidanceText(config.authoring.guidanceText || '');
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
-            setImageGenerationMode(config.imageGenerationMode || 'generate');
+            setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
             setUseCreatorOneKCharacterSheet(
               config.portraitReferences.mode === 'character_sheet' &&
@@ -480,37 +502,22 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
           length: legacyLength,
           beatCount: reelBeatCount,
           textLength: reelTextLength,
-          textOverlayEnabled: reelTextOverlayEnabled,
+          textOverlayEnabled: reelSetup.settings.textOverlayDefault,
           visualStyleId: selectedStyle?.id ?? reelVisualStyleId,
           textOverlayStyle: selectedStyle?.textOverlayStyle,
           moodKey: reelMoodKey,
           visualStyleKey: selectedStyle?.slug ?? reelVisualStyleKey,
-          narrationStyleKey: reelNarrationStyleKey,
-          narrationSettings: normalizeReelNarrationSettings({
-            ...reelNarrationSettings,
-            language: storyLanguageToNarrationLanguage(language),
-            languageSource: 'reel_language',
-          }, {
+          narrationStyleKey: reelSetup.settings.defaultNarrationStyle,
+          narrationSettings: normalizeReelNarrationSettings(null, {
             storyLanguage: language,
-            adminSettings: reelNarrationAdminSettings,
+            adminSettings: reelSetup.settings.narration,
           }),
           brandingEnabled: true,
         },
         portraitReferences: buildPortraitReferences(),
-        narrationVoice: voiceConfig?.enabled
-          ? {
-              mode: 'user_selected',
-              genderBucket: narrationVoiceSelection.genderBucket,
-              voiceId: narrationVoiceSelection.voiceId || (
-                narrationVoiceSelection.genderBucket === 'male'
-                  ? voiceConfig.defaultMaleVoice
-                  : voiceConfig.defaultFemaleVoice
-              ),
-              languageCode: voiceConfig.languageCode,
-            }
-          : {
-              mode: 'legacy_auto',
-            },
+        narrationVoice: {
+          mode: 'legacy_auto',
+        },
       };
     }
 
@@ -702,68 +709,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     }
   };
 
-  const handleReelNarrationPresetChange = (presetId: string) => {
-    const preset = narrationPresets.find((item) => item.id === presetId);
-    if (!preset) {
-      setReelNarrationSettings((current) => normalizeReelNarrationSettings({
-        ...current,
-        presetId: null,
-      }, {
-        storyLanguage: language,
-        adminSettings: reelNarrationAdminSettings,
-      }));
-      return;
-    }
-    setReelNarrationSettings((current) => applyPresetToNarrationSettings(current, preset, reelNarrationAdminSettings));
-  };
-
-  const handlePreviewReelNarration = async () => {
-    if (isPreviewingNarration) return;
-    setIsPreviewingNarration(true);
-    setNarrationPreviewError(null);
-    setNarrationPresetMessage(null);
-    try {
-      const text = (reelInputMode === 'text' ? reelUserText : prompt).trim()
-        || 'Every quiet moment has a story waiting inside it.';
-      const result = await previewReelNarrationAction({
-        text,
-        settings: reelNarrationSettings,
-        storyLanguage: language,
-      });
-      setReelNarrationSettings(result.settings);
-      const audio = new Audio(result.audioUrl);
-      await audio.play();
-    } catch (error) {
-      setNarrationPreviewError(error instanceof Error ? error.message : 'Failed to preview narration.');
-    } finally {
-      setIsPreviewingNarration(false);
-    }
-  };
-
-  const handleSaveReelNarrationPreset = async () => {
-    setNarrationPresetMessage(null);
-    setNarrationPreviewError(null);
-    const name = window.prompt('Preset name', 'My Kissago Voice');
-    if (!name?.trim()) return;
-    try {
-      const created = await saveNarrationSettingsAsPresetAction({
-        settings: reelNarrationSettings,
-        name: name.trim(),
-      });
-      setNarrationPresets((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
-      setReelNarrationSettings((current) => normalizeReelNarrationSettings({
-        ...current,
-        presetId: created.id,
-      }, {
-        storyLanguage: language,
-        adminSettings: reelNarrationAdminSettings,
-      }));
-      setNarrationPresetMessage('Preset saved.');
-    } catch (error) {
-      setNarrationPreviewError(error instanceof Error ? error.message : 'Failed to save preset.');
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -864,7 +809,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       onClick={() => {
                       setCreationMode('reel');
                       setAuthoringMode('prompt');
-                      setImageGenerationMode('generate');
+                      setImageGenerationMode('prompt_only');
                       setIsVerticalStory(true);
                       setShowAdvanced(false);
                       clearSeedPreview();
@@ -886,13 +831,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 <div className="relative rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
                   {creationMode !== 'seeded' ? (
                     <div className="space-y-3 p-2">
-                      {!(isReelMode && reelInputMode === 'text') && (
+                      {!isReelMode && (
                         <div className="flex items-center">
                           <input
                             type="text"
                             value={prompt}
                             onChange={(e) => setPrompt(e.target.value)}
-                            placeholder={isReelMode ? 'Make a short reel about a moonlit mango market...' : 'Tell me a story of a monkey and an elephant...'}
+                            placeholder="Tell me a story of a monkey and an elephant..."
                             className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
                             disabled={isLoading}
                           />
@@ -914,24 +859,61 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       )}
                       {isReelMode && (
                         <div className="space-y-3 border-t border-white/10 px-2 pb-2 pt-3 text-left">
-                          <div className="flex gap-1">
-                            <button
-                              type="button"
-                              onClick={() => { setReelInputMode('prompt'); setReelDistributedTexts(null); setReelDistributedImagePrompts(null); setDistributeError(null); }}
-                              className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${reelInputMode === 'prompt' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'}`}
-                            >
-                              Prompt
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setReelInputMode('text')}
-                              className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${reelInputMode === 'text' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'}`}
-                            >
-                              Text
-                            </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="inline-flex rounded-xl border border-white/10 bg-neutral-950/50 p-1">
+                              <button
+                                type="button"
+                                onClick={() => { setReelInputMode('prompt'); setReelDistributedTexts(null); setReelDistributedImagePrompts(null); setDistributeError(null); }}
+                                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${reelInputMode === 'prompt' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+                              >
+                                Idea
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setReelInputMode('text')}
+                                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${reelInputMode === 'text' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+                              >
+                                Script
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mode</span>
+                              <InfoPopover title="Idea or Script" ariaLabel="Show reel input mode details">
+                                <p>
+                                  Idea lets Kissago shape your thought into expressive short-form reel text, beat panels, and visual prompts.
+                                </p>
+                                <p>
+                                  Script follows the content you provide more strictly, then splits it into beat panels and matching image prompts.
+                                </p>
+                              </InfoPopover>
+                            </div>
                           </div>
 
-                          {reelInputMode === 'text' && (
+                          {reelInputMode === 'prompt' ? (
+                            <div className="space-y-2">
+                              <input
+                                type="text"
+                                value={prompt}
+                                onChange={(e) => setPrompt(e.target.value)}
+                                placeholder="Make a short reel about a moonlit mango market..."
+                                className="min-h-12 w-full rounded-xl border border-white/10 bg-neutral-800/60 px-3 py-2.5 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
+                                disabled={isLoading}
+                              />
+                              <div className="flex justify-end">
+                                <button
+                                  type="submit"
+                                  disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
+                                  className="inline-flex min-h-10 min-w-32 items-center justify-center whitespace-nowrap rounded-xl bg-white px-5 py-2.5 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  {isLoading ? (
+                                    <span>Generating...</span>
+                                  ) : (
+                                    <span>Generate reel</span>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
                             <div className="space-y-2">
                               <div className="relative">
                                 <textarea
@@ -941,301 +923,181 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                     setReelDistributedTexts(null);
                                     setReelDistributedImagePrompts(null);
                                   }}
-                                  placeholder="Write your full reel story here. AI will split it across panels and derive image prompts."
+                                  placeholder="Write your full reel script here. Kissago will split it across panels and derive image prompts."
                                   rows={4}
                                   maxLength={800}
-                                  className="w-full rounded-xl border border-white/10 bg-neutral-800/60 px-3 py-2.5 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50 resize-none"
+                                  className="min-h-32 w-full resize-none rounded-xl border border-white/10 bg-neutral-800/60 px-3 py-2.5 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
                                   disabled={isLoading || isDistributing}
                                 />
                                 <span className={`absolute bottom-2 right-3 text-[11px] ${reelUserText.length > 800 ? 'text-rose-400' : 'text-neutral-500'}`}>
                                   {reelUserText.length} / 800
                                 </span>
                               </div>
-                              <div className="flex items-center justify-between">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                 {distributeError && <p className="text-xs text-rose-400">{distributeError}</p>}
-                                <div className="ml-auto">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDistributeReelText()}
+                                  disabled={!reelUserText.trim() || reelUserText.length > 800 || isDistributing || isLoading}
+                                  className="inline-flex min-h-10 min-w-32 self-end items-center justify-center whitespace-nowrap rounded-xl bg-neutral-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-600 disabled:cursor-not-allowed disabled:opacity-50 sm:ml-auto"
+                                >
+                                  {isDistributing ? 'Preparing...' : 'Prepare panels'}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="rounded-xl border border-white/10 bg-neutral-950/40 p-3">
+                            <div className="grid grid-cols-3 gap-3">
+                              <div className="space-y-2">
+                                <label className="flex h-6 items-center truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Beats</label>
+                                <FilterDropdown
+                                  value={String(reelBeatCount)}
+                                  options={[
+                                    { value: '1', label: '1 beat' },
+                                    { value: '2', label: '2 beats' },
+                                    { value: '3', label: '3 beats' },
+                                  ]}
+                                  onChange={(value) => setReelBeatCount(Number(value) as 1 | 2 | 3)}
+                                  fullWidth
+                                  mode="inline"
+                                  ariaLabel="Choose reel beat count"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <label className="flex h-6 items-center truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Text amount</label>
+                                <FilterDropdown
+                                  value={reelTextLength}
+                                  options={[
+                                    { value: 'short', label: 'Short' },
+                                    { value: 'medium', label: 'Medium' },
+                                    { value: 'long', label: 'Long' },
+                                  ]}
+                                  onChange={(value) => setReelTextLength(value as ReelTextLengthKey)}
+                                  fullWidth
+                                  mode="inline"
+                                  ariaLabel="Choose reel text amount"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <div className="flex h-6 min-w-0 items-center gap-1">
+                                  <label className="truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Images</label>
+                                  <InfoPopover title="Image mode" ariaLabel="Show image mode details">
+                                    <p>
+                                      BYO creates the reel text and image prompts so you can generate or upload visuals yourself.
+                                    </p>
+                                    <p>
+                                      AI asks Kissago to generate the reel images for you and uses more coins.
+                                    </p>
+                                  </InfoPopover>
+                                </div>
+                                <div className="grid h-10 grid-cols-2 overflow-hidden rounded-xl border border-white/10 bg-neutral-800 text-[11px] font-medium">
                                   <button
                                     type="button"
-                                    onClick={() => void handleDistributeReelText()}
-                                    disabled={!reelUserText.trim() || reelUserText.length > 800 || isDistributing || isLoading}
-                                    className="flex items-center gap-2 rounded-xl bg-neutral-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                    onClick={() => setImageGenerationMode('prompt_only')}
+                                    className={`px-1 transition-colors ${
+                                      imageGenerationMode === 'prompt_only'
+                                        ? 'bg-emerald-500/25 text-white'
+                                        : 'text-neutral-400 hover:bg-neutral-700/60'
+                                    }`}
+                                    aria-pressed={imageGenerationMode === 'prompt_only'}
                                   >
-                                    {isDistributing ? (
-                                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                                    ) : (
-                                      <Sparkles className="h-4 w-4" />
-                                    )}
-                                    Preview layout
+                                    BYO
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setImageGenerationMode('generate')}
+                                    className={`px-1 transition-colors ${
+                                      imageGenerationMode === 'generate'
+                                        ? 'bg-emerald-500/25 text-white'
+                                        : 'text-neutral-400 hover:bg-neutral-700/60'
+                                    }`}
+                                    aria-pressed={imageGenerationMode === 'generate'}
+                                  >
+                                    AI
                                   </button>
                                 </div>
                               </div>
                             </div>
-                          )}
-
-                          <div className="grid gap-2 md:grid-cols-5">
-                            <div className="space-y-1">
-                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Beats</label>
-                              <select value={reelBeatCount} onChange={(event) => {
-                                const next = Number(event.target.value) as 1 | 2 | 3;
-                                setReelBeatCount(next);
-                              }} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                                <option value={1}>1 beat</option>
-                                <option value={2}>2 beats</option>
-                                <option value={3}>3 beats</option>
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Text</label>
-                              <select value={reelTextLength} onChange={(event) => setReelTextLength(event.target.value as ReelTextLengthKey)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                                <option value="short">Short</option>
-                                <option value="medium">Medium</option>
-                                <option value="long">Long</option>
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Narration</label>
-                              <select value={reelNarrationStyleKey} onChange={(event) => setReelNarrationStyleKey(event.target.value)} className="w-full rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                                {reelSetup.settings.narrationStyles.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Images</label>
-                              <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-white/10 bg-neutral-800 text-xs">
-                                <button
-                                  type="button"
-                                  onClick={() => setImageGenerationMode('generate')}
-                                  className={`px-2 py-2 transition-colors ${
-                                    imageGenerationMode === 'generate'
-                                      ? 'bg-emerald-500/25 text-white'
-                                      : 'text-neutral-400 hover:bg-neutral-700/60'
-                                  }`}
-                                  aria-pressed={imageGenerationMode === 'generate'}
-                                  title="Kissago generates the reel images for you (uses more coins)."
-                                >
-                                  AI
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setImageGenerationMode('prompt_only')}
-                                  className={`px-2 py-2 transition-colors ${
-                                    imageGenerationMode === 'prompt_only'
-                                      ? 'bg-emerald-500/25 text-white'
-                                      : 'text-neutral-400 hover:bg-neutral-700/60'
-                                  }`}
-                                  aria-pressed={imageGenerationMode === 'prompt_only'}
-                                  title="Kissago returns image prompts; you generate the images elsewhere and upload them. Cheaper."
-                                >
-                                  BYO
-                                </button>
-                              </div>
-                            </div>
-                            <label className="flex min-h-[58px] items-center justify-between gap-3 rounded-xl border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                              <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Text On</span>
-                              <input
-                                type="checkbox"
-                                checked={reelTextOverlayEnabled}
-                                onChange={(event) => setReelTextOverlayEnabled(event.target.checked)}
-                                className="h-4 w-4 accent-emerald-500"
-                              />
-                            </label>
                           </div>
 
-                          <div className="rounded-xl border border-white/10 bg-neutral-800/70 p-3">
-                            <div className="mb-3 flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-neutral-500">
-                              <Volume2 className="h-4 w-4 text-emerald-300" />
-                              Voice
-                            </div>
-                            <div className="grid gap-2 md:grid-cols-3">
-                              <div className="space-y-1">
-                                <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Language</label>
-                                <select
-                                  value={language}
-                                  onChange={(event) => {
-                                    setLanguage(event.target.value as StoryLanguage);
-                                    clearSeedPreview();
-                                  }}
-                                  className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-                                >
-                                  <option value="english">English</option>
-                                  <option value="hindi">Hindi</option>
-                                </select>
-                              </div>
-                              <div className="space-y-1">
-                                <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice</label>
-                                <select
-                                  value={reelNarrationSettings.voiceId}
-                                  onChange={(event) => setReelNarrationSettings((current) => normalizeReelNarrationSettings({
-                                    ...current,
-                                    voiceId: event.target.value,
-                                  }, {
-                                    storyLanguage: language,
-                                    adminSettings: reelNarrationAdminSettings,
-                                  }))}
-                                  className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-                                >
-                                  {reelNarrationAdminSettings.allowedElevenLabsVoices.map((voice) => (
-                                    <option key={voice.voiceId} value={voice.voiceId}>{voice.label}</option>
+                          <div className="space-y-4 rounded-xl border border-white/10 bg-neutral-800/60 p-3">
+                            {(publishedMoods.length > 0 || reelSetup.settings.moods.length > 0) && (
+                              <div className="space-y-2">
+                                <label className="flex h-5 items-center text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mood</label>
+                                <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                                  {(publishedMoods.length > 0
+                                    ? publishedMoods.map((m) => ({ key: m.slug, label: m.name }))
+                                    : reelSetup.settings.moods
+                                  ).map((item) => (
+                                    <button
+                                      key={item.key}
+                                      type="button"
+                                      onClick={() => setReelMoodKey(item.key)}
+                                      className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                                        reelMoodKey === item.key
+                                          ? 'border-indigo-500/50 bg-indigo-500/20 text-indigo-200'
+                                          : 'border-white/10 bg-neutral-900 text-neutral-400 hover:text-white'
+                                      }`}
+                                    >
+                                      {item.label}
+                                    </button>
                                   ))}
-                                </select>
+                                </div>
                               </div>
-                              <div className="space-y-1">
-                                <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preset</label>
-                                <select
-                                  value={reelNarrationSettings.presetId || ''}
-                                  onChange={(event) => handleReelNarrationPresetChange(event.target.value)}
-                                  className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100"
-                                >
-                                  <option value="">Custom</option>
-                                  {narrationPresets.map((preset) => (
-                                    <option key={preset.id} value={preset.id}>{preset.name}</option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
-                            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
-                              <label className="space-y-1">
-                                <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
-                                  <span>Speed</span>
-                                  <span>{reelNarrationSettings.speed.toFixed(2)}x</span>
-                                </span>
-                                <input
-                                  type="range"
-                                  min={0.7}
-                                  max={1.2}
-                                  step={0.01}
-                                  value={reelNarrationSettings.speed}
-                                  onChange={(event) => setReelNarrationSettings((current) => normalizeReelNarrationSettings({
-                                    ...current,
-                                    speed: Number(event.target.value),
-                                  }, {
-                                    storyLanguage: language,
-                                    adminSettings: reelNarrationAdminSettings,
-                                  }))}
-                                  className="w-full accent-emerald-500"
-                                />
-                              </label>
-                              <label className="space-y-1">
-                                <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
-                                  <span>Emotion</span>
-                                  <span>{Math.round(reelNarrationSettings.emotionalIntensity * 100)}%</span>
-                                </span>
-                                <input
-                                  type="range"
-                                  min={0}
-                                  max={1}
-                                  step={0.01}
-                                  value={reelNarrationSettings.emotionalIntensity}
-                                  onChange={(event) => setReelNarrationSettings((current) => normalizeReelNarrationSettings({
-                                    ...current,
-                                    emotionalIntensity: Number(event.target.value),
-                                  }, {
-                                    storyLanguage: language,
-                                    adminSettings: reelNarrationAdminSettings,
-                                  }))}
-                                  className="w-full accent-emerald-500"
-                                />
-                              </label>
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => void handlePreviewReelNarration()}
-                                  disabled={isPreviewingNarration || isLoading}
-                                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-neutral-900 text-neutral-100 transition-colors hover:bg-neutral-700 disabled:cursor-wait disabled:opacity-60"
-                                  title="Preview voice"
-                                >
-                                  <Play className="h-4 w-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void handleSaveReelNarrationPreset()}
-                                  disabled={isLoading}
-                                  className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-neutral-900 text-neutral-100 transition-colors hover:bg-neutral-700 disabled:opacity-60"
-                                  title="Save as preset"
-                                >
-                                  <Save className="h-4 w-4" />
-                                </button>
-                              </div>
-                            </div>
-                            {(narrationPreviewError || narrationPresetMessage) && (
-                              <p className={`mt-2 text-xs ${narrationPreviewError ? 'text-rose-300' : 'text-emerald-300'}`}>
-                                {narrationPreviewError || narrationPresetMessage}
-                              </p>
                             )}
-                          </div>
 
-                          {/* Mood pill selector */}
-                          {(publishedMoods.length > 0 || reelSetup.settings.moods.length > 0) && (
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mood</label>
-                              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
-                                {(publishedMoods.length > 0
-                                  ? publishedMoods.map((m) => ({ key: m.slug, label: m.name }))
-                                  : reelSetup.settings.moods
-                                ).map((item) => (
-                                  <button
-                                    key={item.key}
-                                    type="button"
-                                    onClick={() => setReelMoodKey(item.key)}
-                                    className={`shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
-                                      reelMoodKey === item.key
-                                        ? 'border-indigo-500/50 bg-indigo-500/20 text-indigo-200'
-                                        : 'border-white/10 bg-neutral-800 text-neutral-400 hover:text-white'
-                                    }`}
-                                  >
-                                    {item.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="grid gap-2 md:grid-cols-3">
-                            {reelVisualStyleCards.length > 0 ? reelVisualStyleCards.map((style) => {
-                              const active = reelVisualStyleId === style.id;
-                              return (
-                                <button
-                                  key={style.id}
-                                  type="button"
-                                  onClick={() => {
-                                    if (style.isLocked) {
-                                      router.push('/wallet');
-                                      return;
-                                    }
-                                    setReelVisualStyleId(style.id);
-                                    setReelVisualStyleKey(style.slug);
-                                  }}
-                                  className={`relative min-h-28 overflow-hidden rounded-xl border text-left transition-colors ${
-                                    active
-                                      ? 'border-emerald-400/60 bg-emerald-500/10'
-                                      : 'border-white/10 bg-neutral-800 hover:bg-neutral-700/70'
-                                  }`}
-                                >
-                                  {style.sampleImageUrl ? (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={style.sampleImageUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" />
-                                  ) : (
-                                    <div className="absolute inset-0 bg-neutral-800" />
-                                  )}
-                                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
-                                  <div className="relative flex h-full min-h-28 flex-col justify-end p-3">
-                                    <div className="flex items-center justify-between gap-2">
-                                      <span className="text-sm font-medium text-white">{style.name}</span>
-                                      {style.isLocked && <Lock className="h-4 w-4 text-amber-300" />}
-                                    </div>
-                                    <span className="mt-1 text-[11px] uppercase tracking-[0.16em] text-neutral-300">{style.minPlan}</span>
+                            <div className="space-y-2">
+                              <label className="flex h-5 items-center text-[11px] uppercase tracking-[0.16em] text-neutral-500">Graphic style</label>
+                              <div className="grid gap-2 md:grid-cols-3">
+                                {reelVisualStyleCards.length > 0 ? reelVisualStyleCards.map((style) => {
+                                  const active = reelVisualStyleId === style.id;
+                                  return (
+                                    <button
+                                      key={style.id}
+                                      type="button"
+                                      onClick={() => {
+                                        if (style.isLocked) {
+                                          router.push('/wallet');
+                                          return;
+                                        }
+                                        setReelVisualStyleId(style.id);
+                                        setReelVisualStyleKey(style.slug);
+                                      }}
+                                      className={`relative min-h-28 overflow-hidden rounded-xl border text-left transition-colors ${
+                                        active
+                                          ? 'border-emerald-400/60 bg-emerald-500/10'
+                                          : 'border-white/10 bg-neutral-900 hover:bg-neutral-700/70'
+                                      }`}
+                                    >
+                                      {style.sampleImageUrl ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={style.sampleImageUrl} alt="" className="absolute inset-0 h-full w-full object-cover opacity-70" />
+                                      ) : (
+                                        <div className="absolute inset-0 bg-neutral-800" />
+                                      )}
+                                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+                                      <div className="relative flex h-full min-h-28 flex-col justify-end p-3">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-sm font-medium text-white">{style.name}</span>
+                                          {style.isLocked && <Lock className="h-4 w-4 text-amber-300" />}
+                                        </div>
+                                        <span className="mt-1 text-[11px] uppercase tracking-[0.16em] text-neutral-300">{style.minPlan}</span>
+                                      </div>
+                                    </button>
+                                  );
+                                }) : (
+                                  <div className="rounded-xl border border-white/10 bg-neutral-900 px-3 py-3 text-sm text-neutral-400 md:col-span-3">
+                                    Reel visual styles will appear here after an admin publishes samples.
                                   </div>
-                                </button>
-                              );
-                            }) : (
-                              <div className="rounded-xl border border-white/10 bg-neutral-800 px-3 py-3 text-sm text-neutral-400 md:col-span-3">
-                                Reel visual styles will appear here after an admin publishes samples.
+                                )}
                               </div>
-                            )}
+                            </div>
                           </div>
 
                           {reelInputMode === 'text' && reelDistributedTexts && (
                             <div className="space-y-3 border-t border-white/10 pt-3">
-                              <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Panel layout — edit to refine</p>
+                              <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Panel layout - edit to refine</p>
                               {reelDistributedTexts.map((beatPanels, beatIdx) => (
                                 <div key={beatIdx} className="space-y-1.5">
                                   {reelBeatCount > 1 && (
@@ -1265,15 +1127,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                   type="button"
                                   onClick={() => void startConfiguredStory()}
                                   disabled={isLoading}
-                                  className="flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                  className="inline-flex min-h-10 min-w-32 items-center justify-center whitespace-nowrap rounded-xl bg-white px-5 py-2.5 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   {isLoading ? (
-                                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-black border-t-transparent" />
+                                    <span>Generating...</span>
                                   ) : (
-                                    <>
-                                      <span>Generate reel</span>
-                                      <Sparkles className="h-4 w-4" />
-                                    </>
+                                    <span>Generate reel</span>
                                   )}
                                 </button>
                               </div>
