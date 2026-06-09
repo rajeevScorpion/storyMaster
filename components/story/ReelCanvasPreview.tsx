@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { StoryBeat } from '@/lib/types/story';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
@@ -85,6 +85,7 @@ export default function ReelCanvasPreview({
   const [assets, setAssets] = useState<ReelImageAssets | null>(null);
   const [sequenceDurationsMs, setSequenceDurationsMs] = useState<number[]>([]);
   const [backdropSize, setBackdropSize] = useState({ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT });
+  const [manualElapsedMs, setManualElapsedMs] = useState<number | null>(null);
   const previewSequence = useMemo(() => (
     playAllActive && sequence?.length
       ? sequence
@@ -117,6 +118,7 @@ export default function ReelCanvasPreview({
   const absoluteElapsedMs = playAllActive
     ? timeline.beatDurationsMs.slice(0, activeIndex).reduce((sum, durationMs) => sum + durationMs, 0) + elapsedMs
     : elapsedMs;
+  const renderElapsedMs = manualElapsedMs ?? absoluteElapsedMs;
   const isBackdrop = surface === 'backdrop';
 
   useEffect(() => {
@@ -185,17 +187,27 @@ export default function ReelCanvasPreview({
     const canvas = canvasRef.current;
     const context = canvas?.getContext('2d');
     if (!canvas || !context || !assets) return;
-    drawReelFrame(context, timeline, assets, absoluteElapsedMs, {
+    drawReelFrame(context, timeline, assets, renderElapsedMs, {
       textOverlayEnabled: !isBackdrop && textOverlayEnabled,
       textOverlayStyle,
       vignetteEnabled: !isBackdrop && vignetteEnabled,
       vignetteAmountPercent,
       visualFit: isBackdrop ? 'cover' : 'fill',
     });
-  }, [absoluteElapsedMs, assets, isBackdrop, textOverlayEnabled, textOverlayStyle, timeline, vignetteAmountPercent, vignetteEnabled]);
+  }, [renderElapsedMs, assets, isBackdrop, textOverlayEnabled, textOverlayStyle, timeline, vignetteAmountPercent, vignetteEnabled]);
 
-  const activePanel = getReelSceneAtTime(timeline, absoluteElapsedMs)?.panelIndex ?? 0;
+  // Clear manual panel override once audio starts advancing
+  useEffect(() => {
+    if (absoluteElapsedMs > 0) setManualElapsedMs(null);
+  }, [absoluteElapsedMs]);
+
+  const activePanel = getReelSceneAtTime(timeline, renderElapsedMs)?.panelIndex ?? 0;
   const canvasSize = isBackdrop ? backdropSize : { width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT };
+
+  const handlePanelDotClick = useCallback((panelIndex: number) => {
+    const scene = timeline.scenes.find((s) => s.beatIndex === activeIndex && s.panelIndex === panelIndex);
+    if (scene) setManualElapsedMs(scene.startMs);
+  }, [activeIndex, timeline.scenes]);
 
   return (
     <div ref={containerRef} aria-hidden={isBackdrop || undefined} className="absolute inset-0">
@@ -205,16 +217,21 @@ export default function ReelCanvasPreview({
         height={canvasSize.height}
         className="h-full w-full"
       />
-      {!isBackdrop && <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
-        {[0, 1, 2, 3].map((panelIndex) => (
-          <div
-            key={panelIndex}
-            className={`h-1.5 w-1.5 rounded-full transition-all duration-300 ${
-              panelIndex === activePanel ? 'scale-125 bg-white/70' : 'bg-white/25'
-            }`}
-          />
-        ))}
-      </div>}
+      {!isBackdrop && (
+        <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-2.5">
+          {[0, 1, 2, 3].map((panelIndex) => (
+            <button
+              key={panelIndex}
+              type="button"
+              onClick={() => handlePanelDotClick(panelIndex)}
+              title={`Panel ${panelIndex + 1}`}
+              className={`h-2.5 w-2.5 rounded-full transition-all duration-200 cursor-pointer ${
+                panelIndex === activePanel ? 'bg-emerald-400 scale-110' : 'bg-white/25 hover:bg-emerald-400/70'
+              }`}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

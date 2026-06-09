@@ -606,7 +606,7 @@ export async function saveReelNarrationVoicePreviewAction(input: {
   // Enforce max 4: delete oldest if at capacity
   const { data: existing } = await supabase
     .from('reel_narration_voice_previews')
-    .select('id, audio_r2_key, created_at')
+    .select('id, label, audio_r2_key, created_at')
     .eq('story_id', input.storyId)
     .eq('user_id', userId)
     .order('created_at', { ascending: true });
@@ -617,24 +617,24 @@ export async function saveReelNarrationVoicePreviewAction(input: {
     await supabase.from('reel_narration_voice_previews').delete().eq('id', oldest.id);
   }
 
-  // Determine next label number (fill gaps, 01-04)
-  const usedLabels = new Set((existing ?? []).map((r) => r.id));
-  const remaining = (existing ?? []).filter((r) => r.id !== (existing?.[0]?.id ?? ''));
+  // Determine next label number by finding the lowest unused slot (01–04)
+  const survivingAfterEviction = (existing && existing.length >= MAX_VOICE_PREVIEWS)
+    ? (existing ?? []).slice(1)
+    : (existing ?? []);
   const takenNumbers = new Set(
-    remaining.map((r: Record<string, unknown>) => {
+    survivingAfterEviction.map((r: Record<string, unknown>) => {
       const m = String(r['label'] ?? '').match(/(\d+)$/);
       return m ? parseInt(m[1], 10) : 0;
     })
   );
-  void usedLabels;
   let labelNumber = 1;
   while (takenNumbers.has(labelNumber) && labelNumber <= MAX_VOICE_PREVIEWS) labelNumber++;
   const label = `Preview ${String(labelNumber).padStart(2, '0')}`;
 
-  // Upload to R2
+  // Upload to R2 — store the full r2://bucket/key reference so signed URL resolution works
   const ext = mimeType === 'audio/wav' ? 'wav' : 'mp3';
   const objectKey = `stories/${input.storyId}/voice-previews/${crypto.randomUUID()}.${ext}`;
-  await putR2Object({
+  const { urlOrReference } = await putR2Object({
     access: 'private',
     objectKey,
     body: audioBuffer,
@@ -649,7 +649,7 @@ export async function saveReelNarrationVoicePreviewAction(input: {
       user_id: userId,
       label,
       voice_display_name: input.voiceDisplayName,
-      audio_r2_key: objectKey,
+      audio_r2_key: urlOrReference,
       audio_mime_type: mimeType,
       settings_snapshot: input.settings as unknown as Record<string, unknown>,
       preview_scope: input.scope,
@@ -660,7 +660,7 @@ export async function saveReelNarrationVoicePreviewAction(input: {
 
   if (insertError) throw new Error(`Failed to save voice preview: ${insertError.message}`);
 
-  const audioUrl = await createR2SignedGetUrl(objectKey).catch(() => null);
+  const audioUrl = await createR2SignedGetUrl(urlOrReference).catch(() => null);
   return rowToVoicePreview(inserted as Record<string, unknown>, audioUrl);
 }
 

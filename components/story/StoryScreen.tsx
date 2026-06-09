@@ -2645,6 +2645,10 @@ function StoryScreenInner({
     }),
     [reelTimelineNodes]
   );
+  const reelBeatsNeedingNarration = useMemo(
+    () => (reelTimelineNodes ?? []).filter((n) => !normalizeBeatMediaFields(n.data).audioUrl),
+    [reelTimelineNodes]
+  );
   const reelPreviewSequence = useMemo(
     () => reelPlayableNodes.map((node) => {
       const beat = normalizeBeatMediaFields(node.data);
@@ -3021,7 +3025,10 @@ function StoryScreenInner({
             .map((n) => normalizeBeatMediaFields(n.data).storyText)
             .filter(Boolean)
             .join('\n\n')
-        : normalizedCurrentBeat.storyText;
+        // "1 beat" = one panel caption (short sample, clearly distinct from full)
+        : normalizedCurrentBeat.reelCaptions?.[0]?.text
+          ?? splitTextIntoCompleteCaptionPanels(normalizedCurrentBeat.storyText, REEL_PANEL_COUNT)[0]
+          ?? normalizedCurrentBeat.storyText;
 
       const result = await previewReelNarrationAction({
         text: previewText,
@@ -3043,9 +3050,11 @@ function StoryScreenInner({
         scope: voicePreviewScope,
         voiceDisplayName: selectedReelVoice.label,
       });
+      // Prefer data URL for immediate playback; R2 signed URL is a fallback for reloaded sessions
+      const savedWithAudio = { ...saved, audioUrl: result.audioUrl ?? saved.audioUrl };
       setVoicePreviews((prev) => {
-        const without = prev.filter((p) => p.id !== saved.id);
-        return [...without, saved].slice(-MAX_VOICE_PREVIEWS_LOCAL);
+        const without = prev.filter((p) => p.id !== savedWithAudio.id);
+        return [...without, savedWithAudio].slice(-MAX_VOICE_PREVIEWS_LOCAL);
       });
     } catch (error) {
       setReelNarrationSaveState('error');
@@ -3230,6 +3239,31 @@ function StoryScreenInner({
     }
     void generateNarrationForNode(currentNodeId);
   }, [currentNodeId, generateNarrationForNode, hasUnsavedReelNarrationSettings, hasUnsavedReelText, isReelStory]);
+
+  const handleGenerateAllNarration = useCallback(async () => {
+    if (!isReelStory) return;
+    if (hasUnsavedReelText) {
+      setReelTextSaveState('error');
+      setReelTextMessage('Save panel text before generating narration.');
+      return;
+    }
+    if (hasUnsavedReelNarrationSettings) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage('Save voice settings before generating narration.');
+      setActiveReelEditorSection('voice');
+      return;
+    }
+    const pendingIds = reelBeatsNeedingNarration.map((n) => n.id);
+    for (const nodeId of pendingIds) {
+      await generateNarrationForNode(nodeId);
+    }
+  }, [
+    generateNarrationForNode,
+    hasUnsavedReelNarrationSettings,
+    hasUnsavedReelText,
+    isReelStory,
+    reelBeatsNeedingNarration,
+  ]);
 
   const handleManualNavigateToNode = useCallback((nodeId: string) => {
     if (isReelStory) {
@@ -4473,14 +4507,20 @@ function StoryScreenInner({
               onClick={() => setVoicePreviewScope('1_beat')}
               className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === '1_beat' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
             >
-              1 beat
+              Sample
             </button>
             <button
               type="button"
               onClick={() => setVoicePreviewScope('full')}
-              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === 'full' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
+              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === 'full' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
             >
               Full
+              <span
+                title="Full preview covers all reel beats in one pass. Apply it, then use 'Generate all beats' to create per-beat export narration with the same voice — no re-audition needed."
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Info className="h-2.5 w-2.5" />
+              </span>
             </button>
           </div>
         </div>
@@ -4513,6 +4553,18 @@ function StoryScreenInner({
             Cancel
           </button>
         </div>
+
+        {reelBeatsNeedingNarration.length > 0 && (
+          <button
+            type="button"
+            onClick={() => void handleGenerateAllNarration()}
+            disabled={isGeneratingAudio || hasUnsavedReelNarrationSettings || hasUnsavedReelText}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isGeneratingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
+            Generate narration for all beats
+          </button>
+        )}
 
         {reelNarrationMessage && (
           <p className={`text-xs ${reelNarrationSaveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
