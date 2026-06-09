@@ -55,6 +55,23 @@ function validCaptionStart(caption: ReelPanelCaption | undefined): number | null
 function buildPanelStarts(beat: StoryBeat, durationMs: number): number[] {
   const usableDurationMs = Math.max(1, durationMs || STORYBOARD_ADVANCE_MS * 4);
   const captions = beat.reelCaptions ?? [];
+
+  // Priority 1: use each panel's last word end time for tight word-driven transitions
+  const prevPanelsHaveWordTimings = [0, 1, 2].every((panelIndex) => {
+    const caption = captions.find((c) => c.panelIndex === panelIndex);
+    return caption?.wordTimings && caption.wordTimings.length > 0;
+  });
+
+  if (prevPanelsHaveWordTimings) {
+    return [0, 1, 2, 3].map((panelIndex) => {
+      if (panelIndex === 0) return 0;
+      const prevCaption = captions.find((c) => c.panelIndex === panelIndex - 1)!;
+      const lastWord = prevCaption.wordTimings![prevCaption.wordTimings!.length - 1];
+      return Math.min(usableDurationMs, Math.max(0, lastWord.endMs));
+    });
+  }
+
+  // Priority 2: use caption start times
   const allTimed = [1, 2, 3].every((panelIndex) => validCaptionStart(
     captions.find((caption) => caption.panelIndex === panelIndex)
   ) !== null);

@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -2403,6 +2403,8 @@ function StoryScreenInner({
     play: playAudio,
     currentTimeMs: reelAudioTimeMs,
     durationMs: reelAudioDurationMs,
+    isMuted,
+    toggleMute,
   } = useAudioPlayer(
     normalizedCurrentBeat.audioUrl,
     currentNodeId,
@@ -2672,21 +2674,11 @@ function StoryScreenInner({
     && !hasUnsavedReelNarrationSettings
     && !reelHasPendingWork
   );
-  const reelPlayAllDisabledReason = !reelTimelineNodes?.length
-    ? 'No reel beats available yet.'
-    : reelPlayableNodes.length !== reelTimelineNodes.length
-    ? 'Generate images and narration for every beat first.'
-    : hasUnsavedReelText
-    ? 'Save panel text before playing the full reel.'
-    : hasUnsavedReelOverlayStyle
-    ? 'Save text settings before playing the full reel.'
-    : hasUnsavedReelTransitionSettings
-    ? 'Save transitions before playing the full reel.'
-    : hasUnsavedReelNarrationSettings
-    ? 'Save voice settings before playing the full reel.'
-    : reelHasPendingWork
-    ? 'Wait for image and narration generation to finish.'
-    : 'Play reel from beginning';
+  const canPlayCurrentBeat = Boolean(
+    isReelStory
+    && normalizedCurrentBeat.imageUrl
+    && normalizedCurrentBeat.audioUrl
+  );
   const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
   const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
   const canAccessVideoExport = adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads);
@@ -3987,36 +3979,55 @@ function StoryScreenInner({
     <div className="flex flex-col items-center gap-2">
       <button
         type="button"
-        onClick={handleToggleReelPlayAll}
-        disabled={!canPlayFullReel}
-        title={reelPlayAllActive ? (playbackState === 'playing' ? 'Pause full reel' : 'Resume full reel') : reelPlayAllDisabledReason}
+        onClick={handleReelNarrationToggle}
+        disabled={!canPlayCurrentBeat}
+        title={
+          canPlayCurrentBeat
+            ? playbackState === 'playing' ? 'Pause (P)' : 'Play narration (P)'
+            : !normalizedCurrentBeat.imageUrl
+            ? 'Generate an image for this beat first'
+            : !normalizedCurrentBeat.audioUrl
+            ? 'Generate narration for this beat first'
+            : 'Play narration'
+        }
         className={`flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-md transition-all ${
-          canPlayFullReel
-            ? reelPlayAllActive
+          canPlayCurrentBeat
+            ? playbackState === 'playing'
               ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
               : 'border-emerald-500/25 bg-neutral-900/60 text-emerald-200 hover:border-emerald-400/45 hover:bg-neutral-800'
             : 'cursor-not-allowed border-white/10 bg-neutral-900/35 text-neutral-600'
         }`}
       >
-        {reelPlayAllActive && playbackState === 'playing' ? (
+        {playbackState === 'playing' ? (
           <Pause className="h-5 w-5" />
         ) : (
           <Play className="h-5 w-5" />
         )}
       </button>
-      <NarrationButton
-        isGeneratingAudio={isGeneratingAudio}
-        isAudioReady={isAudioReady}
-        playbackState={playbackState}
-        hasAudio={!!normalizedCurrentBeat.audioUrl}
-        onTogglePlayPause={handleReelNarrationToggle}
-        onGenerateNarration={handleReelGenerateNarration}
-        onClearGlow={clearAudioReady}
-        storyMode={storyMode}
-        onToggleStoryMode={toggleStoryMode}
-        disabled={hasUnsavedReelText || hasUnsavedReelNarrationSettings}
-        disabledReason={hasUnsavedReelNarrationSettings ? 'Save voice settings before generating narration' : 'Save panel text before generating narration'}
-      />
+      <button
+        type="button"
+        onClick={toggleMute}
+        title={isMuted ? 'Unmute' : 'Mute'}
+        className="p-2.5 backdrop-blur-md rounded-full transition-all duration-300 bg-neutral-900/60 border border-white/10 hover:border-white/20 hover:bg-neutral-800 cursor-pointer text-neutral-400 hover:text-neutral-200"
+      >
+        {isMuted ? (
+          <VolumeX className="w-5 h-5" />
+        ) : (
+          <Volume2 className="w-5 h-5" />
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={toggleStoryMode}
+        className={`px-2 py-1 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all duration-300 backdrop-blur-md border ${
+          storyMode
+            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+            : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300 hover:border-white/20'
+        }`}
+        title={storyMode ? 'Story Mode: ON — narration autoplays' : 'Story Mode: OFF — click to autoplay narration'}
+      >
+        auto
+      </button>
     </div>
   );
 

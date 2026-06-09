@@ -13,6 +13,8 @@ interface UseAudioPlayerReturn {
   durationMs: number;
   volume: number;
   setVolume: (v: number) => void;
+  isMuted: boolean;
+  toggleMute: () => void;
 }
 
 interface UseAudioPlayerOptions {
@@ -24,15 +26,21 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
   const [volume, setVolumeState] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevNodeIdRef = useRef<string | undefined>(nodeId);
   const volumeRef = useRef(volume);
+  const isMutedRef = useRef(isMuted);
   const onEndedRef = useRef(options.onEnded);
 
-  // Keep volumeRef in sync
+  // Keep volumeRef and isMutedRef in sync
   useEffect(() => {
     volumeRef.current = volume;
   }, [volume]);
+
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
 
   useEffect(() => {
     onEndedRef.current = options.onEnded;
@@ -72,6 +80,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
 
     const audio = new Audio(audioUrl);
     audio.volume = volumeRef.current;
+    audio.muted = isMutedRef.current;
     const syncMetadata = () => setDurationMs(Number.isFinite(audio.duration) ? audio.duration * 1000 : 0);
     const syncTime = () => setCurrentTimeMs(audio.currentTime * 1000);
     audio.addEventListener('ended', handleEnded);
@@ -105,8 +114,19 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     }
   }, [volume]);
 
+  // Sync muted to audio element
+  useEffect(() => {
+    if (audioRef.current) {
+      audioRef.current.muted = isMuted;
+    }
+  }, [isMuted]);
+
   const setVolume = useCallback((v: number) => {
     setVolumeState(Math.max(0, Math.min(1, v)));
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    setIsMuted((prev) => !prev);
   }, []);
 
   const togglePlayPause = useCallback(() => {
@@ -136,5 +156,5 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     setPlaybackState('idle');
   }, []);
 
-  return { playbackState, togglePlayPause, play, stop, currentTimeMs, durationMs, volume, setVolume };
+  return { playbackState, togglePlayPause, play, stop, currentTimeMs, durationMs, volume, setVolume, isMuted, toggleMute };
 }
