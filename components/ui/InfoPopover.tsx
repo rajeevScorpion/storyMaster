@@ -15,7 +15,7 @@ export default function InfoPopover({
   children: ReactNode;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [panelStyle, setPanelStyle] = useState<{ top: number; left: number } | null>(null);
+  const [panelStyle, setPanelStyle] = useState<{ bottom: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
 
@@ -23,8 +23,8 @@ export default function InfoPopover({
     if (!buttonRef.current) return;
     const rect = buttonRef.current.getBoundingClientRect();
     setPanelStyle({
-      top: rect.bottom + 8,
-      left: Math.min(rect.right - 320, window.innerWidth - 328),
+      bottom: window.innerHeight - rect.top + 8,
+      left: Math.max(8, Math.min(rect.right - 320, window.innerWidth - 328)),
     });
     setIsOpen(true);
   };
@@ -66,7 +66,7 @@ export default function InfoPopover({
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 6, scale: 0.98 }}
           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          style={{ top: panelStyle.top, left: Math.max(8, panelStyle.left) }}
+          style={{ bottom: panelStyle.bottom, left: panelStyle.left }}
           className="fixed z-[200] w-80 max-h-[75vh] overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-4 text-left shadow-2xl shadow-black/60"
         >
           <div className="flex items-start justify-between gap-3">
