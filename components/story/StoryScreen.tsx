@@ -4078,7 +4078,7 @@ function StoryScreenInner({
             )}
           </label>
 
-          <div className="space-y-2 rounded-xl border border-white/10 bg-neutral-900/60 p-3">
+          <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
             <label className="space-y-1.5">
               <ReelFieldLabel>Preset</ReelFieldLabel>
               <FilterDropdown
@@ -4090,14 +4090,15 @@ function StoryScreenInner({
                 ariaLabel="Reel narration preset"
               />
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => void handleSaveReelNarrationPreset()}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10"
+                onClick={() => void handleSetDefaultReelNarrationPreset()}
+                disabled={!selectedReelPresetIsUser || selectedReelPreset?.isDefault}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Save className="h-4 w-4" />
-                Save preset
+                <Check className="h-4 w-4" />
+                Set default
               </button>
               <button
                 type="button"
@@ -4119,21 +4120,20 @@ function StoryScreenInner({
               </button>
               <button
                 type="button"
-                onClick={() => void handleSetDefaultReelNarrationPreset()}
-                disabled={!selectedReelPresetIsUser || selectedReelPreset?.isDefault}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void handleDeleteReelNarrationPreset()}
+                disabled={!selectedReelPresetIsUser}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Check className="h-4 w-4" />
-                Set default
+                <Trash2 className="h-4 w-4" />
+                Delete
               </button>
               <button
                 type="button"
-                onClick={() => void handleDeleteReelNarrationPreset()}
-                disabled={!selectedReelPresetIsUser}
-                className="col-span-2 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={() => void handleSaveReelNarrationPreset()}
+                className="col-span-2 inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3 text-xs text-neutral-300 transition-colors hover:bg-white/10"
               >
-                <Trash2 className="h-4 w-4" />
-                Delete preset
+                <Save className="h-4 w-4" />
+                Save preset
               </button>
             </div>
           </div>
@@ -4329,12 +4329,12 @@ function StoryScreenInner({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             type="button"
             onClick={() => void handlePreviewReelNarrationSettings()}
             disabled={isPreviewingReelNarration}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-white/10 disabled:cursor-wait disabled:opacity-60"
           >
             {isPreviewingReelNarration ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             Preview
@@ -4343,7 +4343,7 @@ function StoryScreenInner({
             type="button"
             onClick={() => void handleSaveReelNarrationSettings()}
             disabled={!hasUnsavedReelNarrationSettings || isReelNarrationSaving}
-            className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-medium text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-medium text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isReelNarrationSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save
@@ -4352,7 +4352,7 @@ function StoryScreenInner({
             type="button"
             onClick={handleCancelReelNarrationSettings}
             disabled={!hasUnsavedReelNarrationSettings || isReelNarrationSaving}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Cancel
           </button>
