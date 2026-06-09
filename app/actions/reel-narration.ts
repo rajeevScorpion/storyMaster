@@ -19,10 +19,13 @@ import {
   normalizeReelNarrationSettings,
   storyLanguageToNarrationLanguage,
   type NarrationPreset,
+  type NarrationVoicePreviewScope,
   type ReelNarrationAdminSettings,
   type ReelNarrationSettings,
+  type ReelNarrationVoicePreview,
 } from '@/lib/reel/narration';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
+import { putR2Object, createR2SignedGetUrl, deleteR2Object } from '@/lib/media/r2-server';
 import type { StoryConfig, StoryLanguage } from '@/lib/types/story';
 
 function isMissingNarrationTableError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -532,4 +535,175 @@ export async function previewReelNarrationAction(input: {
     audioUrl: result.audioUrl,
     settings,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Voice preview history
+// ---------------------------------------------------------------------------
+
+const MAX_VOICE_PREVIEWS = 4;
+
+function rowToVoicePreview(row: Record<string, unknown>, audioUrl: string | null): ReelNarrationVoicePreview {
+  return {
+    id: row.id as string,
+    storyId: row.story_id as string,
+    userId: row.user_id as string,
+    label: row.label as string,
+    voiceDisplayName: (row.voice_display_name as string) ?? '',
+    audioR2Key: row.audio_r2_key as string,
+    audioMimeType: (row.audio_mime_type as string) ?? 'audio/mpeg',
+    audioUrl,
+    settingsSnapshot: row.settings_snapshot as ReelNarrationSettings,
+    previewScope: (row.preview_scope as NarrationVoicePreviewScope) ?? '1_beat',
+    isActive: (row.is_active as boolean) ?? false,
+    createdAt: row.created_at as string,
+  };
+}
+
+export async function listReelNarrationVoicePreviewsAction(
+  storyId: string
+): Promise<ReelNarrationVoicePreview[]> {
+  const userId = await getCurrentUserId(true);
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('reel_narration_voice_previews')
+    .select('*')
+    .eq('story_id', storyId)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true })
+    .limit(MAX_VOICE_PREVIEWS);
+
+  if (error) {
+    if (isMissingNarrationTableError(error)) return [];
+    throw new Error(`Failed to list voice previews: ${error.message}`);
+  }
+
+  const previews = await Promise.all(
+    (data ?? []).map(async (row) => {
+      const audioUrl = await createR2SignedGetUrl(row.audio_r2_key as string).catch(() => null);
+      return rowToVoicePreview(row as Record<string, unknown>, audioUrl);
+    })
+  );
+  return previews;
+}
+
+export async function saveReelNarrationVoicePreviewAction(input: {
+  storyId: string;
+  audioDataUrl: string;
+  settings: ReelNarrationSettings;
+  scope: NarrationVoicePreviewScope;
+  voiceDisplayName: string;
+}): Promise<ReelNarrationVoicePreview> {
+  const userId = await getCurrentUserId(true);
+  const supabase = await createClient();
+
+  // Parse the data URL: data:<mime>;base64,<data>
+  const match = input.audioDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!match) throw new Error('Invalid audio data URL');
+  const [, mimeType, base64Data] = match;
+  const audioBuffer = Buffer.from(base64Data, 'base64');
+
+  // Enforce max 4: delete oldest if at capacity
+  const { data: existing } = await supabase
+    .from('reel_narration_voice_previews')
+    .select('id, audio_r2_key, created_at')
+    .eq('story_id', input.storyId)
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true });
+
+  if (existing && existing.length >= MAX_VOICE_PREVIEWS) {
+    const oldest = existing[0];
+    await deleteR2Object(oldest.audio_r2_key as string).catch(() => {});
+    await supabase.from('reel_narration_voice_previews').delete().eq('id', oldest.id);
+  }
+
+  // Determine next label number (fill gaps, 01-04)
+  const usedLabels = new Set((existing ?? []).map((r) => r.id));
+  const remaining = (existing ?? []).filter((r) => r.id !== (existing?.[0]?.id ?? ''));
+  const takenNumbers = new Set(
+    remaining.map((r: Record<string, unknown>) => {
+      const m = String(r['label'] ?? '').match(/(\d+)$/);
+      return m ? parseInt(m[1], 10) : 0;
+    })
+  );
+  void usedLabels;
+  let labelNumber = 1;
+  while (takenNumbers.has(labelNumber) && labelNumber <= MAX_VOICE_PREVIEWS) labelNumber++;
+  const label = `Preview ${String(labelNumber).padStart(2, '0')}`;
+
+  // Upload to R2
+  const ext = mimeType === 'audio/wav' ? 'wav' : 'mp3';
+  const objectKey = `stories/${input.storyId}/voice-previews/${crypto.randomUUID()}.${ext}`;
+  await putR2Object({
+    access: 'private',
+    objectKey,
+    body: audioBuffer,
+    contentType: mimeType,
+  });
+
+  // Insert DB record
+  const { data: inserted, error: insertError } = await supabase
+    .from('reel_narration_voice_previews')
+    .insert({
+      story_id: input.storyId,
+      user_id: userId,
+      label,
+      voice_display_name: input.voiceDisplayName,
+      audio_r2_key: objectKey,
+      audio_mime_type: mimeType,
+      settings_snapshot: input.settings as unknown as Record<string, unknown>,
+      preview_scope: input.scope,
+      is_active: false,
+    })
+    .select()
+    .single();
+
+  if (insertError) throw new Error(`Failed to save voice preview: ${insertError.message}`);
+
+  const audioUrl = await createR2SignedGetUrl(objectKey).catch(() => null);
+  return rowToVoicePreview(inserted as Record<string, unknown>, audioUrl);
+}
+
+export async function deleteReelNarrationVoicePreviewAction(id: string): Promise<void> {
+  const userId = await getCurrentUserId(true);
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from('reel_narration_voice_previews')
+    .select('audio_r2_key')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .single();
+
+  if (error) throw new Error(`Voice preview not found: ${error.message}`);
+  await deleteR2Object(data.audio_r2_key as string).catch(() => {});
+  await supabase.from('reel_narration_voice_previews').delete().eq('id', id).eq('user_id', userId);
+}
+
+export async function applyReelNarrationVoicePreviewAction(
+  id: string
+): Promise<ReelNarrationSettings> {
+  const userId = await getCurrentUserId(true);
+  const supabase = await createClient();
+
+  const { data, error } = await supabase
+    .from('reel_narration_voice_previews')
+    .select('story_id, settings_snapshot')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .single();
+
+  if (error) throw new Error(`Voice preview not found: ${error.message}`);
+
+  // Mark this one active, clear others for the same story
+  await supabase
+    .from('reel_narration_voice_previews')
+    .update({ is_active: false })
+    .eq('story_id', data.story_id)
+    .eq('user_id', userId);
+  await supabase
+    .from('reel_narration_voice_previews')
+    .update({ is_active: true })
+    .eq('id', id);
+
+  return data.settings_snapshot as unknown as ReelNarrationSettings;
 }

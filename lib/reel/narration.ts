@@ -91,6 +91,23 @@ export interface NarrationPreset {
   updatedAt: string;
 }
 
+export type NarrationVoicePreviewScope = '1_beat' | 'full';
+
+export interface ReelNarrationVoicePreview {
+  id: string;
+  storyId: string;
+  userId: string;
+  label: string;
+  voiceDisplayName: string;
+  audioR2Key: string;
+  audioMimeType: string;
+  audioUrl: string | null;
+  settingsSnapshot: ReelNarrationSettings;
+  previewScope: NarrationVoicePreviewScope;
+  isActive: boolean;
+  createdAt: string;
+}
+
 export interface NarrationLanguageDetection {
   selectedLanguage: string;
   detectedLanguage: string | null;

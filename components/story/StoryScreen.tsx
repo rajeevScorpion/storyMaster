@@ -5,7 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -26,12 +26,16 @@ import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
 import {
+  applyReelNarrationVoicePreviewAction,
   deleteNarrationPresetAction,
+  deleteReelNarrationVoicePreviewAction,
   duplicateNarrationPresetAction,
   listNarrationPresetsAction,
+  listReelNarrationVoicePreviewsAction,
   previewReelNarrationAction,
   saveDefaultNarrationPresetAction,
   saveNarrationSettingsAsPresetAction,
+  saveReelNarrationVoicePreviewAction,
   updateNarrationPresetAction,
 } from '@/app/actions/reel-narration';
 import { useReelVideoExport } from '@/lib/hooks/useReelVideoExport';
@@ -103,9 +107,13 @@ import {
   storyLanguageToNarrationLanguage,
   type NarrationVoiceGender,
   type NarrationPreset,
+  type NarrationVoicePreviewScope,
   type ReelNarrationAdminSettings,
   type ReelNarrationSettings,
+  type ReelNarrationVoicePreview,
 } from '@/lib/reel/narration';
+
+const MAX_VOICE_PREVIEWS_LOCAL = 4;
 
 function StoryboardCycler({
   gridUrl,
@@ -2240,6 +2248,10 @@ function StoryScreenInner({
   const [reelNarrationSaveState, setReelNarrationSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [reelNarrationMessage, setReelNarrationMessage] = useState<string | null>(null);
   const [isPreviewingReelNarration, setIsPreviewingReelNarration] = useState(false);
+  const [voicePreviews, setVoicePreviews] = useState<ReelNarrationVoicePreview[]>([]);
+  const [playingVoicePreviewId, setPlayingVoicePreviewId] = useState<string | null>(null);
+  const playingVoicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [voicePreviewScope, setVoicePreviewScope] = useState<NarrationVoicePreviewScope>('1_beat');
 
   useEffect(() => {
     let cancelled = false;
@@ -2292,6 +2304,14 @@ function StoryScreenInner({
   const characterSheetInputRef = useRef<HTMLInputElement>(null);
   const isReelStory = session.storyConfig.storyKind === 'reel';
   const visibleReaderPanel: StoryReaderPanel = isEnding || isReelStory ? 'story' : activeReaderPanel;
+
+  useEffect(() => {
+    const storyId = session.savedStoryId;
+    if (!isReelStory || !storyId) return;
+    listReelNarrationVoicePreviewsAction(storyId)
+      .then(setVoicePreviews)
+      .catch(() => {});
+  }, [isReelStory, session.savedStoryId]);
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
     enabled: !isReelStory && cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
     resetKey: currentNodeId,
@@ -2985,20 +3005,48 @@ function StoryScreenInner({
     setReelNarrationMessage(null);
   }, [narrationPresets, reelNarrationAdminSettings, updateReelNarrationDraft]);
 
+  const stopPlayingVoicePreview = useCallback(() => {
+    playingVoicePreviewAudioRef.current?.pause();
+    playingVoicePreviewAudioRef.current = null;
+    setPlayingVoicePreviewId(null);
+  }, []);
+
   const handlePreviewReelNarrationSettings = useCallback(async () => {
     if (isPreviewingReelNarration) return;
     setIsPreviewingReelNarration(true);
     setReelNarrationMessage(null);
     try {
+      const previewText = voicePreviewScope === 'full'
+        ? (reelTimelineNodes ?? [])
+            .map((n) => normalizeBeatMediaFields(n.data).storyText)
+            .filter(Boolean)
+            .join('\n\n')
+        : normalizedCurrentBeat.storyText;
+
       const result = await previewReelNarrationAction({
-        text: normalizedCurrentBeat.storyText,
+        text: previewText,
         settings: reelNarrationDraft,
         storyLanguage: session.storyConfig.language,
         panelPauseMs: normalizedReelTransitionDraft.pauseMs,
       });
       setReelNarrationDraft(result.settings);
+
+      stopPlayingVoicePreview();
       const audio = new Audio(result.audioUrl);
-      await audio.play();
+      audio.play();
+
+      if (!session.savedStoryId) return;
+      const saved = await saveReelNarrationVoicePreviewAction({
+        storyId: session.savedStoryId,
+        audioDataUrl: result.audioUrl,
+        settings: result.settings,
+        scope: voicePreviewScope,
+        voiceDisplayName: selectedReelVoice.label,
+      });
+      setVoicePreviews((prev) => {
+        const without = prev.filter((p) => p.id !== saved.id);
+        return [...without, saved].slice(-MAX_VOICE_PREVIEWS_LOCAL);
+      });
     } catch (error) {
       setReelNarrationSaveState('error');
       setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to preview voice.');
@@ -3007,11 +3055,51 @@ function StoryScreenInner({
     }
   }, [
     isPreviewingReelNarration,
+    voicePreviewScope,
+    reelTimelineNodes,
     normalizedCurrentBeat.storyText,
     normalizedReelTransitionDraft.pauseMs,
     reelNarrationDraft,
     session.storyConfig.language,
+    session.savedStoryId,
+    selectedReelVoice.label,
+    stopPlayingVoicePreview,
   ]);
+
+  const handlePlayVoicePreview = useCallback((preview: ReelNarrationVoicePreview) => {
+    if (playingVoicePreviewId === preview.id) {
+      stopPlayingVoicePreview();
+      return;
+    }
+    stopPlayingVoicePreview();
+    if (!preview.audioUrl) return;
+    const audio = new Audio(preview.audioUrl);
+    audio.onended = () => setPlayingVoicePreviewId(null);
+    audio.play();
+    playingVoicePreviewAudioRef.current = audio;
+    setPlayingVoicePreviewId(preview.id);
+  }, [playingVoicePreviewId, stopPlayingVoicePreview]);
+
+  const handleApplyVoicePreview = useCallback(async (preview: ReelNarrationVoicePreview) => {
+    try {
+      const settings = await applyReelNarrationVoicePreviewAction(preview.id);
+      setReelNarrationDraft(settings);
+      setVoicePreviews((prev) => prev.map((p) => ({ ...p, isActive: p.id === preview.id })));
+      setReelNarrationMessage('Voice settings loaded from preview.');
+    } catch (error) {
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to apply preview.');
+    }
+  }, [setReelNarrationDraft]);
+
+  const handleDeleteVoicePreview = useCallback(async (previewId: string) => {
+    if (playingVoicePreviewId === previewId) stopPlayingVoicePreview();
+    try {
+      await deleteReelNarrationVoicePreviewAction(previewId);
+      setVoicePreviews((prev) => prev.filter((p) => p.id !== previewId));
+    } catch {
+      // best-effort
+    }
+  }, [playingVoicePreviewId, stopPlayingVoicePreview]);
 
   const handleSaveReelNarrationSettings = useCallback(async () => {
     if (!isReelStory || !hasUnsavedReelNarrationSettings || isReelNarrationSaving) return;
@@ -4328,6 +4416,74 @@ function StoryScreenInner({
             </div>
           </div>
         )}
+
+        {voicePreviews.length > 0 && (
+          <div className="space-y-1.5">
+            <span className="block text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice previews</span>
+            {voicePreviews.map((preview) => (
+              <div
+                key={preview.id}
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-colors ${preview.isActive ? 'border-emerald-500/30 bg-emerald-500/[0.06]' : 'border-white/10 bg-white/[0.03]'}`}
+              >
+                <button
+                  type="button"
+                  onClick={() => handlePlayVoicePreview(preview)}
+                  disabled={!preview.audioUrl}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label={playingVoicePreviewId === preview.id ? 'Stop' : 'Play'}
+                >
+                  {playingVoicePreviewId === preview.id
+                    ? <Square className="h-3 w-3 fill-current" />
+                    : <Play className="h-3 w-3" />}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <span className="text-xs font-medium text-neutral-200">{preview.label}</span>
+                  {preview.voiceDisplayName && (
+                    <span className="ml-1.5 text-xs text-neutral-500">{preview.voiceDisplayName}</span>
+                  )}
+                  {preview.previewScope === 'full' && (
+                    <span className="ml-1.5 text-[10px] text-neutral-600">· full</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleApplyVoicePreview(preview)}
+                  className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10"
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteVoicePreview(preview.id)}
+                  className="shrink-0 rounded-lg p-1 text-neutral-600 transition-colors hover:text-neutral-400"
+                  aria-label="Delete preview"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preview scope</span>
+          <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-neutral-900 p-0.5">
+            <button
+              type="button"
+              onClick={() => setVoicePreviewScope('1_beat')}
+              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === '1_beat' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
+            >
+              1 beat
+            </button>
+            <button
+              type="button"
+              onClick={() => setVoicePreviewScope('full')}
+              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === 'full' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
+            >
+              Full
+            </button>
+          </div>
+        </div>
 
         <div className="grid grid-cols-3 gap-2">
           <button
