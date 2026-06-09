@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import {
   SOURCE_FIDELITY_OPTIONS,
@@ -9,9 +9,10 @@ import {
   STORY_THEME_OPTIONS,
   VISUAL_PRESET_OPTIONS,
 } from '@/lib/ai/story-config';
-import { AnimatePresence, motion } from 'motion/react';
+import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
-import { Coins, Info, Monitor, Smartphone, Volume2, X } from 'lucide-react';
+import InfoPopover from '@/components/ui/InfoPopover';
+import { Coins, Monitor, Smartphone, Volume2 } from 'lucide-react';
 import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
@@ -78,97 +79,6 @@ const SOURCE_FIDELITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = SOURCE_FIDELITY
   label: option.label,
 }));
 
-function InfoPopover({
-  title,
-  ariaLabel,
-  children,
-}: {
-  title: string;
-  ariaLabel: string;
-  children: ReactNode;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const panelId = useId();
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen]);
-
-  return (
-    <div ref={rootRef} className="relative inline-flex">
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-neutral-900/80 text-neutral-400 transition-colors hover:border-emerald-400/40 hover:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-controls={panelId}
-      >
-        <Info className="h-4 w-4" aria-hidden="true" />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <>
-            <motion.button
-              type="button"
-              aria-label={`Close ${title} details`}
-              className="fixed inset-0 z-[65] bg-black/40 sm:hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
-            />
-            <motion.div
-              id={panelId}
-              role="dialog"
-              aria-label={title}
-              initial={{ opacity: 0, y: 10, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.98 }}
-              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed inset-x-3 bottom-3 z-[70] max-h-[75vh] overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-4 text-left shadow-2xl shadow-black/50 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-medium text-neutral-100">{title}</p>
-                <button
-                  type="button"
-                  onClick={() => setIsOpen(false)}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200"
-                  aria-label={`Close ${title} details`}
-                >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-              <div className="mt-3 space-y-3 text-sm leading-relaxed text-neutral-400">
-                {children}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 interface AdvancedOptionsProps {
   language: StoryLanguage;

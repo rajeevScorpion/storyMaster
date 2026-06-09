@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import ReelCanvasPreview from './ReelCanvasPreview';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
@@ -4500,7 +4501,17 @@ function StoryScreenInner({
         )}
 
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preview scope</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preview scope</span>
+            <InfoPopover title="Full preview scope" ariaLabel="About full preview scope">
+              <p>
+                <strong className="text-neutral-200">Sample</strong> generates a short one-panel clip — fast and low cost. Use it to quickly audition a voice.
+              </p>
+              <p>
+                <strong className="text-neutral-200">Full</strong> covers all reel beats in one pass, giving you a complete sound check. After applying, tap <em>Generate all beats</em> to produce per-beat export narration with the exact same voice — no re-audition needed.
+              </p>
+            </InfoPopover>
+          </div>
           <div className="flex items-center gap-0.5 rounded-lg border border-white/10 bg-neutral-900 p-0.5">
             <button
               type="button"
@@ -4512,15 +4523,9 @@ function StoryScreenInner({
             <button
               type="button"
               onClick={() => setVoicePreviewScope('full')}
-              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === 'full' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
+              className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${voicePreviewScope === 'full' ? 'bg-white/10 text-neutral-100' : 'text-neutral-500 hover:text-neutral-400'}`}
             >
               Full
-              <span
-                title="Full preview covers all reel beats in one pass. Apply it, then use 'Generate all beats' to create per-beat export narration with the same voice — no re-audition needed."
-                onClick={(e) => e.stopPropagation()}
-              >
-                <Info className="h-2.5 w-2.5" />
-              </span>
             </button>
           </div>
         </div>
