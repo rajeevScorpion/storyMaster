@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useId, type ChangeEvent, type CSSProperties, type ReactNode } from 'react';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -16,6 +16,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import ReelCanvasPreview from './ReelCanvasPreview';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
@@ -50,7 +51,6 @@ import {
   REEL_CAPTION_BACKGROUND_BLUR_MIN,
   REEL_CAPTION_VERTICAL_OFFSET_MAX,
   REEL_CAPTION_VERTICAL_OFFSET_MIN,
-  REEL_TEXT_FONT_PRESETS,
   REEL_WORD_HIGHLIGHT_PADDING_X_MAX,
   REEL_WORD_HIGHLIGHT_PADDING_X_MIN,
   REEL_WORD_HIGHLIGHT_PADDING_Y_MAX,
@@ -59,6 +59,9 @@ import {
   REEL_WORD_HIGHLIGHT_RADIUS_MIN,
   REEL_WORD_HIGHLIGHT_WORD_SPACING_MAX,
   REEL_WORD_HIGHLIGHT_WORD_SPACING_MIN,
+  getDefaultReelTextFontFamilyForLanguage,
+  getReelTextFontPresetsForLanguage,
+  isReelTextFontFamilyCompatibleWithLanguage,
   normalizeReelTextOverlayStyle,
   reelColorWithOpacity,
   reelColorInputValue,
@@ -70,12 +73,15 @@ import {
   DEFAULT_REEL_TRANSITION_SETTINGS,
   REEL_TRANSITION_DURATION_MAX_MS,
   REEL_TRANSITION_DURATION_MIN_MS,
+  REEL_TRANSITION_PAUSE_MAX_MS,
+  REEL_TRANSITION_PAUSE_MIN_MS,
   REEL_TRANSITION_REGISTRY,
   REEL_TRANSITION_TYPES,
   normalizeReelTransitionSettings,
   reelTransitionSettingsKey,
   type ReelTransitionSettings,
 } from '@/lib/reel/transitions';
+import { REEL_PANEL_COUNT, hasCompleteCaptionEnding, splitTextIntoCompleteCaptionPanels } from '@/lib/reel/captions';
 import {
   blobToDataUrl,
   compressImageFile,
@@ -90,9 +96,12 @@ import {
 } from '@/lib/media/imageUploadOptimization';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import {
+  DEFAULT_REEL_NARRATION_ADMIN_SETTINGS,
   applyPresetToNarrationSettings,
+  getReelNarrationVoicesForGender,
   normalizeReelNarrationSettings,
   storyLanguageToNarrationLanguage,
+  type NarrationVoiceGender,
   type NarrationPreset,
   type ReelNarrationAdminSettings,
   type ReelNarrationSettings,
@@ -302,35 +311,109 @@ function isFallbackImageUrl(url: string | undefined): boolean {
   return url.startsWith('https://picsum.photos/seed/');
 }
 
-const REEL_PANEL_COUNT = 4;
+function ReelInfoPopover({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div ref={rootRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+        className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/10 bg-neutral-950 text-neutral-500 transition-colors hover:border-emerald-400/40 hover:text-emerald-300"
+        aria-label={`Show ${title} details`}
+        aria-expanded={isOpen}
+        aria-controls={panelId}
+      >
+        <Info className="h-3 w-3" aria-hidden="true" />
+      </button>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            id={panelId}
+            role="dialog"
+            aria-label={title}
+            initial={{ opacity: 0, y: 6, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.98 }}
+            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute left-0 top-full z-50 mt-2 w-64 rounded-2xl border border-white/10 bg-neutral-950 p-3 text-left text-xs leading-relaxed text-neutral-300 shadow-2xl shadow-black/50"
+          >
+            <div className="mb-1 font-sans text-[10px] uppercase tracking-[0.18em] text-emerald-300">
+              {title}
+            </div>
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function ReelFieldLabel({
+  children,
+  infoTitle,
+  info,
+}: {
+  children: ReactNode;
+  infoTitle?: string;
+  info?: ReactNode;
+}) {
+  return (
+    <span className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+      <span>{children}</span>
+      {infoTitle && info && (
+        <ReelInfoPopover title={infoTitle}>
+          {info}
+        </ReelInfoPopover>
+      )}
+    </span>
+  );
+}
 
 function splitReelTextIntoPanels(text: string): string[] {
-  const sentences = text
-    .replace(/\s+/g, ' ')
-    .split(/(?<=[.!?])\s+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  if (sentences.length >= REEL_PANEL_COUNT) {
-    return Array.from({ length: REEL_PANEL_COUNT }, (_, index) =>
-      index === REEL_PANEL_COUNT - 1
-        ? sentences.slice(index).join(' ')
-        : sentences[index]
-    );
-  }
-
-  const words = text.trim().split(/\s+/).filter(Boolean);
-  const chunkSize = Math.max(1, Math.ceil(words.length / REEL_PANEL_COUNT));
-  return Array.from({ length: REEL_PANEL_COUNT }, (_, index) =>
-    words.slice(index * chunkSize, (index + 1) * chunkSize).join(' ')
-  );
+  return splitTextIntoCompleteCaptionPanels(text, REEL_PANEL_COUNT);
 }
 
 function getReelPanelTexts(beat: Pick<StoryBeat, 'storyText' | 'reelCaptions'>): string[] {
   const fallback = splitReelTextIntoPanels(beat.storyText || '');
+  const savedCaptionTexts = Array.from({ length: REEL_PANEL_COUNT }, (_, index) => (
+    beat.reelCaptions?.find((item) => item.panelIndex === index)?.text?.trim() || ''
+  ));
+  const sentenceSafeSavedCaptions = savedCaptionTexts.some(Boolean)
+    ? splitTextIntoCompleteCaptionPanels(savedCaptionTexts.filter(Boolean).join(' '), REEL_PANEL_COUNT)
+    : [];
+
   return Array.from({ length: REEL_PANEL_COUNT }, (_, index) => {
-    const caption = beat.reelCaptions?.find((item) => item.panelIndex === index);
-    return caption?.text?.trim() || fallback[index] || '';
+    return sentenceSafeSavedCaptions[index]
+      || (hasCompleteCaptionEnding(savedCaptionTexts[index]) ? savedCaptionTexts[index] : '')
+      || fallback[index]
+      || '';
   });
 }
 
@@ -365,6 +448,7 @@ function reelNarrationSettingsKey(settings: ReelNarrationSettings | null | undef
     provider: normalized.provider,
     fallbackProvider: normalized.fallbackProvider,
     language: normalized.language,
+    voiceGender: normalized.voiceGender,
     voiceId: normalized.voiceId,
     model: normalized.model,
     presetId: normalized.presetId,
@@ -474,6 +558,7 @@ const REEL_EDITOR_DESTINATIONS: Array<{
 interface ReelCaptionStylePanelProps {
   textOverlayEnabled: boolean;
   normalizedStyle: ReelTextOverlayStyle;
+  storyLanguage: string;
   hasUnsavedStyle: boolean;
   isSavingStyle: boolean;
   saveState: 'idle' | 'saving' | 'saved' | 'error';
@@ -558,28 +643,30 @@ function ReelStyleSliderControl({
   onChange,
 }: ReelStyleSliderControlProps) {
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      <span className="w-10 shrink-0 font-sans text-[10px] uppercase tracking-wider text-neutral-500">
+    <div className="min-w-0 space-y-1.5">
+      <span className="block font-sans text-[10px] uppercase tracking-wider text-neutral-500">
         {label}
       </span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        aria-label={label}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="min-w-0 flex-1 accent-emerald-400"
-      />
-      <ReelStyleNumberInput
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        label={label}
-        onCommit={onChange}
-      />
+      <div className="flex min-w-0 items-center gap-2">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          aria-label={label}
+          onChange={(event) => onChange(Number(event.target.value))}
+          className="min-w-0 flex-1 accent-emerald-400"
+        />
+        <ReelStyleNumberInput
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          label={label}
+          onCommit={onChange}
+        />
+      </div>
     </div>
   );
 }
@@ -638,6 +725,33 @@ const REEL_COLOR_SWATCHES = [
   '#F59E0B',
   '#EF4444',
 ] as const;
+
+const REEL_NARRATION_GENDER_OPTIONS: Array<{ value: NarrationVoiceGender; label: string }> = [
+  { value: 'female', label: 'Female' },
+  { value: 'male', label: 'Male' },
+];
+
+const REEL_NARRATION_PACING_OPTIONS = [
+  { value: 'very_slow', label: 'Very slow' },
+  { value: 'slow', label: 'Slow' },
+  { value: 'gentle', label: 'Gentle' },
+  { value: 'steady', label: 'Steady' },
+  { value: 'dynamic', label: 'Dynamic' },
+];
+
+const REEL_NARRATION_PAUSE_OPTIONS = [
+  { value: 'short', label: 'Short' },
+  { value: 'natural', label: 'Natural' },
+  { value: 'long', label: 'Long' },
+];
+
+const REEL_NARRATION_LANGUAGE_OPTIONS = [
+  { value: 'en-IN', label: 'English' },
+  { value: 'hi-IN', label: 'Hindi' },
+  { value: 'bn-IN', label: 'Bangla' },
+  { value: 'ur-IN', label: 'Urdu' },
+  { value: 'gu-IN', label: 'Gujarati' },
+];
 
 interface ReelRgbChannelControlProps {
   label: string;
@@ -909,19 +1023,15 @@ function ReelStyleColorControl({
 
 interface ReelFontDropdownProps {
   value: string | undefined;
+  storyLanguage: string;
   onChange: (fontFamily: string) => void;
 }
 
-function ReelFontDropdown({ value, onChange }: ReelFontDropdownProps) {
+function ReelFontDropdown({ value, storyLanguage, onChange }: ReelFontDropdownProps) {
   const [open, setOpen] = useState(false);
-  const selected = REEL_TEXT_FONT_PRESETS.find((font) => font.value === value);
-  const selectedLabel = selected?.label ?? 'Custom';
-  const options = selected
-    ? REEL_TEXT_FONT_PRESETS
-    : [
-        { label: 'Custom', value: value ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily },
-        ...REEL_TEXT_FONT_PRESETS,
-      ];
+  const options = getReelTextFontPresetsForLanguage(storyLanguage);
+  const selected = options.find((font) => font.value === value) ?? options[0];
+  const selectedLabel = selected?.label ?? 'Font';
 
   return (
     <div
@@ -939,7 +1049,7 @@ function ReelFontDropdown({ value, onChange }: ReelFontDropdownProps) {
         aria-expanded={open}
         className="flex min-h-7 w-full items-center justify-between gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-left font-sans text-[11px] text-neutral-100 outline-none transition-colors hover:border-white/20 focus:border-emerald-400/50"
       >
-        <span className="min-w-0 truncate" style={{ fontFamily: value }}>
+        <span className="min-w-0 truncate" style={{ fontFamily: selected?.value ?? value }}>
           {selectedLabel}
         </span>
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-neutral-500 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -985,6 +1095,7 @@ function ReelFontDropdown({ value, onChange }: ReelFontDropdownProps) {
 interface ReelCaptionStyleControlsProps {
   textOverlayEnabled: boolean;
   normalizedStyle: ReelTextOverlayStyle;
+  storyLanguage: string;
   onEnabledChange: (enabled: boolean) => void;
   onChange: (patch: ReelTextOverlayStyle) => void;
 }
@@ -992,6 +1103,7 @@ interface ReelCaptionStyleControlsProps {
 function ReelCaptionStyleControls({
   textOverlayEnabled,
   normalizedStyle,
+  storyLanguage,
   onEnabledChange,
   onChange,
 }: ReelCaptionStyleControlsProps) {
@@ -1005,6 +1117,12 @@ function ReelCaptionStyleControls({
   const wordHighlightPaddingY = normalizedStyle.wordHighlightPaddingY ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightPaddingY;
   const wordHighlightBorderRadius = normalizedStyle.wordHighlightBorderRadius ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightBorderRadius;
   const wordHighlightWordSpacing = normalizedStyle.wordHighlightWordSpacing ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightWordSpacing;
+
+  useEffect(() => {
+    if (!isReelTextFontFamilyCompatibleWithLanguage(normalizedStyle.fontFamily, storyLanguage)) {
+      onChange({ fontFamily: getDefaultReelTextFontFamilyForLanguage(storyLanguage) });
+    }
+  }, [normalizedStyle.fontFamily, onChange, storyLanguage]);
 
   return (
     <div className="space-y-2.5">
@@ -1124,6 +1242,7 @@ function ReelCaptionStyleControls({
         </span>
         <ReelFontDropdown
           value={normalizedStyle.fontFamily}
+          storyLanguage={storyLanguage}
           onChange={(fontFamily) => onChange({ fontFamily })}
         />
       </div>
@@ -1173,6 +1292,7 @@ function ReelCaptionStyleControls({
 function ReelCaptionStylePanel({
   textOverlayEnabled,
   normalizedStyle,
+  storyLanguage,
   hasUnsavedStyle,
   isSavingStyle,
   saveState,
@@ -1217,6 +1337,7 @@ function ReelCaptionStylePanel({
         <ReelCaptionStyleControls
           textOverlayEnabled={textOverlayEnabled}
           normalizedStyle={normalizedStyle}
+          storyLanguage={storyLanguage}
           onEnabledChange={onEnabledChange}
           onChange={onChange}
         />
@@ -1311,7 +1432,7 @@ function ReelTransitionPanel({
                       const durationMs = type === 'fast-cut'
                         ? REEL_TRANSITION_REGISTRY[type].defaultDurationMs
                         : settings.durationMs;
-                      onChange(normalizeReelTransitionSettings({ type, durationMs }));
+                      onChange(normalizeReelTransitionSettings({ type, durationMs, pauseMs: settings.pauseMs }));
                       setDropdownOpen(false);
                     }}
                     className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
@@ -1333,6 +1454,15 @@ function ReelTransitionPanel({
             max={REEL_TRANSITION_DURATION_MAX_MS}
             step={50}
             onChange={(durationMs) => onChange(normalizeReelTransitionSettings({ ...settings, durationMs }))}
+          />
+
+          <ReelStyleSliderControl
+            label="Pause before transition (ms)"
+            value={settings.pauseMs}
+            min={REEL_TRANSITION_PAUSE_MIN_MS}
+            max={REEL_TRANSITION_PAUSE_MAX_MS}
+            step={50}
+            onChange={(pauseMs) => onChange(normalizeReelTransitionSettings({ ...settings, pauseMs }))}
           />
 
         {error && <p className="text-xs font-sans text-rose-300">{error}</p>}
@@ -2369,6 +2499,40 @@ function StoryScreenInner({
     () => normalizeReelTransitionSettings(reelTransitionDraft),
     [reelTransitionDraft]
   );
+  const effectiveReelNarrationAdminSettings = reelNarrationAdminSettings ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
+  const reelNarrationLanguageValue = storyLanguageToNarrationLanguage(session.storyConfig.language);
+  const reelNarrationLanguageOptions = useMemo(() => [
+    {
+      value: reelNarrationLanguageValue,
+      label: `Reel language (${session.storyConfig.language})`,
+    },
+    ...REEL_NARRATION_LANGUAGE_OPTIONS.filter((option) => option.value !== reelNarrationLanguageValue),
+  ], [reelNarrationLanguageValue, session.storyConfig.language]);
+  const selectedReelVoiceGender = reelNarrationDraft.voiceGender;
+  const reelGenderVoiceList = useMemo(
+    () => getReelNarrationVoicesForGender(effectiveReelNarrationAdminSettings, selectedReelVoiceGender),
+    [effectiveReelNarrationAdminSettings, selectedReelVoiceGender]
+  );
+  const allReelVoiceOptions = effectiveReelNarrationAdminSettings.allowedElevenLabsVoices;
+  const selectedReelVoice = allReelVoiceOptions.find((voice) => voice.voiceId === reelNarrationDraft.voiceId)
+    ?? reelGenderVoiceList.find((voice) => voice.voiceId === reelNarrationDraft.voiceId)
+    ?? { voiceId: reelNarrationDraft.voiceId, label: reelNarrationDraft.voiceId };
+  const reelVoiceDropdownOptions = useMemo(() => {
+    const currentVoiceIsVisible = reelGenderVoiceList.some((voice) => voice.voiceId === reelNarrationDraft.voiceId);
+    const options = reelGenderVoiceList.map((voice) => ({
+      value: voice.voiceId,
+      label: voice.label,
+    }));
+    return currentVoiceIsVisible || !reelNarrationDraft.voiceId
+      ? options
+      : [{ value: reelNarrationDraft.voiceId, label: selectedReelVoice.label }, ...options];
+  }, [reelGenderVoiceList, reelNarrationDraft.voiceId, selectedReelVoice.label]);
+  const reelPresetDropdownOptions = useMemo(() => [
+    { value: '', label: 'Custom' },
+    ...narrationPresets.map((preset) => ({ value: preset.id, label: preset.name })),
+  ], [narrationPresets]);
+  const selectedReelPreset = narrationPresets.find((preset) => preset.id === reelNarrationDraft.presetId);
+  const selectedReelPresetIsUser = selectedReelPreset?.presetScope === 'user';
   const hasReelAudio = Boolean(
     normalizedCurrentBeat.audioUrl
     || normalizedCurrentBeat.audioStatus === 'ready'
@@ -2784,6 +2948,21 @@ function StoryScreenInner({
     setReelNarrationMessage(null);
   }, [reelNarrationAdminSettings, session.storyConfig.language]);
 
+  const handleReelVoiceGenderChange = useCallback((voiceGender: NarrationVoiceGender) => {
+    const voices = getReelNarrationVoicesForGender(effectiveReelNarrationAdminSettings, voiceGender);
+    const currentVoiceFitsGender = voices.some((voice) => voice.voiceId === reelNarrationDraft.voiceId);
+    updateReelNarrationDraft({
+      voiceGender,
+      voiceId: currentVoiceFitsGender
+        ? reelNarrationDraft.voiceId
+        : voices[0]?.voiceId ?? reelNarrationDraft.voiceId,
+    });
+  }, [
+    effectiveReelNarrationAdminSettings,
+    reelNarrationDraft.voiceId,
+    updateReelNarrationDraft,
+  ]);
+
   const handleCancelReelNarrationSettings = useCallback(() => {
     setReelNarrationDraft(savedReelNarrationSettings);
     setReelNarrationSaveState('idle');
@@ -2815,6 +2994,7 @@ function StoryScreenInner({
         text: normalizedCurrentBeat.storyText,
         settings: reelNarrationDraft,
         storyLanguage: session.storyConfig.language,
+        panelPauseMs: normalizedReelTransitionDraft.pauseMs,
       });
       setReelNarrationDraft(result.settings);
       const audio = new Audio(result.audioUrl);
@@ -2825,7 +3005,13 @@ function StoryScreenInner({
     } finally {
       setIsPreviewingReelNarration(false);
     }
-  }, [isPreviewingReelNarration, normalizedCurrentBeat.storyText, reelNarrationDraft, session.storyConfig.language]);
+  }, [
+    isPreviewingReelNarration,
+    normalizedCurrentBeat.storyText,
+    normalizedReelTransitionDraft.pauseMs,
+    reelNarrationDraft,
+    session.storyConfig.language,
+  ]);
 
   const handleSaveReelNarrationSettings = useCallback(async () => {
     if (!isReelStory || !hasUnsavedReelNarrationSettings || isReelNarrationSaving) return;
@@ -3792,6 +3978,7 @@ function StoryScreenInner({
       <ReelCaptionStylePanel
         textOverlayEnabled={reelOverlayEnabledDraft}
         normalizedStyle={normalizedReelOverlayDraft}
+        storyLanguage={session.storyConfig.language}
         hasUnsavedStyle={hasUnsavedReelOverlayStyle}
         isSavingStyle={isReelStyleSaving}
         saveState={reelStyleSaveState}
@@ -3834,55 +4021,122 @@ function StoryScreenInner({
           </button>
         </div>
 
-        <div className="grid gap-3">
-          <label className="space-y-1">
-            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Language</span>
-            <select
+        <div className="grid gap-4">
+          <label className="space-y-1.5">
+            <ReelFieldLabel>Language</ReelFieldLabel>
+            <FilterDropdown
               value={reelNarrationDraft.language}
-              onChange={(event) => updateReelNarrationDraft({
-                language: event.target.value,
+              options={reelNarrationLanguageOptions}
+              onChange={(value) => updateReelNarrationDraft({
+                language: value,
                 languageSource: 'user_selected',
               })}
-              className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
-            >
-              <option value={storyLanguageToNarrationLanguage(session.storyConfig.language)}>
-                Reel language ({session.storyConfig.language})
-              </option>
-              <option value="en-IN">English</option>
-              <option value="hi-IN">Hindi</option>
-              <option value="ur-PK">Urdu</option>
-            </select>
+              fullWidth
+              size="form"
+              ariaLabel="Reel narration language"
+            />
           </label>
 
-          <label className="space-y-1">
-            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice</span>
-            <select
+          <div className="space-y-2">
+            <ReelFieldLabel>Voice type</ReelFieldLabel>
+            <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-neutral-900 p-1">
+              {REEL_NARRATION_GENDER_OPTIONS.map((option) => {
+                const isSelected = selectedReelVoiceGender === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => handleReelVoiceGenderChange(option.value)}
+                    className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                      isSelected
+                        ? 'bg-emerald-500 text-neutral-950'
+                        : 'text-neutral-300 hover:bg-white/10 hover:text-white'
+                    }`}
+                    aria-pressed={isSelected}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <label className="space-y-1.5">
+            <ReelFieldLabel>Voice</ReelFieldLabel>
+            <FilterDropdown
               value={reelNarrationDraft.voiceId}
-              onChange={(event) => updateReelNarrationDraft({ voiceId: event.target.value })}
-              className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
-            >
-              {(reelNarrationAdminSettings?.allowedElevenLabsVoices ?? []).map((voice) => (
-                <option key={voice.voiceId} value={voice.voiceId}>{voice.label}</option>
-              ))}
-              {!reelNarrationAdminSettings?.allowedElevenLabsVoices.some((voice) => voice.voiceId === reelNarrationDraft.voiceId) && (
-                <option value={reelNarrationDraft.voiceId}>{reelNarrationDraft.voiceId}</option>
-              )}
-            </select>
+              options={reelVoiceDropdownOptions}
+              onChange={(value) => updateReelNarrationDraft({ voiceId: value })}
+              fullWidth
+              size="form"
+              ariaLabel="Reel narration voice"
+            />
+            {selectedReelVoice.description && (
+              <span className="block text-xs leading-relaxed text-neutral-500">
+                {selectedReelVoice.description}
+              </span>
+            )}
           </label>
 
-          <label className="space-y-1">
-            <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preset</span>
-            <select
-              value={reelNarrationDraft.presetId || ''}
-              onChange={(event) => handleReelNarrationPresetChange(event.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/40"
-            >
-              <option value="">Custom</option>
-              {narrationPresets.map((preset) => (
-                <option key={preset.id} value={preset.id}>{preset.name}</option>
-              ))}
-            </select>
-          </label>
+          <div className="space-y-2 rounded-xl border border-white/10 bg-neutral-900/60 p-3">
+            <label className="space-y-1.5">
+              <ReelFieldLabel>Preset</ReelFieldLabel>
+              <FilterDropdown
+                value={reelNarrationDraft.presetId || ''}
+                options={reelPresetDropdownOptions}
+                onChange={handleReelNarrationPresetChange}
+                fullWidth
+                size="form"
+                ariaLabel="Reel narration preset"
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void handleSaveReelNarrationPreset()}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10"
+              >
+                <Save className="h-4 w-4" />
+                Save preset
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDuplicateReelNarrationPreset()}
+                disabled={!reelNarrationDraft.presetId}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Copy className="h-4 w-4" />
+                Duplicate
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleUpdateReelNarrationPreset()}
+                disabled={!selectedReelPresetIsUser}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                Update
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSetDefaultReelNarrationPreset()}
+                disabled={!selectedReelPresetIsUser || selectedReelPreset?.isDefault}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check className="h-4 w-4" />
+                Set default
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteReelNarrationPreset()}
+                disabled={!selectedReelPresetIsUser}
+                className="col-span-2 inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete preset
+              </button>
+            </div>
+          </div>
 
           <label className="space-y-1">
             <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
@@ -3920,7 +4174,12 @@ function StoryScreenInner({
         {reelNarrationAdvancedOpen && (
           <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/70 p-3">
             <label className="space-y-1">
-              <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Model</span>
+              <ReelFieldLabel
+                infoTitle="Model"
+                info="The ElevenLabs model used for final narration. Keep the admin default unless you are testing a newer voice engine."
+              >
+                Model
+              </ReelFieldLabel>
               <input
                 value={reelNarrationDraft.model}
                 onChange={(event) => updateReelNarrationDraft({ model: event.target.value })}
@@ -3929,13 +4188,33 @@ function StoryScreenInner({
             </label>
             <div className="grid gap-3">
               {[
-                ['Stability', 'stability', reelNarrationDraft.stability],
-                ['Clarity', 'similarityBoost', reelNarrationDraft.similarityBoost],
-                ['Style', 'style', reelNarrationDraft.style],
-              ].map(([label, key, value]) => (
+                {
+                  label: 'Stability',
+                  key: 'stability',
+                  value: reelNarrationDraft.stability,
+                  info: 'Higher stability keeps the voice more consistent. Lower stability allows more variation and emotion.',
+                },
+                {
+                  label: 'Clarity',
+                  key: 'similarityBoost',
+                  value: reelNarrationDraft.similarityBoost,
+                  info: 'Higher clarity keeps the voice closer to the selected speaker and can make words sharper.',
+                },
+                {
+                  label: 'Style',
+                  key: 'style',
+                  value: reelNarrationDraft.style,
+                  info: 'Adds more performance style from the voice. Too much can sound dramatic or less predictable.',
+                },
+              ].map(({ label, key, value, info }) => (
                 <label key={key} className="space-y-1">
                   <span className="flex items-center justify-between text-[11px] uppercase tracking-[0.16em] text-neutral-500">
-                    <span>{label}</span>
+                    <span className="flex items-center gap-2">
+                      <span>{label}</span>
+                      <ReelInfoPopover title={label}>
+                        {info}
+                      </ReelInfoPopover>
+                    </span>
                     <span>{Math.round(Number(value) * 100)}%</span>
                   </span>
                   <input
@@ -3952,7 +4231,12 @@ function StoryScreenInner({
             </div>
             <div className="grid gap-2">
               <label className="flex items-center justify-between rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200">
-                <span>Speaker boost</span>
+                <span className="flex items-center gap-2">
+                  <span>Speaker boost</span>
+                  <ReelInfoPopover title="Speaker boost">
+                    Makes the chosen voice sound fuller and more present. It is useful for reels where narration must cut through music.
+                  </ReelInfoPopover>
+                </span>
                 <input
                   type="checkbox"
                   checked={reelNarrationDraft.speakerBoost}
@@ -3961,7 +4245,12 @@ function StoryScreenInner({
                 />
               </label>
               <label className="flex items-center justify-between rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200">
-                <span>Expressive tags</span>
+                <span className="flex items-center gap-2">
+                  <span>Expressive tags</span>
+                  <ReelInfoPopover title="Expressive tags">
+                    Lets supported ElevenLabs models read hints like warm, softly, or pause to shape the delivery.
+                  </ReelInfoPopover>
+                </span>
                 <input
                   type="checkbox"
                   checked={reelNarrationDraft.useExpressiveTags}
@@ -3971,7 +4260,12 @@ function StoryScreenInner({
                 />
               </label>
               <label className="flex items-center justify-between rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-200">
-                <span>Pronunciation dictionary</span>
+                <span className="flex items-center gap-2">
+                  <span>Pronunciation dictionary</span>
+                  <ReelInfoPopover title="Pronunciation dictionary">
+                    Uses admin-approved pronunciation rules for names, brand words, and difficult terms.
+                  </ReelInfoPopover>
+                </span>
                 <input
                   type="checkbox"
                   checked={reelNarrationDraft.usePronunciationDictionary}
@@ -3983,34 +4277,45 @@ function StoryScreenInner({
             </div>
             <div className="grid grid-cols-2 gap-2">
               <label className="space-y-1">
-                <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Pacing</span>
-                <select
-                  value={reelNarrationDraft.pacing}
-                  onChange={(event) => updateReelNarrationDraft({ pacing: event.target.value })}
-                  className="w-full rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+                <ReelFieldLabel
+                  infoTitle="Pacing"
+                  info="Controls how quickly the narration moves through the text. Slower pacing leaves more room for feeling."
                 >
-                  <option value="very_slow">Very slow</option>
-                  <option value="slow">Slow</option>
-                  <option value="gentle">Gentle</option>
-                  <option value="steady">Steady</option>
-                  <option value="dynamic">Dynamic</option>
-                </select>
+                  Pacing
+                </ReelFieldLabel>
+                <FilterDropdown
+                  value={reelNarrationDraft.pacing}
+                  options={REEL_NARRATION_PACING_OPTIONS}
+                  onChange={(value) => updateReelNarrationDraft({ pacing: value })}
+                  fullWidth
+                  size="compact"
+                  ariaLabel="Reel narration pacing"
+                />
               </label>
               <label className="space-y-1">
-                <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Pause</span>
-                <select
-                  value={reelNarrationDraft.pauseStyle}
-                  onChange={(event) => updateReelNarrationDraft({ pauseStyle: event.target.value })}
-                  className="w-full rounded-xl border border-white/10 bg-neutral-950 px-3 py-2 text-sm text-neutral-100"
+                <ReelFieldLabel
+                  infoTitle="Pause"
+                  info="Controls pauses inside the spoken line. Panel-to-panel silence is controlled in Transitions."
                 >
-                  <option value="short">Short</option>
-                  <option value="natural">Natural</option>
-                  <option value="long">Long</option>
-                </select>
+                  Pause
+                </ReelFieldLabel>
+                <FilterDropdown
+                  value={reelNarrationDraft.pauseStyle}
+                  options={REEL_NARRATION_PAUSE_OPTIONS}
+                  onChange={(value) => updateReelNarrationDraft({ pauseStyle: value })}
+                  fullWidth
+                  size="compact"
+                  ariaLabel="Reel narration pause style"
+                />
               </label>
             </div>
             <label className="space-y-1">
-              <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Direction</span>
+              <ReelFieldLabel
+                infoTitle="Direction"
+                info="Extra instruction for the narrator, such as gentle documentary, urgent reel hook, or calm bedtime tone."
+              >
+                Direction
+              </ReelFieldLabel>
               <textarea
                 value={reelNarrationDraft.narrationInstruction}
                 onChange={(event) => updateReelNarrationDraft({ narrationInstruction: event.target.value })}
@@ -4050,53 +4355,6 @@ function StoryScreenInner({
             className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Cancel
-          </button>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void handleSaveReelNarrationPreset()}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10"
-          >
-            <Save className="h-4 w-4" />
-            Save preset
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleDuplicateReelNarrationPreset()}
-            disabled={!reelNarrationDraft.presetId}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Copy className="h-4 w-4" />
-            Duplicate
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleUpdateReelNarrationPreset()}
-            disabled={!narrationPresets.some((preset) => preset.id === reelNarrationDraft.presetId && preset.presetScope === 'user')}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <RefreshCcw className="h-4 w-4" />
-            Update preset
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSetDefaultReelNarrationPreset()}
-            disabled={!narrationPresets.some((preset) => preset.id === reelNarrationDraft.presetId && preset.presetScope === 'user' && !preset.isDefault)}
-            className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Check className="h-4 w-4" />
-            Set default
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleDeleteReelNarrationPreset()}
-            disabled={!narrationPresets.some((preset) => preset.id === reelNarrationDraft.presetId && preset.presetScope === 'user')}
-            className="inline-flex items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Trash2 className="h-4 w-4" />
-            Delete
           </button>
         </div>
 
@@ -4937,6 +5195,7 @@ function StoryScreenInner({
                           <ReelCaptionStyleControls
                             textOverlayEnabled={reelOverlayEnabledDraft}
                             normalizedStyle={normalizedReelOverlayDraft}
+                            storyLanguage={session.storyConfig.language}
                             onEnabledChange={updateReelOverlayEnabledDraft}
                             onChange={updateReelOverlayDraft}
                           />

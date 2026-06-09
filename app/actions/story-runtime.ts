@@ -17,6 +17,7 @@ import {
   getSeedPlan,
   getSeedSourceText,
   normalizeStoryConfig,
+  REEL_LANGUAGE_OPTIONS,
 } from '@/lib/ai/story-config';
 import {
   getDefaultPromptBody,
@@ -48,6 +49,11 @@ import {
   type ReelStorySettings,
   type ReelTextLengthWordRange,
 } from '@/lib/reel/settings';
+import {
+  ensureCompleteCaptionSentence,
+  hasCompleteCaptionEnding,
+  splitTextIntoCompleteCaptionPanels,
+} from '@/lib/reel/captions';
 import type { ReelVisualStyleRuntime } from '@/lib/reel/styles';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
@@ -492,12 +498,18 @@ function formatWordRange(range: ReelTextLengthWordRange): string {
   return `${range.min}-${range.max}`;
 }
 
+function formatStoryLanguageLabel(language: string | null | undefined): string {
+  return REEL_LANGUAGE_OPTIONS.find((option) => option.value === language)?.label ?? 'English';
+}
+
 export async function distributeReelTextAction(input: {
   text: string;
   beatCount: 1 | 2 | 3;
+  language?: StoryConfig['language'];
   wordsPerPanel?: Partial<ReelTextLengthWordRange>;
 }): Promise<{ panelTexts: string[][]; imagePrompts: string[] }> {
   const { text, beatCount } = input;
+  const languageLabel = formatStoryLanguageLabel(input.language);
   const panelCount = beatCount * 4;
   const wordsPerPanel = normalizeReelPanelWordRange(
     input.wordsPerPanel,
@@ -505,7 +517,11 @@ export async function distributeReelTextAction(input: {
   );
   const prompt = [
     'You are a short-form reel content editor. Distribute the user\'s story text into exactly ' + panelCount + ' short captions — one per image panel — preserving the narrative arc.',
-    `Rules for each caption: target ${formatWordRange(wordsPerPanel)} words, maximum ${wordsPerPanel.max} words, complete thought, no sentence fragments ending mid-idea.`,
+    `Write all panel captions in ${languageLabel}. Preserve names, places, and key meaning from the user text.`,
+    `Rules for each caption: target ${formatWordRange(wordsPerPanel)} words, maximum ${wordsPerPanel.max} words.`,
+    'Every panel caption must be one or more complete sentences. Never split one sentence across two panels.',
+    'If the source sentence is long, rewrite or summarize it into shorter complete sentences instead of cutting it mid-sentence.',
+    'End every caption with sentence-final punctuation appropriate to the selected language.',
     'Also write one brief visual scene description per beat (max 40 words), suitable as an AI image generation prompt, describing the setting/mood without referencing text or captions.',
     '',
     'Return ONLY valid JSON with this exact shape (no markdown, no explanation):',
@@ -550,7 +566,15 @@ export async function distributeReelTextAction(input: {
   while (imagePrompts.length < beatCount) imagePrompts.push('');
 
   return {
-    panelTexts: panels.slice(0, beatCount),
+    panelTexts: panels.slice(0, beatCount).map((beatPanels) => {
+      const sentenceSafePanels = splitTextIntoCompleteCaptionPanels(beatPanels.join(' '), 4);
+      return Array.from({ length: 4 }, (_, index) => (
+        sentenceSafePanels[index]
+        || (hasCompleteCaptionEnding(beatPanels[index] || '')
+          ? ensureCompleteCaptionSentence(beatPanels[index] || '')
+          : '')
+      ));
+    }),
     imagePrompts: imagePrompts.slice(0, beatCount),
   };
 }
@@ -575,7 +599,7 @@ export async function generateReelDraft(
       title: `Beat ${index + 1}`,
       beatNumber: index + 1,
       isEnding: index + 1 === beatCount,
-      storyText: (panelTexts[index] ?? []).join(' '),
+      storyText: ensureCompleteCaptionSentence((panelTexts[index] ?? []).join(' ')),
       sceneSummary: imagePrompts[index] ?? '',
       options: [],
       characters: [],
@@ -590,6 +614,7 @@ export async function generateReelDraft(
   }
 
   const lang = normalizedConfig.language || 'english';
+  const languageLabel = formatStoryLanguageLabel(lang);
   const reelSettings = normalizeReelStorySettings(modelOverrides?.reelSettings ?? DEFAULT_REEL_STORY_SETTINGS);
   const dbMoodsForDraft = await getPublishedReelMoodsForRuntime().catch(() => []);
   const dbMoodForDraft = dbMoodsForDraft.find((m) => m.slug === normalizedConfig.reel.moodKey);
@@ -609,7 +634,7 @@ export async function generateReelDraft(
     : getDefaultPromptBody('reel_story_generation');
 
   const resolvedPrompt = resolvePromptTemplate(template, {
-    language: lang,
+    language: languageLabel,
     userPrompt,
     reelBeatCount: beatCount,
     reelPanelCount,
@@ -624,6 +649,7 @@ export async function generateReelDraft(
   });
   const prompt = [
     `Critical reel text budget: "${normalizedConfig.reel.textLength}" means ${textLengthWordRangePerPanel} words per visual panel. Each beat will be split into ${reelPanelCount} panels, so every beat.storyText must be about ${textLengthWordRangePerBeat} words total. Do not collapse a beat into a single short line unless that total word budget permits it.`,
+    `Critical sentence rule: every visual panel must receive complete sentences only. Write each beat.storyText as sentence-complete units in ${languageLabel}; never rely on splitting one sentence across panels. If a thought is long, rewrite it into shorter complete sentences with language-appropriate sentence-final punctuation.`,
     resolvedPrompt,
   ].join('\n\n');
 
@@ -657,7 +683,7 @@ export async function generateReelDraft(
       title: (draft?.title || `Beat ${beatNumber}`).trim(),
       beatNumber,
       isEnding: beatNumber === beatCount,
-      storyText: (draft?.storyText || '').trim(),
+      storyText: ensureCompleteCaptionSentence(draft?.storyText || ''),
       sceneSummary: (draft?.sceneSummary || '').trim(),
       options: [],
       characters: [],
@@ -1024,9 +1050,13 @@ export function buildReelPanelCaptions(
     : undefined;
 
   if (userPanelTexts && userPanelTexts.length >= 4) {
-    return userPanelTexts.slice(0, 4).map((text, panelIndex) => ({
+    const sentenceSafePanels = splitTextIntoCompleteCaptionPanels(userPanelTexts.join(' '), 4);
+    return Array.from({ length: 4 }, (_, panelIndex) => ({
       panelIndex,
-      text: cleanCaptionText(text),
+      text: ensureCompleteCaptionSentence(
+        sentenceSafePanels[panelIndex]
+        || (hasCompleteCaptionEnding(userPanelTexts[panelIndex] || '') ? userPanelTexts[panelIndex] : '')
+      ),
     }));
   }
 
@@ -1036,39 +1066,12 @@ export function buildReelPanelCaptions(
     plan.bottomLeft.description,
     plan.bottomRight.description,
   ];
-  const storyChunks = splitCaptionText(beat.storyText, 4);
+  const storyChunks = splitTextIntoCompleteCaptionPanels(beat.storyText, 4);
 
   return frameDescriptions.map((description, panelIndex) => ({
     panelIndex,
-    text: cleanCaptionText(storyChunks[panelIndex] || description || beat.sceneSummary || beat.title),
+    text: ensureCompleteCaptionSentence(storyChunks[panelIndex] || description || beat.sceneSummary || beat.title),
   }));
-}
-
-function splitCaptionText(value: string, count: number): string[] {
-  const sentences = value
-    .replace(/\s+/g, ' ')
-    .split(/(?<=[.!?])\s+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-
-  if (sentences.length >= count) {
-    return sentences.slice(0, count - 1)
-      .concat(sentences.slice(count - 1).join(' '));
-  }
-
-  const words = value.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [];
-  const idealChunkSize = Math.max(1, Math.ceil(words.length / count));
-  const chunks: string[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const chunk = words.slice(index * idealChunkSize, (index + 1) * idealChunkSize).join(' ');
-    if (chunk) chunks.push(chunk);
-  }
-  return chunks;
-}
-
-function cleanCaptionText(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
 }
 
 export function buildFinalStoryboardImagePrompt(

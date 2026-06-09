@@ -61,13 +61,21 @@ export interface ReelVisualStyleRuntime {
 }
 
 export const REEL_TEXT_FONT_PRESETS = [
-  { label: 'Inter', value: 'var(--font-sans), Inter, system-ui, sans-serif' },
-  { label: 'Playfair', value: 'var(--font-serif), Georgia, Cambria, serif' },
-  { label: 'Bebas', value: 'var(--font-reel-bebas), Impact, sans-serif' },
-  { label: 'Oswald', value: 'var(--font-reel-oswald), Arial Narrow, sans-serif' },
-  { label: 'Montserrat', value: 'var(--font-reel-montserrat), Arial, sans-serif' },
-  { label: 'Poppins', value: 'var(--font-reel-poppins), Arial, sans-serif' },
-  { label: 'Lora', value: 'var(--font-reel-lora), Georgia, serif' },
+  { label: 'Inter', value: 'var(--font-sans), Inter, system-ui, sans-serif', languages: ['english'] },
+  { label: 'Playfair', value: 'var(--font-serif), Georgia, Cambria, serif', languages: ['english'] },
+  { label: 'Bebas', value: 'var(--font-reel-bebas), Impact, sans-serif', languages: ['english'] },
+  { label: 'Oswald', value: 'var(--font-reel-oswald), Arial Narrow, sans-serif', languages: ['english'] },
+  { label: 'Montserrat', value: 'var(--font-reel-montserrat), Arial, sans-serif', languages: ['english'] },
+  { label: 'Poppins', value: 'var(--font-reel-poppins), Arial, sans-serif', languages: ['english'] },
+  { label: 'Lora', value: 'var(--font-reel-lora), Georgia, serif', languages: ['english'] },
+  { label: 'Noto Sans Devanagari', value: 'var(--font-reel-noto-sans-devanagari), Noto Sans Devanagari, sans-serif', languages: ['hindi'] },
+  { label: 'Noto Serif Devanagari', value: 'var(--font-reel-noto-serif-devanagari), Noto Serif Devanagari, serif', languages: ['hindi'] },
+  { label: 'Noto Sans Bengali', value: 'var(--font-reel-noto-sans-bengali), Noto Sans Bengali, sans-serif', languages: ['bangla'] },
+  { label: 'Noto Serif Bengali', value: 'var(--font-reel-noto-serif-bengali), Noto Serif Bengali, serif', languages: ['bangla'] },
+  { label: 'Noto Nastaliq Urdu', value: 'var(--font-reel-noto-nastaliq-urdu), Noto Nastaliq Urdu, serif', languages: ['urdu'] },
+  { label: 'Noto Sans Arabic', value: 'var(--font-reel-noto-sans-arabic), Noto Sans Arabic, sans-serif', languages: ['urdu'] },
+  { label: 'Noto Sans Gujarati', value: 'var(--font-reel-noto-sans-gujarati), Noto Sans Gujarati, sans-serif', languages: ['gujarati'] },
+  { label: 'Noto Serif Gujarati', value: 'var(--font-reel-noto-serif-gujarati), Noto Serif Gujarati, serif', languages: ['gujarati'] },
 ] as const;
 
 export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
@@ -91,6 +99,32 @@ export const DEFAULT_REEL_TEXT_OVERLAY_STYLE: Required<ReelTextOverlayStyle> = {
   wordHighlightBorderRadius: 4,
   wordHighlightWordSpacing: 4,
 };
+
+const REEL_TEXT_FONT_LANGUAGE_FALLBACK = 'english';
+
+function normalizeReelTextFontLanguage(language: string | null | undefined): string {
+  return REEL_TEXT_FONT_PRESETS.some((font) => font.languages.includes(language as never))
+    ? String(language)
+    : REEL_TEXT_FONT_LANGUAGE_FALLBACK;
+}
+
+export function getReelTextFontPresetsForLanguage(language: string | null | undefined) {
+  const normalizedLanguage = normalizeReelTextFontLanguage(language);
+  const fonts = REEL_TEXT_FONT_PRESETS.filter((font) => font.languages.includes(normalizedLanguage as never));
+  return fonts.length > 0 ? fonts : REEL_TEXT_FONT_PRESETS.filter((font) => font.languages.includes(REEL_TEXT_FONT_LANGUAGE_FALLBACK as never));
+}
+
+export function getDefaultReelTextFontFamilyForLanguage(language: string | null | undefined): string {
+  return getReelTextFontPresetsForLanguage(language)[0]?.value ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily;
+}
+
+export function isReelTextFontFamilyCompatibleWithLanguage(
+  fontFamily: string | null | undefined,
+  language: string | null | undefined
+): boolean {
+  if (!fontFamily) return false;
+  return getReelTextFontPresetsForLanguage(language).some((font) => font.value === fontFamily);
+}
 
 export const REEL_CAPTION_VERTICAL_OFFSET_MIN = -30;
 export const REEL_CAPTION_VERTICAL_OFFSET_MAX = 30;

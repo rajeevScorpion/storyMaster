@@ -74,8 +74,8 @@ export interface ReelStorySetupSettings {
 }
 
 export const DEFAULT_REEL_STORY_SETTINGS: ReelStorySettings = {
-  defaultLength: 'medium',
-  defaultBeatCount: 2,
+  defaultLength: 'short',
+  defaultBeatCount: 1,
   defaultTextLength: 'medium',
   textOverlayDefault: true,
   defaultMood: 'playful',
@@ -217,7 +217,7 @@ export function normalizeReelStorySettings(input: unknown): ReelStorySettings {
   const defaultLength = normalizeReelLength(raw.defaultLength);
   const defaultBeatCount = normalizeBeatCount(
     raw.defaultBeatCount,
-    getReelLengthBeatCount(defaultLength) as 1 | 2 | 3
+    DEFAULT_REEL_STORY_SETTINGS.defaultBeatCount
   );
   const defaultMood = moods.some((item) => item.key === raw.defaultMood)
     ? raw.defaultMood as string

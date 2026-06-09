@@ -6,6 +6,7 @@ export type NarrationPresetScope = 'system' | 'user';
 export type NarrationPresetVisibility = 'private' | 'public';
 export type NarrationLanguageMode = 'reel_language' | 'auto' | 'custom';
 export type NarrationGenerationMode = 'preview' | 'final';
+export type NarrationVoiceGender = 'female' | 'male';
 
 export interface NarrationVoiceOption {
   voiceId: string;
@@ -25,6 +26,8 @@ export interface ReelNarrationAdminSettings {
   enabledSystemPresetIds: string[];
   defaultVoiceId: string;
   allowedElevenLabsVoices: NarrationVoiceOption[];
+  femaleElevenLabsVoices: NarrationVoiceOption[];
+  maleElevenLabsVoices: NarrationVoiceOption[];
   defaultElevenLabsModel: string;
   previewElevenLabsModel: string;
   finalElevenLabsModel: string;
@@ -42,6 +45,7 @@ export interface ReelNarrationSettings {
   languageSource: 'reel_language' | 'user_selected' | 'auto_detected';
   detectedLanguage: string | null;
   isMixedLanguage: boolean;
+  voiceGender: NarrationVoiceGender;
   voiceId: string;
   model: string;
   presetId: string | null;
@@ -374,6 +378,52 @@ export const SYSTEM_NARRATION_PRESETS: NarrationPreset[] = [
   }),
 ];
 
+export const RECOMMENDED_REEL_FEMALE_VOICES: NarrationVoiceOption[] = [
+  {
+    voiceId: 'EXAVITQu4vr4xnSDxMaL',
+    label: 'Sarah',
+    description: 'Mature, reassuring, warm narrator',
+  },
+  {
+    voiceId: 'FGY2WhTYpPnrIDTdsKH5',
+    label: 'Laura',
+    description: 'Bright, energetic, social reels',
+  },
+  {
+    voiceId: 'Xb7hH8MSUJpSbSDYk0k2',
+    label: 'Alice',
+    description: 'Clear, friendly educator',
+  },
+  {
+    voiceId: 'XrExE9yKIg1WjnnlVkGX',
+    label: 'Matilda',
+    description: 'Professional, calm alto narrator',
+  },
+];
+
+export const RECOMMENDED_REEL_MALE_VOICES: NarrationVoiceOption[] = [
+  {
+    voiceId: 'JBFqnCBsd6RMkjVDRZzb',
+    label: 'George',
+    description: 'Warm, captivating storyteller',
+  },
+  {
+    voiceId: 'nPczCjzI2devNBz1zQrb',
+    label: 'Brian',
+    description: 'Deep, resonant, comforting',
+  },
+  {
+    voiceId: 'cjVigY5qzO86Huf0OWal',
+    label: 'Eric',
+    description: 'Smooth, trustworthy tenor',
+  },
+  {
+    voiceId: 'pqHfZKP75CvOlQylNhV4',
+    label: 'Bill',
+    description: 'Wise, mature, balanced narrator',
+  },
+];
+
 export const DEFAULT_REEL_NARRATION_ADMIN_SETTINGS: ReelNarrationAdminSettings = {
   defaultProvider: 'elevenlabs',
   fallbackProvider: 'gemini_tts',
@@ -381,12 +431,11 @@ export const DEFAULT_REEL_NARRATION_ADMIN_SETTINGS: ReelNarrationAdminSettings =
   enabledSystemPresetIds: SYSTEM_NARRATION_PRESETS.map((preset) => preset.id),
   defaultVoiceId: 'EXAVITQu4vr4xnSDxMaL',
   allowedElevenLabsVoices: [
-    {
-      voiceId: 'EXAVITQu4vr4xnSDxMaL',
-      label: 'Bella',
-      description: 'Soft, warm default ElevenLabs voice',
-    },
+    ...RECOMMENDED_REEL_FEMALE_VOICES,
+    ...RECOMMENDED_REEL_MALE_VOICES,
   ],
+  femaleElevenLabsVoices: RECOMMENDED_REEL_FEMALE_VOICES,
+  maleElevenLabsVoices: RECOMMENDED_REEL_MALE_VOICES,
   defaultElevenLabsModel: 'eleven_multilingual_v2',
   previewElevenLabsModel: 'eleven_flash_v2_5',
   finalElevenLabsModel: 'eleven_multilingual_v2',
@@ -404,6 +453,7 @@ export const DEFAULT_REEL_NARRATION_SETTINGS: ReelNarrationSettings = {
   languageSource: 'reel_language',
   detectedLanguage: null,
   isMixedLanguage: false,
+  voiceGender: 'female',
   voiceId: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.defaultVoiceId,
   model: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.finalElevenLabsModel,
   presetId: DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.defaultPresetId,
@@ -456,6 +506,10 @@ function normalizeLanguageMode(value: unknown): NarrationLanguageMode {
   return 'reel_language';
 }
 
+function normalizeVoiceGender(value: unknown, fallback: NarrationVoiceGender): NarrationVoiceGender {
+  return value === 'male' || value === 'female' ? value : fallback;
+}
+
 function normalizePresetScope(value: unknown): NarrationPresetScope {
   return value === 'user' ? 'user' : 'system';
 }
@@ -464,8 +518,8 @@ function normalizePresetVisibility(value: unknown): NarrationPresetVisibility {
   return value === 'public' ? 'public' : 'private';
 }
 
-function normalizeVoiceOptions(value: unknown): NarrationVoiceOption[] {
-  if (!Array.isArray(value)) return DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices;
+function normalizeVoiceOptions(value: unknown, fallback: NarrationVoiceOption[]): NarrationVoiceOption[] {
+  if (!Array.isArray(value)) return fallback;
   const options = value
     .map((entry) => {
       if (typeof entry === 'string') {
@@ -483,7 +537,44 @@ function normalizeVoiceOptions(value: unknown): NarrationVoiceOption[] {
       };
     })
     .filter((entry): entry is NarrationVoiceOption => Boolean(entry));
-  return options.length > 0 ? options : DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices;
+  return options.length > 0 ? options : fallback;
+}
+
+function uniqueVoiceOptions(...groups: NarrationVoiceOption[][]): NarrationVoiceOption[] {
+  const seen = new Set<string>();
+  const result: NarrationVoiceOption[] = [];
+  groups.flat().forEach((voice) => {
+    const voiceId = voice.voiceId.trim();
+    if (!voiceId || seen.has(voiceId)) return;
+    seen.add(voiceId);
+    result.push({ ...voice, voiceId });
+  });
+  return result;
+}
+
+function hasConfiguredVoiceList(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
+}
+
+export function getReelNarrationVoicesForGender(
+  adminSettings: ReelNarrationAdminSettings,
+  gender: NarrationVoiceGender
+): NarrationVoiceOption[] {
+  const voices = gender === 'male'
+    ? adminSettings.maleElevenLabsVoices
+    : adminSettings.femaleElevenLabsVoices;
+  return voices.length > 0 ? voices : adminSettings.allowedElevenLabsVoices;
+}
+
+export function getReelNarrationVoiceGender(
+  adminSettings: ReelNarrationAdminSettings,
+  voiceId: string | null | undefined
+): NarrationVoiceGender | null {
+  const id = cleanString(voiceId);
+  if (!id) return null;
+  if (adminSettings.maleElevenLabsVoices.some((voice) => voice.voiceId === id)) return 'male';
+  if (adminSettings.femaleElevenLabsVoices.some((voice) => voice.voiceId === id)) return 'female';
+  return null;
 }
 
 function normalizeDictionaryLocators(value: unknown): PronunciationDictionaryLocator[] {
@@ -511,8 +602,22 @@ export function normalizeReelNarrationAdminSettings(
   const defaults = DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
   const legacyVoice = cleanString(legacyElevenLabs?.voiceId, defaults.defaultVoiceId);
   const legacyModel = cleanString(legacyElevenLabs?.modelId, defaults.finalElevenLabsModel);
-  const allowedVoices = normalizeVoiceOptions(raw.allowedElevenLabsVoices);
+  const legacyAllowedVoices = normalizeVoiceOptions(
+    raw.allowedElevenLabsVoices ?? raw.allowed_elevenlabs_voices,
+    defaults.allowedElevenLabsVoices
+  );
+  const femaleElevenLabsVoices = normalizeVoiceOptions(
+    raw.femaleElevenLabsVoices ?? raw.female_elevenlabs_voices,
+    hasConfiguredVoiceList(raw.allowedElevenLabsVoices ?? raw.allowed_elevenlabs_voices)
+      ? legacyAllowedVoices
+      : defaults.femaleElevenLabsVoices
+  );
+  const maleElevenLabsVoices = normalizeVoiceOptions(
+    raw.maleElevenLabsVoices ?? raw.male_elevenlabs_voices,
+    defaults.maleElevenLabsVoices
+  );
   const defaultVoiceId = cleanString(raw.defaultVoiceId, legacyVoice);
+  const allowedVoices = uniqueVoiceOptions(femaleElevenLabsVoices, maleElevenLabsVoices, legacyAllowedVoices);
   const enabledSystemPresetIds = Array.isArray(raw.enabledSystemPresetIds)
     ? raw.enabledSystemPresetIds.map((value) => cleanString(value)).filter(Boolean)
     : defaults.enabledSystemPresetIds;
@@ -526,6 +631,11 @@ export function normalizeReelNarrationAdminSettings(
     allowedElevenLabsVoices: allowedVoices.some((voice) => voice.voiceId === defaultVoiceId)
       ? allowedVoices
       : [{ voiceId: defaultVoiceId, label: defaultVoiceId }, ...allowedVoices],
+    femaleElevenLabsVoices: femaleElevenLabsVoices.some((voice) => voice.voiceId === defaultVoiceId)
+      || maleElevenLabsVoices.some((voice) => voice.voiceId === defaultVoiceId)
+      ? femaleElevenLabsVoices
+      : [{ voiceId: defaultVoiceId, label: defaultVoiceId }, ...femaleElevenLabsVoices],
+    maleElevenLabsVoices,
     defaultElevenLabsModel: cleanString(raw.defaultElevenLabsModel, legacyModel),
     previewElevenLabsModel: cleanString(raw.previewElevenLabsModel, defaults.previewElevenLabsModel),
     finalElevenLabsModel: cleanString(raw.finalElevenLabsModel, legacyModel),
@@ -568,15 +678,27 @@ export function normalizeNarrationPreset(input: unknown): NarrationPreset {
 }
 
 export function storyLanguageToNarrationLanguage(language: StoryLanguage | string | null | undefined): string {
-  if (language === 'hindi') return 'hi-IN';
-  return 'en-IN';
+  switch (language) {
+    case 'hindi':
+      return 'hi-IN';
+    case 'bangla':
+      return 'bn-IN';
+    case 'urdu':
+      return 'ur-IN';
+    case 'gujarati':
+      return 'gu-IN';
+    default:
+      return 'en-IN';
+  }
 }
 
 export function toElevenLabsLanguageCode(language: string | null | undefined): string | null {
   const normalized = cleanString(language).toLowerCase();
   if (!normalized) return null;
   if (normalized.startsWith('hi')) return 'hi';
+  if (normalized.startsWith('bn')) return 'bn';
   if (normalized.startsWith('ur')) return 'ur';
+  if (normalized.startsWith('gu')) return 'gu';
   if (normalized.startsWith('en')) return 'en';
   return normalized.split('-')[0] || null;
 }
@@ -605,12 +727,23 @@ export function normalizeReelNarrationSettings(
     ?? getNarrationPresetById(cleanString(raw.presetId ?? raw.preset_id, adminSettings.defaultPresetId))
     ?? getNarrationPresetById(adminSettings.defaultPresetId)
     ?? SYSTEM_NARRATION_PRESETS[0];
+  const rawVoiceId = cleanString(raw.voiceId ?? raw.voice_id);
+  const inferredGender = getReelNarrationVoiceGender(adminSettings, rawVoiceId || defaultPreset.voiceId || adminSettings.defaultVoiceId)
+    ?? DEFAULT_REEL_NARRATION_SETTINGS.voiceGender;
+  const rawVoiceGender = raw.voiceGender ?? raw.voice_gender;
+  const voiceGender = normalizeVoiceGender(rawVoiceGender, inferredGender);
+  const genderDefaultVoice = getReelNarrationVoicesForGender(adminSettings, voiceGender)[0]?.voiceId;
+  const hasExplicitVoiceGender = rawVoiceGender === 'male' || rawVoiceGender === 'female';
+  const fallbackVoiceId = hasExplicitVoiceGender
+    ? genderDefaultVoice || defaultPreset.voiceId || adminSettings.defaultVoiceId
+    : defaultPreset.voiceId || genderDefaultVoice || adminSettings.defaultVoiceId;
   const fallback = {
     ...DEFAULT_REEL_NARRATION_SETTINGS,
     provider: adminSettings.defaultProvider,
     fallbackProvider: adminSettings.fallbackProvider,
     language: storyLanguageToNarrationLanguage(options.storyLanguage),
-    voiceId: defaultPreset.voiceId || adminSettings.defaultVoiceId,
+    voiceGender,
+    voiceId: fallbackVoiceId,
     model: defaultPreset.model || adminSettings.finalElevenLabsModel,
     presetId: defaultPreset.id,
     speed: defaultPreset.speed,
@@ -639,7 +772,8 @@ export function normalizeReelNarrationSettings(
       : 'reel_language',
     detectedLanguage: cleanString(raw.detectedLanguage ?? raw.detected_language) || null,
     isMixedLanguage: normalizeBoolean(raw.isMixedLanguage ?? raw.is_mixed_language, fallback.isMixedLanguage),
-    voiceId: cleanString(raw.voiceId ?? raw.voice_id, fallback.voiceId),
+    voiceGender,
+    voiceId: rawVoiceId || fallback.voiceId,
     model: cleanString(raw.model, fallback.model),
     presetId: cleanString(raw.presetId ?? raw.preset_id, fallback.presetId ?? '') || null,
     speed: normalizeNumber(raw.speed, fallback.speed, 0.5, 2),
@@ -670,6 +804,7 @@ export function applyPresetToNarrationSettings(
       provider: preset.provider,
       presetId: preset.id,
       model: preset.model || settings.model,
+      voiceGender: getReelNarrationVoiceGender(adminSettings, preset.voiceId) ?? settings.voiceGender,
       voiceId: preset.voiceId || settings.voiceId,
       languageMode: preset.languageMode,
       speed: preset.speed,
@@ -699,22 +834,34 @@ export function detectNarrationLanguage(text: string, selectedLanguage: string):
   }
 
   const devanagari = (compact.match(/[\u0900-\u097F]/g) || []).length;
+  const bengali = (compact.match(/[\u0980-\u09FF]/g) || []).length;
+  const gujarati = (compact.match(/[\u0A80-\u0AFF]/g) || []).length;
   const arabic = (compact.match(/[\u0600-\u06FF]/g) || []).length;
   const latinLetters = (compact.match(/[A-Za-z]/g) || []).length;
   const hinglishMarkers = /\b(dil|kahani|zindagi|pyaar|safar|yaad|sapna|khushi|dard|roshni|andhera|rishta|awaaz)\b/i.test(compact);
-  const hasIndic = devanagari > 0 || arabic > 0 || hinglishMarkers;
+  const hasIndic = devanagari > 0 || bengali > 0 || gujarati > 0 || arabic > 0 || hinglishMarkers;
   const hasLatin = latinLetters > 0;
-  const isMixedLanguage = (hasIndic && hasLatin) || (devanagari > 0 && arabic > 0);
+  const scriptCount = [devanagari, bengali, gujarati, arabic].filter((count) => count > 0).length;
+  const isMixedLanguage = (hasIndic && hasLatin) || scriptCount > 1;
   let detectedLanguage: string | null = null;
 
   if (devanagari > arabic && devanagari > latinLetters * 0.25) {
     detectedLanguage = 'hi-IN';
+  } else if (bengali > latinLetters * 0.25) {
+    detectedLanguage = 'bn-IN';
+  } else if (gujarati > latinLetters * 0.25) {
+    detectedLanguage = 'gu-IN';
   } else if (arabic > devanagari && arabic > latinLetters * 0.2) {
-    detectedLanguage = 'ur-PK';
+    detectedLanguage = 'ur-IN';
   } else if (hinglishMarkers && hasLatin) {
     detectedLanguage = 'hi-IN';
   } else if (latinLetters > 0) {
-    detectedLanguage = selectedLanguage.toLowerCase().startsWith('hi') && hinglishMarkers ? 'hi-IN' : 'en-IN';
+    const selectedLower = selectedLanguage.toLowerCase();
+    detectedLanguage = selectedLower.startsWith('hi') && hinglishMarkers
+      ? 'hi-IN'
+      : selectedLower.startsWith('bn') || selectedLower.startsWith('gu') || selectedLower.startsWith('ur')
+      ? selectedLanguage
+      : 'en-IN';
   }
 
   const selectedRoot = selectedLanguage.slice(0, 2).toLowerCase();
@@ -734,6 +881,26 @@ export function detectNarrationLanguage(text: string, selectedLanguage: string):
 export function elevenLabsModelSupportsExpressiveTags(model: string | null | undefined): boolean {
   const normalized = cleanString(model).toLowerCase();
   return normalized.includes('v3') || normalized.includes('alpha') || normalized.includes('expressive');
+}
+
+export function normalizeReelNarrationPanelPauseMs(value: unknown): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.min(3000, Math.round(parsed)));
+}
+
+function formatPanelPauseSeparator(pauseMs: number, supportsExpressiveTags: boolean): string {
+  const normalizedPauseMs = normalizeReelNarrationPanelPauseMs(pauseMs);
+  if (normalizedPauseMs <= 0) return '\n';
+  if (supportsExpressiveTags) {
+    return normalizedPauseMs >= 1200 ? '\n[long pause]\n' : '\n[pause]\n';
+  }
+
+  const seconds = (normalizedPauseMs / 1000)
+    .toFixed(2)
+    .replace(/0+$/g, '')
+    .replace(/\.$/g, '');
+  return `\n<break time="${seconds}s" />\n`;
 }
 
 function stripExpressiveTags(text: string): string {
@@ -759,6 +926,21 @@ function paceText(text: string, pacing: string, pauseStyle: string): string {
   return paced;
 }
 
+function getPacedNarrationParts(input: {
+  text: string;
+  captionTexts?: string[];
+  pacing: string;
+  pauseStyle: string;
+}): string[] {
+  const captionParts = input.captionTexts
+    ?.map((text) => text.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const sourceParts = captionParts && captionParts.length > 0
+    ? captionParts
+    : [input.text.replace(/\s+/g, ' ').trim()].filter(Boolean);
+  return sourceParts.map((part) => paceText(part, input.pacing, input.pauseStyle));
+}
+
 export function buildNarrationDeliveryInstruction(
   settings: ReelNarrationSettings,
   preset?: NarrationPreset | null
@@ -775,6 +957,8 @@ export function buildNarrationDeliveryInstruction(
 
 export function buildNarrationPerformanceScript(input: {
   text: string;
+  captionTexts?: string[];
+  panelPauseMs?: number;
   settings: ReelNarrationSettings;
   preset?: NarrationPreset | null;
   provider: NarrationProvider;
@@ -788,7 +972,13 @@ export function buildNarrationPerformanceScript(input: {
     && adminSettings.expressiveTagsEnabled
     && input.settings.useExpressiveTags
     && elevenLabsModelSupportsExpressiveTags(input.settings.model);
-  const pacedText = paceText(input.text, input.settings.pacing, input.settings.pauseStyle);
+  const pacedParts = getPacedNarrationParts({
+    text: input.text,
+    captionTexts: input.captionTexts,
+    pacing: input.settings.pacing,
+    pauseStyle: input.settings.pauseStyle,
+  });
+  const pacedText = pacedParts.join('\n');
 
   if (input.provider === 'gemini_tts') {
     return {
@@ -801,8 +991,9 @@ export function buildNarrationPerformanceScript(input: {
   }
 
   if (!supportsExpressiveTags) {
+    const separator = formatPanelPauseSeparator(input.panelPauseMs ?? 0, false);
     return {
-      text: stripExpressiveTags(pacedText),
+      text: pacedParts.map(stripExpressiveTags).join(separator),
       deliveryInstruction,
       language,
       expressiveTagsUsed: false,
@@ -815,9 +1006,10 @@ export function buildNarrationPerformanceScript(input: {
     : input.settings.pacing === 'very_slow' || input.settings.pacing === 'slow'
     ? '[softly, slowly]'
     : '[gently]';
+  const separator = formatPanelPauseSeparator(input.panelPauseMs ?? 0, true);
 
   return {
-    text: `${tag}\n${pacedText}`.trim(),
+    text: `${tag}\n${pacedParts.join(separator)}`.trim(),
     deliveryInstruction,
     language,
     expressiveTagsUsed: true,

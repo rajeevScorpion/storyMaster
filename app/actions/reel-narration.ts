@@ -475,6 +475,7 @@ export async function previewReelNarrationAction(input: {
   text: string;
   settings: ReelNarrationSettings;
   storyLanguage?: StoryLanguage | string | null;
+  panelPauseMs?: number;
 }): Promise<{ audioUrl: string; settings: ReelNarrationSettings }> {
   const userId = await getCurrentUserId(true);
   const [adminSettings, voiceSettings] = await Promise.all([
@@ -522,6 +523,7 @@ export async function previewReelNarrationAction(input: {
       },
       narrationSettings: previewSettings,
       generationMode: 'preview',
+      panelPauseMs: input.panelPauseMs,
       logUserId: userId,
     }
   );

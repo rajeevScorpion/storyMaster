@@ -19,6 +19,7 @@ import { DEFAULT_REEL_STORY_SETTINGS, normalizeReelStorySettings, type ReelStory
 import {
   buildNarrationPerformanceScript,
   getNarrationPresetById,
+  normalizeReelNarrationPanelPauseMs,
   normalizeReelNarrationSettings,
   toElevenLabsLanguageCode,
   type NarrationGenerationMode,
@@ -594,28 +595,38 @@ interface ElevenLabsTimestampResponse {
   normalized_alignment?: ElevenLabsAlignment;
 }
 
-function joinReelCaptionText(captions: ReelCaptionTiming | undefined, fallback: string): string {
-  const text = captions
+function getReelCaptionTexts(captions: ReelCaptionTiming | undefined): string[] {
+  return captions
     ?.map((caption) => caption.text.trim())
     .filter(Boolean)
-    .join(' ')
-    .trim();
+    ?? [];
+}
+
+function joinReelCaptionText(captions: ReelCaptionTiming | undefined, fallback: string): string {
+  const text = getReelCaptionTexts(captions).join(' ').trim();
   return text || fallback;
 }
 
-function estimateReelCaptionTimings(captions: ReelCaptionTiming | undefined): ReelCaptionTiming | undefined {
+function estimateReelCaptionTimings(
+  captions: ReelCaptionTiming | undefined,
+  panelPauseMs = 0
+): ReelCaptionTiming | undefined {
   if (!captions?.length) return captions;
+  const normalizedPanelPauseMs = normalizeReelNarrationPanelPauseMs(panelPauseMs);
   const wordCounts = captions.map((caption) => Math.max(1, caption.text.trim().split(/\s+/).filter(Boolean).length));
   const totalWords = wordCounts.reduce((sum, count) => sum + count, 0);
-  const totalDurationMs = Math.max(3200, totalWords * 430 + captions.length * 160);
+  const spokenDurationMs = Math.max(3200, totalWords * 430 + captions.length * 160);
   let cursor = 0;
+  let spokenCursor = 0;
   return captions.map((caption, index) => {
-    const duration = index === captions.length - 1
-      ? totalDurationMs - cursor
-      : Math.max(700, Math.round((wordCounts[index] / totalWords) * totalDurationMs));
+    const isLast = index === captions.length - 1;
+    const duration = isLast
+      ? spokenDurationMs - spokenCursor
+      : Math.max(700, Math.round((wordCounts[index] / totalWords) * spokenDurationMs));
     const startMs = cursor;
     const endMs = Math.max(startMs + 700, Math.round(startMs + duration));
-    cursor = endMs;
+    spokenCursor += Math.max(700, duration);
+    cursor = endMs + (isLast ? 0 : normalizedPanelPauseMs);
     return { ...caption, startMs, endMs };
   });
 }
@@ -661,15 +672,16 @@ function deriveWordTimings(
 function applyAlignmentToReelCaptions(
   captions: ReelCaptionTiming | undefined,
   narrationText: string,
-  alignment: ElevenLabsAlignment | undefined
+  alignment: ElevenLabsAlignment | undefined,
+  panelPauseMs = 0
 ): ReelCaptionTiming | undefined {
   if (!captions?.length || !alignment?.characters?.length) {
-    return estimateReelCaptionTimings(captions);
+    return estimateReelCaptionTimings(captions, panelPauseMs);
   }
 
   const startTimes = alignment.character_start_times_seconds ?? [];
   const endTimes = alignment.character_end_times_seconds ?? [];
-  const source = narrationText.toLowerCase();
+  const source = (alignment.characters?.join('') || narrationText).toLowerCase();
   let cursor = 0;
   const timed = captions.map((caption) => {
     const captionText = caption.text.trim();
@@ -697,7 +709,7 @@ function applyAlignmentToReelCaptions(
 
   return timed.some((caption) => typeof caption.startMs === 'number' && typeof caption.endMs === 'number')
     ? timed
-    : estimateReelCaptionTimings(captions);
+    : estimateReelCaptionTimings(captions, panelPauseMs);
 }
 
 async function callElevenLabsTTSWithTimestamps(
@@ -782,6 +794,7 @@ async function buildNarrationAudioPayload(
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
     generationMode?: NarrationGenerationMode;
+    panelPauseMs?: number;
   } = {}
 ): Promise<NarrationAudioPayload> {
   const payloadStartedAt = narrationNowMs();
@@ -793,6 +806,8 @@ async function buildNarrationAudioPayload(
   });
   const preset = getNarrationPresetById(narrationSettings.presetId);
   const maxLength = Math.max(200, reelSettings.narration.maxNarrationLength);
+  const reelCaptionTexts = isReel ? getReelCaptionTexts(options.reelCaptions) : undefined;
+  const panelPauseMs = normalizeReelNarrationPanelPauseMs(options.panelPauseMs);
   const narrationText = (isReel ? joinReelCaptionText(options.reelCaptions, storyText) : storyText).slice(0, maxLength);
   const geminiVoiceName = isReel
     ? reelSettings.narration.fallbackGeminiVoice || voiceName
@@ -801,6 +816,8 @@ async function buildNarrationAudioPayload(
   if (isReel && reelSettings.elevenLabs.enabled && narrationSettings.provider === 'elevenlabs') {
     const elevenScript = buildNarrationPerformanceScript({
       text: narrationText,
+      captionTexts: reelCaptionTexts,
+      panelPauseMs,
       settings: narrationSettings,
       preset,
       provider: 'elevenlabs',
@@ -824,7 +841,7 @@ async function buildNarrationAudioPayload(
         buffer: eleven.audioBuffer,
         mimeType: eleven.mimeType,
         extension: 'mp3',
-        reelCaptions: applyAlignmentToReelCaptions(options.reelCaptions, elevenScript.text, eleven.alignment),
+        reelCaptions: applyAlignmentToReelCaptions(options.reelCaptions, elevenScript.text, eleven.alignment, panelPauseMs),
         providerUsed: 'elevenlabs',
         fallbackUsed: false,
         selectedVoice: narrationSettings.voiceId,
@@ -844,6 +861,7 @@ async function buildNarrationAudioPayload(
       console.warn('ElevenLabs reel TTS failed; falling back to Gemini TTS:', error instanceof Error ? error.message : error);
       const geminiScript = buildNarrationPerformanceScript({
         text: narrationText,
+        captionTexts: reelCaptionTexts,
         settings: narrationSettings,
         preset,
         provider: 'gemini_tts',
@@ -890,6 +908,7 @@ async function buildNarrationAudioPayload(
   const geminiScript = isReel
     ? buildNarrationPerformanceScript({
         text: narrationText,
+        captionTexts: reelCaptionTexts,
         settings: narrationSettings,
         preset,
         provider: 'gemini_tts',
@@ -989,6 +1008,7 @@ export async function generateAndPersistNarration(
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
     generationMode?: NarrationGenerationMode;
+    panelPauseMs?: number;
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming }> {
   return timeNarrationStep(
@@ -1203,6 +1223,7 @@ export async function generateReelNarrationOnly(
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
     generationMode?: NarrationGenerationMode;
+    panelPauseMs?: number;
     logUserId?: string | null;
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming }> {

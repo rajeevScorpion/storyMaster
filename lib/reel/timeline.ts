@@ -42,6 +42,10 @@ export interface ReelFrameSample {
   durationMs: number;
 }
 
+function getEffectiveTransitionDurationMs(settings: ReelTransitionSettings): number {
+  return Math.max(0, settings.durationMs - settings.pauseMs);
+}
+
 function validCaptionStart(caption: ReelPanelCaption | undefined): number | null {
   return caption && typeof caption.startMs === 'number' && Number.isFinite(caption.startMs)
     ? Math.max(0, caption.startMs)
@@ -122,12 +126,14 @@ export function getReelSceneAtTime(timeline: ReelTimeline, timeMs: number): Reel
 
 export function getReelTransitionAtTime(timeline: ReelTimeline, timeMs: number): ReelTransitionWindow | null {
   if (timeline.transitionSettings.type === 'fast-cut') return null;
+  const transitionDurationMs = getEffectiveTransitionDurationMs(timeline.transitionSettings);
+  if (transitionDurationMs <= 0) return null;
 
   for (let index = 0; index < timeline.scenes.length - 1; index += 1) {
     const from = timeline.scenes[index];
     const to = timeline.scenes[index + 1];
     const endMs = to.startMs;
-    const startMs = Math.max(from.startMs, endMs - timeline.transitionSettings.durationMs);
+    const startMs = Math.max(from.startMs, endMs - transitionDurationMs);
     if (endMs > startMs && timeMs >= startMs && timeMs < endMs) {
       return {
         from,
@@ -166,10 +172,11 @@ export function buildReelFrameSamples(timeline: ReelTimeline, fps: number): Reel
       addPoint(scene.beatStartMs + word.endMs);
     });
 
-    if (timeline.transitionSettings.type !== 'fast-cut' && index < timeline.scenes.length - 1) {
+    const transitionDurationMs = getEffectiveTransitionDurationMs(timeline.transitionSettings);
+    if (timeline.transitionSettings.type !== 'fast-cut' && transitionDurationMs > 0 && index < timeline.scenes.length - 1) {
       const nextScene = timeline.scenes[index + 1];
       const endMs = nextScene.startMs;
-      const startMs = Math.max(scene.startMs, endMs - timeline.transitionSettings.durationMs);
+      const startMs = Math.max(scene.startMs, endMs - transitionDurationMs);
       for (let timeMs = startMs; timeMs < endMs; timeMs += frameDurationMs) {
         addPoint(timeMs);
       }

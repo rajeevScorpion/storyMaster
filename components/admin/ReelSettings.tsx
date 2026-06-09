@@ -12,6 +12,8 @@ import {
 import { runReelCleanup, type ReelCleanupResult } from '@/app/actions/reel-cleanup';
 import {
   DEFAULT_REEL_NARRATION_ADMIN_SETTINGS,
+  RECOMMENDED_REEL_FEMALE_VOICES,
+  RECOMMENDED_REEL_MALE_VOICES,
   SYSTEM_NARRATION_PRESETS,
   type PronunciationDictionaryLocator,
   type ReelNarrationAdminSettings,
@@ -74,7 +76,10 @@ function formatAllowedVoices(voices: NarrationVoiceOption[]): string {
     .join('\n');
 }
 
-function parseAllowedVoices(value: string): NarrationVoiceOption[] {
+function parseAllowedVoices(
+  value: string,
+  fallback: NarrationVoiceOption[] = DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices
+): NarrationVoiceOption[] {
   const voices = value
     .split(/\r?\n/)
     .map((line): NarrationVoiceOption | null => {
@@ -89,7 +94,18 @@ function parseAllowedVoices(value: string): NarrationVoiceOption[] {
     })
     .filter((voice): voice is NarrationVoiceOption => Boolean(voice));
 
-  return voices.length > 0 ? voices : DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.allowedElevenLabsVoices;
+  return voices.length > 0 ? voices : fallback;
+}
+
+function appendMissingVoices(
+  current: NarrationVoiceOption[],
+  recommended: NarrationVoiceOption[]
+): NarrationVoiceOption[] {
+  const existingIds = new Set(current.map((voice) => voice.voiceId));
+  return [
+    ...current,
+    ...recommended.filter((voice) => !existingIds.has(voice.voiceId)),
+  ];
 }
 
 function formatDictionaryLocators(locators: PronunciationDictionaryLocator[]): string {
@@ -241,6 +257,23 @@ export default function ReelSettings() {
         ...patch,
       },
     }));
+  };
+
+  const handleAddRecommendedVoices = () => {
+    const femaleElevenLabsVoices = appendMissingVoices(
+      narrationSettings.femaleElevenLabsVoices,
+      RECOMMENDED_REEL_FEMALE_VOICES
+    );
+    const maleElevenLabsVoices = appendMissingVoices(
+      narrationSettings.maleElevenLabsVoices,
+      RECOMMENDED_REEL_MALE_VOICES
+    );
+    updateNarrationSettings({
+      femaleElevenLabsVoices,
+      maleElevenLabsVoices,
+      allowedElevenLabsVoices: [...femaleElevenLabsVoices, ...maleElevenLabsVoices],
+      defaultVoiceId: narrationSettings.defaultVoiceId || femaleElevenLabsVoices[0]?.voiceId,
+    });
   };
 
   const toggleSystemPreset = (presetId: string) => {
@@ -492,18 +525,69 @@ export default function ReelSettings() {
           </label>
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-neutral-500">Allowed ElevenLabs voices</span>
-            <textarea
-              value={formatAllowedVoices(narrationSettings.allowedElevenLabsVoices)}
+        <div className="mt-5 rounded-xl border border-white/10 bg-neutral-950/40 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-neutral-500">ElevenLabs reel voices</p>
+              <p className="mt-1 text-xs leading-relaxed text-neutral-400">
+                Add one voice per line as voiceId|Label|Description. Users choose Female or Male first, then pick from that list.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleAddRecommendedVoices}
               disabled={!editableSettings}
-              onChange={(event) => updateNarrationSettings({ allowedElevenLabsVoices: parseAllowedVoices(event.target.value) })}
-              spellCheck={false}
-              className="mt-1 min-h-28 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
-            />
-          </label>
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <RefreshCcw size={13} />
+              Add recommended voices
+            </button>
+          </div>
 
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-neutral-500">Female voices</span>
+              <textarea
+                value={formatAllowedVoices(narrationSettings.femaleElevenLabsVoices)}
+                disabled={!editableSettings}
+                onChange={(event) => {
+                  const femaleElevenLabsVoices = parseAllowedVoices(
+                    event.target.value,
+                    DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.femaleElevenLabsVoices
+                  );
+                  updateNarrationSettings({
+                    femaleElevenLabsVoices,
+                    allowedElevenLabsVoices: [...femaleElevenLabsVoices, ...narrationSettings.maleElevenLabsVoices],
+                  });
+                }}
+                spellCheck={false}
+                className="mt-1 min-h-28 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-neutral-500">Male voices</span>
+              <textarea
+                value={formatAllowedVoices(narrationSettings.maleElevenLabsVoices)}
+                disabled={!editableSettings}
+                onChange={(event) => {
+                  const maleElevenLabsVoices = parseAllowedVoices(
+                    event.target.value,
+                    DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.maleElevenLabsVoices
+                  );
+                  updateNarrationSettings({
+                    maleElevenLabsVoices,
+                    allowedElevenLabsVoices: [...narrationSettings.femaleElevenLabsVoices, ...maleElevenLabsVoices],
+                  });
+                }}
+                spellCheck={false}
+                className="mt-1 min-h-28 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
           <label className="block">
             <span className="text-[11px] uppercase tracking-wider text-neutral-500">Pronunciation locators</span>
             <textarea

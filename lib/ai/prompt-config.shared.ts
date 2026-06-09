@@ -193,7 +193,8 @@ Generate all {{reelBeatCount}} beats of the reel in a single response. There is 
 Rules:
 1. Return strict valid JSON only using the reel draft schema: { beatCount, beats: [{ beatIndex, title, storyText, sceneSummary, imagePrompt }] }.
 2. Produce exactly {{reelBeatCount}} beats. beatIndex starts at 1 and increments by 1.
-3. storyText is the quote itself — a single inspirational quote, statement, line, or short cluster of lines. Each beat must carry enough words for {{reelPanelCount}} visual panels: target {{textLengthWordRangePerPanel}} words per panel and {{textLengthWordRangePerBeat}} words total per beat. Keep it narration-friendly: clean rhythm, natural pauses, no inner monologue or scene direction mixed in.
+3. storyText is the quote itself — a single inspirational quote, statement, line, or short cluster of lines. Each beat must carry enough complete sentences for {{reelPanelCount}} visual panels: target {{textLengthWordRangePerPanel}} words per panel and {{textLengthWordRangePerBeat}} words total per beat. Keep it narration-friendly: clean rhythm, natural pauses, no inner monologue or scene direction mixed in.
+3a. Every eventual visual panel must receive complete sentences only. Never depend on splitting one sentence across panels; rewrite long thoughts into shorter complete sentences with sentence-final punctuation appropriate to {{language}}.
 4. The quotes should form a flowing emotional or thematic sequence — each one a fresh facet of the user's request, not a continuation of a plot. Avoid repeating phrasing across beats.
 5. title is 1–4 words, useful for admin previews only.
 6. sceneSummary is a short English continuity hint for the visual composer (atmosphere, mood, motif). Not user-facing.

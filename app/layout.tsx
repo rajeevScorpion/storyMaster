@@ -4,6 +4,14 @@ import {
   Inter,
   Lora,
   Montserrat,
+  Noto_Nastaliq_Urdu,
+  Noto_Sans_Arabic,
+  Noto_Sans_Bengali,
+  Noto_Sans_Devanagari,
+  Noto_Sans_Gujarati,
+  Noto_Serif_Bengali,
+  Noto_Serif_Devanagari,
+  Noto_Serif_Gujarati,
   Oswald,
   Playfair_Display,
   Poppins,
@@ -48,6 +56,46 @@ const lora = Lora({
   variable: '--font-reel-lora',
 });
 
+const notoSansDevanagari = Noto_Sans_Devanagari({
+  subsets: ['devanagari'],
+  variable: '--font-reel-noto-sans-devanagari',
+});
+
+const notoSerifDevanagari = Noto_Serif_Devanagari({
+  subsets: ['devanagari'],
+  variable: '--font-reel-noto-serif-devanagari',
+});
+
+const notoSansBengali = Noto_Sans_Bengali({
+  subsets: ['bengali'],
+  variable: '--font-reel-noto-sans-bengali',
+});
+
+const notoSerifBengali = Noto_Serif_Bengali({
+  subsets: ['bengali'],
+  variable: '--font-reel-noto-serif-bengali',
+});
+
+const notoNastaliqUrdu = Noto_Nastaliq_Urdu({
+  subsets: ['arabic'],
+  variable: '--font-reel-noto-nastaliq-urdu',
+});
+
+const notoSansArabic = Noto_Sans_Arabic({
+  subsets: ['arabic'],
+  variable: '--font-reel-noto-sans-arabic',
+});
+
+const notoSansGujarati = Noto_Sans_Gujarati({
+  subsets: ['gujarati'],
+  variable: '--font-reel-noto-sans-gujarati',
+});
+
+const notoSerifGujarati = Noto_Serif_Gujarati({
+  subsets: ['gujarati'],
+  variable: '--font-reel-noto-serif-gujarati',
+});
+
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -63,7 +111,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({children}: {children: React.ReactNode}) {
   return (
-    <html lang="en" className={`${inter.variable} ${playfair.variable} ${bebas.variable} ${oswald.variable} ${montserrat.variable} ${poppins.variable} ${lora.variable}`}>
+    <html lang="en" className={`${inter.variable} ${playfair.variable} ${bebas.variable} ${oswald.variable} ${montserrat.variable} ${poppins.variable} ${lora.variable} ${notoSansDevanagari.variable} ${notoSerifDevanagari.variable} ${notoSansBengali.variable} ${notoSerifBengali.variable} ${notoNastaliqUrdu.variable} ${notoSansArabic.variable} ${notoSansGujarati.variable} ${notoSerifGujarati.variable}`}>
       <body className="bg-neutral-950 text-neutral-200 font-sans antialiased" suppressHydrationWarning><Providers>{children}</Providers></body>
     </html>
   );

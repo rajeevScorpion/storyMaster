@@ -25,7 +25,11 @@ import {
 import {
   normalizeReelNarrationSettings,
 } from '@/lib/reel/narration';
-import type { ReelVisualStyleCard } from '@/lib/reel/styles';
+import {
+  getDefaultReelTextFontFamilyForLanguage,
+  isReelTextFontFamilyCompatibleWithLanguage,
+  type ReelVisualStyleCard,
+} from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
 import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X } from 'lucide-react';
@@ -35,6 +39,7 @@ import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { REEL_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -67,6 +72,7 @@ type CreationMode = 'prompt' | 'seeded' | 'reel';
 
 const REEL_SETUP_CACHE_KEY = 'kissago_reel_story_setup_cache';
 const REEL_SETUP_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_REEL_LANDING_BEAT_COUNT = 1;
 
 function readCachedReelSetup(): ReelStorySetupSettings | null {
   if (typeof window === 'undefined') return null;
@@ -224,7 +230,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
   const [setupSettings, setSetupSettings] = useState(initialLandingData.setupSettings);
   const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
-  const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(reelSetup.settings.defaultBeatCount);
+  const [reelLanguage, setReelLanguage] = useState<StoryLanguage>('english');
+  const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(DEFAULT_REEL_LANDING_BEAT_COUNT);
   const [reelTextLength, setReelTextLength] = useState<ReelTextLengthKey>(reelSetup.settings.defaultTextLength);
   const [reelMoodKey, setReelMoodKey] = useState(reelSetup.settings.defaultMood);
   const [reelVisualStyleKey, setReelVisualStyleKey] = useState(reelSetup.settings.defaultVisualStyle);
@@ -322,7 +329,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       .then((setup) => {
         writeCachedReelSetup(setup);
         setReelSetup(setup);
-        setReelBeatCount(setup.settings.defaultBeatCount);
+        setReelBeatCount(DEFAULT_REEL_LANDING_BEAT_COUNT);
         setReelTextLength(setup.settings.defaultTextLength);
         setReelMoodKey(setup.settings.defaultMood);
         setReelVisualStyleKey(setup.settings.defaultVisualStyle);
@@ -402,6 +409,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             const config = normalizeStoryConfig(JSON.parse(savedConfig) as StoryConfig);
             setCreationMode(config.storyKind === 'reel' ? 'reel' : config.authoring.mode === 'seeded' ? 'seeded' : 'prompt');
             setLanguage(config.language);
+            setReelLanguage(config.language);
             setAgeGroup(config.ageGroup);
             const isPresetSetting = ['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
             setSettingCountry(isPresetSetting ? config.settingCountry : 'custom');
@@ -479,9 +487,16 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     if (isReelMode) {
       const legacyLength = getReelLegacyLengthForBeatCount(reelBeatCount);
       const selectedStyle = selectedReelVisualStyle;
+      const selectedTextOverlayStyle = selectedStyle?.textOverlayStyle;
+      const textOverlayFontFamily = isReelTextFontFamilyCompatibleWithLanguage(
+        selectedTextOverlayStyle?.fontFamily,
+        reelLanguage
+      )
+        ? selectedTextOverlayStyle?.fontFamily
+        : getDefaultReelTextFontFamilyForLanguage(reelLanguage);
       return {
         storyKind: 'reel',
-        language,
+        language: reelLanguage,
         ageGroup,
         settingCountry: 'generic',
         maxBeats: reelBeatCount,
@@ -504,12 +519,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
           textLength: reelTextLength,
           textOverlayEnabled: reelSetup.settings.textOverlayDefault,
           visualStyleId: selectedStyle?.id ?? reelVisualStyleId,
-          textOverlayStyle: selectedStyle?.textOverlayStyle,
+          textOverlayStyle: {
+            ...selectedTextOverlayStyle,
+            fontFamily: textOverlayFontFamily,
+          },
           moodKey: reelMoodKey,
           visualStyleKey: selectedStyle?.slug ?? reelVisualStyleKey,
           narrationStyleKey: reelSetup.settings.defaultNarrationStyle,
           narrationSettings: normalizeReelNarrationSettings(null, {
-            storyLanguage: language,
+            storyLanguage: reelLanguage,
             adminSettings: reelSetup.settings.narration,
           }),
           brandingEnabled: true,
@@ -564,7 +582,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   };
 
   const startConfiguredStory = async (seedPlan?: SeedPlan) => {
-    const voiceConfig = narrationVoiceConfig || await getNarrationVoiceSelectionConfig(language).catch(() => null);
+    const voiceConfig = isReelMode
+      ? narrationVoiceConfig
+      : narrationVoiceConfig || await getNarrationVoiceSelectionConfig(language).catch(() => null);
     const config = buildStoryConfig(seedPlan, voiceConfig);
     const storyPrompt = creationMode === 'seeded'
       ? sourceText.trim()
@@ -697,6 +717,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       const result = await distributeReelTextAction({
         text: reelUserText.trim(),
         beatCount: reelBeatCount,
+        language: reelLanguage,
         wordsPerPanel: getReelTextLengthRange(reelSetup.settings, reelTextLength),
       });
       setReelDistributedTexts(result.panelTexts);
@@ -809,6 +830,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       onClick={() => {
                       setCreationMode('reel');
                       setAuthoringMode('prompt');
+                      setReelBeatCount(DEFAULT_REEL_LANDING_BEAT_COUNT);
+                      setReelTextLength(reelSetup.settings.defaultTextLength);
                       setImageGenerationMode('prompt_only');
                       setIsVerticalStory(true);
                       setShowAdvanced(false);
@@ -948,7 +971,23 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                           )}
 
                           <div className="rounded-xl border border-white/10 bg-neutral-950/40 p-3">
-                            <div className="grid grid-cols-3 gap-3">
+                            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                              <div className="space-y-2">
+                                <label className="flex h-6 items-center truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Language</label>
+                                <FilterDropdown
+                                  value={reelLanguage}
+                                  options={REEL_LANGUAGE_OPTIONS}
+                                  onChange={(value) => {
+                                    setReelLanguage(value as StoryLanguage);
+                                    setReelDistributedTexts(null);
+                                    setReelDistributedImagePrompts(null);
+                                    setDistributeError(null);
+                                  }}
+                                  fullWidth
+                                  mode="inline"
+                                  ariaLabel="Choose reel language"
+                                />
+                              </div>
                               <div className="space-y-2">
                                 <label className="flex h-6 items-center truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Beats</label>
                                 <FilterDropdown

@@ -25,6 +25,7 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, isReelStoryConfig, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { DEFAULT_REEL_STORY_SETTINGS, findReelDefiner, normalizeReelStorySettings } from '@/lib/reel/settings';
+import { ensureCompleteCaptionSentence, hasCompleteCaptionEnding, splitTextIntoCompleteCaptionPanels } from '@/lib/reel/captions';
 import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import { normalizeReelTransitionSettings, type ReelTransitionSettings } from '@/lib/reel/transitions';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
@@ -1893,12 +1894,13 @@ export const useStoryStore = create<StoryState>()(
               const isReelNarration = isReelStoryConfig(storyConfig);
               const reelNarrationOptions = isReelNarration
                 ? {
-                    reelCaptions: beat.reelCaptions,
-                    reelSettings: modelOverrides?.reelSettings,
-                    narrationSettings: storyConfig.reel.narrationSettings,
-                    generationMode: 'final' as const,
-                  }
-                : {};
+                  reelCaptions: beat.reelCaptions,
+                  reelSettings: modelOverrides?.reelSettings,
+                  narrationSettings: storyConfig.reel.narrationSettings,
+                  generationMode: 'final' as const,
+                  panelPauseMs: normalizeReelTransitionSettings(storyConfig.reel.transitionSettings).pauseMs,
+                }
+              : {};
               const narrationFn: Promise<{ audioUrl: string; reelCaptions?: StoryBeat['reelCaptions'] }> = storyId
                 ? generateAndPersistNarration(
                   beat.storyText, initialSession.tone!, initialSession.genre!,
@@ -2844,6 +2846,7 @@ export const useStoryStore = create<StoryState>()(
                   reelSettings: modelOverrides?.reelSettings,
                   narrationSettings: session.storyConfig.reel.narrationSettings,
                   generationMode: 'final' as const,
+                  panelPauseMs: normalizeReelTransitionSettings(session.storyConfig.reel.transitionSettings).pauseMs,
                 }
               : {};
 
@@ -3299,6 +3302,7 @@ export const useStoryStore = create<StoryState>()(
                 reelSettings: modelOverrides?.reelSettings,
                 narrationSettings: session.storyConfig.reel.narrationSettings,
                 generationMode: 'final' as const,
+                panelPauseMs: normalizeReelTransitionSettings(session.storyConfig.reel.transitionSettings).pauseMs,
               }
             : {};
 
@@ -3403,7 +3407,12 @@ export const useStoryStore = create<StoryState>()(
           return { clearedNarration: false };
         }
 
-        const normalizedTexts = Array.from({ length: 4 }, (_, index) => (panelTexts[index] || '').trim());
+        const normalizedTexts = splitTextIntoCompleteCaptionPanels(
+          panelTexts.filter(Boolean).join(' '),
+          4
+        ).map((text, index) => ensureCompleteCaptionSentence(
+          text || (hasCompleteCaptionEnding(panelTexts[index] || '') ? panelTexts[index] : '')
+        ));
         if (!normalizedTexts.some(Boolean)) {
           throw new Error('Add text to at least one panel before saving.');
         }

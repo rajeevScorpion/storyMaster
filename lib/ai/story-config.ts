@@ -7,6 +7,7 @@ import type {
   SeedPlan,
   StoryAuthoringConfig,
   StoryConfig,
+  StoryLanguage,
   StoryDetailLevel,
   StoryPalette,
   SourceFidelity,
@@ -62,6 +63,19 @@ export const STORY_DETAIL_OPTIONS: Array<{ value: StoryDetailLevel; label: strin
   { value: 'simple', label: 'Simple' },
   { value: 'balanced', label: 'Balanced' },
   { value: 'lush', label: 'Lush' },
+];
+
+export const STORY_LANGUAGE_OPTIONS: Array<{ value: Extract<StoryLanguage, 'english' | 'hindi'>; label: string }> = [
+  { value: 'english', label: 'English' },
+  { value: 'hindi', label: 'Hindi' },
+];
+
+export const REEL_LANGUAGE_OPTIONS: Array<{ value: StoryLanguage; label: string }> = [
+  { value: 'english', label: 'English' },
+  { value: 'hindi', label: 'Hindi' },
+  { value: 'bangla', label: 'Bangla' },
+  { value: 'urdu', label: 'Urdu' },
+  { value: 'gujarati', label: 'Gujarati' },
 ];
 
 export const SOURCE_FIDELITY_OPTIONS: Array<{
@@ -228,7 +242,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
 
   return {
     storyKind,
-    language: input?.language || DEFAULT_STORY_CONFIG.language,
+    language: normalizeStoryLanguage(input?.language),
     ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats,
@@ -357,6 +371,12 @@ function sanitizeText(value?: string | null): string {
 
 function normalizeStoryKind(value?: string | null): StoryConfig['storyKind'] {
   return value === 'reel' ? 'reel' : 'story';
+}
+
+function normalizeStoryLanguage(value?: string | null): StoryLanguage {
+  return REEL_LANGUAGE_OPTIONS.some((option) => option.value === value)
+    ? value as StoryLanguage
+    : DEFAULT_STORY_CONFIG.language;
 }
 
 function normalizeReelConfig(input?: Partial<ReelStoryConfig> | null, storyLanguage?: StoryConfig['language']): ReelStoryConfig {
