@@ -2397,6 +2397,27 @@ function StoryScreenInner({
 
     cancelReelPlayAll();
   }, [cancelReelPlayAll, currentNodeId, navigateToNode, reelPlayAllActive]);
+  const activeFullVoicePreview = useMemo(
+    () => (isReelStory
+      ? voicePreviews.find((preview) => preview.isActive && preview.previewScope === 'full' && preview.audioUrl) ?? null
+      : null),
+    [isReelStory, voicePreviews]
+  );
+  const currentBeatPlaybackAudioUrl = !reelPlayAllActive && activeFullVoicePreview?.audioUrl
+    ? activeFullVoicePreview.audioUrl
+    : normalizedCurrentBeat.audioUrl;
+  const currentBeatPlaybackKey = isReelStory
+    ? `${currentNodeId}:${reelPlayAllActive ? 'play-all' : activeFullVoicePreview?.id ?? 'beat-audio'}`
+    : currentNodeId;
+  const currentBeatForPlayback = useMemo(() => {
+    if (!isReelStory || currentBeatPlaybackAudioUrl === normalizedCurrentBeat.audioUrl) {
+      return normalizedCurrentBeat;
+    }
+    return {
+      ...normalizedCurrentBeat,
+      audioUrl: currentBeatPlaybackAudioUrl,
+    };
+  }, [currentBeatPlaybackAudioUrl, isReelStory, normalizedCurrentBeat]);
   const {
     playbackState,
     togglePlayPause,
@@ -2406,8 +2427,8 @@ function StoryScreenInner({
     isMuted,
     toggleMute,
   } = useAudioPlayer(
-    normalizedCurrentBeat.audioUrl,
-    currentNodeId,
+    currentBeatPlaybackAudioUrl,
+    currentBeatPlaybackKey,
     { onEnded: handleReelAudioEnded }
   );
   const {
@@ -2677,7 +2698,7 @@ function StoryScreenInner({
   const canPlayCurrentBeat = Boolean(
     isReelStory
     && normalizedCurrentBeat.imageUrl
-    && normalizedCurrentBeat.audioUrl
+    && currentBeatPlaybackAudioUrl
   );
   const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
   const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
@@ -3014,11 +3035,8 @@ function StoryScreenInner({
     setReelNarrationMessage(null);
     try {
       const previewText = voicePreviewScope === 'full'
-        ? (reelTimelineNodes ?? [])
-            .map((n) => normalizeBeatMediaFields(n.data).storyText)
-            .filter(Boolean)
-            .join('\n\n')
-        // "1 beat" = one panel caption (short sample, clearly distinct from full)
+        ? normalizedCurrentBeat.storyText
+        // Sample = one panel caption (short sample, clearly distinct from full beat)
         : normalizedCurrentBeat.reelCaptions?.[0]?.text
           ?? splitTextIntoCompleteCaptionPanels(normalizedCurrentBeat.storyText, REEL_PANEL_COUNT)[0]
           ?? normalizedCurrentBeat.storyText;
@@ -3058,7 +3076,7 @@ function StoryScreenInner({
   }, [
     isPreviewingReelNarration,
     voicePreviewScope,
-    reelTimelineNodes,
+    normalizedCurrentBeat.reelCaptions,
     normalizedCurrentBeat.storyText,
     normalizedReelTransitionDraft.pauseMs,
     reelNarrationDraft,
@@ -3083,15 +3101,20 @@ function StoryScreenInner({
   }, [playingVoicePreviewId, stopPlayingVoicePreview]);
 
   const handleApplyVoicePreview = useCallback(async (preview: ReelNarrationVoicePreview) => {
+    if (preview.previewScope !== 'full') {
+      setReelNarrationMessage('Only full beat previews can be applied.');
+      return;
+    }
     try {
+      stopPlayingVoicePreview();
       const settings = await applyReelNarrationVoicePreviewAction(preview.id);
       setReelNarrationDraft(settings);
       setVoicePreviews((prev) => prev.map((p) => ({ ...p, isActive: p.id === preview.id })));
-      setReelNarrationMessage('Voice settings loaded from preview.');
+      setReelNarrationMessage('Full preview applied to beat playback.');
     } catch (error) {
       setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to apply preview.');
     }
-  }, [setReelNarrationDraft]);
+  }, [setReelNarrationDraft, stopPlayingVoicePreview]);
 
   const handleDeleteVoicePreview = useCallback(async (previewId: string) => {
     if (playingVoicePreviewId === previewId) stopPlayingVoicePreview();
@@ -3296,16 +3319,12 @@ function StoryScreenInner({
     if (!firstNodeId) return;
 
     reelPlayAllNodeIdsRef.current = nodeIds;
-    pendingReelPlayAllNodeIdRef.current = null;
+    pendingReelPlayAllNodeIdRef.current = firstNodeId;
     setReelPlayAllActive(true);
 
     if (currentNodeId !== firstNodeId) {
-      pendingReelPlayAllNodeIdRef.current = firstNodeId;
       navigateToNode(firstNodeId);
-      return;
     }
-
-    playAudio();
   }, [
     canPlayFullReel,
     currentNodeId,
@@ -3375,7 +3394,8 @@ function StoryScreenInner({
         setReelTextMessage('Save panel text before using narration.');
         return;
       }
-      if (normalizedCurrentBeat.audioUrl) {
+      const narrationAudioUrl = isReelStory ? currentBeatPlaybackAudioUrl : normalizedCurrentBeat.audioUrl;
+      if (narrationAudioUrl) {
         togglePlayPause();
       } else if (!isGeneratingAudio) {
         handleGenerateNarration();
@@ -3922,8 +3942,8 @@ function StoryScreenInner({
     >
       {isStoryboard ? (
         <ReelCanvasPreview
-          key={`reel-${surface}:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}`}
-          beat={normalizedCurrentBeat}
+          key={`reel-${surface}:${normalizedCurrentBeat.imageUrl}:${currentBeatPlaybackKey}`}
+          beat={currentBeatForPlayback}
           imageUrl={normalizedCurrentBeat.imageUrl!}
           audioDurationMs={reelAudioDurationMs}
           elapsedMs={reelAudioTimeMs}
@@ -3986,7 +4006,7 @@ function StoryScreenInner({
             ? playbackState === 'playing' ? 'Pause (P)' : 'Play narration (P)'
             : !normalizedCurrentBeat.imageUrl
             ? 'Generate an image for this beat first'
-            : !normalizedCurrentBeat.audioUrl
+            : !currentBeatPlaybackAudioUrl
             ? 'Generate narration for this beat first'
             : 'Play narration'
         }
@@ -4466,48 +4486,55 @@ function StoryScreenInner({
         {voicePreviews.length > 0 && (
           <div className="space-y-1.5">
             <span className="block text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice previews</span>
-            {voicePreviews.map((preview) => (
-              <div
-                key={preview.id}
-                className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-colors ${preview.isActive ? 'border-emerald-500/30 bg-emerald-500/[0.06]' : 'border-white/10 bg-white/[0.03]'}`}
-              >
-                <button
-                  type="button"
-                  onClick={() => handlePlayVoicePreview(preview)}
-                  disabled={!preview.audioUrl}
-                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                  aria-label={playingVoicePreviewId === preview.id ? 'Stop' : 'Play'}
+            {voicePreviews.map((preview) => {
+              const canApplyPreview = preview.previewScope === 'full' && Boolean(preview.audioUrl);
+              return (
+                <div
+                  key={preview.id}
+                  className={`flex items-center gap-2 rounded-xl border px-3 py-2 transition-colors ${preview.isActive ? 'border-emerald-500/30 bg-emerald-500/[0.06]' : 'border-white/10 bg-white/[0.03]'}`}
                 >
-                  {playingVoicePreviewId === preview.id
-                    ? <Square className="h-3 w-3 fill-current" />
-                    : <Play className="h-3 w-3" />}
-                </button>
-                <div className="min-w-0 flex-1">
-                  <span className="text-xs font-medium text-neutral-200">{preview.label}</span>
-                  {preview.voiceDisplayName && (
-                    <span className="ml-1.5 text-xs text-neutral-500">{preview.voiceDisplayName}</span>
-                  )}
-                  {preview.previewScope === 'full' && (
-                    <span className="ml-1.5 text-[10px] text-neutral-600">· full</span>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handlePlayVoicePreview(preview)}
+                    disabled={!preview.audioUrl}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-label={playingVoicePreviewId === preview.id ? 'Stop' : 'Play'}
+                  >
+                    {playingVoicePreviewId === preview.id
+                      ? <Square className="h-3 w-3 fill-current" />
+                      : <Play className="h-3 w-3" />}
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-xs font-medium text-neutral-200">{preview.label}</span>
+                    {preview.voiceDisplayName && (
+                      <span className="ml-1.5 text-xs text-neutral-500">{preview.voiceDisplayName}</span>
+                    )}
+                    {preview.previewScope && (
+                      <span className="ml-1.5 text-[10px] text-neutral-600">
+                        {preview.previewScope === 'full' ? '- full' : '- sample'}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleApplyVoicePreview(preview)}
+                    disabled={!canApplyPreview}
+                    title={canApplyPreview ? 'Apply preview to beat playback' : 'Only full previews can be applied'}
+                    className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDeleteVoicePreview(preview.id)}
+                    className="shrink-0 rounded-lg p-1 text-neutral-600 transition-colors hover:text-neutral-400"
+                    aria-label="Delete preview"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleApplyVoicePreview(preview)}
-                  className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10"
-                >
-                  Apply
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteVoicePreview(preview.id)}
-                  className="shrink-0 rounded-lg p-1 text-neutral-600 transition-colors hover:text-neutral-400"
-                  aria-label="Delete preview"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -4516,10 +4543,10 @@ function StoryScreenInner({
             <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preview scope</span>
             <InfoPopover title="Full preview scope" ariaLabel="About full preview scope">
               <p>
-                <strong className="text-neutral-200">Sample</strong> generates a short one-panel clip — fast and low cost. Use it to quickly audition a voice.
+                <strong className="text-neutral-200">Sample</strong> generates a short one-panel clip - fast and low cost. Use it to quickly audition a voice.
               </p>
               <p>
-                <strong className="text-neutral-200">Full</strong> covers all reel beats in one pass, giving you a complete sound check. After applying, tap <em>Generate all beats</em> to produce per-beat export narration with the exact same voice — no re-audition needed.
+                <strong className="text-neutral-200">Full</strong> generates this beat&apos;s complete narration. Apply it to hear the beat with that voice before saving and generating final narration.
               </p>
             </InfoPopover>
           </div>
@@ -4796,9 +4823,9 @@ function StoryScreenInner({
             >
             {isReelStory && isStoryboard ? (
               <ReelCanvasPreview
-                key={`reel-backdrop:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}`}
+                key={`reel-backdrop:${normalizedCurrentBeat.imageUrl}:${currentBeatPlaybackKey}`}
                 surface="backdrop"
-                beat={normalizedCurrentBeat}
+                beat={currentBeatForPlayback}
                 imageUrl={normalizedCurrentBeat.imageUrl!}
                 audioDurationMs={reelAudioDurationMs}
                 elapsedMs={reelAudioTimeMs}

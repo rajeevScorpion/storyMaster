@@ -687,12 +687,15 @@ export async function applyReelNarrationVoicePreviewAction(
 
   const { data, error } = await supabase
     .from('reel_narration_voice_previews')
-    .select('story_id, settings_snapshot')
+    .select('story_id, settings_snapshot, preview_scope')
     .eq('id', id)
     .eq('user_id', userId)
     .single();
 
   if (error) throw new Error(`Voice preview not found: ${error.message}`);
+  if ((data.preview_scope as NarrationVoicePreviewScope) !== 'full') {
+    throw new Error('Only full beat previews can be applied.');
+  }
 
   // Mark this one active, clear others for the same story
   await supabase
