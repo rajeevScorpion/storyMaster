@@ -490,6 +490,30 @@ export const DEFAULT_REEL_NARRATION_SETTINGS: ReelNarrationSettings = {
   pauseStyle: 'natural',
 };
 
+const ELEVENLABS_MULTILINGUAL_V2_LANGUAGE_CODES = new Set([
+  'en', 'ja', 'zh', 'de', 'hi', 'fr', 'ko', 'pt', 'it', 'es',
+  'id', 'nl', 'tr', 'fil', 'pl', 'sv', 'bg', 'ro', 'ar', 'cs',
+  'el', 'fi', 'hr', 'ms', 'sk', 'da', 'ta', 'uk', 'ru',
+]);
+
+const ELEVENLABS_FLASH_V2_5_LANGUAGE_CODES = new Set([
+  ...ELEVENLABS_MULTILINGUAL_V2_LANGUAGE_CODES,
+  'hu', 'no', 'vi',
+]);
+
+const ELEVENLABS_V3_LANGUAGE_CODES = new Set([
+  'af', 'ar', 'hy', 'as', 'az', 'be', 'bn', 'bs', 'bg', 'ca',
+  'ceb', 'ny', 'hr', 'cs', 'da', 'nl', 'en', 'et', 'fil', 'fi',
+  'fr', 'gl', 'ka', 'de', 'el', 'gu', 'ha', 'he', 'hi', 'hu',
+  'is', 'id', 'ga', 'it', 'ja', 'jv', 'kn', 'kk', 'ky', 'ko',
+  'lv', 'ln', 'lt', 'lb', 'mk', 'ms', 'ml', 'zh', 'mr', 'ne',
+  'no', 'ps', 'fa', 'pl', 'pt', 'pa', 'ro', 'ru', 'sr', 'sd',
+  'sk', 'sl', 'so', 'es', 'sw', 'sv', 'ta', 'te', 'th', 'tr',
+  'uk', 'ur', 'vi', 'cy',
+]);
+
+const ELEVENLABS_BROAD_LANGUAGE_MODEL_ID = 'eleven_v3';
+
 function cleanString(value: unknown, fallback = ''): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
@@ -718,6 +742,77 @@ export function toElevenLabsLanguageCode(language: string | null | undefined): s
   if (normalized.startsWith('gu')) return 'gu';
   if (normalized.startsWith('en')) return 'en';
   return normalized.split('-')[0] || null;
+}
+
+export function elevenLabsModelSupportsLanguage(
+  model: string | null | undefined,
+  language: string | null | undefined
+): boolean {
+  const languageCode = toElevenLabsLanguageCode(language);
+  if (!languageCode) return true;
+
+  const modelId = cleanString(model).toLowerCase();
+  if (!modelId) return true;
+
+  if (modelId === 'eleven_multilingual_v2'
+    || modelId === 'eleven_multilingual_sts_v2'
+    || modelId === 'eleven_multilingual_ttv_v2') {
+    return ELEVENLABS_MULTILINGUAL_V2_LANGUAGE_CODES.has(languageCode);
+  }
+
+  if (modelId === 'eleven_flash_v2_5' || modelId === 'eleven_turbo_v2_5') {
+    return ELEVENLABS_FLASH_V2_5_LANGUAGE_CODES.has(languageCode);
+  }
+
+  if (modelId === 'eleven_flash_v2' || modelId === 'eleven_turbo_v2') {
+    return languageCode === 'en';
+  }
+
+  if (modelId === 'eleven_v3' || modelId === 'eleven_ttv_v3') {
+    return ELEVENLABS_V3_LANGUAGE_CODES.has(languageCode);
+  }
+
+  return true;
+}
+
+export function getElevenLabsUnsupportedLanguageReason(
+  model: string | null | undefined,
+  language: string | null | undefined
+): string | null {
+  if (elevenLabsModelSupportsLanguage(model, language)) return null;
+  const languageCode = toElevenLabsLanguageCode(language) ?? language ?? 'unknown';
+  return `ElevenLabs model ${cleanString(model, 'default')} does not support language_code '${languageCode}'.`;
+}
+
+export function resolveElevenLabsModelForLanguage(
+  preferredModel: string | null | undefined,
+  language: string | null | undefined,
+  fallbackModels: Array<string | null | undefined> = []
+): string {
+  const candidates: string[] = [];
+  [preferredModel, ...fallbackModels, ELEVENLABS_BROAD_LANGUAGE_MODEL_ID].forEach((candidate) => {
+    const model = cleanString(candidate);
+    if (model && !candidates.includes(model)) candidates.push(model);
+  });
+
+  return candidates.find((model) => elevenLabsModelSupportsLanguage(model, language))
+    ?? candidates[0]
+    ?? cleanString(preferredModel);
+}
+
+export function resolvePreviewElevenLabsModel(
+  settings: ReelNarrationSettings,
+  adminSettings: ReelNarrationAdminSettings
+): string {
+  return resolveElevenLabsModelForLanguage(
+    cleanString(adminSettings.previewElevenLabsModel, settings.model),
+    settings.language,
+    [
+      settings.model,
+      adminSettings.finalElevenLabsModel,
+      adminSettings.defaultElevenLabsModel,
+    ]
+  );
 }
 
 export function getEnabledSystemNarrationPresets(adminSettings: ReelNarrationAdminSettings): NarrationPreset[] {

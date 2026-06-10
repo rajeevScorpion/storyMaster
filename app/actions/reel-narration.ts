@@ -17,6 +17,7 @@ import {
   normalizeNarrationPreset,
   normalizeReelNarrationAdminSettings,
   normalizeReelNarrationSettings,
+  resolvePreviewElevenLabsModel,
   storyLanguageToNarrationLanguage,
   type NarrationPreset,
   type NarrationVoicePreviewScope,
@@ -498,7 +499,7 @@ export async function previewReelNarrationAction(input: {
   const previewSettings = normalizeReelNarrationSettings(
     {
       ...settings,
-      model: adminSettings.previewElevenLabsModel || settings.model,
+      model: resolvePreviewElevenLabsModel(settings, adminSettings),
     },
     {
       storyLanguage: input.storyLanguage,
@@ -533,7 +534,7 @@ export async function previewReelNarrationAction(input: {
 
   return {
     audioUrl: result.audioUrl,
-    settings,
+    settings: previewSettings,
   };
 }
 

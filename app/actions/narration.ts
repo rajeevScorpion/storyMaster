@@ -18,9 +18,11 @@ import type { StoryBeat, WordTiming } from '@/lib/types/story';
 import { DEFAULT_REEL_STORY_SETTINGS, normalizeReelStorySettings, type ReelStorySettings } from '@/lib/reel/settings';
 import {
   buildNarrationPerformanceScript,
+  getElevenLabsUnsupportedLanguageReason,
   getNarrationPresetById,
   normalizeReelNarrationPanelPauseMs,
   normalizeReelNarrationSettings,
+  resolveElevenLabsModelForLanguage,
   toElevenLabsLanguageCode,
   type NarrationGenerationMode,
   type NarrationProvider,
@@ -814,55 +816,33 @@ async function buildNarrationAudioPayload(
     : voiceName;
 
   if (isReel && reelSettings.elevenLabs.enabled && narrationSettings.provider === 'elevenlabs') {
-    const elevenScript = buildNarrationPerformanceScript({
-      text: narrationText,
-      captionTexts: reelCaptionTexts,
-      panelPauseMs,
-      settings: narrationSettings,
-      preset,
-      provider: 'elevenlabs',
-      adminSettings: reelSettings.narration,
-      generationMode: options.generationMode ?? 'final',
-    });
-    try {
-      const eleven = await timeNarrationStep(
-        'narration.call_elevenlabs_tts_with_timestamps',
-        {
-          language: narrationSettings.language,
-          storyLength: narrationText.length,
-          modelId: narrationSettings.model,
-          presetId: narrationSettings.presetId,
-          expressiveTagsUsed: elevenScript.expressiveTagsUsed,
-        },
-        () => callElevenLabsTTSWithTimestamps(elevenScript.text, reelSettings, narrationSettings)
-      );
-
-      return {
-        buffer: eleven.audioBuffer,
-        mimeType: eleven.mimeType,
-        extension: 'mp3',
-        reelCaptions: applyAlignmentToReelCaptions(options.reelCaptions, elevenScript.text, eleven.alignment, panelPauseMs),
-        providerUsed: 'elevenlabs',
-        fallbackUsed: false,
-        selectedVoice: narrationSettings.voiceId,
-        selectedModel: narrationSettings.model,
-        language: narrationSettings.language,
-        detectedLanguage: elevenScript.language.detectedLanguage,
-        isMixedLanguage: elevenScript.language.isMixedLanguage,
-        presetId: narrationSettings.presetId,
-        generationDurationMs: Math.round(narrationNowMs() - payloadStartedAt),
-        estimatedCostMetadata: {
-          provider: 'elevenlabs',
-          generationMode: options.generationMode ?? 'final',
-          textLength: narrationText.length,
-        },
-      };
-    } catch (error) {
+    const elevenModel = resolveElevenLabsModelForLanguage(
+      narrationSettings.model || reelSettings.elevenLabs.modelId,
+      narrationSettings.language,
+      [
+        options.generationMode === 'preview'
+          ? reelSettings.narration.previewElevenLabsModel
+          : reelSettings.narration.finalElevenLabsModel,
+        reelSettings.narration.defaultElevenLabsModel,
+        reelSettings.elevenLabs.modelId,
+      ]
+    );
+    const elevenNarrationSettings = normalizeReelNarrationSettings(
+      {
+        ...narrationSettings,
+        model: elevenModel,
+      },
+      {
+        storyLanguage: language,
+        adminSettings: reelSettings.narration,
+      }
+    );
+    const fallbackToGemini = async (error: unknown): Promise<NarrationAudioPayload> => {
       console.warn('ElevenLabs reel TTS failed; falling back to Gemini TTS:', error instanceof Error ? error.message : error);
       const geminiScript = buildNarrationPerformanceScript({
         text: narrationText,
         captionTexts: reelCaptionTexts,
-        settings: narrationSettings,
+        settings: elevenNarrationSettings,
         preset,
         provider: 'gemini_tts',
         adminSettings: reelSettings.narration,
@@ -873,7 +853,7 @@ async function buildNarrationAudioPayload(
         tone,
         genre,
         geminiVoiceName,
-        narrationSettings.language || language,
+        elevenNarrationSettings.language || language,
         costTelemetry,
         {
           taskKey: options.taskKey,
@@ -884,24 +864,79 @@ async function buildNarrationAudioPayload(
         buffer: pcmToWavBuffer(pcmBase64),
         mimeType: 'audio/wav',
         extension: 'wav',
-        reelCaptions: estimateReelCaptionTimings(options.reelCaptions),
+        reelCaptions: estimateReelCaptionTimings(options.reelCaptions, panelPauseMs),
         providerUsed: 'gemini_tts',
         fallbackUsed: true,
         selectedVoice: geminiVoiceName,
         selectedModel: 'gemini_tts',
-        language: narrationSettings.language || language,
+        language: elevenNarrationSettings.language || language,
         detectedLanguage: geminiScript.language.detectedLanguage,
         isMixedLanguage: geminiScript.language.isMixedLanguage,
-        presetId: narrationSettings.presetId,
+        presetId: elevenNarrationSettings.presetId,
         generationDurationMs: Math.round(narrationNowMs() - payloadStartedAt),
         errorMessage: error instanceof Error ? error.message : String(error),
         estimatedCostMetadata: {
           provider: 'gemini_tts',
           fallbackFrom: 'elevenlabs',
+          attemptedElevenLabsModel: elevenNarrationSettings.model,
           generationMode: options.generationMode ?? 'final',
           textLength: narrationText.length,
         },
       };
+    };
+    const unsupportedReason = getElevenLabsUnsupportedLanguageReason(
+      elevenNarrationSettings.model,
+      elevenNarrationSettings.language
+    );
+    if (unsupportedReason) {
+      return fallbackToGemini(new Error(unsupportedReason));
+    }
+
+    const elevenScript = buildNarrationPerformanceScript({
+      text: narrationText,
+      captionTexts: reelCaptionTexts,
+      panelPauseMs,
+      settings: elevenNarrationSettings,
+      preset,
+      provider: 'elevenlabs',
+      adminSettings: reelSettings.narration,
+      generationMode: options.generationMode ?? 'final',
+    });
+    try {
+      const eleven = await timeNarrationStep(
+        'narration.call_elevenlabs_tts_with_timestamps',
+        {
+          language: elevenNarrationSettings.language,
+          storyLength: narrationText.length,
+          modelId: elevenNarrationSettings.model,
+          presetId: elevenNarrationSettings.presetId,
+          expressiveTagsUsed: elevenScript.expressiveTagsUsed,
+        },
+        () => callElevenLabsTTSWithTimestamps(elevenScript.text, reelSettings, elevenNarrationSettings)
+      );
+
+      return {
+        buffer: eleven.audioBuffer,
+        mimeType: eleven.mimeType,
+        extension: 'mp3',
+        reelCaptions: applyAlignmentToReelCaptions(options.reelCaptions, elevenScript.text, eleven.alignment, panelPauseMs),
+        providerUsed: 'elevenlabs',
+        fallbackUsed: false,
+        selectedVoice: elevenNarrationSettings.voiceId,
+        selectedModel: elevenNarrationSettings.model,
+        language: elevenNarrationSettings.language,
+        detectedLanguage: elevenScript.language.detectedLanguage,
+        isMixedLanguage: elevenScript.language.isMixedLanguage,
+        presetId: elevenNarrationSettings.presetId,
+        generationDurationMs: Math.round(narrationNowMs() - payloadStartedAt),
+        estimatedCostMetadata: {
+          provider: 'elevenlabs',
+          generationMode: options.generationMode ?? 'final',
+          textLength: narrationText.length,
+        },
+      };
+    } catch (error) {
+      return fallbackToGemini(error);
     }
   }
 
