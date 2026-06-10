@@ -5,6 +5,7 @@ import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
+import { createPortal } from 'react-dom';
 import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
@@ -551,9 +552,8 @@ function ReelToolbar({
 
 type ReelEditorSection = 'text' | 'style' | 'transitions' | 'voice';
 type ReelEditorDestination = ReelEditorSection;
-type ReelMobilePreviewMode = 'work' | 'compact' | 'full';
-type ReelInlineMobilePreviewMode = Exclude<ReelMobilePreviewMode, 'full'>;
-type ReelPreviewSurface = 'desktop' | 'mobile-work' | 'mobile-compact' | 'mobile-full';
+type ReelMobilePreviewMode = 'work' | 'full';
+type ReelPreviewSurface = 'desktop' | 'mobile-work' | 'mobile-full';
 
 const REEL_EDITOR_DESTINATIONS: Array<{
   id: ReelEditorDestination;
@@ -573,7 +573,6 @@ const REEL_MOBILE_PREVIEW_MODES: Array<{
   icon: LucideIcon;
 }> = [
   { id: 'work', label: 'Work mode', icon: SlidersHorizontal },
-  { id: 'compact', label: 'Compact preview', icon: UnfoldVertical },
   { id: 'full', label: 'Full preview', icon: Focus },
 ];
 
@@ -1049,24 +1048,114 @@ interface ReelFontDropdownProps {
   onChange: (fontFamily: string) => void;
 }
 
+interface FloatingListboxPosition {
+  bottom?: number;
+  left: number;
+  maxHeight: number;
+  maxWidth: number;
+  top?: number;
+  width: number;
+}
+
+function useFloatingListbox(
+  open: boolean,
+  onOpenChange: (open: boolean) => void,
+  optionCount: number,
+  optionHeight = 40
+) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<FloatingListboxPosition | null>(null);
+  const [opensUp, setOpensUp] = useState(false);
+
+  const updatePosition = useCallback(() => {
+    if (!anchorRef.current || typeof window === 'undefined') return;
+
+    const rect = anchorRef.current.getBoundingClientRect();
+    const viewportPadding = 8;
+    const gap = 6;
+    const estimatedMenuHeight = Math.min(optionCount * optionHeight + 12, 280);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const nextOpensUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+    const availableHeight = Math.max(
+      optionHeight + 12,
+      (nextOpensUp ? spaceAbove : spaceBelow) - viewportPadding * 2
+    );
+    const maxWidth = Math.max(0, window.innerWidth - viewportPadding * 2);
+    const width = Math.min(rect.width, maxWidth);
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - width - viewportPadding)
+    );
+
+    setOpensUp(nextOpensUp);
+    setPosition({
+      bottom: nextOpensUp ? Math.max(viewportPadding, window.innerHeight - rect.top + gap) : undefined,
+      left,
+      maxHeight: Math.min(280, availableHeight),
+      maxWidth,
+      top: nextOpensUp ? undefined : Math.min(window.innerHeight - viewportPadding, rect.bottom + gap),
+      width,
+    });
+  }, [optionCount, optionHeight]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const frame = window.requestAnimationFrame(updatePosition);
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (anchorRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      onOpenChange(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [onOpenChange, open, updatePosition]);
+
+  return { anchorRef, menuRef, opensUp, position, updatePosition };
+}
+
 function ReelFontDropdown({ value, storyLanguage, onChange }: ReelFontDropdownProps) {
   const [open, setOpen] = useState(false);
   const options = getReelTextFontPresetsForLanguage(storyLanguage);
   const selected = options.find((font) => font.value === value) ?? options[0];
   const selectedLabel = selected?.label ?? 'Font';
+  const {
+    anchorRef: fontDropdownAnchorRef,
+    menuRef: fontDropdownMenuRef,
+    opensUp: fontDropdownOpensUp,
+    position: fontDropdownPosition,
+    updatePosition: updateFontDropdownPosition,
+  } = useFloatingListbox(open, setOpen, options.length, 38);
 
   return (
     <div
+      ref={fontDropdownAnchorRef}
       className="relative min-w-0 flex-1"
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+        if (
+          !event.currentTarget.contains(event.relatedTarget as Node | null) &&
+          !fontDropdownMenuRef.current?.contains(event.relatedTarget as Node | null)
+        ) {
           setOpen(false);
         }
       }}
     >
       <button
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          if (!open) updateFontDropdownPosition();
+          setOpen((current) => !current);
+        }}
         aria-haspopup="listbox"
         aria-expanded={open}
         className="flex min-h-7 w-full items-center justify-between gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-left font-sans text-[11px] text-neutral-100 outline-none transition-colors hover:border-white/20 focus:border-emerald-400/50"
@@ -1077,38 +1166,58 @@ function ReelFontDropdown({ value, storyLanguage, onChange }: ReelFontDropdownPr
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-neutral-500 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
-      {open && (
-        <div
-          role="listbox"
-          className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-50 overflow-hidden rounded-2xl border border-white/12 bg-neutral-950 p-1.5 shadow-2xl shadow-black/60"
-        >
-          {options.map((font) => {
-            const active = font.value === value;
-            return (
-              <button
-                key={`${font.label}-${font.value}`}
-                type="button"
-                role="option"
-                aria-selected={active}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onChange(font.value);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
-                  active
-                    ? 'bg-emerald-400 text-neutral-950'
-                    : 'text-neutral-200 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                <span className="min-w-0 truncate" style={{ fontFamily: font.value }}>
-                  {font.label}
-                </span>
-                {active && <Check className="h-3.5 w-3.5 shrink-0" />}
-              </button>
-            );
-          })}
-        </div>
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
+          {open && fontDropdownPosition && (
+            <motion.div
+              ref={fontDropdownMenuRef}
+              role="listbox"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+              className={`fixed z-[1000] overflow-y-auto border border-white/12 bg-neutral-950 p-1.5 shadow-2xl shadow-black/60 ${
+                fontDropdownOpensUp ? 'rounded-2xl rounded-b-none' : 'rounded-2xl rounded-t-none'
+              }`}
+              style={{
+                bottom: fontDropdownPosition.bottom,
+                left: fontDropdownPosition.left,
+                maxHeight: fontDropdownPosition.maxHeight,
+                maxWidth: fontDropdownPosition.maxWidth,
+                top: fontDropdownPosition.top,
+                width: fontDropdownPosition.width,
+              }}
+            >
+              {options.map((font) => {
+                const active = font.value === value;
+                return (
+                  <button
+                    key={`${font.label}-${font.value}`}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      onChange(font.value);
+                      setOpen(false);
+                    }}
+                    className={`flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
+                      active
+                        ? 'bg-emerald-400 text-neutral-950'
+                        : 'text-neutral-200 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    <span className="min-w-0 truncate" style={{ fontFamily: font.value }}>
+                      {font.label}
+                    </span>
+                    {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+                  </button>
+                );
+              })}
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
       )}
     </div>
   );
@@ -1397,6 +1506,13 @@ function ReelTransitionPanel({
 }: ReelTransitionPanelProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const selected = REEL_TRANSITION_REGISTRY[settings.type];
+  const {
+    anchorRef: transitionDropdownAnchorRef,
+    menuRef: transitionDropdownMenuRef,
+    opensUp: transitionDropdownOpensUp,
+    position: transitionDropdownPosition,
+    updatePosition: updateTransitionDropdownPosition,
+  } = useFloatingListbox(dropdownOpen, setDropdownOpen, REEL_TRANSITION_TYPES.length, 40);
 
   return (
     <section className={embedded ? 'bg-neutral-950' : 'rounded-3xl border border-white/10 bg-neutral-950 shadow-2xl'}>
@@ -1426,14 +1542,23 @@ function ReelTransitionPanel({
 
       <div className="space-y-3 px-4 py-3">
           <div
+            ref={transitionDropdownAnchorRef}
             className="relative"
             onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropdownOpen(false);
+              if (
+                !event.currentTarget.contains(event.relatedTarget as Node | null) &&
+                !transitionDropdownMenuRef.current?.contains(event.relatedTarget as Node | null)
+              ) {
+                setDropdownOpen(false);
+              }
             }}
           >
             <button
               type="button"
-              onClick={() => setDropdownOpen((current) => !current)}
+              onClick={() => {
+                if (!dropdownOpen) updateTransitionDropdownPosition();
+                setDropdownOpen((current) => !current);
+              }}
               aria-haspopup="listbox"
               aria-expanded={dropdownOpen}
               className="flex min-h-10 w-full items-center justify-between rounded-full border border-white/10 bg-neutral-900 px-4 font-sans text-xs text-neutral-100 transition-colors hover:border-white/20"
@@ -1441,31 +1566,54 @@ function ReelTransitionPanel({
               <span>{selected.label}</span>
               <ChevronDown className={`h-4 w-4 text-neutral-500 transition-transform ${dropdownOpen ? 'rotate-180' : ''}`} />
             </button>
-            {dropdownOpen && (
-              <div role="listbox" className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-50 rounded-2xl border border-white/10 bg-neutral-950 p-1.5 shadow-2xl">
-                {REEL_TRANSITION_TYPES.map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    role="option"
-                    aria-selected={settings.type === type}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      const durationMs = type === 'fast-cut'
-                        ? REEL_TRANSITION_REGISTRY[type].defaultDurationMs
-                        : settings.durationMs;
-                      onChange(normalizeReelTransitionSettings({ type, durationMs, pauseMs: settings.pauseMs }));
-                      setDropdownOpen(false);
-                    }}
-                    className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
-                      settings.type === type ? 'bg-emerald-400 text-neutral-950' : 'text-neutral-200 hover:bg-white/10'
+            {typeof document !== 'undefined' && createPortal(
+              <AnimatePresence>
+                {dropdownOpen && transitionDropdownPosition && (
+                  <motion.div
+                    ref={transitionDropdownMenuRef}
+                    role="listbox"
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                    className={`fixed z-[1000] overflow-y-auto border border-white/10 bg-neutral-950 p-1.5 shadow-2xl ${
+                      transitionDropdownOpensUp ? 'rounded-2xl rounded-b-none' : 'rounded-2xl rounded-t-none'
                     }`}
+                    style={{
+                      bottom: transitionDropdownPosition.bottom,
+                      left: transitionDropdownPosition.left,
+                      maxHeight: transitionDropdownPosition.maxHeight,
+                      maxWidth: transitionDropdownPosition.maxWidth,
+                      top: transitionDropdownPosition.top,
+                      width: transitionDropdownPosition.width,
+                    }}
                   >
-                    {REEL_TRANSITION_REGISTRY[type].label}
-                    {settings.type === type && <Check className="h-3.5 w-3.5" />}
-                  </button>
-                ))}
-              </div>
+                    {REEL_TRANSITION_TYPES.map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        role="option"
+                        aria-selected={settings.type === type}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          const durationMs = type === 'fast-cut'
+                            ? REEL_TRANSITION_REGISTRY[type].defaultDurationMs
+                            : settings.durationMs;
+                          onChange(normalizeReelTransitionSettings({ type, durationMs, pauseMs: settings.pauseMs }));
+                          setDropdownOpen(false);
+                        }}
+                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left font-sans text-xs transition-colors ${
+                          settings.type === type ? 'bg-emerald-400 text-neutral-950' : 'text-neutral-200 hover:bg-white/10'
+                        }`}
+                      >
+                        {REEL_TRANSITION_REGISTRY[type].label}
+                        {settings.type === type && <Check className="h-3.5 w-3.5" />}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>,
+              document.body
             )}
           </div>
 
@@ -2249,7 +2397,6 @@ function StoryScreenInner({
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeReelEditorSection, setActiveReelEditorSection] = useState<ReelEditorSection>('text');
   const [reelMobilePreviewMode, setReelMobilePreviewMode] = useState<ReelMobilePreviewMode>('work');
-  const [reelMobileReturnMode, setReelMobileReturnMode] = useState<ReelInlineMobilePreviewMode>('work');
   const [reelEditorNavigationMessage, setReelEditorNavigationMessage] = useState<string | null>(null);
   const reelSettingsScrollRef = useRef<HTMLDivElement>(null);
   const [reelSettingsFade, setReelSettingsFade] = useState({ top: false, bottom: false });
@@ -2843,9 +2990,6 @@ function StoryScreenInner({
   ]);
 
   const changeReelMobilePreviewMode = useCallback((mode: ReelMobilePreviewMode) => {
-    if (mode !== 'full') {
-      setReelMobileReturnMode(mode);
-    }
     setReelMobilePreviewMode(mode);
   }, []);
 
@@ -3989,21 +4133,13 @@ function StoryScreenInner({
       ? 'hidden h-full rounded-[28px] md:block'
       : surface === 'mobile-work'
       ? 'h-full max-h-full w-auto max-w-[calc(100vw-2rem)] rounded-[18px] md:hidden'
-      : surface === 'mobile-compact'
-      ? 'h-full max-h-full w-auto max-w-[calc(100vw-7rem)] rounded-[18px] md:hidden'
       : surface === 'mobile-full'
       ? 'h-full max-h-full w-auto max-w-[calc(100vw-1.5rem)] rounded-[28px] md:hidden'
       : 'max-w-[19rem] rounded-[24px] md:hidden';
-    const previewStyle: CSSProperties | undefined = surface === 'mobile-compact'
-      ? {
-          maxWidth: 'min(calc(100vw - 8.75rem), 14rem)',
-        }
-      : undefined;
 
     return (
       <div
         className={`relative mx-auto aspect-[9/16] overflow-hidden border border-white/15 bg-neutral-950/50 shadow-2xl ${previewClassName}`}
-        style={previewStyle}
       >
         {isStoryboard ? (
           <ReelCanvasPreview
@@ -4907,41 +5043,13 @@ function StoryScreenInner({
     </div>
   );
 
-  const mobileReelPreviewMode: ReelInlineMobilePreviewMode = reelMobilePreviewMode === 'full'
-    ? reelMobileReturnMode
-    : reelMobilePreviewMode;
-  const mobileInlinePreviewSurface: ReelPreviewSurface = mobileReelPreviewMode === 'work'
-    ? 'mobile-work'
-    : 'mobile-compact';
-  const mobileInlinePreviewSizeClass = mobileReelPreviewMode === 'work'
-    ? 'basis-[30%] min-h-[12rem]'
-    : 'basis-[20%] min-h-[9.5rem]';
-
   const reelEditorLayout = isReelStory ? (
     <>
     <div className={`${reelMobilePreviewMode === 'full' ? 'hidden md:grid' : 'flex'} h-full min-h-0 w-full flex-1 flex-col gap-2 md:h-[min(80dvh,calc(100dvh_-_7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6`}>
-      <div className={`shrink-0 md:hidden ${mobileInlinePreviewSizeClass} ${
-        mobileReelPreviewMode === 'work'
-          ? 'flex items-center justify-center'
-          : 'grid grid-cols-[minmax(0,1fr)_8.5rem] items-stretch gap-3'
-      }`}>
-        {mobileReelPreviewMode === 'work' ? (
-          <div className="flex h-full min-h-0 w-full items-center justify-center">
-            {renderReelPreview(mobileInlinePreviewSurface)}
-          </div>
-        ) : (
-          <>
-            <div className="flex h-full min-h-0 items-center justify-start">
-              {renderReelPreview(mobileInlinePreviewSurface)}
-            </div>
-            <div className="flex min-h-0 flex-col items-end justify-center gap-1.5 overflow-y-auto py-1 scrollbar-none">
-              {renderReelBeatTimeline('vertical')}
-              {renderReelMobileModeControls('horizontal')}
-              {renderReelPlaybackControls('horizontal')}
-              {renderReelMobileActionControls()}
-            </div>
-          </>
-        )}
+      <div className="flex basis-[45%] min-h-[14rem] shrink-0 items-center justify-center md:hidden">
+        <div className="flex h-full min-h-0 w-full items-center justify-center">
+          {renderReelPreview('mobile-work')}
+        </div>
       </div>
 
       <div className="hidden h-full items-end justify-center pb-4 md:flex">
@@ -4950,11 +5058,9 @@ function StoryScreenInner({
 
       {renderReelPreview('desktop')}
 
-      <div className={`flex min-h-0 w-full flex-col gap-2 md:h-full md:self-stretch md:justify-end ${
-        mobileReelPreviewMode === 'work' ? 'flex-1 basis-3/4' : 'flex-1'
-      }`}>
-        {mobileReelPreviewMode === 'work' && renderReelWorkMobileRail()}
-        <div className={mobileReelPreviewMode === 'work' ? 'hidden md:block' : undefined}>
+      <div className="flex min-h-0 w-full flex-1 basis-[55%] flex-col gap-2 md:h-full md:self-stretch md:justify-end">
+        {renderReelWorkMobileRail()}
+        <div className="hidden md:block">
           <ReelToolbar
             storyMap={session.storyMap}
             onNodeClick={handleManualNavigateToNode}
@@ -5054,11 +5160,13 @@ function StoryScreenInner({
             aria-hidden="true"
             className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.06),transparent_58%)]"
           />
-          <div className="absolute right-3 top-3 z-20">
-            {renderReelMobileModeControls('vertical')}
-          </div>
           <div className="relative z-10 flex h-full min-h-0 w-full items-center justify-center">
-            {renderReelPreview('mobile-full')}
+            <div className="relative flex h-full min-h-0 w-fit max-w-full items-center justify-center">
+              {renderReelPreview('mobile-full')}
+              <div className="absolute bottom-3 right-3 z-20">
+                {renderReelMobileModeControls('horizontal')}
+              </div>
+            </div>
           </div>
         </div>
 

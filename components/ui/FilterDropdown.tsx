@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Check } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 
@@ -11,6 +12,16 @@ export interface FilterDropdownOption {
 
 type DropdownSize = 'compact' | 'form';
 type DropdownMode = 'popover' | 'inline';
+
+interface DropdownPosition {
+  bottom?: number;
+  left: number;
+  maxHeight: number;
+  maxWidth: number;
+  minWidth: number;
+  top?: number;
+  width?: number;
+}
 
 export default function FilterDropdown({
   value,
@@ -31,13 +42,15 @@ export default function FilterDropdown({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [opensUp, setOpensUp] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setIsOpen(false);
-      }
+      const target = e.target as Node;
+      if (ref.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setIsOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -45,16 +58,54 @@ export default function FilterDropdown({
 
   const selected = options.find((o) => o.value === value);
   const isForm = size === 'form';
-  const updatePlacement = () => {
+  const updatePlacement = useCallback(() => {
     if (!ref.current || typeof window === 'undefined') return;
 
     const rect = ref.current.getBoundingClientRect();
+    const viewportPadding = 8;
     const estimatedOptionHeight = isForm ? 44 : 36;
     const estimatedMenuHeight = Math.min(options.length * estimatedOptionHeight + 16, 280);
     const spaceBelow = window.innerHeight - rect.bottom;
     const spaceAbove = rect.top;
-    setOpensUp(spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow);
-  };
+    const nextOpensUp = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(
+      estimatedOptionHeight + 16,
+      Math.min(280, (nextOpensUp ? spaceAbove : spaceBelow) - viewportPadding * 2)
+    );
+    const maxWidth = Math.max(0, window.innerWidth - viewportPadding * 2);
+    const width = mode === 'inline' || fullWidth
+      ? Math.min(rect.width, maxWidth)
+      : Math.min(Math.max(rect.width, 180), maxWidth);
+    const menuWidth = width;
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      Math.max(viewportPadding, window.innerWidth - menuWidth - viewportPadding)
+    );
+
+    setOpensUp(nextOpensUp);
+    setMenuPosition({
+      bottom: nextOpensUp ? Math.max(viewportPadding, window.innerHeight - rect.top + 4) : undefined,
+      left,
+      maxHeight,
+      maxWidth,
+      minWidth: Math.min(rect.width, maxWidth),
+      top: nextOpensUp ? undefined : Math.min(window.innerHeight - viewportPadding, rect.bottom - 1),
+      width,
+    });
+  }, [fullWidth, isForm, mode, options.length]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = window.requestAnimationFrame(updatePlacement);
+    window.addEventListener('resize', updatePlacement);
+    window.addEventListener('scroll', updatePlacement, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', updatePlacement);
+      window.removeEventListener('scroll', updatePlacement, true);
+    };
+  }, [isOpen, updatePlacement]);
+
   const containerClassName = [
     'relative',
     fullWidth ? 'w-full' : '',
@@ -70,9 +121,8 @@ export default function FilterDropdown({
     isOpen ? (opensUp ? 'rounded-t-none' : 'rounded-b-none') : '',
   ].join(' ');
   const menuWrapperClassName = [
-    'absolute left-0 z-50 overflow-hidden',
-    opensUp ? 'bottom-full mb-1' : 'top-full -mt-px',
-    mode === 'inline' || fullWidth ? 'w-full' : 'w-max min-w-full',
+    'fixed z-[1000] overflow-hidden',
+    mode === 'inline' || fullWidth ? 'w-full' : '',
   ].join(' ');
   const menuClassName = [
     'max-h-72 overflow-y-auto bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
@@ -84,6 +134,56 @@ export default function FilterDropdown({
     'w-full flex items-center gap-2 transition-colors',
     isForm ? 'px-4 py-3 text-sm text-left' : 'px-3 py-2 text-sm text-left',
   ].join(' ');
+  const menu = typeof document !== 'undefined' ? createPortal(
+    <AnimatePresence>
+      {isOpen && menuPosition && (
+        <motion.div
+          ref={menuRef}
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+          className={menuWrapperClassName}
+          style={{
+            bottom: menuPosition.bottom,
+            left: menuPosition.left,
+            maxWidth: menuPosition.maxWidth,
+            minWidth: menuPosition.minWidth,
+            top: menuPosition.top,
+            width: menuPosition.width,
+          }}
+        >
+          <div className={menuClassName} role="listbox" style={{ maxHeight: menuPosition.maxHeight }}>
+            {options.map((opt) => (
+              <button
+                type="button"
+                key={opt.value}
+                onClick={() => {
+                  onChange(opt.value);
+                  setIsOpen(false);
+                }}
+                className={`${optionClassName} ${
+                  opt.value === value
+                    ? 'text-emerald-400'
+                    : 'text-neutral-400 hover:bg-emerald-500/10 hover:text-emerald-300'
+                }`}
+                role="option"
+                aria-selected={opt.value === value}
+              >
+                <Check
+                  className={`w-3 h-3 shrink-0 ${
+                    opt.value === value ? 'opacity-100' : 'opacity-0'
+                  }`}
+                />
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body
+  ) : null;
 
   return (
     <div ref={ref} className={containerClassName}>
@@ -109,45 +209,7 @@ export default function FilterDropdown({
           }`}
         />
       </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: 'auto' }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className={menuWrapperClassName}
-          >
-            <div className={menuClassName} role="listbox">
-              {options.map((opt) => (
-                <button
-                  type="button"
-                  key={opt.value}
-                  onClick={() => {
-                    onChange(opt.value);
-                    setIsOpen(false);
-                  }}
-                  className={`${optionClassName} ${
-                    opt.value === value
-                      ? 'text-emerald-400'
-                      : 'text-neutral-400 hover:bg-emerald-500/10 hover:text-emerald-300'
-                  }`}
-                  role="option"
-                  aria-selected={opt.value === value}
-                >
-                  <Check
-                    className={`w-3 h-3 shrink-0 ${
-                      opt.value === value ? 'opacity-100' : 'opacity-0'
-                    }`}
-                  />
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {menu}
     </div>
   );
 }

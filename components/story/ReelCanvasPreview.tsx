@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { StoryBeat } from '@/lib/types/story';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
@@ -41,6 +41,39 @@ export interface ReelPreviewBeat {
 
 const PREVIEW_WIDTH = 425;
 const PREVIEW_HEIGHT = Math.round(PREVIEW_WIDTH * 16 / 9);
+const PREVIEW_IMAGE_ASSET_CACHE_LIMIT = 6;
+
+const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+const previewImageAssetCache = new Map<string, ReelImageAssets>();
+
+function getCachedPreviewImageAssets(cacheKey: string): ReelImageAssets | null {
+  const assets = previewImageAssetCache.get(cacheKey);
+  if (!assets) return null;
+  previewImageAssetCache.delete(cacheKey);
+  previewImageAssetCache.set(cacheKey, assets);
+  return assets;
+}
+
+function rememberPreviewImageAssets(cacheKey: string, assets: ReelImageAssets): ReelImageAssets {
+  const existingAssets = previewImageAssetCache.get(cacheKey);
+  if (existingAssets) {
+    if (existingAssets !== assets) releaseReelImageAssets(assets);
+    previewImageAssetCache.delete(cacheKey);
+    previewImageAssetCache.set(cacheKey, existingAssets);
+    return existingAssets;
+  }
+
+  previewImageAssetCache.set(cacheKey, assets);
+  while (previewImageAssetCache.size > PREVIEW_IMAGE_ASSET_CACHE_LIMIT) {
+    const oldestKey = previewImageAssetCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldestAssets = previewImageAssetCache.get(oldestKey);
+    previewImageAssetCache.delete(oldestKey);
+    if (oldestAssets) releaseReelImageAssets(oldestAssets);
+  }
+
+  return assets;
+}
 
 function probeDurationMs(audioUrl: string | undefined): Promise<number> {
   if (!audioUrl) return Promise.resolve(0);
@@ -84,10 +117,7 @@ export default function ReelCanvasPreview({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const onImageLoadRef = useRef(onImageLoad);
   const onImageErrorRef = useRef(onImageError);
-  const [assets, setAssets] = useState<ReelImageAssets | null>(null);
-  const [sequenceDurationsMs, setSequenceDurationsMs] = useState<number[]>([]);
-  const [backdropSize, setBackdropSize] = useState({ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT });
-  const [manualElapsedMs, setManualElapsedMs] = useState<number | null>(null);
+  const isBackdrop = surface === 'backdrop';
   const previewSequence = useMemo(() => (
     playAllActive && sequence?.length
       ? sequence
@@ -98,9 +128,15 @@ export default function ReelCanvasPreview({
     imageUrl: toReelFetchUrl(item.imageUrl),
   })), [previewSequence]);
   const imageAssetsKey = useMemo(
-    () => previewSequence.map((item) => `${item.nodeId}:${item.imageUrl}`).join('|'),
-    [previewSequence]
+    () => [...new Set(renderSequence.map((item) => item.imageUrl))].join('|'),
+    [renderSequence]
   );
+  const [assets, setAssets] = useState<ReelImageAssets | null>(() => (
+    isBackdrop ? null : getCachedPreviewImageAssets(imageAssetsKey)
+  ));
+  const [sequenceDurationsMs, setSequenceDurationsMs] = useState<number[]>([]);
+  const [backdropSize, setBackdropSize] = useState({ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT });
+  const [manualElapsedMs, setManualElapsedMs] = useState<number | null>(null);
   const audioDurationKey = useMemo(
     () => previewSequence.map((item) => `${item.nodeId}:${item.audioUrl ?? ''}`).join('|'),
     [previewSequence]
@@ -125,7 +161,6 @@ export default function ReelCanvasPreview({
     ? timeline.beatDurationsMs.slice(0, activeIndex).reduce((sum, durationMs) => sum + durationMs, 0) + elapsedMs
     : elapsedMs;
   const renderElapsedMs = manualElapsedMs ?? absoluteElapsedMs;
-  const isBackdrop = surface === 'backdrop';
 
   useEffect(() => {
     if (!isBackdrop || !containerRef.current) return;
@@ -168,14 +203,26 @@ export default function ReelCanvasPreview({
   useEffect(() => {
     let alive = true;
     let loadedAssets: ReelImageAssets | null = null;
+    const cachedAssets = isBackdrop ? null : getCachedPreviewImageAssets(imageAssetsKey);
+    if (cachedAssets) {
+      setAssets(cachedAssets);
+      onImageLoadRef.current?.();
+      return () => {
+        alive = false;
+      };
+    }
+
     loadReelImageAssets(renderSequence.map((item) => item.imageUrl))
       .then((nextAssets) => {
         loadedAssets = nextAssets;
+        const reusableAssets = isBackdrop
+          ? nextAssets
+          : rememberPreviewImageAssets(imageAssetsKey, nextAssets);
         if (!alive) {
-          releaseReelImageAssets(nextAssets);
+          if (isBackdrop) releaseReelImageAssets(nextAssets);
           return;
         }
-        setAssets(nextAssets);
+        setAssets(reusableAssets);
         onImageLoadRef.current?.();
       })
       .catch(() => {
@@ -183,13 +230,13 @@ export default function ReelCanvasPreview({
       });
     return () => {
       alive = false;
-      if (loadedAssets) releaseReelImageAssets(loadedAssets);
+      if (isBackdrop && loadedAssets) releaseReelImageAssets(loadedAssets);
     };
     // `imageAssetsKey` tracks only image inputs so voice changes do not reload bitmaps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageAssetsKey]);
+  }, [imageAssetsKey, isBackdrop]);
 
-  useEffect(() => {
+  useBrowserLayoutEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext('2d');
     if (!canvas || !context || !assets) return;
