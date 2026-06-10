@@ -551,9 +551,9 @@ function ReelToolbar({
 
 type ReelEditorSection = 'text' | 'style' | 'transitions' | 'voice';
 type ReelEditorDestination = ReelEditorSection;
-type ReelMobilePreviewMode = 'work' | 'maximize' | 'fullscreen';
-type ReelInlineMobilePreviewMode = Exclude<ReelMobilePreviewMode, 'fullscreen'>;
-type ReelPreviewSurface = 'desktop' | 'mobile-work' | 'mobile-maximize' | 'mobile-fullscreen';
+type ReelMobilePreviewMode = 'work' | 'compact' | 'full';
+type ReelInlineMobilePreviewMode = Exclude<ReelMobilePreviewMode, 'full'>;
+type ReelPreviewSurface = 'desktop' | 'mobile-work' | 'mobile-compact' | 'mobile-full';
 
 const REEL_EDITOR_DESTINATIONS: Array<{
   id: ReelEditorDestination;
@@ -573,8 +573,8 @@ const REEL_MOBILE_PREVIEW_MODES: Array<{
   icon: LucideIcon;
 }> = [
   { id: 'work', label: 'Work mode', icon: SlidersHorizontal },
-  { id: 'maximize', label: 'Maximize preview', icon: UnfoldVertical },
-  { id: 'fullscreen', label: 'Full screen preview', icon: Focus },
+  { id: 'compact', label: 'Compact preview', icon: UnfoldVertical },
+  { id: 'full', label: 'Full preview', icon: Focus },
 ];
 
 interface ReelCaptionStylePanelProps {
@@ -2843,7 +2843,7 @@ function StoryScreenInner({
   ]);
 
   const changeReelMobilePreviewMode = useCallback((mode: ReelMobilePreviewMode) => {
-    if (mode !== 'fullscreen') {
+    if (mode !== 'full') {
       setReelMobileReturnMode(mode);
     }
     setReelMobilePreviewMode(mode);
@@ -3988,17 +3988,15 @@ function StoryScreenInner({
     const previewClassName = surface === 'desktop'
       ? 'hidden h-full rounded-[28px] md:block'
       : surface === 'mobile-work'
+      ? 'h-full max-h-full w-auto max-w-[calc(100vw-2rem)] rounded-[18px] md:hidden'
+      : surface === 'mobile-compact'
       ? 'h-full max-h-full w-auto max-w-[calc(100vw-7rem)] rounded-[18px] md:hidden'
-      : surface === 'mobile-fullscreen'
-      ? 'rounded-[28px] md:hidden'
+      : surface === 'mobile-full'
+      ? 'h-full max-h-full w-auto max-w-[calc(100vw-1.5rem)] rounded-[28px] md:hidden'
       : 'max-w-[19rem] rounded-[24px] md:hidden';
-    const previewStyle: CSSProperties | undefined = surface === 'mobile-maximize'
+    const previewStyle: CSSProperties | undefined = surface === 'mobile-compact'
       ? {
-          width: 'min(calc(100vw - 1.5rem), 19rem, calc(max(13rem, calc(100dvh - 19rem)) * 9 / 16))',
-        }
-      : surface === 'mobile-fullscreen'
-      ? {
-          width: 'min(calc(100vw - 6.5rem), 21rem)',
+          maxWidth: 'min(calc(100vw - 8.75rem), 14rem)',
         }
       : undefined;
 
@@ -4064,8 +4062,11 @@ function StoryScreenInner({
     );
   };
 
-  const renderReelPlaybackControls = () => (
-    <div className="flex flex-col items-center gap-2">
+  const renderReelPlaybackControls = (layout: 'vertical' | 'horizontal' = 'vertical') => {
+    const isHorizontal = layout === 'horizontal';
+
+    return (
+    <div className={`flex items-center gap-2 ${isHorizontal ? 'flex-row' : 'flex-col'}`}>
       <button
         type="button"
         onClick={handleReelNarrationToggle}
@@ -4079,7 +4080,7 @@ function StoryScreenInner({
             ? 'Generate narration for this beat first'
             : 'Play narration'
         }
-        className={`flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-md transition-all ${
+        className={`flex ${isHorizontal ? 'h-9 w-9' : 'h-11 w-11'} items-center justify-center rounded-full border backdrop-blur-md transition-all ${
           canPlayCurrentBeat
             ? playbackState === 'playing'
               ? 'border-emerald-400/45 bg-emerald-500/20 text-emerald-100 hover:bg-emerald-500/30'
@@ -4097,18 +4098,18 @@ function StoryScreenInner({
         type="button"
         onClick={toggleMute}
         title={isMuted ? 'Unmute' : 'Mute'}
-        className="p-2.5 backdrop-blur-md rounded-full transition-all duration-300 bg-neutral-900/60 border border-white/10 hover:border-white/20 hover:bg-neutral-800 cursor-pointer text-neutral-400 hover:text-neutral-200"
+        className={`${isHorizontal ? 'flex h-9 w-9 items-center justify-center p-0' : 'p-2.5'} backdrop-blur-md rounded-full transition-all duration-300 bg-neutral-900/60 border border-white/10 hover:border-white/20 hover:bg-neutral-800 cursor-pointer text-neutral-400 hover:text-neutral-200`}
       >
         {isMuted ? (
-          <VolumeX className="w-5 h-5" />
+          <VolumeX className={isHorizontal ? 'h-4 w-4' : 'w-5 h-5'} />
         ) : (
-          <Volume2 className="w-5 h-5" />
+          <Volume2 className={isHorizontal ? 'h-4 w-4' : 'w-5 h-5'} />
         )}
       </button>
       <button
         type="button"
         onClick={toggleStoryMode}
-        className={`px-2 py-1 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all duration-300 backdrop-blur-md border ${
+        className={`${isHorizontal ? 'h-9 px-2' : 'px-2 py-1'} rounded-full text-[10px] font-sans uppercase tracking-wider transition-all duration-300 backdrop-blur-md border ${
           storyMode
             ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
             : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300 hover:border-white/20'
@@ -4118,10 +4119,11 @@ function StoryScreenInner({
         auto
       </button>
     </div>
-  );
+    );
+  };
 
-  const renderReelMobileModeControls = () => (
-    <div className="flex items-center gap-0.5 rounded-full border border-white/10 bg-neutral-950/75 p-0.5 shadow-lg backdrop-blur-md md:hidden">
+  const renderReelMobileModeControls = (layout: 'horizontal' | 'vertical' = 'horizontal') => (
+    <div className={`flex ${layout === 'vertical' ? 'flex-col' : 'items-center'} gap-0.5 rounded-full border border-white/10 bg-neutral-950/75 p-0.5 shadow-lg backdrop-blur-md md:hidden`}>
       {REEL_MOBILE_PREVIEW_MODES.map((mode) => {
         const Icon = mode.icon;
         const active = reelMobilePreviewMode === mode.id;
@@ -4145,6 +4147,70 @@ function StoryScreenInner({
       })}
     </div>
   );
+
+  const renderReelBeatTimeline = (layout: 'horizontal' | 'vertical' = 'horizontal') => {
+    const timelineNodes = reelTimelineNodes ?? [];
+
+    if (timelineNodes.length === 0) return null;
+
+    if (layout === 'horizontal') {
+      return (
+        <div className="min-w-0 overflow-x-auto scrollbar-none">
+          <Timeline
+            storyMap={session.storyMap}
+            onNodeClick={handleManualNavigateToNode}
+            focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+            nodes={timelineNodes}
+            compact
+          />
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-h-[4.5rem] overflow-y-auto scrollbar-none">
+        <div className="flex flex-col items-center">
+          {timelineNodes.map((node, index) => {
+            const isCurrent = node.id === session.storyMap.currentNodeId;
+            const isFocused = focusMode === 'timeline' && node.id === session.storyMap.currentNodeId;
+            const isLast = index === timelineNodes.length - 1;
+
+            return (
+              <div key={node.id} className="flex flex-col items-center">
+                <button
+                  type="button"
+                  onClick={() => handleManualNavigateToNode(node.id)}
+                  title={`Beat ${node.beatNumber}: ${node.data.title}`}
+                  className="relative group"
+                >
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ delay: index * 0.04, type: 'spring', stiffness: 300 }}
+                    className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all duration-200 ${
+                      isCurrent
+                        ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30'
+                        : 'border border-neutral-600 bg-neutral-800 text-neutral-400 hover:border-neutral-400'
+                    } ${isFocused ? 'ring-2 ring-white/50' : ''}`}
+                  >
+                    {node.beatNumber}
+                  </motion.div>
+                  {isCurrent && (
+                    <motion.div
+                      animate={{ scale: [1, 1.45, 1], opacity: [0.4, 0, 0.4] }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                      className="absolute inset-0 rounded-full bg-emerald-500"
+                    />
+                  )}
+                </button>
+                {!isLast && <div className="h-3 w-px bg-neutral-700" />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const reelSectionHasChanges = (section: ReelEditorDestination): boolean => {
     if (section === 'text') return hasUnsavedReelText;
@@ -4787,6 +4853,27 @@ function StoryScreenInner({
     </button>
   );
 
+  const renderReelImageUploadButton = () => (
+    <button
+      type="button"
+      onClick={togglePromptTools}
+      disabled={!canOpenPromptTools}
+      aria-expanded={promptToolsOpen}
+      aria-haspopup="dialog"
+      aria-label={canOpenPromptTools ? 'Prompt and image tools' : 'No prompt tools available'}
+      title={canOpenPromptTools ? 'Prompt and image tools' : 'No prompt tools available'}
+      className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${
+        !canOpenPromptTools
+          ? 'cursor-not-allowed border-white/5 bg-white/[0.03] text-neutral-700'
+          : promptToolsOpen
+          ? 'border-sky-400/25 bg-sky-500/20 text-sky-200 hover:bg-sky-500/25'
+          : 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10'
+      }`}
+    >
+      <Layers className="h-4 w-4" />
+    </button>
+  );
+
   const reelToolbarActions = (
     <>
       {renderReelPublishButton()}
@@ -4795,50 +4882,63 @@ function StoryScreenInner({
     </>
   );
 
-  const reelFullscreenActions = (
-    <>
+  const renderReelMobileActionControls = () => (
+    <div className="flex items-center justify-end gap-2">
+      {renderReelImageUploadButton()}
       {renderReelExportButton()}
       {renderReelDiscardButton()}
-    </>
+    </div>
   );
 
-  const mobileReelPreviewMode: ReelInlineMobilePreviewMode = reelMobilePreviewMode === 'fullscreen'
+  const renderReelWorkMobileRail = () => (
+    <div className="md:hidden">
+      <div className="flex justify-end pr-1">
+        {renderReelMobileModeControls('horizontal')}
+      </div>
+      <div className="mt-1 flex min-h-11 items-center gap-2 rounded-2xl border border-white/5 bg-neutral-950/55 px-1 py-1 shadow-[0_-10px_24px_rgba(0,0,0,0.16)] backdrop-blur-sm">
+        <div className="min-w-0 flex-1">
+          {renderReelBeatTimeline('horizontal')}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {renderReelPlaybackControls('horizontal')}
+          {renderReelMobileActionControls()}
+        </div>
+      </div>
+    </div>
+  );
+
+  const mobileReelPreviewMode: ReelInlineMobilePreviewMode = reelMobilePreviewMode === 'full'
     ? reelMobileReturnMode
     : reelMobilePreviewMode;
+  const mobileInlinePreviewSurface: ReelPreviewSurface = mobileReelPreviewMode === 'work'
+    ? 'mobile-work'
+    : 'mobile-compact';
+  const mobileInlinePreviewSizeClass = mobileReelPreviewMode === 'work'
+    ? 'basis-[30%] min-h-[12rem]'
+    : 'basis-[20%] min-h-[9.5rem]';
 
   const reelEditorLayout = isReelStory ? (
     <>
-    <div className={`${reelMobilePreviewMode === 'fullscreen' ? 'hidden md:grid' : 'flex'} h-full min-h-0 w-full flex-1 flex-col gap-2 md:h-[min(80dvh,calc(100dvh_-_7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6`}>
-      <div className={`relative md:hidden ${
+    <div className={`${reelMobilePreviewMode === 'full' ? 'hidden md:grid' : 'flex'} h-full min-h-0 w-full flex-1 flex-col gap-2 md:h-[min(80dvh,calc(100dvh_-_7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6`}>
+      <div className={`shrink-0 md:hidden ${mobileInlinePreviewSizeClass} ${
         mobileReelPreviewMode === 'work'
-          ? 'grid basis-1/4 min-h-[7rem] shrink-0 grid-cols-[3rem_minmax(0,1fr)_6.75rem] items-center gap-2 rounded-[24px] border border-white/10 bg-neutral-950/35 px-3 py-2'
-          : 'shrink-0'
+          ? 'flex items-center justify-center'
+          : 'grid grid-cols-[minmax(0,1fr)_8.5rem] items-stretch gap-3'
       }`}>
         {mobileReelPreviewMode === 'work' ? (
-          <>
-            <div className="flex items-center justify-center">
-              {renderReelPlaybackControls()}
-            </div>
-            <div className="flex h-full min-h-0 items-center justify-center">
-              {renderReelPreview('mobile-work')}
-            </div>
-            <div className="flex h-full items-start justify-end pt-1">
-              {renderReelMobileModeControls()}
-            </div>
-          </>
+          <div className="flex h-full min-h-0 w-full items-center justify-center">
+            {renderReelPreview(mobileInlinePreviewSurface)}
+          </div>
         ) : (
           <>
-            <div className="relative mx-auto w-fit">
-              {renderReelPreview('mobile-maximize')}
-              <div className="absolute right-2 top-2 z-20">
-                {renderReelMobileModeControls()}
-              </div>
+            <div className="flex h-full min-h-0 items-center justify-start">
+              {renderReelPreview(mobileInlinePreviewSurface)}
             </div>
-            <div
-              className="absolute bottom-3 z-20"
-              style={{ left: 'max(0.25rem, calc(50% - 12.75rem))' }}
-            >
-              {renderReelPlaybackControls()}
+            <div className="flex min-h-0 flex-col items-end justify-center gap-1.5 overflow-y-auto py-1 scrollbar-none">
+              {renderReelBeatTimeline('vertical')}
+              {renderReelMobileModeControls('horizontal')}
+              {renderReelPlaybackControls('horizontal')}
+              {renderReelMobileActionControls()}
             </div>
           </>
         )}
@@ -4853,16 +4953,19 @@ function StoryScreenInner({
       <div className={`flex min-h-0 w-full flex-col gap-2 md:h-full md:self-stretch md:justify-end ${
         mobileReelPreviewMode === 'work' ? 'flex-1 basis-3/4' : 'flex-1'
       }`}>
-        <ReelToolbar
-          storyMap={session.storyMap}
-          onNodeClick={handleManualNavigateToNode}
-          focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
-          nodes={reelTimelineNodes}
-          canOpenPromptTools={canOpenPromptTools}
-          promptToolsOpen={promptToolsOpen}
-          onTogglePromptTools={togglePromptTools}
-          actions={reelToolbarActions}
-        />
+        {mobileReelPreviewMode === 'work' && renderReelWorkMobileRail()}
+        <div className={mobileReelPreviewMode === 'work' ? 'hidden md:block' : undefined}>
+          <ReelToolbar
+            storyMap={session.storyMap}
+            onNodeClick={handleManualNavigateToNode}
+            focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+            nodes={reelTimelineNodes}
+            canOpenPromptTools={canOpenPromptTools}
+            promptToolsOpen={promptToolsOpen}
+            onTogglePromptTools={togglePromptTools}
+            actions={reelToolbarActions}
+          />
+        </div>
 
         {reelEditorNavigationMessage && (
           <p role="alert" className="shrink-0 rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs font-sans text-amber-200">
@@ -4944,35 +5047,31 @@ function StoryScreenInner({
       </div>
     </div>
 
-    {reelMobilePreviewMode === 'fullscreen' && (
+    {reelMobilePreviewMode === 'full' && (
       <div className="flex h-full min-h-0 w-full flex-1 flex-col md:hidden">
-        <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-1">
+        <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 pb-3 pt-1">
           <div
             aria-hidden="true"
             className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.06),transparent_58%)]"
           />
-          <div className="absolute bottom-5 left-3 z-20">
-            {renderReelPlaybackControls()}
+          <div className="absolute right-3 top-3 z-20">
+            {renderReelMobileModeControls('vertical')}
           </div>
-          <div className="absolute bottom-5 right-3 z-20">
-            {renderReelMobileModeControls()}
-          </div>
-          <div className="relative z-10 flex h-full min-h-0 items-center justify-center">
-            {renderReelPreview('mobile-fullscreen')}
+          <div className="relative z-10 flex h-full min-h-0 w-full items-center justify-center">
+            {renderReelPreview('mobile-full')}
           </div>
         </div>
 
         <div className="relative z-20 shrink-0 border-t border-white/5 bg-neutral-950/80 px-1 pb-2 pt-1 shadow-[0_-16px_36px_rgba(0,0,0,0.35)] backdrop-blur-md">
-          <ReelToolbar
-            storyMap={session.storyMap}
-            onNodeClick={handleManualNavigateToNode}
-            focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
-            nodes={reelTimelineNodes}
-            canOpenPromptTools={canOpenPromptTools}
-            promptToolsOpen={promptToolsOpen}
-            onTogglePromptTools={togglePromptTools}
-            actions={reelFullscreenActions}
-          />
+          <div className="flex min-h-11 items-center gap-2">
+            <div className="min-w-0 flex-1">
+              {renderReelBeatTimeline('horizontal')}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {renderReelPlaybackControls('horizontal')}
+              {renderReelMobileActionControls()}
+            </div>
+          </div>
         </div>
       </div>
     )}

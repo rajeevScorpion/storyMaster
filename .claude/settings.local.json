@@ -46,7 +46,11 @@
       "WebFetch(domain:docs.cloud.google.com)",
       "WebFetch(domain:blog.laozhang.ai)",
       "WebFetch(domain:deepmind.google)",
-      "Bash(tee /tmp/audio_branch.txt)"
+      "Bash(tee /tmp/audio_branch.txt)",
+      "PowerShell(taskkill /F /IM node.exe 2>&1)",
+      "PowerShell(if \\($LASTEXITCODE -eq 0\\) { \"All node processes stopped.\" } else { \"No node processes found or error occurred.\" })",
+      "Bash(ls -la \"d:\\\\AiCoding\\\\storyMaster\\\\\" | grep -i \"wrangler\\\\|cloudflare\")",
+      "Read(//d/AiCoding/**)"
     ]
   },
   "sandbox": {
