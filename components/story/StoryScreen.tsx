@@ -551,6 +551,9 @@ function ReelToolbar({
 
 type ReelEditorSection = 'text' | 'style' | 'transitions' | 'voice';
 type ReelEditorDestination = ReelEditorSection;
+type ReelMobilePreviewMode = 'work' | 'maximize' | 'fullscreen';
+type ReelInlineMobilePreviewMode = Exclude<ReelMobilePreviewMode, 'fullscreen'>;
+type ReelPreviewSurface = 'desktop' | 'mobile-work' | 'mobile-maximize' | 'mobile-fullscreen';
 
 const REEL_EDITOR_DESTINATIONS: Array<{
   id: ReelEditorDestination;
@@ -562,6 +565,16 @@ const REEL_EDITOR_DESTINATIONS: Array<{
   { id: 'style', label: 'Text Settings', icon: Type },
   { id: 'transitions', label: 'Transitions', icon: Blend },
   { id: 'voice', label: 'Voice / Narration', icon: Volume2 },
+];
+
+const REEL_MOBILE_PREVIEW_MODES: Array<{
+  id: ReelMobilePreviewMode;
+  label: string;
+  icon: LucideIcon;
+}> = [
+  { id: 'work', label: 'Work mode', icon: SlidersHorizontal },
+  { id: 'maximize', label: 'Maximize preview', icon: UnfoldVertical },
+  { id: 'fullscreen', label: 'Full screen preview', icon: Focus },
 ];
 
 interface ReelCaptionStylePanelProps {
@@ -2235,6 +2248,8 @@ function StoryScreenInner({
 
   const [isMinimized, setIsMinimized] = useState(false);
   const [activeReelEditorSection, setActiveReelEditorSection] = useState<ReelEditorSection>('text');
+  const [reelMobilePreviewMode, setReelMobilePreviewMode] = useState<ReelMobilePreviewMode>('work');
+  const [reelMobileReturnMode, setReelMobileReturnMode] = useState<ReelInlineMobilePreviewMode>('work');
   const [reelEditorNavigationMessage, setReelEditorNavigationMessage] = useState<string | null>(null);
   const reelSettingsScrollRef = useRef<HTMLDivElement>(null);
   const [reelSettingsFade, setReelSettingsFade] = useState({ top: false, bottom: false });
@@ -2797,7 +2812,7 @@ function StoryScreenInner({
     if (!element) return;
     element.scrollTop = 0;
     updateReelSettingsFade();
-  }, [activeReelEditorSection, isReelStory, updateReelSettingsFade]);
+  }, [activeReelEditorSection, isReelStory, reelMobilePreviewMode, updateReelSettingsFade]);
 
   useEffect(() => {
     if (!isReelStory) return;
@@ -2820,11 +2835,19 @@ function StoryScreenInner({
     hasUnsavedReelText,
     hasUnsavedReelTransitionSettings,
     isReelStory,
+    reelMobilePreviewMode,
     reelStyleMessage,
     reelTextMessage,
     reelTransitionMessage,
     updateReelSettingsFade,
   ]);
+
+  const changeReelMobilePreviewMode = useCallback((mode: ReelMobilePreviewMode) => {
+    if (mode !== 'fullscreen') {
+      setReelMobileReturnMode(mode);
+    }
+    setReelMobilePreviewMode(mode);
+  }, []);
 
   const updateReelPanelDraft = useCallback((panelIndex: number, value: string) => {
     setReelPanelDraft((current) =>
@@ -3961,72 +3984,85 @@ function StoryScreenInner({
       : 'justify-end px-4 pb-[31px] pt-1 md:p-12 max-w-5xl mx-auto'
   }`;
 
-  const renderReelPreview = (surface: 'desktop' | 'mobile') => (
-    <div
-      className={`relative mx-auto aspect-[9/16] overflow-hidden border border-white/15 bg-neutral-950/50 shadow-2xl ${
-        surface === 'desktop'
-          ? 'hidden h-full rounded-[28px] md:block'
-          : 'max-w-[19rem] rounded-[24px] md:hidden'
-      }`}
-      style={surface === 'mobile' ? {
-        width: 'min(calc(100vw - 1.5rem), 19rem, calc(max(13rem, calc(100dvh - 19rem)) * 9 / 16))',
-      } : undefined}
-    >
-      {isStoryboard ? (
-        <ReelCanvasPreview
-          key={`reel-${surface}:${currentNodeId}:${normalizedCurrentBeat.imageUrl}`}
-          beat={currentBeatForPlayback}
-          imageUrl={normalizedCurrentBeat.imageUrl!}
-          audioDurationMs={reelAudioDurationMs}
-          elapsedMs={reelAudioTimeMs}
-          sequence={reelPlayAllActive ? reelPreviewSequence : undefined}
-          currentNodeId={currentNodeId}
-          playAllActive={reelPlayAllActive}
-          resetPanelKey={currentBeatPlaybackKey}
-          vignetteEnabled={cycleSettings.vignetteEnabled}
-          vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
-          textOverlayEnabled={reelOverlayEnabledDraft}
-          textOverlayStyle={reelOverlayDraft}
-          transitionSettings={normalizedReelTransitionDraft}
-          onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
-          onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
-        />
-      ) : displayImageUrl ? (
-        <Image
-          src={displayImageUrl}
-          alt={currentBeat.sceneSummary}
-          fill
-          className="object-cover"
-          referrerPolicy="no-referrer"
-          priority
-          unoptimized
-          onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
-          onError={() => setFailedImageUrl(displayImageUrl)}
-        />
-      ) : showPromptOnlyPlaceholder ? (
-        <div
-          className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
-          title="No image for this beat - use the prompt tools to upload one"
-        >
-          <ImageOff className="h-10 w-10 text-sky-200/80" />
-        </div>
-      ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
-          {showPendingImageState ? (
-            <>
-              <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-              <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Syncing</p>
-            </>
-          ) : (
-            <>
-              <AlertTriangle className="h-8 w-8 text-amber-300" />
-              <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Upload Needs Retry</p>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  const renderReelPreview = (surface: ReelPreviewSurface) => {
+    const previewClassName = surface === 'desktop'
+      ? 'hidden h-full rounded-[28px] md:block'
+      : surface === 'mobile-work'
+      ? 'h-full max-h-full w-auto max-w-[calc(100vw-7rem)] rounded-[18px] md:hidden'
+      : surface === 'mobile-fullscreen'
+      ? 'rounded-[28px] md:hidden'
+      : 'max-w-[19rem] rounded-[24px] md:hidden';
+    const previewStyle: CSSProperties | undefined = surface === 'mobile-maximize'
+      ? {
+          width: 'min(calc(100vw - 1.5rem), 19rem, calc(max(13rem, calc(100dvh - 19rem)) * 9 / 16))',
+        }
+      : surface === 'mobile-fullscreen'
+      ? {
+          width: 'min(calc(100vw - 6.5rem), 21rem)',
+        }
+      : undefined;
+
+    return (
+      <div
+        className={`relative mx-auto aspect-[9/16] overflow-hidden border border-white/15 bg-neutral-950/50 shadow-2xl ${previewClassName}`}
+        style={previewStyle}
+      >
+        {isStoryboard ? (
+          <ReelCanvasPreview
+            key={`reel-${surface}:${currentNodeId}:${normalizedCurrentBeat.imageUrl}`}
+            beat={currentBeatForPlayback}
+            imageUrl={normalizedCurrentBeat.imageUrl!}
+            audioDurationMs={reelAudioDurationMs}
+            elapsedMs={reelAudioTimeMs}
+            sequence={reelPlayAllActive ? reelPreviewSequence : undefined}
+            currentNodeId={currentNodeId}
+            playAllActive={reelPlayAllActive}
+            resetPanelKey={currentBeatPlaybackKey}
+            vignetteEnabled={cycleSettings.vignetteEnabled}
+            vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+            textOverlayEnabled={reelOverlayEnabledDraft}
+            textOverlayStyle={reelOverlayDraft}
+            transitionSettings={normalizedReelTransitionDraft}
+            onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
+            onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
+          />
+        ) : displayImageUrl ? (
+          <Image
+            src={displayImageUrl}
+            alt={currentBeat.sceneSummary}
+            fill
+            className="object-cover"
+            referrerPolicy="no-referrer"
+            priority
+            unoptimized
+            onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
+            onError={() => setFailedImageUrl(displayImageUrl)}
+          />
+        ) : showPromptOnlyPlaceholder ? (
+          <div
+            className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
+            title="No image for this beat - use the prompt tools to upload one"
+          >
+            <ImageOff className="h-10 w-10 text-sky-200/80" />
+          </div>
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
+            {showPendingImageState ? (
+              <>
+                <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
+                <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Syncing</p>
+              </>
+            ) : (
+              <>
+                <AlertTriangle className="h-8 w-8 text-amber-300" />
+                <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Upload Needs Retry</p>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderReelPlaybackControls = () => (
     <div className="flex flex-col items-center gap-2">
@@ -4081,6 +4117,32 @@ function StoryScreenInner({
       >
         auto
       </button>
+    </div>
+  );
+
+  const renderReelMobileModeControls = () => (
+    <div className="flex items-center gap-0.5 rounded-full border border-white/10 bg-neutral-950/75 p-0.5 shadow-lg backdrop-blur-md md:hidden">
+      {REEL_MOBILE_PREVIEW_MODES.map((mode) => {
+        const Icon = mode.icon;
+        const active = reelMobilePreviewMode === mode.id;
+        return (
+          <button
+            key={mode.id}
+            type="button"
+            onClick={() => changeReelMobilePreviewMode(mode.id)}
+            aria-pressed={active}
+            title={mode.label}
+            className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+              active
+                ? 'bg-emerald-500/20 text-emerald-200'
+                : 'text-neutral-400 hover:bg-white/10 hover:text-neutral-100'
+            }`}
+          >
+            <Icon className="h-4 w-4" />
+            <span className="sr-only">{mode.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 
@@ -4653,86 +4715,133 @@ function StoryScreenInner({
     </section>
   );
 
-  const reelToolbarActions = (
-    <>
-      {reelPublishingEnabled && (
-        <button
-          type="button"
-          onClick={() => canPublishReel && setShowPublishDialog(true)}
-          disabled={!canPublishReel}
-          aria-label="Publish reel"
-          title={!onSave ? 'Sign in to publish this reel.' : reelDistributionBlockReason ?? 'Publish reel'}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-white/[0.03] disabled:text-neutral-600"
-        >
-          <Share2 className="h-4 w-4" />
-        </button>
-      )}
-
-      {canExportReelVideo ? (
-        <button
-          type="button"
-          onClick={() => void handleExportReelVideo()}
-          disabled={isExporting}
-          aria-label={isExporting ? `Exporting reel video, ${exportProgress} percent` : 'Export reel video'}
-          title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-wait disabled:opacity-70"
-        >
-          {isExporting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : exportProgress === 100 ? (
-            <Check className="h-4 w-4" />
-          ) : (
-            <Download className="h-4 w-4" />
-          )}
-        </button>
-      ) : reelReadyForDistribution && videoDownloadGlobalOn && !canAccessVideoExport ? (
-        <button
-          type="button"
-          onClick={() => window.open('/wallet', '_blank')}
-          aria-label="Export reel video, upgrade required"
-          title="Video export is available on eligible plans."
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-200"
-        >
-          <Lock className="h-4 w-4" />
-        </button>
-      ) : (
-        <button
-          type="button"
-          disabled
-          aria-label="Export reel video unavailable"
-          title={!videoDownloadGlobalOn ? 'Video export is disabled in Global Settings.' : reelDistributionBlockReason ?? 'Export reel video'}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/5 bg-white/[0.03] text-neutral-600 disabled:cursor-not-allowed"
-        >
-          <Download className="h-4 w-4" />
-        </button>
-      )}
-
+  const renderReelPublishButton = () => (
+    reelPublishingEnabled ? (
       <button
         type="button"
-        onClick={() => {
-          setDiscardReelError(null);
-          setShowDiscardReelDialog(true);
-        }}
-        disabled={!session.savedStoryId || isDiscardingReel}
-        aria-label="Discard reel draft"
-        title={session.savedStoryId ? 'Discard this reel draft' : 'Save must finish before this reel can be discarded.'}
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-rose-500/20 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-white/[0.03] disabled:text-neutral-600"
+        onClick={() => canPublishReel && setShowPublishDialog(true)}
+        disabled={!canPublishReel}
+        aria-label="Publish reel"
+        title={!onSave ? 'Sign in to publish this reel.' : reelDistributionBlockReason ?? 'Publish reel'}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-white/[0.03] disabled:text-neutral-600"
       >
-        {isDiscardingReel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+        <Share2 className="h-4 w-4" />
       </button>
+    ) : null
+  );
+
+  const renderReelExportButton = () => (
+    canExportReelVideo ? (
+      <button
+        type="button"
+        onClick={() => void handleExportReelVideo()}
+        disabled={isExporting}
+        aria-label={isExporting ? `Exporting reel video, ${exportProgress} percent` : 'Export reel video'}
+        title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-wait disabled:opacity-70"
+      >
+        {isExporting ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : exportProgress === 100 ? (
+          <Check className="h-4 w-4" />
+        ) : (
+          <Download className="h-4 w-4" />
+        )}
+      </button>
+    ) : reelReadyForDistribution && videoDownloadGlobalOn && !canAccessVideoExport ? (
+      <button
+        type="button"
+        onClick={() => window.open('/wallet', '_blank')}
+        aria-label="Export reel video, upgrade required"
+        title="Video export is available on eligible plans."
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-neutral-400 transition-colors hover:bg-white/10 hover:text-neutral-200"
+      >
+        <Lock className="h-4 w-4" />
+      </button>
+    ) : (
+      <button
+        type="button"
+        disabled
+        aria-label="Export reel video unavailable"
+        title={!videoDownloadGlobalOn ? 'Video export is disabled in Global Settings.' : reelDistributionBlockReason ?? 'Export reel video'}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/5 bg-white/[0.03] text-neutral-600 disabled:cursor-not-allowed"
+      >
+        <Download className="h-4 w-4" />
+      </button>
+    )
+  );
+
+  const renderReelDiscardButton = () => (
+    <button
+      type="button"
+      onClick={() => {
+        setDiscardReelError(null);
+        setShowDiscardReelDialog(true);
+      }}
+      disabled={!session.savedStoryId || isDiscardingReel}
+      aria-label="Discard reel draft"
+      title={session.savedStoryId ? 'Discard this reel draft' : 'Save must finish before this reel can be discarded.'}
+      className="flex h-9 w-9 items-center justify-center rounded-full border border-rose-500/20 bg-rose-500/10 text-rose-200 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:border-white/5 disabled:bg-white/[0.03] disabled:text-neutral-600"
+    >
+      {isDiscardingReel ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+    </button>
+  );
+
+  const reelToolbarActions = (
+    <>
+      {renderReelPublishButton()}
+      {renderReelExportButton()}
+      {renderReelDiscardButton()}
     </>
   );
 
+  const reelFullscreenActions = (
+    <>
+      {renderReelExportButton()}
+      {renderReelDiscardButton()}
+    </>
+  );
+
+  const mobileReelPreviewMode: ReelInlineMobilePreviewMode = reelMobilePreviewMode === 'fullscreen'
+    ? reelMobileReturnMode
+    : reelMobilePreviewMode;
+
   const reelEditorLayout = isReelStory ? (
-    <div className="flex min-h-0 w-full flex-1 flex-col gap-3 md:h-[min(80dvh,calc(100dvh_-_7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6">
-      <div className="relative shrink-0 md:hidden">
-        {renderReelPreview('mobile')}
-        <div
-          className="absolute bottom-3 z-20"
-          style={{ left: 'max(0.25rem, calc(50% - 12.75rem))' }}
-        >
-          {renderReelPlaybackControls()}
-        </div>
+    <>
+    <div className={`${reelMobilePreviewMode === 'fullscreen' ? 'hidden md:grid' : 'flex'} h-full min-h-0 w-full flex-1 flex-col gap-2 md:h-[min(80dvh,calc(100dvh_-_7rem))] md:flex-none md:grid md:grid-cols-[3.25rem_auto_minmax(20rem,24rem)] md:items-stretch md:justify-center md:gap-6`}>
+      <div className={`relative md:hidden ${
+        mobileReelPreviewMode === 'work'
+          ? 'grid basis-1/4 min-h-[7rem] shrink-0 grid-cols-[3rem_minmax(0,1fr)_6.75rem] items-center gap-2 rounded-[24px] border border-white/10 bg-neutral-950/35 px-3 py-2'
+          : 'shrink-0'
+      }`}>
+        {mobileReelPreviewMode === 'work' ? (
+          <>
+            <div className="flex items-center justify-center">
+              {renderReelPlaybackControls()}
+            </div>
+            <div className="flex h-full min-h-0 items-center justify-center">
+              {renderReelPreview('mobile-work')}
+            </div>
+            <div className="flex h-full items-start justify-end pt-1">
+              {renderReelMobileModeControls()}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="relative mx-auto w-fit">
+              {renderReelPreview('mobile-maximize')}
+              <div className="absolute right-2 top-2 z-20">
+                {renderReelMobileModeControls()}
+              </div>
+            </div>
+            <div
+              className="absolute bottom-3 z-20"
+              style={{ left: 'max(0.25rem, calc(50% - 12.75rem))' }}
+            >
+              {renderReelPlaybackControls()}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="hidden h-full items-end justify-center pb-4 md:flex">
@@ -4741,7 +4850,9 @@ function StoryScreenInner({
 
       {renderReelPreview('desktop')}
 
-      <div className="flex min-h-0 w-full flex-1 flex-col gap-2 md:h-full md:self-stretch md:justify-end">
+      <div className={`flex min-h-0 w-full flex-col gap-2 md:h-full md:self-stretch md:justify-end ${
+        mobileReelPreviewMode === 'work' ? 'flex-1 basis-3/4' : 'flex-1'
+      }`}>
         <ReelToolbar
           storyMap={session.storyMap}
           onNodeClick={handleManualNavigateToNode}
@@ -4832,6 +4943,40 @@ function StoryScreenInner({
         </div>
       </div>
     </div>
+
+    {reelMobilePreviewMode === 'fullscreen' && (
+      <div className="flex h-full min-h-0 w-full flex-1 flex-col md:hidden">
+        <div className="relative flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-1">
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.06),transparent_58%)]"
+          />
+          <div className="absolute bottom-5 left-3 z-20">
+            {renderReelPlaybackControls()}
+          </div>
+          <div className="absolute bottom-5 right-3 z-20">
+            {renderReelMobileModeControls()}
+          </div>
+          <div className="relative z-10 flex h-full min-h-0 items-center justify-center">
+            {renderReelPreview('mobile-fullscreen')}
+          </div>
+        </div>
+
+        <div className="relative z-20 shrink-0 border-t border-white/5 bg-neutral-950/80 px-1 pb-2 pt-1 shadow-[0_-16px_36px_rgba(0,0,0,0.35)] backdrop-blur-md">
+          <ReelToolbar
+            storyMap={session.storyMap}
+            onNodeClick={handleManualNavigateToNode}
+            focusedNodeId={focusMode === 'timeline' ? session.storyMap.currentNodeId : undefined}
+            nodes={reelTimelineNodes}
+            canOpenPromptTools={canOpenPromptTools}
+            promptToolsOpen={promptToolsOpen}
+            onTogglePromptTools={togglePromptTools}
+            actions={reelFullscreenActions}
+          />
+        </div>
+      </div>
+    )}
+    </>
   ) : null;
 
   return (
