@@ -27,6 +27,7 @@ interface ReelCanvasPreviewProps {
   currentNodeId?: string;
   playAllActive?: boolean;
   surface?: 'preview' | 'backdrop';
+  resetPanelKey?: string;
   onImageLoad?: () => void;
   onImageError?: () => void;
 }
@@ -75,6 +76,7 @@ export default function ReelCanvasPreview({
   currentNodeId,
   playAllActive = false,
   surface = 'preview',
+  resetPanelKey,
   onImageLoad,
   onImageError,
 }: ReelCanvasPreviewProps) {
@@ -95,8 +97,12 @@ export default function ReelCanvasPreview({
     ...item,
     imageUrl: toReelFetchUrl(item.imageUrl),
   })), [previewSequence]);
-  const sequenceKey = useMemo(
-    () => previewSequence.map((item) => `${item.nodeId}:${item.imageUrl}:${item.audioUrl ?? ''}`).join('|'),
+  const imageAssetsKey = useMemo(
+    () => previewSequence.map((item) => `${item.nodeId}:${item.imageUrl}`).join('|'),
+    [previewSequence]
+  );
+  const audioDurationKey = useMemo(
+    () => previewSequence.map((item) => `${item.nodeId}:${item.audioUrl ?? ''}`).join('|'),
     [previewSequence]
   );
   const activeIndex = playAllActive
@@ -155,9 +161,9 @@ export default function ReelCanvasPreview({
     return () => {
       alive = false;
     };
-    // `sequenceKey` tracks the audio inputs while avoiding reloads for narration time updates.
+    // `audioDurationKey` tracks audio inputs while avoiding reloads for narration time updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sequenceKey]);
+  }, [audioDurationKey]);
 
   useEffect(() => {
     let alive = true;
@@ -179,9 +185,9 @@ export default function ReelCanvasPreview({
       alive = false;
       if (loadedAssets) releaseReelImageAssets(loadedAssets);
     };
-    // `sequenceKey` tracks media inputs while preserving loaded bitmaps as playback ticks.
+    // `imageAssetsKey` tracks only image inputs so voice changes do not reload bitmaps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sequenceKey]);
+  }, [imageAssetsKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -200,6 +206,10 @@ export default function ReelCanvasPreview({
   useEffect(() => {
     if (absoluteElapsedMs > 0) setManualElapsedMs(null);
   }, [absoluteElapsedMs]);
+
+  useEffect(() => {
+    setManualElapsedMs(null);
+  }, [resetPanelKey]);
 
   const activePanel = getReelSceneAtTime(timeline, renderElapsedMs)?.panelIndex ?? 0;
   const canvasSize = isBackdrop ? backdropSize : { width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT };

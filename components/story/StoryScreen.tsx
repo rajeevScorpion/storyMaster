@@ -2251,6 +2251,7 @@ function StoryScreenInner({
   const [isPreviewingReelNarration, setIsPreviewingReelNarration] = useState(false);
   const [voicePreviews, setVoicePreviews] = useState<ReelNarrationVoicePreview[]>([]);
   const [playingVoicePreviewId, setPlayingVoicePreviewId] = useState<string | null>(null);
+  const [pendingAutoPlayVoicePreviewId, setPendingAutoPlayVoicePreviewId] = useState<string | null>(null);
   const playingVoicePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [voicePreviewScope, setVoicePreviewScope] = useState<NarrationVoicePreviewScope>('1_beat');
 
@@ -3014,11 +3015,18 @@ function StoryScreenInner({
       updateReelNarrationDraft({ presetId: null });
       return;
     }
-    setReelNarrationDraft((current) => applyPresetToNarrationSettings(
-      current,
-      preset,
-      reelNarrationAdminSettings ?? undefined
-    ));
+    setReelNarrationDraft((current) => {
+      const next = applyPresetToNarrationSettings(
+        current,
+        preset,
+        reelNarrationAdminSettings ?? undefined
+      );
+      return {
+        ...next,
+        voiceGender: current.voiceGender,
+        voiceId: current.voiceId,
+      };
+    });
     setReelNarrationSaveState('idle');
     setReelNarrationMessage(null);
   }, [narrationPresets, reelNarrationAdminSettings, updateReelNarrationDraft]);
@@ -3029,10 +3037,43 @@ function StoryScreenInner({
     setPlayingVoicePreviewId(null);
   }, []);
 
+  const playVoicePreviewAudio = useCallback((preview: ReelNarrationVoicePreview) => {
+    stopPlayingVoicePreview();
+    if (!preview.audioUrl) return;
+
+    const audio = new Audio(preview.audioUrl);
+    audio.onended = () => {
+      if (playingVoicePreviewAudioRef.current === audio) {
+        playingVoicePreviewAudioRef.current = null;
+      }
+      setPlayingVoicePreviewId((current) => (current === preview.id ? null : current));
+    };
+    playingVoicePreviewAudioRef.current = audio;
+    setPlayingVoicePreviewId(preview.id);
+    audio.play()
+      .catch(() => {
+        if (playingVoicePreviewAudioRef.current === audio) {
+          playingVoicePreviewAudioRef.current = null;
+        }
+        setPlayingVoicePreviewId((current) => (current === preview.id ? null : current));
+      });
+  }, [stopPlayingVoicePreview]);
+
+  useEffect(() => {
+    if (!pendingAutoPlayVoicePreviewId) return;
+    const preview = voicePreviews.find((candidate) => candidate.id === pendingAutoPlayVoicePreviewId);
+    if (!preview) return;
+
+    setPendingAutoPlayVoicePreviewId(null);
+    playVoicePreviewAudio(preview);
+  }, [pendingAutoPlayVoicePreviewId, playVoicePreviewAudio, voicePreviews]);
+
   const handlePreviewReelNarrationSettings = useCallback(async () => {
     if (isPreviewingReelNarration) return;
     setIsPreviewingReelNarration(true);
     setReelNarrationMessage(null);
+    setPendingAutoPlayVoicePreviewId(null);
+    stopPlayingVoicePreview();
     try {
       const previewText = voicePreviewScope === 'full'
         ? normalizedCurrentBeat.storyText
@@ -3049,10 +3090,6 @@ function StoryScreenInner({
       });
       setReelNarrationDraft(result.settings);
 
-      stopPlayingVoicePreview();
-      const audio = new Audio(result.audioUrl);
-      audio.play();
-
       if (!session.savedStoryId) return;
       const saved = await saveReelNarrationVoicePreviewAction({
         storyId: session.savedStoryId,
@@ -3067,6 +3104,7 @@ function StoryScreenInner({
         const without = prev.filter((p) => p.id !== savedWithAudio.id);
         return [...without, savedWithAudio].slice(-MAX_VOICE_PREVIEWS_LOCAL);
       });
+      setPendingAutoPlayVoicePreviewId(savedWithAudio.id);
     } catch (error) {
       setReelNarrationSaveState('error');
       setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to preview voice.');
@@ -3091,14 +3129,8 @@ function StoryScreenInner({
       stopPlayingVoicePreview();
       return;
     }
-    stopPlayingVoicePreview();
-    if (!preview.audioUrl) return;
-    const audio = new Audio(preview.audioUrl);
-    audio.onended = () => setPlayingVoicePreviewId(null);
-    audio.play();
-    playingVoicePreviewAudioRef.current = audio;
-    setPlayingVoicePreviewId(preview.id);
-  }, [playingVoicePreviewId, stopPlayingVoicePreview]);
+    playVoicePreviewAudio(preview);
+  }, [playVoicePreviewAudio, playingVoicePreviewId, stopPlayingVoicePreview]);
 
   const handleApplyVoicePreview = useCallback(async (preview: ReelNarrationVoicePreview) => {
     if (preview.previewScope !== 'full') {
@@ -3942,7 +3974,7 @@ function StoryScreenInner({
     >
       {isStoryboard ? (
         <ReelCanvasPreview
-          key={`reel-${surface}:${normalizedCurrentBeat.imageUrl}:${currentBeatPlaybackKey}`}
+          key={`reel-${surface}:${currentNodeId}:${normalizedCurrentBeat.imageUrl}`}
           beat={currentBeatForPlayback}
           imageUrl={normalizedCurrentBeat.imageUrl!}
           audioDurationMs={reelAudioDurationMs}
@@ -3950,6 +3982,7 @@ function StoryScreenInner({
           sequence={reelPlayAllActive ? reelPreviewSequence : undefined}
           currentNodeId={currentNodeId}
           playAllActive={reelPlayAllActive}
+          resetPanelKey={currentBeatPlaybackKey}
           vignetteEnabled={cycleSettings.vignetteEnabled}
           vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
           textOverlayEnabled={reelOverlayEnabledDraft}
@@ -4487,7 +4520,7 @@ function StoryScreenInner({
           <div className="space-y-1.5">
             <span className="block text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice previews</span>
             {voicePreviews.map((preview) => {
-              const canApplyPreview = preview.previewScope === 'full' && Boolean(preview.audioUrl);
+              const canApplyPreview = Boolean(preview.audioUrl);
               return (
                 <div
                   key={preview.id}
@@ -4515,15 +4548,17 @@ function StoryScreenInner({
                       </span>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleApplyVoicePreview(preview)}
-                    disabled={!canApplyPreview}
-                    title={canApplyPreview ? 'Apply preview to beat playback' : 'Only full previews can be applied'}
-                    className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Apply
-                  </button>
+                  {preview.previewScope === 'full' && (
+                    <button
+                      type="button"
+                      onClick={() => void handleApplyVoicePreview(preview)}
+                      disabled={!canApplyPreview}
+                      title={canApplyPreview ? 'Apply preview to beat playback' : 'Preview audio is not ready'}
+                      className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Apply
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => void handleDeleteVoicePreview(preview.id)}
@@ -4801,41 +4836,36 @@ function StoryScreenInner({
 
   return (
     <div className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
-      {/* Background Image */}
+      {/* Background */}
       <div className="absolute inset-0 z-0">
         <AnimatePresence mode="wait">
           <motion.div
-            key={visualKey}
-            initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
-            animate={isStoryboard ? { opacity: 1 } : { opacity: 1, scale: [1, 1.08] }}
+            key={isReelStory ? 'reel-workspace-background' : visualKey}
+            initial={isReelStory || isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
+            animate={isReelStory || isStoryboard ? { opacity: 1 } : { opacity: 1, scale: [1, 1.08] }}
             exit={{ opacity: 0 }}
             transition={{
               opacity: { duration: 1.5, ease: "easeOut" },
               scale: { duration: 20, ease: "easeInOut", repeat: Infinity, repeatType: "reverse" },
             }}
-            className={isVerticalStory ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
+            className={isReelStory ? 'absolute inset-0' : isVerticalStory ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
             <div className={isReelStory
-              ? 'absolute inset-0 scale-110 opacity-70 blur-2xl'
+              ? 'absolute inset-0'
               : isVerticalStory
               ? 'absolute inset-0 md:scale-110 md:blur-2xl'
               : 'contents'}
             >
-            {isReelStory && isStoryboard ? (
-              <ReelCanvasPreview
-                key={`reel-backdrop:${normalizedCurrentBeat.imageUrl}:${currentBeatPlaybackKey}`}
-                surface="backdrop"
-                beat={currentBeatForPlayback}
-                imageUrl={normalizedCurrentBeat.imageUrl!}
-                audioDurationMs={reelAudioDurationMs}
-                elapsedMs={reelAudioTimeMs}
-                sequence={reelPlayAllActive ? reelPreviewSequence : undefined}
-                currentNodeId={currentNodeId}
-                playAllActive={reelPlayAllActive}
-                vignetteEnabled={false}
-                vignetteAmountPercent={0}
-                textOverlayEnabled={false}
-                transitionSettings={normalizedReelTransitionDraft}
+            {isReelStory ? (
+              <div
+                className="absolute inset-0"
+                style={{
+                  background: [
+                    'linear-gradient(180deg, rgba(255,255,255,0.045) 0%, rgba(255,255,255,0) 32%, rgba(0,0,0,0.48) 100%)',
+                    'linear-gradient(90deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0) 22%, rgba(0,0,0,0.22) 100%)',
+                    'linear-gradient(135deg, #070708 0%, #161719 42%, #101114 68%, #050506 100%)',
+                  ].join(', '),
+                }}
               />
             ) : isStoryboard ? (
               <StoryboardCycler
