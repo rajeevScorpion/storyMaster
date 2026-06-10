@@ -901,7 +901,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             </div>
                             <div className="flex items-center gap-1.5">
                               <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Mode</span>
-                              <InfoPopover title="Idea or Script" ariaLabel="Show reel input mode details">
+                              <InfoPopover title="Idea or script" ariaLabel="Show reel input mode details">
                                 <p>
                                   Idea lets Kissago shape your thought into expressive short-form reel text, beat panels, and visual prompts.
                                 </p>
@@ -1023,7 +1023,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                   <label className="truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Images</label>
                                   <InfoPopover title="Image mode" ariaLabel="Show image mode details">
                                     <p>
-                                      BYO creates the reel text and image prompts so you can generate or upload visuals yourself.
+                                      Bring your own creates the reel text and image prompts so you can generate or upload visuals yourself.
                                     </p>
                                     <p>
                                       AI asks Kissago to generate the reel images for you and uses more coins.

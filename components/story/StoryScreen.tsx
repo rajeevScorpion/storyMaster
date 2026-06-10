@@ -329,15 +329,39 @@ function ReelInfoPopover({
   children: ReactNode;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
+
+  const open = () => {
+    if (!buttonRef.current) return;
+    const isMobile = window.matchMedia('(max-width: 767px)').matches;
+    if (isMobile) {
+      setPanelStyle({
+        bottom: 12,
+        left: 12,
+        right: 12,
+      });
+      setIsOpen(true);
+      return;
+    }
+
+    const rect = buttonRef.current.getBoundingClientRect();
+    setPanelStyle({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - 264)),
+      top: Math.min(rect.bottom + 8, window.innerHeight - 8),
+    });
+    setIsOpen(true);
+  };
 
   useEffect(() => {
     if (!isOpen) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target)) return;
+      const panel = document.getElementById(panelId);
+      if (panel?.contains(target)) return;
+      setIsOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setIsOpen(false);
@@ -348,13 +372,14 @@ function ReelInfoPopover({
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen]);
+  }, [isOpen, panelId]);
 
   return (
-    <div ref={rootRef} className="relative inline-flex">
+    <div className="relative inline-flex">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={() => setIsOpen((current) => !current)}
+        onClick={() => (isOpen ? setIsOpen(false) : open())}
         className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-white/10 bg-neutral-950 text-neutral-500 transition-colors hover:border-emerald-400/40 hover:text-emerald-300"
         aria-label={`Show ${title} details`}
         aria-expanded={isOpen}
@@ -362,25 +387,41 @@ function ReelInfoPopover({
       >
         <Info className="h-3 w-3" aria-hidden="true" />
       </button>
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            id={panelId}
-            role="dialog"
-            aria-label={title}
-            initial={{ opacity: 0, y: 6, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 6, scale: 0.98 }}
-            transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute left-0 top-full z-50 mt-2 w-64 rounded-2xl border border-white/10 bg-neutral-950 p-3 text-left text-xs leading-relaxed text-neutral-300 shadow-2xl shadow-black/50"
-          >
-            <div className="mb-1 font-sans text-[10px] uppercase tracking-[0.18em] text-emerald-300">
-              {title}
-            </div>
-            {children}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
+          {isOpen && panelStyle && (
+            <>
+              <motion.button
+                type="button"
+                aria-label={`Close ${title} details`}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.14 }}
+                onClick={() => setIsOpen(false)}
+                className="fixed inset-0 z-[1090] bg-black/45 md:hidden"
+              />
+              <motion.div
+                id={panelId}
+                role="dialog"
+                aria-label={title}
+                initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+                style={panelStyle}
+                className="fixed z-[1100] max-h-[min(48dvh,22rem)] w-auto overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-3 text-left text-xs leading-relaxed text-neutral-300 shadow-2xl shadow-black/50 md:w-64 md:max-h-[75vh]"
+              >
+                <div className="mb-1 font-sans text-xs font-medium text-emerald-300">
+                  {title}
+                </div>
+                {children}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 }
@@ -4456,70 +4497,84 @@ function StoryScreenInner({
     </div>
   ) : (
     <section id="reel-editor-panel-voice" role="tabpanel" aria-labelledby="reel-editor-tab-voice" className="bg-neutral-950 px-4 py-4">
-      <div className="space-y-4">
-        <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-4">
+        <div className="order-1 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 font-sans text-[11px] uppercase tracking-[0.22em] text-neutral-400">
             <Volume2 className="h-4 w-4 text-emerald-300/80" />
             Voice
           </div>
-          <button
-            type="button"
-            onClick={() => setReelNarrationAdvancedOpen((value) => !value)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-neutral-300 transition-colors hover:bg-white/10"
-            title={reelNarrationAdvancedOpen ? 'Hide advanced voice controls' : 'Show advanced voice controls'}
-          >
-            <SlidersHorizontal className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <ReelInfoPopover title="Advanced voice settings">
+              <p>
+                Opens detailed narration controls for model, stability, clarity, pacing, pauses, and delivery direction. Use these when the basic voice controls need finer tuning.
+              </p>
+            </ReelInfoPopover>
+            <button
+              type="button"
+              onClick={() => setReelNarrationAdvancedOpen((value) => !value)}
+              aria-pressed={reelNarrationAdvancedOpen}
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${
+                reelNarrationAdvancedOpen
+                  ? 'border-emerald-400/60 bg-emerald-500/20 text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.22)]'
+                  : 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10'
+              }`}
+              title={reelNarrationAdvancedOpen ? 'Hide advanced voice controls' : 'Show advanced voice controls'}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
-        <div className="grid gap-4">
-          <label className="space-y-1.5">
-            <ReelFieldLabel>Language</ReelFieldLabel>
-            <FilterDropdown
-              value={reelNarrationDraft.language}
-              options={reelNarrationLanguageOptions}
-              onChange={(value) => updateReelNarrationDraft({
-                language: value,
-                languageSource: 'user_selected',
-              })}
-              fullWidth
-              size="form"
-              ariaLabel="Reel narration language"
-            />
-          </label>
+        <div className="order-3 grid gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="min-w-0 space-y-1">
+              <ReelFieldLabel>Language</ReelFieldLabel>
+              <FilterDropdown
+                value={reelNarrationDraft.language}
+                options={reelNarrationLanguageOptions}
+                onChange={(value) => updateReelNarrationDraft({
+                  language: value,
+                  languageSource: 'user_selected',
+                })}
+                fullWidth
+                size="compact"
+                ariaLabel="Reel narration language"
+              />
+            </label>
 
-          <div className="space-y-2">
-            <ReelFieldLabel>Voice type</ReelFieldLabel>
-            <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-neutral-900 p-1">
-              {REEL_NARRATION_GENDER_OPTIONS.map((option) => {
-                const isSelected = selectedReelVoiceGender === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => handleReelVoiceGenderChange(option.value)}
-                    className={`rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-                      isSelected
-                        ? 'bg-emerald-500 text-neutral-950'
-                        : 'text-neutral-300 hover:bg-white/10 hover:text-white'
-                    }`}
-                    aria-pressed={isSelected}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
+            <div className="min-w-0 space-y-1">
+              <ReelFieldLabel>Voice type</ReelFieldLabel>
+              <div className="grid h-10 grid-cols-2 rounded-xl border border-white/10 bg-neutral-900 p-0.5">
+                {REEL_NARRATION_GENDER_OPTIONS.map((option) => {
+                  const isSelected = selectedReelVoiceGender === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => handleReelVoiceGenderChange(option.value)}
+                      className={`rounded-lg px-2 py-1 text-sm font-medium transition-colors ${
+                        isSelected
+                          ? 'bg-emerald-500 text-neutral-950'
+                          : 'text-neutral-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                      aria-pressed={isSelected}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
-          <label className="space-y-1.5">
+          <label className="space-y-1">
             <ReelFieldLabel>Voice</ReelFieldLabel>
             <FilterDropdown
               value={reelNarrationDraft.voiceId}
               options={reelVoiceDropdownOptions}
               onChange={(value) => updateReelNarrationDraft({ voiceId: value })}
               fullWidth
-              size="form"
+              size="compact"
               ariaLabel="Reel narration voice"
             />
             {selectedReelVoice.description && (
@@ -4529,15 +4584,15 @@ function StoryScreenInner({
             )}
           </label>
 
-          <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-            <label className="space-y-1.5">
+          <div className="space-y-2.5 rounded-xl border border-white/10 bg-neutral-900/60 p-3">
+            <label className="space-y-1">
               <ReelFieldLabel>Preset</ReelFieldLabel>
               <FilterDropdown
                 value={reelNarrationDraft.presetId || ''}
                 options={reelPresetDropdownOptions}
                 onChange={handleReelNarrationPresetChange}
                 fullWidth
-                size="form"
+                size="compact"
                 ariaLabel="Reel narration preset"
               />
             </label>
@@ -4546,44 +4601,44 @@ function StoryScreenInner({
                 type="button"
                 onClick={() => void handleSetDefaultReelNarrationPreset()}
                 disabled={!selectedReelPresetIsUser || selectedReelPreset?.isDefault}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Check className="h-4 w-4" />
+                <Check className="h-3.5 w-3.5" />
                 Set default
               </button>
               <button
                 type="button"
                 onClick={() => void handleDuplicateReelNarrationPreset()}
                 disabled={!reelNarrationDraft.presetId}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Copy className="h-4 w-4" />
+                <Copy className="h-3.5 w-3.5" />
                 Duplicate
               </button>
               <button
                 type="button"
                 onClick={() => void handleUpdateReelNarrationPreset()}
                 disabled={!selectedReelPresetIsUser}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <RefreshCcw className="h-4 w-4" />
+                <RefreshCcw className="h-3.5 w-3.5" />
                 Update
               </button>
               <button
                 type="button"
                 onClick={() => void handleDeleteReelNarrationPreset()}
                 disabled={!selectedReelPresetIsUser}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-rose-500/20 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-100 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-3.5 w-3.5" />
                 Delete
               </button>
               <button
                 type="button"
                 onClick={() => void handleSaveReelNarrationPreset()}
-                className="col-span-2 inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3 text-xs text-neutral-300 transition-colors hover:bg-white/10"
+                className="col-span-2 inline-flex items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-2 text-xs text-neutral-300 transition-colors hover:bg-white/10"
               >
-                <Save className="h-4 w-4" />
+                <Save className="h-3.5 w-3.5" />
                 Save preset
               </button>
             </div>
@@ -4623,7 +4678,7 @@ function StoryScreenInner({
         </div>
 
         {reelNarrationAdvancedOpen && (
-          <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/70 p-3">
+          <div className="order-2 space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.06] p-3 shadow-[0_12px_36px_rgba(16,185,129,0.08)]">
             <label className="space-y-1">
               <ReelFieldLabel
                 infoTitle="Model"
@@ -4746,7 +4801,7 @@ function StoryScreenInner({
               <label className="space-y-1">
                 <ReelFieldLabel
                   infoTitle="Pause"
-                  info="Controls pauses inside the spoken line. Panel-to-panel silence is controlled in Transitions."
+                  info="Controls pauses inside the spoken line. Panel-to-panel silence is controlled in transitions."
                 >
                   Pause
                 </ReelFieldLabel>
@@ -4781,7 +4836,7 @@ function StoryScreenInner({
         )}
 
         {voicePreviews.length > 0 && (
-          <div className="space-y-1.5">
+          <div className="order-4 space-y-1.5">
             <span className="block text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice previews</span>
             {voicePreviews.map((preview) => {
               const canApplyPreview = Boolean(preview.audioUrl);
@@ -4837,7 +4892,7 @@ function StoryScreenInner({
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-2">
+        <div className="order-5 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <span className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Preview scope</span>
             <InfoPopover title="Full preview scope" ariaLabel="About full preview scope">
@@ -4867,7 +4922,15 @@ function StoryScreenInner({
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="order-6 grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={handleCancelReelNarrationSettings}
+            disabled={!hasUnsavedReelNarrationSettings || isReelNarrationSaving}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
           <button
             type="button"
             onClick={() => void handlePreviewReelNarrationSettings()}
@@ -4886,14 +4949,6 @@ function StoryScreenInner({
             {isReelNarrationSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save
           </button>
-          <button
-            type="button"
-            onClick={handleCancelReelNarrationSettings}
-            disabled={!hasUnsavedReelNarrationSettings || isReelNarrationSaving}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Cancel
-          </button>
         </div>
 
         {reelBeatsNeedingNarration.length > 0 && (
@@ -4901,7 +4956,7 @@ function StoryScreenInner({
             type="button"
             onClick={() => void handleGenerateAllNarration()}
             disabled={isGeneratingAudio || hasUnsavedReelNarrationSettings || hasUnsavedReelText}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="order-7 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isGeneratingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
             Generate narration for all beats
@@ -4909,7 +4964,7 @@ function StoryScreenInner({
         )}
 
         {reelNarrationMessage && (
-          <p className={`text-xs ${reelNarrationSaveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
+          <p className={`order-8 text-xs ${reelNarrationSaveState === 'error' ? 'text-rose-300' : 'text-emerald-300'}`}>
             {reelNarrationMessage}
           </p>
         )}
