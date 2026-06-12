@@ -8,6 +8,7 @@ import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { DEFAULT_VIDEO_EXPORT_PRESET, normalizeVideoExportPreset, type VideoExportPreset } from '@/lib/types/pricing';
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
+import { getStoryboardPanelDurationsSeconds } from '@/lib/storyboard/timing';
 import {
   DEFAULT_REEL_TEXT_OVERLAY_STYLE,
   clampNumber,
@@ -133,7 +134,7 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function getStoryboardPanelDurationsSeconds(beat: StoryBeat, audioDuration: number): number[] {
+function getCaptionTimedStoryboardPanelDurationsSeconds(beat: StoryBeat, audioDuration: number): number[] {
   const fallbackSeconds = STORYBOARD_ADVANCE_MS / 1000;
   const timedCaptions = beat.reelCaptions?.filter((caption) => (
     typeof caption.startMs === 'number'
@@ -816,7 +817,9 @@ export function useVideoExport() {
           const isStoryboard = beat.isStoryboard === true;
           const fallbackSeconds = STORYBOARD_ADVANCE_MS / 1000;
           const panelDurations = isStoryboard
-            ? getStoryboardPanelDurationsSeconds(beat, audioDuration)
+            ? isReelExport
+              ? getCaptionTimedStoryboardPanelDurationsSeconds(beat, audioDuration)
+              : getStoryboardPanelDurationsSeconds(audioDuration)
             : [audioDuration > 0 ? audioDuration : fallbackSeconds];
           const panelDuration = panelDurations[0] ?? fallbackSeconds;
           const endHoldDuration = isReelExport && index === videoBeats.length - 1

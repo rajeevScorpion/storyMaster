@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { toReelFetchUrl } from '@/lib/reel/media';
+import { toMediaFetchUrl } from '@/lib/media/client';
 
 export type PlaybackState = 'idle' | 'playing' | 'paused';
 
@@ -79,7 +79,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       return;
     }
 
-    const audio = new Audio(toReelFetchUrl(audioUrl));
+    const audio = new Audio(toMediaFetchUrl(audioUrl));
     audio.volume = volumeRef.current;
     audio.muted = isMutedRef.current;
     const syncMetadata = () => setDurationMs(Number.isFinite(audio.duration) ? audio.duration * 1000 : 0);

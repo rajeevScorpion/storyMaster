@@ -138,16 +138,30 @@ export async function createR2SignedGetUrl(
   );
 }
 
-export async function getR2ObjectBuffer(reference: string): Promise<{ buffer: Buffer; contentType: string | null } | null> {
+export async function getR2ObjectBuffer(
+  reference: string,
+  options: { range?: string } = {}
+): Promise<{
+  buffer: Buffer;
+  contentType: string | null;
+  contentLength: number;
+  contentRange: string | null;
+} | null> {
   const parsed = parseR2Reference(reference);
   if (!parsed) return null;
   const client = await getR2Client();
-  const response = await client.send(new GetObjectCommand({ Bucket: parsed.bucket, Key: parsed.objectKey }));
+  const response = await client.send(new GetObjectCommand({
+    Bucket: parsed.bucket,
+    Key: parsed.objectKey,
+    ...(options.range ? { Range: options.range } : {}),
+  }));
   const bytes = await response.Body?.transformToByteArray();
   if (!bytes) return null;
   return {
     buffer: Buffer.from(bytes),
     contentType: response.ContentType ?? null,
+    contentLength: response.ContentLength ?? bytes.byteLength,
+    contentRange: response.ContentRange ?? null,
   };
 }
 

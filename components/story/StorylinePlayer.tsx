@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -52,178 +52,15 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
-import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
+import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
-import StoryboardVignette from './StoryboardVignette';
-import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
-
-function StoryboardCycler({
-  gridUrl,
-  audioUrl,
-  cycleOverride,
-  cycleMs,
-  vignetteEnabled,
-  vignetteAmountPercent,
-  playbackState,
-  imageClassName,
-  captions,
-  textOverlayEnabled = true,
-  textOverlayStyle,
-}: {
-  gridUrl: string;
-  audioUrl?: string;
-  cycleOverride: boolean;
-  cycleMs: number;
-  vignetteEnabled: boolean;
-  vignetteAmountPercent: number;
-  playbackState: 'idle' | 'playing' | 'paused';
-  imageClassName?: string;
-  captions?: StoryBeat['reelCaptions'];
-  textOverlayEnabled?: boolean;
-  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
-}) {
-  const [activePanel, setActivePanel] = useState(0);
-  const [currentElapsedMs, setCurrentElapsedMs] = useState<number | null>(null);
-  const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
-  const hasAudio = !!audioUrl;
-  const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
-  const timedCaptions = useMemo(() => captions?.filter((caption) => (
-    typeof caption.startMs === 'number'
-    && typeof caption.endMs === 'number'
-    && caption.endMs > caption.startMs
-  )), [captions]);
-  const hasTimedCaptions = Boolean(timedCaptions && timedCaptions.length > 0);
-  const elapsedBeforePauseRef = useRef(0);
-  const playbackStartedAtRef = useRef<number | null>(null);
-  const panelDurationMs = cycleOverride
-    ? cycleMs
-    : !audioUrl
-    ? STORYBOARD_ADVANCE_MS
-    : resolvedAudioDurationMs ?? STORYBOARD_ADVANCE_MS;
-
-  useEffect(() => {
-    prevPlaybackStateRef.current = 'idle';
-    if (cycleOverride || !audioUrl) return;
-    const audio = new Audio();
-    const onMeta = () => { const d = audio.duration; setResolvedAudioDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS); };
-    const onError = () => setResolvedAudioDurationMs(STORYBOARD_ADVANCE_MS);
-    audio.addEventListener('loadedmetadata', onMeta);
-    audio.addEventListener('error', onError);
-    audio.src = audioUrl;
-    return () => { audio.src = ''; };
-  }, [gridUrl, audioUrl, cycleOverride, cycleMs]);
-
-  useEffect(() => {
-    if (panelDurationMs === null) return;
-    if (hasTimedCaptions && hasAudio && !cycleOverride) return;
-    const prev = prevPlaybackStateRef.current;
-    prevPlaybackStateRef.current = playbackState;
-    let resetPanelTimeout: number | undefined;
-    if (hasAudio && !cycleOverride && prev === 'idle' && playbackState === 'playing') {
-      resetPanelTimeout = window.setTimeout(() => setActivePanel(0), 0);
-    }
-    const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
-    if (!shouldCycle) {
-      return () => {
-        if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
-      };
-    }
-    const id = setInterval(() => setActivePanel(p => Math.min(p + 1, 3)), panelDurationMs);
-    return () => {
-      if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
-      clearInterval(id);
-    };
-  }, [panelDurationMs, playbackState, hasAudio, cycleOverride, hasTimedCaptions]);
-
-  useEffect(() => {
-    if (!hasTimedCaptions || !hasAudio || cycleOverride) return;
-
-    const prev = prevPlaybackStateRef.current;
-    prevPlaybackStateRef.current = playbackState;
-
-    if (prev === 'idle' && playbackState === 'playing') {
-      elapsedBeforePauseRef.current = 0;
-      playbackStartedAtRef.current = Date.now();
-      window.setTimeout(() => setActivePanel(0), 0);
-    } else if (playbackState === 'playing' && playbackStartedAtRef.current === null) {
-      playbackStartedAtRef.current = Date.now();
-    }
-
-    if (playbackState === 'paused' && playbackStartedAtRef.current !== null) {
-      elapsedBeforePauseRef.current += Date.now() - playbackStartedAtRef.current;
-      playbackStartedAtRef.current = null;
-    }
-
-    if (playbackState !== 'playing') return;
-
-    const id = window.setInterval(() => {
-      const startedAt = playbackStartedAtRef.current ?? Date.now();
-      const elapsedMs = elapsedBeforePauseRef.current + (Date.now() - startedAt);
-      setCurrentElapsedMs(elapsedMs);
-      const caption = timedCaptions!.find((item) => elapsedMs >= item.startMs! && elapsedMs < item.endMs!)
-        ?? timedCaptions!.find((item) => elapsedMs < item.endMs!)
-        ?? timedCaptions![timedCaptions!.length - 1];
-      setActivePanel(Math.max(0, Math.min(3, caption.panelIndex)));
-    }, 100);
-
-    return () => window.clearInterval(id);
-  }, [hasTimedCaptions, hasAudio, cycleOverride, playbackState, timedCaptions]);
-
-  const activeCaptionObj = textOverlayEnabled
-    ? captions?.find((caption) => caption.panelIndex === activePanel)
-    : undefined;
-  const activeCaption = activeCaptionObj?.text;
-  const activeCaptionWordTimings = activeCaptionObj?.wordTimings;
-
-  return (
-    <div className="absolute inset-0 overflow-hidden">
-      <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activePanel}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.6, ease: 'easeInOut' }}
-            className="absolute inset-0 overflow-hidden"
-          >
-            <div
-              className="absolute"
-              style={getStoryboardPanelCropStyle(activePanel)}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={gridUrl} alt="" className="w-full h-full object-cover" />
-            </div>
-          </motion.div>
-        </AnimatePresence>
-      </div>
-      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      {activeCaption && (
-        <ReelCaptionOverlay style={textOverlayStyle}>
-          <ReelTimedCaptionText
-            text={activeCaption}
-            wordTimings={activeCaptionWordTimings}
-            elapsedMs={currentElapsedMs}
-            isPlaying={playbackState === 'playing'}
-            style={textOverlayStyle}
-          />
-        </ReelCaptionOverlay>
-      )}
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-        {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
-          <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'}`} />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cursor-pointer';
 const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
@@ -454,10 +291,22 @@ export default function StorylinePlayer({
     ? 'Finalizing file'
     : 'Exporting video';
 
-  const { playbackState, togglePlayPause, play: playAudio, stop: stopAudio, volume, setVolume } = useAudioPlayer(
+  const {
+    playbackState,
+    togglePlayPause,
+    play: playAudio,
+    stop: stopAudio,
+    currentTimeMs: audioElapsedMs,
+    durationMs: audioDurationMs,
+    volume,
+    setVolume,
+  } = useAudioPlayer(
     currentBeat.audioUrl || undefined,
     `storyline-${currentIndex}`
   );
+  const storyboardAudioDurationMs = audioDurationMs > 0
+    ? audioDurationMs
+    : currentBeat.narrationMetadata?.durationMs ?? 0;
 
   const clearChoiceTransitionTimers = useCallback(() => {
     if (choiceHoldTimerRef.current) {
@@ -640,10 +489,12 @@ export default function StorylinePlayer({
               <div className={`absolute inset-0 transition-opacity duration-500 ${
                 isVerticalStoryline ? (isMinimized ? 'opacity-95 md:opacity-60' : 'opacity-95 md:opacity-40') : (isMinimized ? 'opacity-60' : 'opacity-40')
               }`}>
-                <StoryboardCycler
+                <StoryStoryboardPlayer
                   key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                   gridUrl={currentBeat.imageUrl!}
                   audioUrl={currentBeat.audioUrl || undefined}
+                  audioElapsedMs={audioElapsedMs}
+                  audioDurationMs={storyboardAudioDurationMs}
                   cycleOverride={cycleSettings.cycleOverride}
                   cycleMs={cycleSettings.cycleMs}
                   vignetteEnabled={cycleSettings.vignetteEnabled}
@@ -684,10 +535,12 @@ export default function StorylinePlayer({
               <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
                 <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
                   {isStoryboard ? (
-                    <StoryboardCycler
+                    <StoryStoryboardPlayer
                       key={`vertical-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                       gridUrl={currentBeat.imageUrl!}
                       audioUrl={currentBeat.audioUrl || undefined}
+                      audioElapsedMs={audioElapsedMs}
+                      audioDurationMs={storyboardAudioDurationMs}
                       cycleOverride={cycleSettings.cycleOverride}
                       cycleMs={cycleSettings.cycleMs}
                       vignetteEnabled={cycleSettings.vignetteEnabled}
@@ -921,10 +774,12 @@ export default function StorylinePlayer({
         <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStoryline ? 'hidden' : 'flex'}`}>
           <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
             {isStoryboard ? (
-              <StoryboardCycler
+              <StoryStoryboardPlayer
                 key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                 gridUrl={currentBeat.imageUrl!}
                 audioUrl={currentBeat.audioUrl || undefined}
+                audioElapsedMs={audioElapsedMs}
+                audioDurationMs={storyboardAudioDurationMs}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
                 vignetteEnabled={cycleSettings.vignetteEnabled}

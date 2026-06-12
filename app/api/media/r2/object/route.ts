@@ -16,6 +16,11 @@ function isValidObjectKey(value: string | null): value is string {
     && value!.length <= 1024;
 }
 
+function normalizeRangeHeader(value: string | null): string | undefined {
+  if (!value || !/^bytes=(?:\d+-\d*|-\d+)$/.test(value.trim())) return undefined;
+  return value.trim();
+}
+
 function parsePublicR2Url(
   value: string | null,
   publicBaseUrl: string | null,
@@ -79,7 +84,11 @@ export async function GET(request: Request) {
   }
 
   try {
-    const object = await getR2ObjectBuffer(toR2Reference(objectRef.bucket, objectRef.objectKey));
+    const requestedRange = normalizeRangeHeader(request.headers.get('range'));
+    const object = await getR2ObjectBuffer(
+      toR2Reference(objectRef.bucket, objectRef.objectKey),
+      { range: requestedRange }
+    );
     if (!object) {
       return NextResponse.json({ error: 'Media object not found.' }, { status: 404 });
     }
@@ -97,11 +106,17 @@ export async function GET(request: Request) {
       },
     });
 
+    const headers = new Headers({
+      'Content-Type': object.contentType || 'application/octet-stream',
+      'Content-Length': String(object.buffer.byteLength),
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'private, no-store',
+    });
+    if (object.contentRange) headers.set('Content-Range', object.contentRange);
+
     return new Response(body, {
-      headers: {
-        'Content-Type': object.contentType || 'application/octet-stream',
-        'Cache-Control': 'private, no-store',
-      },
+      status: object.contentRange ? 206 : 200,
+      headers,
     });
   } catch (err) {
     console.warn('R2 object proxy failed:', err instanceof Error ? err.message : err);

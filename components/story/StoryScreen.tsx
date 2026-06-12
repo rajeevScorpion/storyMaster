@@ -19,9 +19,8 @@ import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
-import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import ReelCanvasPreview from './ReelCanvasPreview';
-import { toReelFetchUrl } from '@/lib/reel/media';
+import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
@@ -47,8 +46,6 @@ import {
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
-import StoryboardVignette from './StoryboardVignette';
-import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import type { StoryBeat, StoryNode, StorySession } from '@/lib/types/story';
 import { resolveVideoExportWatermarkVisibility, type PricingRuntimeContext } from '@/lib/types/pricing';
@@ -161,207 +158,6 @@ function hasFinalReelNarration(beat: StoryBeat): boolean {
   if (normalizedBeat.activeNarrationPreviewId) return true;
   if (normalizedBeat.narrationMetadata?.scope === 'sample') return false;
   return true;
-}
-
-function StoryboardCycler({
-  gridUrl,
-  audioUrl,
-  cycleOverride,
-  cycleMs,
-  vignetteEnabled,
-  vignetteAmountPercent,
-  playbackState,
-  onImageError,
-  onImageLoad,
-  imageClassName,
-  showIndicators = true,
-  captions,
-  textOverlayEnabled = true,
-  textOverlayStyle,
-  textHighlightSupported = true,
-}: {
-  gridUrl: string;
-  audioUrl?: string;
-  cycleOverride: boolean;
-  cycleMs: number;
-  vignetteEnabled: boolean;
-  vignetteAmountPercent: number;
-  playbackState: 'idle' | 'playing' | 'paused';
-  onImageError?: () => void;
-  onImageLoad?: () => void;
-  imageClassName?: string;
-  showIndicators?: boolean;
-  captions?: StoryBeat['reelCaptions'];
-  textOverlayEnabled?: boolean;
-  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
-  textHighlightSupported?: boolean;
-}) {
-  const [activePanel, setActivePanel] = useState(0);
-  const [currentElapsedMs, setCurrentElapsedMs] = useState<number | null>(null);
-  const [resolvedAudioDurationMs, setResolvedAudioDurationMs] = useState<number | null>(null);
-  const hasAudio = !!audioUrl;
-  const prevPlaybackStateRef = useRef<'idle' | 'playing' | 'paused'>('idle');
-  const timedCaptions = useMemo(() => captions?.filter((caption) => (
-    typeof caption.startMs === 'number'
-    && typeof caption.endMs === 'number'
-    && caption.endMs > caption.startMs
-  )), [captions]);
-  const hasTimedCaptions = Boolean(timedCaptions && timedCaptions.length > 0);
-  const elapsedBeforePauseRef = useRef(0);
-  const playbackStartedAtRef = useRef<number | null>(null);
-  const panelDurationMs = cycleOverride
-    ? cycleMs
-    : !audioUrl
-    ? STORYBOARD_ADVANCE_MS
-    : resolvedAudioDurationMs ?? STORYBOARD_ADVANCE_MS;
-
-  // Effect 1: resolve panel duration whenever the beat changes
-  useEffect(() => {
-    prevPlaybackStateRef.current = 'idle';
-
-    if (cycleOverride || !audioUrl) return;
-
-    // Narration present: hold panel 1 until audio metadata is known
-    const audio = new Audio();
-    const onMeta = () => {
-      const d = audio.duration;
-      setResolvedAudioDurationMs(isFinite(d) && d > 0 ? (d * 1000) / 4 : STORYBOARD_ADVANCE_MS);
-    };
-    const onError = () => setResolvedAudioDurationMs(STORYBOARD_ADVANCE_MS);
-    audio.addEventListener('loadedmetadata', onMeta);
-    audio.addEventListener('error', onError);
-    audio.src = toReelFetchUrl(audioUrl); // triggers metadata load - no play()
-    return () => { audio.src = ''; };
-  }, [gridUrl, audioUrl, cycleOverride, cycleMs]);
-
-  // Effect 2: run interval only when playing (or when no narration)
-  // Pause → interval clears → panel freezes
-  // End (idle after play) → interval clears → panel stays on last frame
-  // Replay (idle → playing) → resets to panel 1 and restarts
-  useEffect(() => {
-    if (panelDurationMs === null) return;
-    if (hasTimedCaptions && hasAudio && !cycleOverride) return;
-
-    const prev = prevPlaybackStateRef.current;
-    prevPlaybackStateRef.current = playbackState;
-
-    // Reset to panel 1 when replaying after narration ended
-    let resetPanelTimeout: number | undefined;
-    if (hasAudio && !cycleOverride && prev === 'idle' && playbackState === 'playing') {
-      resetPanelTimeout = window.setTimeout(() => setActivePanel(0), 0);
-    }
-
-    // With narration: only cycle while playing
-    // Without narration / override: cycle freely (playbackState stays 'idle')
-    const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
-    if (!shouldCycle) {
-      return () => {
-        if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
-      };
-    }
-
-    const id = setInterval(() => setActivePanel(p => Math.min(p + 1, 3)), panelDurationMs);
-    return () => {
-      if (resetPanelTimeout) window.clearTimeout(resetPanelTimeout);
-      clearInterval(id);
-    };
-  }, [panelDurationMs, playbackState, hasAudio, cycleOverride, hasTimedCaptions]);
-
-  useEffect(() => {
-    if (!hasTimedCaptions || !hasAudio || cycleOverride) return;
-
-    const prev = prevPlaybackStateRef.current;
-    prevPlaybackStateRef.current = playbackState;
-
-    if (prev === 'idle' && playbackState === 'playing') {
-      elapsedBeforePauseRef.current = 0;
-      playbackStartedAtRef.current = Date.now();
-      window.setTimeout(() => setActivePanel(0), 0);
-    } else if (playbackState === 'playing' && playbackStartedAtRef.current === null) {
-      playbackStartedAtRef.current = Date.now();
-    }
-
-    if (playbackState === 'paused' && playbackStartedAtRef.current !== null) {
-      elapsedBeforePauseRef.current += Date.now() - playbackStartedAtRef.current;
-      playbackStartedAtRef.current = null;
-    }
-
-    if (playbackState !== 'playing') return;
-
-    const id = window.setInterval(() => {
-      const startedAt = playbackStartedAtRef.current ?? Date.now();
-      const elapsedMs = elapsedBeforePauseRef.current + (Date.now() - startedAt);
-      setCurrentElapsedMs(elapsedMs);
-      const caption = timedCaptions!.find((item) => elapsedMs >= item.startMs! && elapsedMs < item.endMs!)
-        ?? timedCaptions!.find((item) => elapsedMs < item.endMs!)
-        ?? timedCaptions![timedCaptions!.length - 1];
-      setActivePanel(Math.max(0, Math.min(3, caption.panelIndex)));
-    }, 100);
-
-    return () => window.clearInterval(id);
-  }, [hasTimedCaptions, hasAudio, cycleOverride, playbackState, timedCaptions]);
-
-  const activeCaptionObj = textOverlayEnabled
-    ? captions?.find((caption) => caption.panelIndex === activePanel)
-    : undefined;
-  const activeCaption = activeCaptionObj?.text;
-  const activeCaptionWordTimings = textHighlightSupported ? activeCaptionObj?.wordTimings : undefined;
-
-  return (
-    <div className="absolute inset-0 overflow-hidden">
-      <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activePanel}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.6, ease: 'easeInOut' }}
-            className="absolute inset-0 overflow-hidden"
-          >
-            {/* Overscanned grid container, positioned to crop to the active quadrant. */}
-            <div
-              className="absolute"
-              style={getStoryboardPanelCropStyle(activePanel)}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={gridUrl}
-                alt=""
-                className="w-full h-full object-cover"
-                onLoad={onImageLoad}
-                onError={onImageError}
-              />
-            </div>
-          </motion.div>
-        </AnimatePresence>
-      </div>
-      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      {activeCaption && (
-        <ReelCaptionOverlay style={textOverlayStyle}>
-          <ReelTimedCaptionText
-            text={activeCaption}
-            wordTimings={activeCaptionWordTimings}
-            elapsedMs={currentElapsedMs}
-            isPlaying={playbackState === 'playing'}
-            style={textOverlayStyle}
-          />
-        </ReelCaptionOverlay>
-      )}
-      {showIndicators && (
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-          {STORYBOARD_PANEL_SEQUENCE.map((_, i) => (
-            <div
-              key={i}
-              className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
-                i === activePanel ? 'bg-white/70 scale-125' : 'bg-white/25'
-              }`}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function isFallbackImageUrl(url: string | undefined): boolean {
@@ -2703,6 +2499,9 @@ function StoryScreenInner({
     currentBeatPlaybackKey,
     { onEnded: handleReelAudioEnded }
   );
+  const storyboardAudioDurationMs = reelAudioDurationMs > 0
+    ? reelAudioDurationMs
+    : normalizedCurrentBeat.narrationMetadata?.durationMs ?? 0;
   const {
     exportVideo,
     cancel: cancelExport,
@@ -5670,10 +5469,12 @@ function StoryScreenInner({
                 }}
               />
             ) : isStoryboard ? (
-              <StoryboardCycler
+              <StoryStoryboardPlayer
                 key={`${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                 gridUrl={normalizedCurrentBeat.imageUrl!}
                 audioUrl={normalizedCurrentBeat.audioUrl}
+                audioElapsedMs={reelAudioTimeMs}
+                audioDurationMs={storyboardAudioDurationMs}
                 cycleOverride={cycleSettings.cycleOverride}
                 cycleMs={cycleSettings.cycleMs}
                 vignetteEnabled={cycleSettings.vignetteEnabled}
@@ -5703,10 +5504,12 @@ function StoryScreenInner({
               <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
                 <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
                   {isStoryboard ? (
-                    <StoryboardCycler
+                    <StoryStoryboardPlayer
                       key={`vertical-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                       gridUrl={normalizedCurrentBeat.imageUrl!}
                       audioUrl={normalizedCurrentBeat.audioUrl}
+                      audioElapsedMs={reelAudioTimeMs}
+                      audioDurationMs={storyboardAudioDurationMs}
                       cycleOverride={cycleSettings.cycleOverride}
                       cycleMs={cycleSettings.cycleMs}
                       vignetteEnabled={cycleSettings.vignetteEnabled}
@@ -5852,10 +5655,12 @@ function StoryScreenInner({
           {(displayImageUrl || showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
               {isStoryboard ? (
-                <StoryboardCycler
+                <StoryStoryboardPlayer
                   key={`mobile-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                   gridUrl={normalizedCurrentBeat.imageUrl!}
                   audioUrl={normalizedCurrentBeat.audioUrl}
+                  audioElapsedMs={reelAudioTimeMs}
+                  audioDurationMs={storyboardAudioDurationMs}
                   cycleOverride={cycleSettings.cycleOverride}
                   cycleMs={cycleSettings.cycleMs}
                   vignetteEnabled={cycleSettings.vignetteEnabled}
