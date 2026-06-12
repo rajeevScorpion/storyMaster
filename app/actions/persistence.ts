@@ -500,6 +500,14 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.narration_voice_id = normalizedBeat.narrationVoiceId;
   }
 
+  if (normalizedBeat.narrationMetadata) {
+    row.narration_metadata = normalizedBeat.narrationMetadata as unknown as Record<string, unknown>;
+  }
+
+  if (normalizedBeat.activeNarrationPreviewId) {
+    row.active_narration_preview_id = normalizedBeat.activeNarrationPreviewId;
+  }
+
   if (normalizedBeat.isStoryboard) {
     row.is_storyboard = true;
   }
@@ -552,6 +560,8 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,
     narrationVoiceId: beat.narration_voice_id || undefined,
+    narrationMetadata: beat.narration_metadata as StoryBeat['narrationMetadata'] | undefined,
+    activeNarrationPreviewId: beat.active_narration_preview_id || undefined,
     isStoryboard: beat.is_storyboard || undefined,
     reelCaptions: Array.isArray(beat.reel_captions)
       ? beat.reel_captions as StoryBeat['reelCaptions']
@@ -1076,6 +1086,8 @@ export async function updateBeatMediaState(
     audioStatus?: BeatMediaStatus;
     audioError?: string | null;
     narrationVoiceId?: string;
+    narrationMetadata?: StoryBeat['narrationMetadata'] | null;
+    activeNarrationPreviewId?: string | null;
     characters?: Character[];
     reelCaptions?: StoryBeat['reelCaptions'] | null;
   }
@@ -1114,6 +1126,14 @@ export async function updateBeatMediaState(
     updateData.audio_synced_at = null;
   }
   if (patch.narrationVoiceId) updateData.narration_voice_id = patch.narrationVoiceId;
+  if ('narrationMetadata' in patch) {
+    updateData.narration_metadata = patch.narrationMetadata
+      ? patch.narrationMetadata as unknown as Record<string, unknown>
+      : null;
+  }
+  if ('activeNarrationPreviewId' in patch) {
+    updateData.active_narration_preview_id = patch.activeNarrationPreviewId ?? null;
+  }
   if (patch.characters) {
     updateData.characters = patch.characters as unknown as Record<string, unknown>[];
   }
@@ -1183,6 +1203,8 @@ export async function updateBeatMediaState(
     ...(patch.audioStatus ? { audioStatus: patch.audioStatus } : {}),
     ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
     ...(patch.narrationVoiceId ? { narrationVoiceId: patch.narrationVoiceId } : {}),
+    ...('narrationMetadata' in patch ? { narrationMetadata: patch.narrationMetadata || undefined } : {}),
+    ...('activeNarrationPreviewId' in patch ? { activeNarrationPreviewId: patch.activeNarrationPreviewId || undefined } : {}),
     ...(patch.characters ? { characters: patch.characters } : {}),
     ...('reelCaptions' in patch ? { reelCaptions: patch.reelCaptions || undefined } : {}),
   });
@@ -1376,6 +1398,8 @@ export async function autoPublishStoryline(
     audioStatus: b.audio_status,
     audioError: b.audio_error || undefined,
     narrationVoiceId: b.narration_voice_id || undefined,
+    narrationMetadata: b.narration_metadata as StoryBeat['narrationMetadata'] | undefined,
+    activeNarrationPreviewId: b.active_narration_preview_id || undefined,
     isStoryboard: b.is_storyboard || undefined,
     reelCaptions: Array.isArray(b.reel_captions) ? b.reel_captions as StoryBeat['reelCaptions'] : undefined,
     reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,

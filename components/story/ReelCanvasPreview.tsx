@@ -20,6 +20,7 @@ interface ReelCanvasPreviewProps {
   elapsedMs: number;
   textOverlayEnabled: boolean;
   textOverlayStyle?: ReelTextOverlayStyle;
+  textHighlightSupported?: boolean;
   transitionSettings: ReelTransitionSettings;
   vignetteEnabled: boolean;
   vignetteAmountPercent: number;
@@ -91,8 +92,19 @@ function probeDurationMs(audioUrl: string | undefined): Promise<number> {
       cleanUp();
       resolve(0);
     });
-    audio.src = audioUrl;
+    audio.src = toReelFetchUrl(audioUrl);
   });
+}
+
+function stripWordTimings(beat: StoryBeat): StoryBeat {
+  if (!beat.reelCaptions?.some((caption) => caption.wordTimings?.length)) return beat;
+  return {
+    ...beat,
+    reelCaptions: beat.reelCaptions.map((caption) => ({
+      ...caption,
+      wordTimings: undefined,
+    })),
+  };
 }
 
 export default function ReelCanvasPreview({
@@ -102,6 +114,7 @@ export default function ReelCanvasPreview({
   elapsedMs,
   textOverlayEnabled,
   textOverlayStyle,
+  textHighlightSupported = true,
   transitionSettings,
   vignetteEnabled,
   vignetteAmountPercent,
@@ -123,10 +136,16 @@ export default function ReelCanvasPreview({
       ? sequence
       : [{ beat, imageUrl, audioUrl: beat.audioUrl, nodeId: currentNodeId ?? 'current' }]
   ), [beat, currentNodeId, imageUrl, playAllActive, sequence]);
-  const renderSequence = useMemo(() => previewSequence.map((item) => ({
-    ...item,
-    imageUrl: toReelFetchUrl(item.imageUrl),
-  })), [previewSequence]);
+  const renderSequence = useMemo(() => previewSequence.map((item) => {
+    const keepHighlights = playAllActive
+      ? item.beat.narrationMetadata?.textHighlightSupported === true
+      : textHighlightSupported;
+    return {
+      ...item,
+      beat: keepHighlights ? item.beat : stripWordTimings(item.beat),
+      imageUrl: toReelFetchUrl(item.imageUrl),
+    };
+  }), [playAllActive, previewSequence, textHighlightSupported]);
   const imageAssetsKey = useMemo(
     () => [...new Set(renderSequence.map((item) => item.imageUrl))].join('|'),
     [renderSequence]

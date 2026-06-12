@@ -18,15 +18,20 @@ import type { StoryBeat, WordTiming } from '@/lib/types/story';
 import { DEFAULT_REEL_STORY_SETTINGS, normalizeReelStorySettings, type ReelStorySettings } from '@/lib/reel/settings';
 import {
   buildNarrationPerformanceScript,
+  getTextHighlightSupported,
   getElevenLabsUnsupportedLanguageReason,
   getNarrationPresetById,
+  normalizeNarrationMetadata,
   normalizeReelNarrationPanelPauseMs,
   normalizeReelNarrationSettings,
   resolveElevenLabsModelForLanguage,
   toElevenLabsLanguageCode,
+  type BeatNarrationMetadata,
   type NarrationGenerationMode,
   type NarrationProvider,
+  type NarrationPreset,
   type ReelNarrationSettings,
+  type WordTimestamp,
 } from '@/lib/reel/narration';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
@@ -47,6 +52,7 @@ import {
 } from '@/lib/ai/narration-voices';
 
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
+const ELEVENLABS_TTS_TIMEOUT_MS = 45_000;
 const NARRATION_SAMPLE_BUCKET = 'narration-voice-samples';
 const VOICE_SAMPLE_BATCH_SIZE = 6;
 const VOICE_SAMPLE_BATCH_DELAY_MS = 65_000;
@@ -108,8 +114,7 @@ function getApiKey(): string {
   return key;
 }
 
-function pcmToWavBuffer(pcmBase64: string, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
-  const pcmBytes = Buffer.from(pcmBase64, 'base64');
+function pcmBufferToWavBuffer(pcmBytes: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
   const dataSize = pcmBytes.length;
   const byteRate = sampleRate * channels * (bitsPerSample / 8);
   const blockAlign = channels * (bitsPerSample / 8);
@@ -138,10 +143,24 @@ function pcmToWavBuffer(pcmBase64: string, sampleRate = 24000, channels = 1, bit
   return Buffer.concat([header, pcmBytes]);
 }
 
+function pcmToWavBuffer(pcmBase64: string, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
+  return pcmBufferToWavBuffer(Buffer.from(pcmBase64, 'base64'), sampleRate, channels, bitsPerSample);
+}
+
 function pcmBase64DurationMs(pcmBase64: string, sampleRate = 24000, channels = 1, bitsPerSample = 16): number {
   const bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
   const pcmBytes = Buffer.from(pcmBase64, 'base64');
   return Math.round((pcmBytes.length / bytesPerSecond) * 1000);
+}
+
+function pcmBufferDurationMs(pcmBytes: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): number {
+  const bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
+  return Math.round((pcmBytes.length / bytesPerSecond) * 1000);
+}
+
+function silencePcmBuffer(durationMs: number, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
+  const bytesPerSecond = sampleRate * channels * (bitsPerSample / 8);
+  return Buffer.alloc(Math.max(0, Math.round((durationMs / 1000) * bytesPerSecond)));
 }
 
 function sampleTextHash(text: string): string {
@@ -375,13 +394,14 @@ export async function generateNarrationVoiceSamples(options: { regenerateAll?: b
         let lastError: unknown = null;
         for (let attempt = 1; attempt <= VOICE_SAMPLE_MAX_ATTEMPTS; attempt += 1) {
           try {
-            pcmBase64 = await callGeminiTTS(
+            const ttsResult = await callGeminiTTS(
               task.sampleText,
               'warm',
               'narration voice sample',
               task.voiceId,
               task.languageCode
             );
+            pcmBase64 = ttsResult.pcmBase64;
             break;
           } catch (error) {
             lastError = error;
@@ -477,6 +497,12 @@ export async function generateNarrationVoiceSamples(options: { regenerateAll?: b
   };
 }
 
+interface GeminiTTSResult {
+  pcmBase64: string;
+  modelId: string;
+  tokensUsed?: number;
+}
+
 async function callGeminiTTS(
   storyText: string,
   tone: string,
@@ -488,7 +514,7 @@ async function callGeminiTTS(
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
   } = {}
-): Promise<string> {
+): Promise<GeminiTTSResult> {
   return timeNarrationStep(
     'narration.call_gemini_tts',
     {
@@ -560,7 +586,13 @@ async function callGeminiTTS(
         });
       }
 
-      return audioPart.inlineData.data;
+      return {
+        pcmBase64: audioPart.inlineData.data,
+        modelId: ttsConfig.model,
+        tokensUsed: response.usageMetadata
+          ? (response.usageMetadata.promptTokenCount ?? 0) + (response.usageMetadata.candidatesTokenCount ?? 0)
+          : undefined,
+      };
     }
   );
 }
@@ -574,9 +606,16 @@ interface NarrationAudioPayload {
   reelCaptions?: ReelCaptionTiming;
   providerUsed: NarrationProvider;
   fallbackUsed: boolean;
+  fallbackReason?: string;
   selectedVoice: string;
   selectedModel: string;
   language: string;
+  durationMs: number;
+  wordTimestamps?: WordTimestamp[];
+  textHighlightSupported: boolean;
+  timestampSource: 'elevenlabs' | 'none';
+  charsUsed: number;
+  tokensUsed?: number;
   detectedLanguage: string | null;
   isMixedLanguage: boolean;
   presetId: string | null;
@@ -611,13 +650,17 @@ function joinReelCaptionText(captions: ReelCaptionTiming | undefined, fallback: 
 
 function estimateReelCaptionTimings(
   captions: ReelCaptionTiming | undefined,
-  panelPauseMs = 0
+  panelPauseMs = 0,
+  totalDurationMs?: number
 ): ReelCaptionTiming | undefined {
   if (!captions?.length) return captions;
   const normalizedPanelPauseMs = normalizeReelNarrationPanelPauseMs(panelPauseMs);
   const wordCounts = captions.map((caption) => Math.max(1, caption.text.trim().split(/\s+/).filter(Boolean).length));
   const totalWords = wordCounts.reduce((sum, count) => sum + count, 0);
-  const spokenDurationMs = Math.max(3200, totalWords * 430 + captions.length * 160);
+  const pauseBudgetMs = normalizedPanelPauseMs * Math.max(0, captions.length - 1);
+  const spokenDurationMs = typeof totalDurationMs === 'number' && Number.isFinite(totalDurationMs) && totalDurationMs > 0
+    ? Math.max(captions.length * 700, totalDurationMs - pauseBudgetMs)
+    : Math.max(3200, totalWords * 430 + captions.length * 160);
   let cursor = 0;
   let spokenCursor = 0;
   return captions.map((caption, index) => {
@@ -714,6 +757,71 @@ function applyAlignmentToReelCaptions(
     : estimateReelCaptionTimings(captions, panelPauseMs);
 }
 
+function flattenWordTimestamps(captions: ReelCaptionTiming | undefined): WordTimestamp[] {
+  return captions
+    ?.flatMap((caption) => caption.wordTimings ?? [])
+    .map((timing) => ({
+      word: timing.word,
+      startMs: timing.startMs,
+      endMs: timing.endMs,
+    }))
+    ?? [];
+}
+
+function getLastCaptionEndMs(captions: ReelCaptionTiming | undefined): number {
+  return Math.max(
+    0,
+    ...(captions ?? []).map((caption) => (
+      typeof caption.endMs === 'number' && Number.isFinite(caption.endMs) ? caption.endMs : 0
+    ))
+  );
+}
+
+function getAlignmentDurationMs(alignment: ElevenLabsAlignment | undefined): number {
+  const endTimes = alignment?.character_end_times_seconds ?? [];
+  const last = [...endTimes].reverse().find((value) => Number.isFinite(value) && value > 0);
+  return last ? Math.round(last * 1000) : 0;
+}
+
+function buildBeatNarrationMetadata(input: {
+  payload: NarrationAudioPayload;
+  audioUrl?: string | null;
+  previewId?: string;
+  scope?: 'sample' | 'full';
+}): BeatNarrationMetadata {
+  const metadata = normalizeNarrationMetadata({
+    provider: input.payload.providerUsed,
+    model: input.payload.selectedModel,
+    voiceId: input.payload.selectedVoice,
+    language: input.payload.language,
+    audioUrl: input.audioUrl ?? null,
+    durationMs: input.payload.durationMs,
+    wordTimestamps: input.payload.wordTimestamps,
+    textHighlightSupported: input.payload.textHighlightSupported,
+    timestampSource: input.payload.timestampSource,
+    fallbackUsed: input.payload.fallbackUsed,
+    fallbackReason: input.payload.fallbackReason ?? input.payload.errorMessage ?? undefined,
+    charsUsed: input.payload.charsUsed,
+    tokensUsed: input.payload.tokensUsed,
+    createdAt: new Date().toISOString(),
+  }) as BeatNarrationMetadata;
+  return {
+    ...metadata,
+    ...(input.previewId ? { previewId: input.previewId } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
+    panelDurationsMs: input.payload.reelCaptions
+      ? [...input.payload.reelCaptions]
+        .sort((left, right) => left.panelIndex - right.panelIndex)
+        .map((caption) => (
+          typeof caption.startMs === 'number' && typeof caption.endMs === 'number'
+            ? Math.max(0, caption.endMs - caption.startMs)
+            : 0
+        ))
+        .filter((duration) => duration > 0)
+      : undefined,
+  };
+}
+
 async function callElevenLabsTTSWithTimestamps(
   text: string,
   settings: ReelStorySettings,
@@ -761,7 +869,7 @@ async function callElevenLabsTTSWithTimestamps(
       },
       body: JSON.stringify(requestBody),
     }),
-    GEMINI_TTS_TIMEOUT_MS,
+    ELEVENLABS_TTS_TIMEOUT_MS,
     'elevenlabs_tts'
   );
 
@@ -779,6 +887,132 @@ async function callElevenLabsTTSWithTimestamps(
     audioBuffer: Buffer.from(json.audio_base64, 'base64'),
     mimeType: 'audio/mpeg',
     alignment: json.normalized_alignment ?? json.alignment,
+  };
+}
+
+async function buildGeminiReelAudio(input: {
+  narrationText: string;
+  tone: string;
+  genre: string;
+  voiceName: string;
+  language: string;
+  costTelemetry: CostTelemetryContext | undefined;
+  reelCaptions?: ReelCaptionTiming;
+  reelCaptionTexts?: string[];
+  narrationSettings: ReelNarrationSettings;
+  preset: NarrationPreset | null;
+  adminSettings: ReelStorySettings['narration'];
+  generationMode: NarrationGenerationMode;
+  panelPauseMs: number;
+  narrationStyle?: string;
+  taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+}): Promise<{
+  buffer: Buffer;
+  reelCaptions?: ReelCaptionTiming;
+  durationMs: number;
+  selectedModel: string;
+  tokensUsed?: number;
+  detectedLanguage: string | null;
+  isMixedLanguage: boolean;
+}> {
+  const baseScript = buildNarrationPerformanceScript({
+    text: input.narrationText,
+    captionTexts: input.reelCaptionTexts,
+    settings: input.narrationSettings,
+    preset: input.preset,
+    provider: 'gemini_tts',
+    adminSettings: input.adminSettings,
+    generationMode: input.generationMode,
+  });
+
+  const captions = input.reelCaptions
+    ?.filter((caption) => caption.text.trim())
+    .sort((left, right) => left.panelIndex - right.panelIndex);
+
+  if (captions && captions.length > 1) {
+    const chunks: Buffer[] = [];
+    const timedCaptions: ReelCaptionTiming = [];
+    let cursorMs = 0;
+    let selectedModel = 'gemini_tts';
+    let tokensUsed = 0;
+
+    for (let index = 0; index < captions.length; index += 1) {
+      const caption = captions[index];
+      const panelScript = buildNarrationPerformanceScript({
+        text: caption.text,
+        captionTexts: [caption.text],
+        settings: input.narrationSettings,
+        preset: input.preset,
+        provider: 'gemini_tts',
+        adminSettings: input.adminSettings,
+        generationMode: input.generationMode,
+      });
+      const result = await callGeminiTTS(
+        panelScript.text,
+        input.tone,
+        input.genre,
+        input.voiceName,
+        input.language,
+        input.costTelemetry,
+        {
+          taskKey: input.taskKey,
+          narrationStyle: panelScript.deliveryInstruction || input.narrationStyle || input.tone,
+        }
+      );
+      const pcm = Buffer.from(result.pcmBase64, 'base64');
+      const durationMs = pcmBufferDurationMs(pcm);
+      const startMs = cursorMs;
+      const endMs = startMs + durationMs;
+      chunks.push(pcm);
+      selectedModel = result.modelId || selectedModel;
+      tokensUsed += result.tokensUsed ?? 0;
+      timedCaptions.push({
+        ...caption,
+        startMs,
+        endMs,
+        wordTimings: undefined,
+      });
+      cursorMs = endMs;
+
+      if (index < captions.length - 1 && input.panelPauseMs > 0) {
+        chunks.push(silencePcmBuffer(input.panelPauseMs));
+        cursorMs += input.panelPauseMs;
+      }
+    }
+
+    const pcm = Buffer.concat(chunks);
+    return {
+      buffer: pcmBufferToWavBuffer(pcm),
+      reelCaptions: timedCaptions,
+      durationMs: cursorMs || pcmBufferDurationMs(pcm),
+      selectedModel,
+      tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+      detectedLanguage: baseScript.language.detectedLanguage,
+      isMixedLanguage: baseScript.language.isMixedLanguage,
+    };
+  }
+
+  const result = await callGeminiTTS(
+    baseScript.text,
+    input.tone,
+    input.genre,
+    input.voiceName,
+    input.language,
+    input.costTelemetry,
+    {
+      taskKey: input.taskKey,
+      narrationStyle: baseScript.deliveryInstruction || input.narrationStyle,
+    }
+  );
+  const durationMs = pcmBase64DurationMs(result.pcmBase64);
+  return {
+    buffer: pcmToWavBuffer(result.pcmBase64),
+    reelCaptions: estimateReelCaptionTimings(input.reelCaptions, input.panelPauseMs, durationMs),
+    durationMs,
+    selectedModel: result.modelId,
+    tokensUsed: result.tokensUsed,
+    detectedLanguage: baseScript.language.detectedLanguage,
+    isMixedLanguage: baseScript.language.isMixedLanguage,
   };
 }
 
@@ -839,42 +1073,46 @@ async function buildNarrationAudioPayload(
     );
     const fallbackToGemini = async (error: unknown): Promise<NarrationAudioPayload> => {
       console.warn('ElevenLabs reel TTS failed; falling back to Gemini TTS:', error instanceof Error ? error.message : error);
-      const geminiScript = buildNarrationPerformanceScript({
-        text: narrationText,
-        captionTexts: reelCaptionTexts,
-        settings: elevenNarrationSettings,
-        preset,
-        provider: 'gemini_tts',
-        adminSettings: reelSettings.narration,
-        generationMode: options.generationMode ?? 'final',
-      });
-      const pcmBase64 = await callGeminiTTS(
-        geminiScript.text,
+      const gemini = await buildGeminiReelAudio({
+        narrationText,
         tone,
         genre,
-        geminiVoiceName,
-        elevenNarrationSettings.language || language,
+        voiceName: geminiVoiceName,
+        language: elevenNarrationSettings.language || language,
         costTelemetry,
-        {
-          taskKey: options.taskKey,
-          narrationStyle: geminiScript.deliveryInstruction || options.narrationStyle || tone,
-        }
-      );
+        reelCaptions: options.reelCaptions,
+        reelCaptionTexts,
+        narrationSettings: elevenNarrationSettings,
+        preset,
+        adminSettings: reelSettings.narration,
+        generationMode: options.generationMode ?? 'final',
+        panelPauseMs,
+        narrationStyle: options.narrationStyle || tone,
+        taskKey: options.taskKey,
+      });
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
-        buffer: pcmToWavBuffer(pcmBase64),
+        buffer: gemini.buffer,
         mimeType: 'audio/wav',
         extension: 'wav',
-        reelCaptions: estimateReelCaptionTimings(options.reelCaptions, panelPauseMs),
+        reelCaptions: gemini.reelCaptions,
         providerUsed: 'gemini_tts',
         fallbackUsed: true,
+        fallbackReason: errorMessage,
         selectedVoice: geminiVoiceName,
-        selectedModel: 'gemini_tts',
+        selectedModel: gemini.selectedModel,
         language: elevenNarrationSettings.language || language,
-        detectedLanguage: geminiScript.language.detectedLanguage,
-        isMixedLanguage: geminiScript.language.isMixedLanguage,
+        durationMs: gemini.durationMs,
+        wordTimestamps: undefined,
+        textHighlightSupported: false,
+        timestampSource: 'none',
+        charsUsed: narrationText.length,
+        tokensUsed: gemini.tokensUsed,
+        detectedLanguage: gemini.detectedLanguage,
+        isMixedLanguage: gemini.isMixedLanguage,
         presetId: elevenNarrationSettings.presetId,
         generationDurationMs: Math.round(narrationNowMs() - payloadStartedAt),
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage,
         estimatedCostMetadata: {
           provider: 'gemini_tts',
           fallbackFrom: 'elevenlabs',
@@ -915,16 +1153,26 @@ async function buildNarrationAudioPayload(
         () => callElevenLabsTTSWithTimestamps(elevenScript.text, reelSettings, elevenNarrationSettings)
       );
 
+      const reelCaptions = applyAlignmentToReelCaptions(options.reelCaptions, elevenScript.text, eleven.alignment, panelPauseMs);
+      const wordTimestamps = flattenWordTimestamps(reelCaptions);
+      const textHighlightSupported = getTextHighlightSupported('elevenlabs', wordTimestamps);
+      const durationMs = getAlignmentDurationMs(eleven.alignment) || getLastCaptionEndMs(reelCaptions);
+
       return {
         buffer: eleven.audioBuffer,
         mimeType: eleven.mimeType,
         extension: 'mp3',
-        reelCaptions: applyAlignmentToReelCaptions(options.reelCaptions, elevenScript.text, eleven.alignment, panelPauseMs),
+        reelCaptions,
         providerUsed: 'elevenlabs',
         fallbackUsed: false,
         selectedVoice: elevenNarrationSettings.voiceId,
         selectedModel: elevenNarrationSettings.model,
         language: elevenNarrationSettings.language,
+        durationMs,
+        wordTimestamps: wordTimestamps.length > 0 ? wordTimestamps : undefined,
+        textHighlightSupported,
+        timestampSource: textHighlightSupported ? 'elevenlabs' : 'none',
+        charsUsed: narrationText.length,
         detectedLanguage: elevenScript.language.detectedLanguage,
         isMixedLanguage: elevenScript.language.isMixedLanguage,
         presetId: elevenNarrationSettings.presetId,
@@ -940,41 +1188,58 @@ async function buildNarrationAudioPayload(
     }
   }
 
-  const geminiScript = isReel
-    ? buildNarrationPerformanceScript({
-        text: narrationText,
-        captionTexts: reelCaptionTexts,
-        settings: narrationSettings,
+  const gemini = isReel
+    ? await buildGeminiReelAudio({
+        narrationText,
+        tone,
+        genre,
+        voiceName: geminiVoiceName,
+        language: narrationSettings.language || language,
+        costTelemetry,
+        reelCaptions: options.reelCaptions,
+        reelCaptionTexts,
+        narrationSettings,
         preset,
-        provider: 'gemini_tts',
         adminSettings: reelSettings.narration,
         generationMode: options.generationMode ?? 'final',
+        panelPauseMs,
+        narrationStyle: options.narrationStyle,
+        taskKey: options.taskKey,
       })
     : null;
-  const pcmBase64 = await callGeminiTTS(
-    geminiScript?.text ?? narrationText,
-    tone,
-    genre,
-    geminiVoiceName,
-    narrationSettings.language || language,
-    costTelemetry,
-    {
-      taskKey: options.taskKey,
-      narrationStyle: geminiScript?.deliveryInstruction || options.narrationStyle,
-    }
-  );
+  const nonReelGemini = !isReel
+    ? await callGeminiTTS(
+        narrationText,
+        tone,
+        genre,
+        geminiVoiceName,
+        narrationSettings.language || language,
+        costTelemetry,
+        {
+          taskKey: options.taskKey,
+          narrationStyle: options.narrationStyle,
+        }
+      )
+    : null;
+  const nonReelDurationMs = nonReelGemini ? pcmBase64DurationMs(nonReelGemini.pcmBase64) : 0;
   return {
-    buffer: pcmToWavBuffer(pcmBase64),
+    buffer: gemini?.buffer ?? pcmToWavBuffer(nonReelGemini?.pcmBase64 ?? ''),
     mimeType: 'audio/wav',
     extension: 'wav',
-    reelCaptions: isReel ? estimateReelCaptionTimings(options.reelCaptions) : undefined,
+    reelCaptions: gemini?.reelCaptions,
     providerUsed: 'gemini_tts',
     fallbackUsed: false,
     selectedVoice: geminiVoiceName,
-    selectedModel: 'gemini_tts',
+    selectedModel: gemini?.selectedModel ?? nonReelGemini?.modelId ?? 'gemini_tts',
     language: narrationSettings.language || language,
-    detectedLanguage: geminiScript?.language.detectedLanguage ?? null,
-    isMixedLanguage: geminiScript?.language.isMixedLanguage ?? false,
+    durationMs: gemini?.durationMs ?? nonReelDurationMs,
+    wordTimestamps: undefined,
+    textHighlightSupported: false,
+    timestampSource: 'none',
+    charsUsed: narrationText.length,
+    tokensUsed: gemini?.tokensUsed ?? nonReelGemini?.tokensUsed,
+    detectedLanguage: gemini?.detectedLanguage ?? null,
+    isMixedLanguage: gemini?.isMixedLanguage ?? false,
     presetId: narrationSettings.presetId,
     generationDurationMs: Math.round(narrationNowMs() - payloadStartedAt),
     estimatedCostMetadata: {
@@ -1045,7 +1310,7 @@ export async function generateAndPersistNarration(
     generationMode?: NarrationGenerationMode;
     panelPauseMs?: number;
   } = {}
-): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming }> {
+): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata?: BeatNarrationMetadata }> {
   return timeNarrationStep(
     'narration.generate_and_persist',
     {
@@ -1154,6 +1419,8 @@ export async function generateAndPersistNarration(
         }
       );
 
+      let narrationMetadata: BeatNarrationMetadata | undefined;
+
       await timeNarrationStep(
         'narration.persist_audio_url',
         {
@@ -1167,7 +1434,18 @@ export async function generateAndPersistNarration(
               audioStatus: 'ready',
               audioError: null,
               narrationVoiceId: voiceName,
+              narrationMetadata: buildBeatNarrationMetadata({
+                payload: audioPayload,
+                audioUrl: persistedAudioUrl,
+                scope: 'full',
+              }),
+              activeNarrationPreviewId: null,
               ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
+            });
+            narrationMetadata = buildBeatNarrationMetadata({
+              payload: audioPayload,
+              audioUrl: persistedAudioUrl,
+              scope: 'full',
             });
             if (audioPayload.reelCaptions?.length) {
               const admin = createAdminClient();
@@ -1210,7 +1488,15 @@ export async function generateAndPersistNarration(
         storagePath: persistedAudioUrl,
       });
 
-      return { audioUrl: playbackAudioUrl || persistedAudioUrl || '', reelCaptions: audioPayload.reelCaptions };
+      return {
+        audioUrl: playbackAudioUrl || persistedAudioUrl || '',
+        reelCaptions: audioPayload.reelCaptions,
+        narrationMetadata: narrationMetadata ?? buildBeatNarrationMetadata({
+          payload: audioPayload,
+          audioUrl: persistedAudioUrl,
+          scope: 'full',
+        }),
+      };
     }
   );
 }
@@ -1238,8 +1524,8 @@ export async function generateNarrationOnly(
       voiceName,
     },
     async () => {
-      const pcmBase64 = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry, options);
-      const wavBuffer = pcmToWavBuffer(pcmBase64);
+      const result = await callGeminiTTS(storyText, tone, genre, voiceName, language, costTelemetry, options);
+      const wavBuffer = pcmToWavBuffer(result.pcmBase64);
       return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
     }
   );
@@ -1258,10 +1544,11 @@ export async function generateReelNarrationOnly(
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
     generationMode?: NarrationGenerationMode;
+    previewScope?: 'sample' | 'full';
     panelPauseMs?: number;
     logUserId?: string | null;
   } = {}
-): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming }> {
+): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata: BeatNarrationMetadata }> {
   return timeNarrationStep(
     'narration.generate_reel_only',
     {
@@ -1281,9 +1568,15 @@ export async function generateReelNarrationOnly(
         payload,
         storagePath: null,
       });
+      const audioUrl = `data:${payload.mimeType};base64,${payload.buffer.toString('base64')}`;
       return {
-        audioUrl: `data:${payload.mimeType};base64,${payload.buffer.toString('base64')}`,
+        audioUrl,
         reelCaptions: payload.reelCaptions,
+        narrationMetadata: buildBeatNarrationMetadata({
+          payload,
+          audioUrl,
+          scope: options.previewScope ?? (options.generationMode === 'preview' ? 'sample' : 'full'),
+        }),
       };
     }
   );

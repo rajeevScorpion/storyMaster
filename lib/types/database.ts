@@ -171,6 +171,8 @@ export interface DbBeat {
   audio_error: string | null;
   audio_synced_at: string | null;
   narration_voice_id: string | null;
+  narration_metadata?: Record<string, unknown> | null;
+  active_narration_preview_id?: string | null;
   is_storyboard: boolean;
   reel_captions?: ReelPanelCaption[] | null;
   origin_kind: string | null;

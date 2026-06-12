@@ -1,7 +1,7 @@
 import type { BeatMediaStatus } from './beat-media';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
 import type { ReelLengthKey, ReelTextLengthKey } from '@/lib/reel/settings';
-import type { ReelNarrationSettings } from '@/lib/reel/narration';
+import type { BeatNarrationMetadata, ReelNarrationSettings } from '@/lib/reel/narration';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 
@@ -147,6 +147,8 @@ export interface StoryBeat {
   audioStatus?: BeatMediaStatus;
   audioError?: string;
   narrationVoiceId?: string;
+  narrationMetadata?: BeatNarrationMetadata;
+  activeNarrationPreviewId?: string;
   originKind?: 'generated' | 'seeded_canonical';
   seedPlanBeatIndex?: number;
   canonicalOptionId?: string;

@@ -7,11 +7,74 @@ export type NarrationPresetVisibility = 'private' | 'public';
 export type NarrationLanguageMode = 'reel_language' | 'auto' | 'custom';
 export type NarrationGenerationMode = 'preview' | 'final';
 export type NarrationVoiceGender = 'female' | 'male';
+export type TTSProvider = NarrationProvider;
+export type TimestampSource = 'elevenlabs' | 'none';
+export type PreviewScope = 'sample' | 'full';
+export type NarrationVoiceTier = 'free' | 'plus' | 'studio';
 
 export interface NarrationVoiceOption {
   voiceId: string;
   label: string;
   description?: string;
+}
+
+export interface WordTimestamp {
+  word: string;
+  startMs: number;
+  endMs: number;
+}
+
+export interface NarrationMetadata {
+  provider: TTSProvider;
+  model: string;
+  voiceId?: string;
+  voiceName?: string;
+  language: string;
+  audioUrl?: string | null;
+  durationMs: number;
+  wordTimestamps?: WordTimestamp[];
+  textHighlightSupported: boolean;
+  timestampSource: TimestampSource;
+  fallbackUsed: boolean;
+  fallbackReason?: string;
+  charsUsed?: number;
+  tokensUsed?: number;
+  createdAt?: string;
+}
+
+export interface NarrationPreviewMetadata extends NarrationMetadata {
+  scope: PreviewScope;
+}
+
+export interface ActiveNarration extends NarrationPreviewMetadata {
+  previewId: string;
+  audioUrl: string;
+}
+
+export interface BeatNarrationMetadata extends NarrationMetadata {
+  previewId?: string;
+  scope?: PreviewScope;
+  panelDurationsMs?: number[];
+}
+
+export interface ReelNarrationLanguageSetting {
+  language: string;
+  label: string;
+  enabled: boolean;
+  availableForTiers: NarrationVoiceTier[];
+  preferredProvider: NarrationProvider;
+  fallbackProvider: NarrationFallbackProvider;
+  textHighlightAvailable: boolean;
+}
+
+export interface ReelNarrationVoicePreset extends NarrationVoiceOption {
+  provider: NarrationProvider;
+  language: string;
+  model: string;
+  gender?: NarrationVoiceGender;
+  availableForTiers: NarrationVoiceTier[];
+  supportsTimestamps: boolean;
+  active: boolean;
 }
 
 export interface PronunciationDictionaryLocator {
@@ -36,6 +99,8 @@ export interface ReelNarrationAdminSettings {
   expressiveTagsEnabled: boolean;
   pronunciationDictionaryEnabled: boolean;
   pronunciationDictionaryLocators: PronunciationDictionaryLocator[];
+  languageSettings: ReelNarrationLanguageSetting[];
+  voicePresets: ReelNarrationVoicePreset[];
 }
 
 export interface ReelNarrationSettings {
@@ -96,6 +161,7 @@ export type NarrationVoicePreviewScope = '1_beat' | 'full';
 export interface ReelNarrationVoicePreview {
   id: string;
   storyId: string;
+  nodeId?: string;
   userId: string;
   label: string;
   voiceDisplayName: string;
@@ -104,6 +170,9 @@ export interface ReelNarrationVoicePreview {
   audioUrl: string | null;
   settingsSnapshot: ReelNarrationSettings;
   previewScope: NarrationVoicePreviewScope;
+  generationMetadata?: NarrationPreviewMetadata;
+  activeNarration?: ActiveNarration;
+  reelCaptions?: import('@/lib/types/story').StoryBeat['reelCaptions'];
   isActive: boolean;
   createdAt: string;
 }
@@ -441,6 +510,54 @@ export const RECOMMENDED_REEL_MALE_VOICES: NarrationVoiceOption[] = [
   },
 ];
 
+export const DEFAULT_REEL_NARRATION_LANGUAGE_SETTINGS: ReelNarrationLanguageSetting[] = [
+  {
+    language: 'en-IN',
+    label: 'English',
+    enabled: true,
+    availableForTiers: ['free', 'plus', 'studio'],
+    preferredProvider: 'elevenlabs',
+    fallbackProvider: 'gemini_tts',
+    textHighlightAvailable: true,
+  },
+  {
+    language: 'hi-IN',
+    label: 'Hindi',
+    enabled: true,
+    availableForTiers: ['free', 'plus', 'studio'],
+    preferredProvider: 'elevenlabs',
+    fallbackProvider: 'gemini_tts',
+    textHighlightAvailable: true,
+  },
+  {
+    language: 'bn-IN',
+    label: 'Bangla',
+    enabled: true,
+    availableForTiers: ['plus', 'studio'],
+    preferredProvider: 'elevenlabs',
+    fallbackProvider: 'gemini_tts',
+    textHighlightAvailable: true,
+  },
+  {
+    language: 'ur-IN',
+    label: 'Urdu',
+    enabled: true,
+    availableForTiers: ['plus', 'studio'],
+    preferredProvider: 'elevenlabs',
+    fallbackProvider: 'gemini_tts',
+    textHighlightAvailable: true,
+  },
+  {
+    language: 'gu-IN',
+    label: 'Gujarati',
+    enabled: true,
+    availableForTiers: ['plus', 'studio'],
+    preferredProvider: 'elevenlabs',
+    fallbackProvider: 'gemini_tts',
+    textHighlightAvailable: true,
+  },
+];
+
 export const DEFAULT_REEL_NARRATION_ADMIN_SETTINGS: ReelNarrationAdminSettings = {
   defaultProvider: 'elevenlabs',
   fallbackProvider: 'gemini_tts',
@@ -461,6 +578,8 @@ export const DEFAULT_REEL_NARRATION_ADMIN_SETTINGS: ReelNarrationAdminSettings =
   expressiveTagsEnabled: true,
   pronunciationDictionaryEnabled: false,
   pronunciationDictionaryLocators: [],
+  languageSettings: DEFAULT_REEL_NARRATION_LANGUAGE_SETTINGS,
+  voicePresets: [],
 };
 
 export const DEFAULT_REEL_NARRATION_SETTINGS: ReelNarrationSettings = {
@@ -542,6 +661,97 @@ function normalizeFallbackProvider(value: unknown): NarrationFallbackProvider {
   return value === 'gemini_tts' ? 'gemini_tts' : 'gemini_tts';
 }
 
+function normalizeTimestampSource(value: unknown): TimestampSource {
+  return value === 'elevenlabs' ? 'elevenlabs' : 'none';
+}
+
+function normalizeVoiceTier(value: unknown): NarrationVoiceTier | null {
+  return value === 'studio' || value === 'plus' || value === 'free' ? value : null;
+}
+
+function normalizeTierList(value: unknown, fallback: NarrationVoiceTier[] = ['free']): NarrationVoiceTier[] {
+  if (!Array.isArray(value)) return fallback;
+  const tiers = value
+    .map(normalizeVoiceTier)
+    .filter((entry): entry is NarrationVoiceTier => Boolean(entry));
+  return tiers.length > 0 ? [...new Set(tiers)] : fallback;
+}
+
+function tierAllowsUser(availableForTiers: NarrationVoiceTier[], tier: string | null | undefined): boolean {
+  const normalized = normalizeVoiceTier(tier) ?? 'free';
+  return availableForTiers.includes(normalized);
+}
+
+function normalizeWordTimestamps(value: unknown): WordTimestamp[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const raw = entry as Record<string, unknown>;
+      const word = cleanString(raw.word);
+      const startMs = Number(raw.startMs ?? raw.start_ms);
+      const endMs = Number(raw.endMs ?? raw.end_ms);
+      if (!word || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
+      return {
+        word,
+        startMs: Math.max(0, Math.round(startMs)),
+        endMs: Math.max(0, Math.round(endMs)),
+      };
+    })
+    .filter((entry): entry is WordTimestamp => Boolean(entry));
+}
+
+export function getTextHighlightSupported(
+  provider: TTSProvider,
+  wordTimestamps: WordTimestamp[] | undefined
+): boolean {
+  return provider === 'elevenlabs' && Boolean(wordTimestamps?.length);
+}
+
+export function normalizeNarrationMetadata(
+  input: unknown,
+  fallback: Partial<NarrationMetadata> = {}
+): NarrationMetadata {
+  const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const provider = normalizeProvider(raw.provider ?? raw.providerUsed ?? raw.provider_used, fallback.provider ?? 'gemini_tts');
+  const wordTimestamps = normalizeWordTimestamps(raw.wordTimestamps ?? raw.word_timestamps);
+  const textHighlightSupported = getTextHighlightSupported(provider, wordTimestamps);
+  return {
+    provider,
+    model: cleanString(raw.model ?? raw.selectedModel ?? raw.selected_model, fallback.model ?? provider),
+    voiceId: cleanString(raw.voiceId ?? raw.voice_id ?? raw.selectedVoice ?? raw.selected_voice, fallback.voiceId) || undefined,
+    voiceName: cleanString(raw.voiceName ?? raw.voice_name, fallback.voiceName) || undefined,
+    language: cleanString(raw.language, fallback.language ?? 'en-IN'),
+    audioUrl: cleanString(raw.audioUrl ?? raw.audio_url, fallback.audioUrl ?? '') || null,
+    durationMs: Math.max(0, Math.round(Number(raw.durationMs ?? raw.duration_ms ?? fallback.durationMs ?? 0) || 0)),
+    wordTimestamps: wordTimestamps.length > 0 ? wordTimestamps : undefined,
+    textHighlightSupported,
+    timestampSource: textHighlightSupported ? 'elevenlabs' : 'none',
+    fallbackUsed: normalizeBoolean(raw.fallbackUsed ?? raw.fallback_used, fallback.fallbackUsed ?? false),
+    fallbackReason: cleanString(raw.fallbackReason ?? raw.fallback_reason, fallback.fallbackReason) || undefined,
+    charsUsed: Number.isFinite(Number(raw.charsUsed ?? raw.chars_used))
+      ? Math.max(0, Math.round(Number(raw.charsUsed ?? raw.chars_used)))
+      : fallback.charsUsed,
+    tokensUsed: Number.isFinite(Number(raw.tokensUsed ?? raw.tokens_used))
+      ? Math.max(0, Math.round(Number(raw.tokensUsed ?? raw.tokens_used)))
+      : fallback.tokensUsed,
+    createdAt: cleanString(raw.createdAt ?? raw.created_at, fallback.createdAt) || undefined,
+  };
+}
+
+export function normalizeNarrationPreviewMetadata(
+  input: unknown,
+  fallback: Partial<NarrationPreviewMetadata> = {}
+): NarrationPreviewMetadata {
+  const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  return {
+    ...normalizeNarrationMetadata(input, fallback),
+    scope: raw.scope === 'sample' || raw.previewScope === '1_beat' || raw.preview_scope === '1_beat'
+      ? 'sample'
+      : 'full',
+  };
+}
+
 function normalizeLanguageMode(value: unknown): NarrationLanguageMode {
   if (value === 'auto' || value === 'custom' || value === 'reel_language') return value;
   return 'reel_language';
@@ -581,6 +791,56 @@ function normalizeVoiceOptions(value: unknown, fallback: NarrationVoiceOption[])
   return options.length > 0 ? options : fallback;
 }
 
+function normalizeLanguageSettings(
+  value: unknown,
+  fallback: ReelNarrationLanguageSetting[]
+): ReelNarrationLanguageSetting[] {
+  if (!Array.isArray(value)) return fallback;
+  const settings = value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const raw = entry as Record<string, unknown>;
+      const language = cleanString(raw.language);
+      if (!language) return null;
+      return {
+        language,
+        label: cleanString(raw.label, language),
+        enabled: normalizeBoolean(raw.enabled, true),
+        availableForTiers: normalizeTierList(raw.availableForTiers ?? raw.available_for_tiers, ['free']),
+        preferredProvider: normalizeProvider(raw.preferredProvider ?? raw.preferred_provider, 'elevenlabs'),
+        fallbackProvider: normalizeFallbackProvider(raw.fallbackProvider ?? raw.fallback_provider),
+        textHighlightAvailable: normalizeBoolean(raw.textHighlightAvailable ?? raw.text_highlight_available, true),
+      };
+    })
+    .filter((entry): entry is ReelNarrationLanguageSetting => Boolean(entry));
+  return settings.length > 0 ? settings : fallback;
+}
+
+function normalizeVoicePresets(value: unknown): ReelNarrationVoicePreset[] {
+  if (!Array.isArray(value)) return [];
+  const presets: ReelNarrationVoicePreset[] = [];
+  value.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      const raw = entry as Record<string, unknown>;
+      const voiceId = cleanString(raw.voiceId ?? raw.voice_id);
+      const language = cleanString(raw.language);
+      if (!voiceId || !language) return;
+      presets.push({
+        voiceId,
+        label: cleanString(raw.label ?? raw.voiceName ?? raw.voice_name, voiceId),
+        description: cleanString(raw.description) || undefined,
+        provider: normalizeProvider(raw.provider, 'elevenlabs'),
+        language,
+        model: cleanString(raw.model, DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.finalElevenLabsModel),
+        gender: raw.gender === 'male' || raw.gender === 'female' ? raw.gender : undefined,
+        availableForTiers: normalizeTierList(raw.availableForTiers ?? raw.available_for_tiers, ['free']),
+        supportsTimestamps: normalizeBoolean(raw.supportsTimestamps ?? raw.supports_timestamps, true),
+        active: normalizeBoolean(raw.active, true),
+      });
+    });
+  return presets;
+}
+
 function uniqueVoiceOptions(...groups: NarrationVoiceOption[][]): NarrationVoiceOption[] {
   const seen = new Set<string>();
   const result: NarrationVoiceOption[] = [];
@@ -605,6 +865,41 @@ export function getReelNarrationVoicesForGender(
     ? adminSettings.maleElevenLabsVoices
     : adminSettings.femaleElevenLabsVoices;
   return voices.length > 0 ? voices : adminSettings.allowedElevenLabsVoices;
+}
+
+export function getAvailableReelNarrationLanguages(
+  adminSettings: ReelNarrationAdminSettings,
+  userTier: string | null | undefined
+): ReelNarrationLanguageSetting[] {
+  return adminSettings.languageSettings.filter((setting) => (
+    setting.enabled && tierAllowsUser(setting.availableForTiers, userTier)
+  ));
+}
+
+export function getReelNarrationVoiceOptions(input: {
+  adminSettings: ReelNarrationAdminSettings;
+  language: string;
+  userTier?: string | null;
+  gender?: NarrationVoiceGender;
+}): NarrationVoiceOption[] {
+  const presets = input.adminSettings.voicePresets.filter((preset) => (
+    preset.active
+    && preset.provider === 'elevenlabs'
+    && preset.language === input.language
+    && (!input.gender || !preset.gender || preset.gender === input.gender)
+    && tierAllowsUser(preset.availableForTiers, input.userTier)
+  ));
+  if (presets.length > 0) {
+    return presets.map((preset) => ({
+      voiceId: preset.voiceId,
+      label: preset.label,
+      description: preset.description,
+    }));
+  }
+
+  return input.gender
+    ? getReelNarrationVoicesForGender(input.adminSettings, input.gender)
+    : input.adminSettings.allowedElevenLabsVoices;
 }
 
 export function getReelNarrationVoiceGender(
@@ -685,6 +980,11 @@ export function normalizeReelNarrationAdminSettings(
     expressiveTagsEnabled: normalizeBoolean(raw.expressiveTagsEnabled, defaults.expressiveTagsEnabled),
     pronunciationDictionaryEnabled: normalizeBoolean(raw.pronunciationDictionaryEnabled, defaults.pronunciationDictionaryEnabled),
     pronunciationDictionaryLocators: normalizeDictionaryLocators(raw.pronunciationDictionaryLocators),
+    languageSettings: normalizeLanguageSettings(
+      raw.languageSettings ?? raw.language_settings,
+      defaults.languageSettings
+    ),
+    voicePresets: normalizeVoicePresets(raw.voicePresets ?? raw.voice_presets),
   };
 }
 

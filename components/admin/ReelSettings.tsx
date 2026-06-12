@@ -17,7 +17,9 @@ import {
   SYSTEM_NARRATION_PRESETS,
   type PronunciationDictionaryLocator,
   type ReelNarrationAdminSettings,
+  type ReelNarrationLanguageSetting,
   type NarrationVoiceOption,
+  type ReelNarrationVoicePreset,
 } from '@/lib/reel/narration';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
@@ -143,6 +145,12 @@ export default function ReelSettings() {
   const [cleanupRunning, setCleanupRunning] = useState<null | 'dry_run' | 'execute'>(null);
   const [cleanupResult, setCleanupResult] = useState<ReelCleanupResult | null>(null);
   const [executeConfirmed, setExecuteConfirmed] = useState(false);
+  const [languageSettingsJson, setLanguageSettingsJson] = useState(
+    JSON.stringify(DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.languageSettings, null, 2)
+  );
+  const [voicePresetsJson, setVoicePresetsJson] = useState(
+    JSON.stringify(DEFAULT_REEL_NARRATION_ADMIN_SETTINGS.voicePresets, null, 2)
+  );
 
   useEffect(() => {
     getReelStorySetupSettings()
@@ -177,6 +185,12 @@ export default function ReelSettings() {
   const narrationSettings = editableSettings?.narration ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
   const enabledSystemPresetIds = new Set(narrationSettings.enabledSystemPresetIds);
   const enabledSystemPresets = SYSTEM_NARRATION_PRESETS.filter((preset) => enabledSystemPresetIds.has(preset.id));
+
+  useEffect(() => {
+    if (!editableSettings) return;
+    setLanguageSettingsJson(JSON.stringify(narrationSettings.languageSettings, null, 2));
+    setVoicePresetsJson(JSON.stringify(narrationSettings.voicePresets, null, 2));
+  }, [settingsJson, editableSettings, narrationSettings.languageSettings, narrationSettings.voicePresets]);
 
   const handleToggle = async () => {
     setToggleSaving(true);
@@ -257,6 +271,32 @@ export default function ReelSettings() {
         ...patch,
       },
     }));
+  };
+
+  const handleNarrationJsonArrayChange = (
+    key: 'languageSettings' | 'voicePresets',
+    value: string
+  ) => {
+    if (key === 'languageSettings') {
+      setLanguageSettingsJson(value);
+    } else {
+      setVoicePresetsJson(value);
+    }
+
+    try {
+      const parsed = JSON.parse(value);
+      if (!Array.isArray(parsed)) {
+        setSettingsMessage(`${key} must be a JSON array.`);
+        return;
+      }
+      if (key === 'languageSettings') {
+        updateNarrationSettings({ languageSettings: parsed as ReelNarrationLanguageSetting[] });
+      } else {
+        updateNarrationSettings({ voicePresets: parsed as ReelNarrationVoicePreset[] });
+      }
+    } catch {
+      setSettingsMessage(`${key} JSON is not valid yet.`);
+    }
   };
 
   const handleAddRecommendedVoices = () => {
@@ -582,6 +622,39 @@ export default function ReelSettings() {
                 }}
                 spellCheck={false}
                 className="mt-1 min-h-28 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-xl border border-white/10 bg-neutral-950/40 p-4">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-neutral-500">Language and voice availability</p>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-400">
+              Configure tier-scoped languages and provider-aware voice presets. User voice lists are filtered from these settings when presets are present.
+            </p>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-neutral-500">Language settings JSON</span>
+              <textarea
+                value={languageSettingsJson}
+                disabled={!editableSettings}
+                onChange={(event) => handleNarrationJsonArrayChange('languageSettings', event.target.value)}
+                spellCheck={false}
+                className="mt-1 min-h-52 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
+              />
+            </label>
+
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wider text-neutral-500">Voice presets JSON</span>
+              <textarea
+                value={voicePresetsJson}
+                disabled={!editableSettings}
+                onChange={(event) => handleNarrationJsonArrayChange('voicePresets', event.target.value)}
+                spellCheck={false}
+                className="mt-1 min-h-52 w-full rounded-lg border border-white/10 bg-neutral-950 px-3 py-2 font-mono text-xs text-neutral-100 outline-none transition-colors focus:border-emerald-500/40 disabled:opacity-50"
               />
             </label>
           </div>

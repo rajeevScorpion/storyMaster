@@ -1818,6 +1818,7 @@ export const useStoryStore = create<StoryState>()(
 
           // Track resolved audio URL for merging after image resolves
           let resolvedAudioUrl: string | undefined;
+          let resolvedNarrationMetadata: StoryBeat['narrationMetadata'];
           let earlySavedStoryId: string | undefined;
           let earlySavedByUserId: string | undefined;
           const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
@@ -1901,7 +1902,7 @@ export const useStoryStore = create<StoryState>()(
                   panelPauseMs: normalizeReelTransitionSettings(storyConfig.reel.transitionSettings).pauseMs,
                 }
               : {};
-              const narrationFn: Promise<{ audioUrl: string; reelCaptions?: StoryBeat['reelCaptions'] }> = storyId
+              const narrationFn: Promise<{ audioUrl: string; reelCaptions?: StoryBeat['reelCaptions']; narrationMetadata?: StoryBeat['narrationMetadata'] }> = storyId
                 ? generateAndPersistNarration(
                   beat.storyText, initialSession.tone!, initialSession.genre!,
                   voiceResolution.voiceId, voiceResolution.languageCode, storyId, rootNodeId,
@@ -1932,13 +1933,14 @@ export const useStoryStore = create<StoryState>()(
                   }
                 ).then((audioUrl) => ({ audioUrl }));
 
-              narrationFn.then(({ audioUrl, reelCaptions }) => {
+              narrationFn.then(({ audioUrl, reelCaptions, narrationMetadata }) => {
                 console.info('[timing:start_story.narration]', {
                   durationMs: Math.round(nowMs() - narrationStartedAt),
                   mode: storyId ? 'persisted' : 'base64_fallback',
                   success: true,
                 });
                 resolvedAudioUrl = audioUrl;
+                resolvedNarrationMetadata = narrationMetadata;
                 if (reelCaptions?.length) {
                   beat.reelCaptions = reelCaptions;
                 }
@@ -1956,6 +1958,10 @@ export const useStoryStore = create<StoryState>()(
                       ...rootNode.data,
                       audioUrl,
                       ...(reelCaptions?.length ? { reelCaptions } : {}),
+                      ...(narrationMetadata ? {
+                        narrationMetadata,
+                        activeNarrationPreviewId: undefined,
+                      } : {}),
                       narrationVoiceId: voiceResolution.voiceId,
                       audioStatus: storyId ? 'ready' : 'not_requested',
                       audioError: undefined,
@@ -2095,6 +2101,10 @@ export const useStoryStore = create<StoryState>()(
               imageUrl: promptOnly ? undefined : imageResult.imageUrl,
               narrationVoiceId: narratorVoiceResolution.voiceId,
               ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
+              ...(resolvedNarrationMetadata ? {
+                narrationMetadata: resolvedNarrationMetadata,
+                activeNarrationPreviewId: undefined,
+              } : {}),
             },
           };
 
@@ -2745,6 +2755,7 @@ export const useStoryStore = create<StoryState>()(
           // the .then() can't update the store (node doesn't exist yet),
           // so we capture the URL and apply it during the merge.
           let resolvedAudioUrl: string | undefined;
+          let resolvedNarrationMetadata: StoryBeat['narrationMetadata'];
 
           // Fire-and-forget: start narration in parallel with image generation
           // Voice is locked at story start — use it directly or fall back to default constant
@@ -2777,7 +2788,11 @@ export const useStoryStore = create<StoryState>()(
             set({ isGeneratingAudio: true });
             const narrationStartedAt = nowMs();
 
-            const handleNarrationResolved = (audioUrl: string, reelCaptions?: StoryBeat['reelCaptions']) => {
+            const handleNarrationResolved = (
+              audioUrl: string,
+              reelCaptions?: StoryBeat['reelCaptions'],
+              narrationMetadata?: StoryBeat['narrationMetadata']
+            ) => {
               console.info('[timing:continue_story.narration]', {
                 durationMs: Math.round(nowMs() - narrationStartedAt),
                 mode: session.savedStoryId ? 'persisted' : 'base64_fallback',
@@ -2785,8 +2800,13 @@ export const useStoryStore = create<StoryState>()(
                 nodeId: newNodeId,
               });
               resolvedAudioUrl = audioUrl;
+              resolvedNarrationMetadata = narrationMetadata;
               if (reelCaptions?.length) {
                 beat.reelCaptions = reelCaptions;
+              }
+              if (narrationMetadata) {
+                beat.narrationMetadata = narrationMetadata;
+                beat.activeNarrationPreviewId = undefined;
               }
               const latestSession = get().session;
               if (!latestSession) return;
@@ -2801,6 +2821,10 @@ export const useStoryStore = create<StoryState>()(
                     ...node.data,
                     audioUrl,
                     ...(reelCaptions?.length ? { reelCaptions } : {}),
+                    ...(narrationMetadata ? {
+                      narrationMetadata,
+                      activeNarrationPreviewId: undefined,
+                    } : {}),
                     narrationVoiceId: voiceForBeat,
                     audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
                     audioError: undefined,
@@ -2862,7 +2886,7 @@ export const useStoryStore = create<StoryState>()(
                   narrationStyle: getReelNarrationStyle(modelOverrides, session.storyConfig),
                   ...reelNarrationOptions,
                 }
-              ).then(({ audioUrl, reelCaptions }) => handleNarrationResolved(audioUrl, reelCaptions))
+              ).then(({ audioUrl, reelCaptions, narrationMetadata }) => handleNarrationResolved(audioUrl, reelCaptions, narrationMetadata))
                 .catch(handleNarrationError);
             } else if (isReelNarration) {
               narrationPromise = generateReelNarrationOnly(
@@ -2873,7 +2897,7 @@ export const useStoryStore = create<StoryState>()(
                   narrationStyle: getReelNarrationStyle(modelOverrides, session.storyConfig),
                   ...reelNarrationOptions,
                 }
-              ).then(({ audioUrl, reelCaptions }) => handleNarrationResolved(audioUrl, reelCaptions))
+              ).then(({ audioUrl, reelCaptions, narrationMetadata }) => handleNarrationResolved(audioUrl, reelCaptions, narrationMetadata))
                 .catch(handleNarrationError);
             } else {
               // Fallback: generate only (no persistence yet)
@@ -2970,6 +2994,10 @@ export const useStoryStore = create<StoryState>()(
                   narrationVoiceId: voiceForBeat,
                   persistedImageUrl: undefined,
                   ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
+                  ...(resolvedNarrationMetadata ? {
+                    narrationMetadata: resolvedNarrationMetadata,
+                    activeNarrationPreviewId: undefined,
+                  } : {}),
                   imageStatus: promptOnly ? 'not_requested' : 'pending',
                   audioStatus: resolvedAudioUrl
                     ? (session.savedStoryId ? 'ready' : 'not_requested')
@@ -3295,6 +3323,7 @@ export const useStoryStore = create<StoryState>()(
 
           let audioUrl: string;
           let reelCaptions: StoryBeat['reelCaptions'];
+          let narrationMetadata: StoryBeat['narrationMetadata'];
           const isReelNarration = isReelStoryConfig(session.storyConfig);
           const reelNarrationOptions = isReelNarration
             ? {
@@ -3320,6 +3349,7 @@ export const useStoryStore = create<StoryState>()(
             );
             audioUrl = result.audioUrl;
             reelCaptions = result.reelCaptions;
+            narrationMetadata = result.narrationMetadata;
           } else if (isReelNarration) {
             const result = await generateReelNarrationOnly(
               node.data.storyText, session.tone, session.genre,
@@ -3332,6 +3362,7 @@ export const useStoryStore = create<StoryState>()(
             );
             audioUrl = result.audioUrl;
             reelCaptions = result.reelCaptions;
+            narrationMetadata = result.narrationMetadata;
           } else {
             // No cloud save yet — generate only, returns base64
             audioUrl = await generateNarrationOnly(
@@ -3357,6 +3388,10 @@ export const useStoryStore = create<StoryState>()(
                 ...latestSession.storyMap.nodes[nodeId].data,
                 audioUrl,
                 ...(reelCaptions?.length ? { reelCaptions } : {}),
+                ...(narrationMetadata ? {
+                  narrationMetadata,
+                  activeNarrationPreviewId: undefined,
+                } : {}),
                 narrationVoiceId: voiceName,
                 audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
                 audioError: undefined,

@@ -21,6 +21,7 @@ import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import ReelCanvasPreview from './ReelCanvasPreview';
+import { toReelFetchUrl } from '@/lib/reel/media';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
@@ -104,7 +105,8 @@ import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import {
   DEFAULT_REEL_NARRATION_ADMIN_SETTINGS,
   applyPresetToNarrationSettings,
-  getReelNarrationVoicesForGender,
+  getAvailableReelNarrationLanguages,
+  getReelNarrationVoiceOptions,
   normalizeReelNarrationSettings,
   storyLanguageToNarrationLanguage,
   type NarrationVoiceGender,
@@ -116,6 +118,41 @@ import {
 } from '@/lib/reel/narration';
 
 const MAX_VOICE_PREVIEWS_LOCAL = 4;
+
+function formatNarrationProvider(provider: string | undefined): string {
+  if (provider === 'elevenlabs') return 'ElevenLabs';
+  if (provider === 'gemini_tts') return 'Gemini TTS';
+  return 'Provider unknown';
+}
+
+function getHighlightStatusLabel(preview: ReelNarrationVoicePreview): string {
+  if (preview.generationMetadata?.textHighlightSupported) return 'Highlight supported';
+  if (preview.generationMetadata?.provider === 'gemini_tts') return 'Highlight unavailable';
+  if (preview.generationMetadata?.provider === 'elevenlabs') return 'No word timestamps';
+  return 'Highlight unknown';
+}
+
+function getHighlightUnavailableReason(preview: ReelNarrationVoicePreview): string {
+  if (preview.generationMetadata?.provider === 'gemini_tts') {
+    return 'Text highlight is unavailable because Gemini TTS does not provide word-level timestamps.';
+  }
+  if (preview.generationMetadata?.provider === 'elevenlabs') {
+    return 'Text highlight is unavailable because this preview did not return word-level timestamps.';
+  }
+  return 'Text highlight availability is unknown for this older preview.';
+}
+
+function stripUnsupportedWordTimings(beat: StoryBeat): StoryBeat {
+  if (beat.narrationMetadata?.textHighlightSupported === true) return beat;
+  if (!beat.reelCaptions?.some((caption) => caption.wordTimings?.length)) return beat;
+  return {
+    ...beat,
+    reelCaptions: beat.reelCaptions.map((caption) => ({
+      ...caption,
+      wordTimings: undefined,
+    })),
+  };
+}
 
 function StoryboardCycler({
   gridUrl,
@@ -132,6 +169,7 @@ function StoryboardCycler({
   captions,
   textOverlayEnabled = true,
   textOverlayStyle,
+  textHighlightSupported = true,
 }: {
   gridUrl: string;
   audioUrl?: string;
@@ -147,6 +185,7 @@ function StoryboardCycler({
   captions?: StoryBeat['reelCaptions'];
   textOverlayEnabled?: boolean;
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
+  textHighlightSupported?: boolean;
 }) {
   const [activePanel, setActivePanel] = useState(0);
   const [currentElapsedMs, setCurrentElapsedMs] = useState<number | null>(null);
@@ -182,7 +221,7 @@ function StoryboardCycler({
     const onError = () => setResolvedAudioDurationMs(STORYBOARD_ADVANCE_MS);
     audio.addEventListener('loadedmetadata', onMeta);
     audio.addEventListener('error', onError);
-    audio.src = audioUrl; // triggers metadata load — no play()
+    audio.src = toReelFetchUrl(audioUrl); // triggers metadata load - no play()
     return () => { audio.src = ''; };
   }, [gridUrl, audioUrl, cycleOverride, cycleMs]);
 
@@ -257,7 +296,7 @@ function StoryboardCycler({
     ? captions?.find((caption) => caption.panelIndex === activePanel)
     : undefined;
   const activeCaption = activeCaptionObj?.text;
-  const activeCaptionWordTimings = activeCaptionObj?.wordTimings;
+  const activeCaptionWordTimings = textHighlightSupported ? activeCaptionObj?.wordTimings : undefined;
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -626,6 +665,7 @@ interface ReelCaptionStylePanelProps {
   saveState: 'idle' | 'saving' | 'saved' | 'error';
   message: string | null;
   embedded?: boolean;
+  wordHighlightAvailable?: boolean;
   onEnabledChange: (enabled: boolean) => void;
   onChange: (patch: ReelTextOverlayStyle) => void;
   onCancel: () => void;
@@ -1268,6 +1308,7 @@ interface ReelCaptionStyleControlsProps {
   textOverlayEnabled: boolean;
   normalizedStyle: ReelTextOverlayStyle;
   storyLanguage: string;
+  wordHighlightAvailable?: boolean;
   onEnabledChange: (enabled: boolean) => void;
   onChange: (patch: ReelTextOverlayStyle) => void;
 }
@@ -1276,6 +1317,7 @@ function ReelCaptionStyleControls({
   textOverlayEnabled,
   normalizedStyle,
   storyLanguage,
+  wordHighlightAvailable = true,
   onEnabledChange,
   onChange,
 }: ReelCaptionStyleControlsProps) {
@@ -1439,23 +1481,29 @@ function ReelCaptionStyleControls({
           onOpacityChange={(backgroundOpacity) => onChange({ backgroundOpacity })}
           onBlurChange={(backgroundBlur) => onChange({ backgroundBlur })}
         />
-        <ReelStyleColorControl
-          label="Word highlight"
-          color={normalizedStyle.wordHighlightColor}
-          fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightColor}
-          opacity={wordHighlightOpacity}
-          sampleText="Word highlight"
-          samplePaddingX={wordHighlightPaddingX}
-          samplePaddingY={wordHighlightPaddingY}
-          sampleBorderRadius={wordHighlightBorderRadius}
-          sampleWordSpacing={wordHighlightWordSpacing}
-          onColorChange={(wordHighlightColor) => onChange({ wordHighlightColor })}
-          onOpacityChange={(wordHighlightOpacity) => onChange({ wordHighlightOpacity })}
-          onSamplePaddingXChange={(wordHighlightPaddingX) => onChange({ wordHighlightPaddingX })}
-          onSamplePaddingYChange={(wordHighlightPaddingY) => onChange({ wordHighlightPaddingY })}
-          onSampleBorderRadiusChange={(wordHighlightBorderRadius) => onChange({ wordHighlightBorderRadius })}
-          onSampleWordSpacingChange={(wordHighlightWordSpacing) => onChange({ wordHighlightWordSpacing })}
-        />
+        {wordHighlightAvailable ? (
+          <ReelStyleColorControl
+            label="Word highlight"
+            color={normalizedStyle.wordHighlightColor}
+            fallback={DEFAULT_REEL_TEXT_OVERLAY_STYLE.wordHighlightColor}
+            opacity={wordHighlightOpacity}
+            sampleText="Word highlight"
+            samplePaddingX={wordHighlightPaddingX}
+            samplePaddingY={wordHighlightPaddingY}
+            sampleBorderRadius={wordHighlightBorderRadius}
+            sampleWordSpacing={wordHighlightWordSpacing}
+            onColorChange={(wordHighlightColor) => onChange({ wordHighlightColor })}
+            onOpacityChange={(wordHighlightOpacity) => onChange({ wordHighlightOpacity })}
+            onSamplePaddingXChange={(wordHighlightPaddingX) => onChange({ wordHighlightPaddingX })}
+            onSamplePaddingYChange={(wordHighlightPaddingY) => onChange({ wordHighlightPaddingY })}
+            onSampleBorderRadiusChange={(wordHighlightBorderRadius) => onChange({ wordHighlightBorderRadius })}
+            onSampleWordSpacingChange={(wordHighlightWordSpacing) => onChange({ wordHighlightWordSpacing })}
+          />
+        ) : (
+          <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100/90">
+            Word highlight is unavailable for the applied narration because word-level timestamps are not available.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1470,6 +1518,7 @@ function ReelCaptionStylePanel({
   saveState,
   message,
   embedded = false,
+  wordHighlightAvailable = true,
   onEnabledChange,
   onChange,
   onCancel,
@@ -1510,6 +1559,7 @@ function ReelCaptionStylePanel({
           textOverlayEnabled={textOverlayEnabled}
           normalizedStyle={normalizedStyle}
           storyLanguage={storyLanguage}
+          wordHighlightAvailable={wordHighlightAvailable}
           onEnabledChange={onEnabledChange}
           onChange={onChange}
         />
@@ -2513,10 +2563,10 @@ function StoryScreenInner({
   useEffect(() => {
     const storyId = session.savedStoryId;
     if (!isReelStory || !storyId) return;
-    listReelNarrationVoicePreviewsAction(storyId)
+    listReelNarrationVoicePreviewsAction(storyId, currentNodeId)
       .then(setVoicePreviews)
       .catch(() => {});
-  }, [isReelStory, session.savedStoryId]);
+  }, [currentNodeId, isReelStory, session.savedStoryId]);
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
     enabled: !isReelStory && cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
     resetKey: currentNodeId,
@@ -2607,6 +2657,10 @@ function StoryScreenInner({
       : null),
     [isReelStory, voicePreviews]
   );
+  const activeNarrationMetadata = activeFullVoicePreview?.generationMetadata
+    ?? normalizedCurrentBeat.narrationMetadata
+    ?? null;
+  const activeNarrationHighlightSupported = activeNarrationMetadata?.textHighlightSupported === true;
   const currentBeatPlaybackAudioUrl = !reelPlayAllActive && activeFullVoicePreview?.audioUrl
     ? activeFullVoicePreview.audioUrl
     : normalizedCurrentBeat.audioUrl;
@@ -2748,20 +2802,47 @@ function StoryScreenInner({
     [reelTransitionDraft]
   );
   const effectiveReelNarrationAdminSettings = reelNarrationAdminSettings ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
+  const reelNarrationTier = pricing.snapshot.planKey;
   const reelNarrationLanguageValue = storyLanguageToNarrationLanguage(session.storyConfig.language);
-  const reelNarrationLanguageOptions = useMemo(() => [
-    {
-      value: reelNarrationLanguageValue,
-      label: `Reel language (${session.storyConfig.language})`,
-    },
-    ...REEL_NARRATION_LANGUAGE_OPTIONS.filter((option) => option.value !== reelNarrationLanguageValue),
-  ], [reelNarrationLanguageValue, session.storyConfig.language]);
+  const reelNarrationLanguageOptions = useMemo(() => {
+    const available = getAvailableReelNarrationLanguages(
+      effectiveReelNarrationAdminSettings,
+      reelNarrationTier
+    );
+    const configured = available.map((setting) => ({
+      value: setting.language,
+      label: setting.language === reelNarrationLanguageValue
+        ? `Reel language (${session.storyConfig.language})`
+        : setting.label,
+    }));
+    return configured.length > 0
+      ? configured
+      : [
+          {
+            value: reelNarrationLanguageValue,
+            label: `Reel language (${session.storyConfig.language})`,
+          },
+          ...REEL_NARRATION_LANGUAGE_OPTIONS.filter((option) => option.value !== reelNarrationLanguageValue),
+        ];
+  }, [effectiveReelNarrationAdminSettings, reelNarrationLanguageValue, reelNarrationTier, session.storyConfig.language]);
   const selectedReelVoiceGender = reelNarrationDraft.voiceGender;
   const reelGenderVoiceList = useMemo(
-    () => getReelNarrationVoicesForGender(effectiveReelNarrationAdminSettings, selectedReelVoiceGender),
-    [effectiveReelNarrationAdminSettings, selectedReelVoiceGender]
+    () => getReelNarrationVoiceOptions({
+      adminSettings: effectiveReelNarrationAdminSettings,
+      language: reelNarrationDraft.language,
+      userTier: reelNarrationTier,
+      gender: selectedReelVoiceGender,
+    }),
+    [effectiveReelNarrationAdminSettings, reelNarrationDraft.language, reelNarrationTier, selectedReelVoiceGender]
   );
-  const allReelVoiceOptions = effectiveReelNarrationAdminSettings.allowedElevenLabsVoices;
+  const allReelVoiceOptions = useMemo(
+    () => getReelNarrationVoiceOptions({
+      adminSettings: effectiveReelNarrationAdminSettings,
+      language: reelNarrationDraft.language,
+      userTier: reelNarrationTier,
+    }),
+    [effectiveReelNarrationAdminSettings, reelNarrationDraft.language, reelNarrationTier]
+  );
   const selectedReelVoice = allReelVoiceOptions.find((voice) => voice.voiceId === reelNarrationDraft.voiceId)
     ?? reelGenderVoiceList.find((voice) => voice.voiceId === reelNarrationDraft.voiceId)
     ?? { voiceId: reelNarrationDraft.voiceId, label: reelNarrationDraft.voiceId };
@@ -2917,10 +2998,10 @@ function StoryScreenInner({
   const canExportReelVideo = Boolean(videoDownloadGlobalOn && reelReadyForDistribution && canAccessVideoExport);
   const reelExportBeats = reelDistributionBeats.map((beat) => {
     const normalizedBeat = normalizeBeatMediaFields(beat);
-    return {
+    return stripUnsupportedWordTimings({
       ...normalizedBeat,
       imageUrl: normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl,
-    };
+    });
   });
   const isCompatibilityExport = exportEngine === 'compatibility';
   const exportPhaseLabel = exportStage === 'checking'
@@ -3196,7 +3277,12 @@ function StoryScreenInner({
   }, [reelNarrationAdminSettings, session.storyConfig.language]);
 
   const handleReelVoiceGenderChange = useCallback((voiceGender: NarrationVoiceGender) => {
-    const voices = getReelNarrationVoicesForGender(effectiveReelNarrationAdminSettings, voiceGender);
+    const voices = getReelNarrationVoiceOptions({
+      adminSettings: effectiveReelNarrationAdminSettings,
+      language: reelNarrationDraft.language,
+      userTier: reelNarrationTier,
+      gender: voiceGender,
+    });
     const currentVoiceFitsGender = voices.some((voice) => voice.voiceId === reelNarrationDraft.voiceId);
     updateReelNarrationDraft({
       voiceGender,
@@ -3206,7 +3292,9 @@ function StoryScreenInner({
     });
   }, [
     effectiveReelNarrationAdminSettings,
+    reelNarrationDraft.language,
     reelNarrationDraft.voiceId,
+    reelNarrationTier,
     updateReelNarrationDraft,
   ]);
 
@@ -3289,10 +3377,18 @@ function StoryScreenInner({
         : normalizedCurrentBeat.reelCaptions?.[0]?.text
           ?? splitTextIntoCompleteCaptionPanels(normalizedCurrentBeat.storyText, REEL_PANEL_COUNT)[0]
           ?? normalizedCurrentBeat.storyText;
+      const previewCaptions = voicePreviewScope === 'full'
+        ? normalizedCurrentBeat.reelCaptions
+        : [{
+            panelIndex: 0,
+            text: previewText,
+          }];
 
       const result = await previewReelNarrationAction({
         text: previewText,
         settings: reelNarrationDraft,
+        scope: voicePreviewScope,
+        reelCaptions: previewCaptions,
         storyLanguage: session.storyConfig.language,
         panelPauseMs: normalizedReelTransitionDraft.pauseMs,
       });
@@ -3301,10 +3397,17 @@ function StoryScreenInner({
       if (!session.savedStoryId) return;
       const saved = await saveReelNarrationVoicePreviewAction({
         storyId: session.savedStoryId,
+        nodeId: currentNodeId,
         audioDataUrl: result.audioUrl,
         settings: result.settings,
         scope: voicePreviewScope,
         voiceDisplayName: selectedReelVoice.label,
+        generationMetadata: {
+          ...result.narrationMetadata,
+          scope: voicePreviewScope === 'full' ? 'full' : 'sample',
+          voiceName: selectedReelVoice.label,
+        },
+        reelCaptions: result.reelCaptions,
       });
       // Prefer data URL for immediate playback; R2 signed URL is a fallback for reloaded sessions
       const savedWithAudio = { ...saved, audioUrl: result.audioUrl ?? saved.audioUrl };
@@ -3321,6 +3424,7 @@ function StoryScreenInner({
     }
   }, [
     isPreviewingReelNarration,
+    currentNodeId,
     voicePreviewScope,
     normalizedCurrentBeat.reelCaptions,
     normalizedCurrentBeat.storyText,
@@ -3347,14 +3451,55 @@ function StoryScreenInner({
     }
     try {
       stopPlayingVoicePreview();
-      const settings = await applyReelNarrationVoicePreviewAction(preview.id);
-      setReelNarrationDraft(settings);
-      setVoicePreviews((prev) => prev.map((p) => ({ ...p, isActive: p.id === preview.id })));
-      setReelNarrationMessage('Full preview applied to beat playback.');
+      const result = await applyReelNarrationVoicePreviewAction(preview.id, currentNodeId);
+      setReelNarrationDraft(result.settings);
+      setVoicePreviews((prev) => prev.map((p) => (
+        p.id === preview.id
+          ? { ...p, ...result.preview, audioUrl: preview.audioUrl ?? result.preview.audioUrl, isActive: true }
+          : { ...p, isActive: false, activeNarration: undefined }
+      )));
+      useStoryStore.setState((state) => {
+        const currentSession = state.session;
+        const node = currentSession?.storyMap.nodes[currentNodeId];
+        if (!currentSession || !node) return state;
+        const appliedAudioUrl = result.preview.activeNarration?.audioUrl
+          ?? result.preview.audioR2Key
+          ?? result.preview.audioUrl
+          ?? preview.audioUrl;
+        const updatedMap = {
+          ...currentSession.storyMap,
+          nodes: {
+            ...currentSession.storyMap.nodes,
+            [currentNodeId]: {
+              ...node,
+              data: normalizeBeatMediaFields({
+                ...node.data,
+                audioUrl: appliedAudioUrl || node.data.audioUrl,
+                audioStatus: 'ready',
+                audioError: undefined,
+                narrationVoiceId: result.settings.voiceId,
+                narrationMetadata: result.preview.generationMetadata,
+                activeNarrationPreviewId: result.preview.id,
+                ...(result.preview.reelCaptions?.length ? { reelCaptions: result.preview.reelCaptions } : {}),
+              }),
+            },
+          },
+        };
+        return {
+          ...state,
+          session: {
+            ...currentSession,
+            storyMap: updatedMap,
+          },
+        };
+      });
+      setReelNarrationMessage(result.preview.generationMetadata?.textHighlightSupported
+        ? 'Full preview applied to beat playback with word highlight.'
+        : 'Full preview applied. Text highlight is unavailable for this narration.');
     } catch (error) {
       setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to apply preview.');
     }
-  }, [setReelNarrationDraft, stopPlayingVoicePreview]);
+  }, [currentNodeId, setReelNarrationDraft, stopPlayingVoicePreview]);
 
   const handleDeleteVoicePreview = useCallback(async (previewId: string) => {
     if (playingVoicePreviewId === previewId) stopPlayingVoicePreview();
@@ -4197,6 +4342,7 @@ function StoryScreenInner({
             vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
             textOverlayEnabled={reelOverlayEnabledDraft}
             textOverlayStyle={reelOverlayDraft}
+            textHighlightSupported={activeNarrationHighlightSupported}
             transitionSettings={normalizedReelTransitionDraft}
             onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
             onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
@@ -4476,6 +4622,7 @@ function StoryScreenInner({
         saveState={reelStyleSaveState}
         message={reelStyleMessage}
         embedded
+        wordHighlightAvailable={!activeNarrationMetadata || activeNarrationHighlightSupported}
         onEnabledChange={updateReelOverlayEnabledDraft}
         onChange={updateReelOverlayDraft}
         onCancel={handleCancelReelOverlayStyle}
@@ -4532,10 +4679,21 @@ function StoryScreenInner({
               <FilterDropdown
                 value={reelNarrationDraft.language}
                 options={reelNarrationLanguageOptions}
-                onChange={(value) => updateReelNarrationDraft({
-                  language: value,
-                  languageSource: 'user_selected',
-                })}
+                onChange={(value) => {
+                  const voices = getReelNarrationVoiceOptions({
+                    adminSettings: effectiveReelNarrationAdminSettings,
+                    language: value,
+                    userTier: reelNarrationTier,
+                    gender: reelNarrationDraft.voiceGender,
+                  });
+                  updateReelNarrationDraft({
+                    language: value,
+                    languageSource: 'user_selected',
+                    voiceId: voices.some((voice) => voice.voiceId === reelNarrationDraft.voiceId)
+                      ? reelNarrationDraft.voiceId
+                      : voices[0]?.voiceId ?? reelNarrationDraft.voiceId,
+                  });
+                }}
                 fullWidth
                 size="compact"
                 ariaLabel="Reel narration language"
@@ -4835,11 +4993,22 @@ function StoryScreenInner({
           </div>
         )}
 
+        {activeNarrationMetadata && !activeNarrationHighlightSupported && (
+          <div className="order-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100/90">
+            {activeNarrationMetadata.provider === 'gemini_tts'
+              ? 'Text highlight is unavailable for this narration because Gemini TTS does not provide word-level timestamps.'
+              : 'Text highlight is unavailable because this narration did not return word-level timestamps.'}
+          </div>
+        )}
+
         {voicePreviews.length > 0 && (
           <div className="order-4 space-y-1.5">
             <span className="block text-[11px] uppercase tracking-[0.16em] text-neutral-500">Voice previews</span>
             {voicePreviews.map((preview) => {
               const canApplyPreview = Boolean(preview.audioUrl);
+              const providerModel = preview.generationMetadata
+                ? `${formatNarrationProvider(preview.generationMetadata.provider)} · ${preview.generationMetadata.model}`
+                : null;
               return (
                 <div
                   key={preview.id}
@@ -4857,15 +5026,31 @@ function StoryScreenInner({
                       : <Play className="h-3 w-3" />}
                   </button>
                   <div className="min-w-0 flex-1">
-                    <span className="text-xs font-medium text-neutral-200">{preview.label}</span>
-                    {preview.voiceDisplayName && (
-                      <span className="ml-1.5 text-xs text-neutral-500">{preview.voiceDisplayName}</span>
-                    )}
-                    {preview.previewScope && (
-                      <span className="ml-1.5 text-[10px] text-neutral-600">
-                        {preview.previewScope === 'full' ? '- full' : '- sample'}
-                      </span>
-                    )}
+                    <div className="truncate">
+                      <span className="text-xs font-medium text-neutral-200">{preview.label}</span>
+                      {preview.voiceDisplayName && (
+                        <span className="ml-1.5 text-xs text-neutral-500">{preview.voiceDisplayName}</span>
+                      )}
+                      {preview.previewScope && (
+                        <span className="ml-1.5 text-[10px] text-neutral-600">
+                          {preview.previewScope === 'full' ? '- full' : '- sample'}
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="mt-0.5 truncate text-[10px] text-neutral-500"
+                      title={preview.generationMetadata?.textHighlightSupported ? undefined : getHighlightUnavailableReason(preview)}
+                    >
+                      {providerModel ?? 'Metadata unavailable'}
+                      <span className="mx-1 text-neutral-700">·</span>
+                      {getHighlightStatusLabel(preview)}
+                      {preview.generationMetadata?.fallbackUsed && (
+                        <>
+                          <span className="mx-1 text-neutral-700">·</span>
+                          Fallback used
+                        </>
+                      )}
+                    </div>
                   </div>
                   {preview.previewScope === 'full' && (
                     <button
@@ -5884,6 +6069,7 @@ function StoryScreenInner({
                             textOverlayEnabled={reelOverlayEnabledDraft}
                             normalizedStyle={normalizedReelOverlayDraft}
                             storyLanguage={session.storyConfig.language}
+                            wordHighlightAvailable={!activeNarrationMetadata || activeNarrationHighlightSupported}
                             onEnabledChange={updateReelOverlayEnabledDraft}
                             onChange={updateReelOverlayDraft}
                           />

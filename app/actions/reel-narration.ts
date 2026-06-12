@@ -14,12 +14,16 @@ import {
   SYSTEM_NARRATION_PRESETS,
   applyPresetToNarrationSettings,
   buildPresetInputFromSettings,
+  normalizeNarrationPreviewMetadata,
   normalizeNarrationPreset,
   normalizeReelNarrationAdminSettings,
   normalizeReelNarrationSettings,
   resolvePreviewElevenLabsModel,
   storyLanguageToNarrationLanguage,
+  type ActiveNarration,
+  type BeatNarrationMetadata,
   type NarrationPreset,
+  type NarrationPreviewMetadata,
   type NarrationVoicePreviewScope,
   type ReelNarrationAdminSettings,
   type ReelNarrationSettings,
@@ -28,6 +32,7 @@ import {
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { putR2Object, createR2SignedGetUrl, deleteR2Object } from '@/lib/media/r2-server';
 import type { StoryConfig, StoryLanguage } from '@/lib/types/story';
+import { updateBeatMediaState } from '@/app/actions/persistence';
 
 function isMissingNarrationTableError(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error?.message) return false;
@@ -457,9 +462,19 @@ export async function saveReelNarrationSettingsAction(input: {
         audio_status: 'not_requested',
         audio_error: null,
         narration_voice_id: null,
+        narration_metadata: null,
+        active_narration_preview_id: null,
         audio_synced_at: null,
       })
       .eq('story_id', input.storyId);
+
+    const { error: clearPreviewError } = await admin
+      .from('reel_narration_voice_previews')
+      .update({ is_active: false, active_narration: null })
+      .eq('story_id', input.storyId);
+    if (clearPreviewError && !isMissingNarrationTableError(clearPreviewError)) {
+      console.warn('Failed to clear active narration previews:', clearPreviewError.message);
+    }
   }
 
   return normalized;
@@ -478,9 +493,16 @@ export async function applyNarrationPresetToSettingsAction(input: {
 export async function previewReelNarrationAction(input: {
   text: string;
   settings: ReelNarrationSettings;
+  scope?: NarrationVoicePreviewScope;
+  reelCaptions?: ReelNarrationVoicePreview['reelCaptions'];
   storyLanguage?: StoryLanguage | string | null;
   panelPauseMs?: number;
-}): Promise<{ audioUrl: string; settings: ReelNarrationSettings }> {
+}): Promise<{
+  audioUrl: string;
+  settings: ReelNarrationSettings;
+  narrationMetadata: BeatNarrationMetadata;
+  reelCaptions?: ReelNarrationVoicePreview['reelCaptions'];
+}> {
   const userId = await getCurrentUserId(true);
   const [adminSettings, voiceSettings] = await Promise.all([
     getReelNarrationAdminSettings(),
@@ -525,8 +547,10 @@ export async function previewReelNarrationAction(input: {
         ...DEFAULT_REEL_STORY_SETTINGS,
         narration: adminSettings,
       },
+      reelCaptions: input.reelCaptions,
       narrationSettings: previewSettings,
       generationMode: 'preview',
+      previewScope: previewScopeToMetadataScope(input.scope ?? '1_beat'),
       panelPauseMs: input.panelPauseMs,
       logUserId: userId,
     }
@@ -535,6 +559,8 @@ export async function previewReelNarrationAction(input: {
   return {
     audioUrl: result.audioUrl,
     settings: previewSettings,
+    narrationMetadata: result.narrationMetadata,
+    reelCaptions: result.reelCaptions,
   };
 }
 
@@ -544,10 +570,46 @@ export async function previewReelNarrationAction(input: {
 
 const MAX_VOICE_PREVIEWS = 4;
 
+function previewScopeToMetadataScope(scope: NarrationVoicePreviewScope): 'sample' | 'full' {
+  return scope === 'full' ? 'full' : 'sample';
+}
+
+function buildPreviewMetadataFromRow(row: Record<string, unknown>, audioUrl: string | null): NarrationPreviewMetadata | undefined {
+  const rawMetadata = row.generation_metadata && typeof row.generation_metadata === 'object'
+    ? row.generation_metadata as Record<string, unknown>
+    : {};
+  const hasMetadata = Object.keys(rawMetadata).length > 0 || row.provider_used || row.selected_model;
+  if (!hasMetadata) return undefined;
+
+  return normalizeNarrationPreviewMetadata({
+    ...rawMetadata,
+    scope: previewScopeToMetadataScope((row.preview_scope as NarrationVoicePreviewScope) ?? '1_beat'),
+    provider: rawMetadata.provider ?? row.provider_used,
+    model: rawMetadata.model ?? row.selected_model,
+    voiceId: rawMetadata.voiceId ?? row.voice_id,
+    voiceName: rawMetadata.voiceName ?? row.voice_display_name,
+    language: rawMetadata.language ?? row.language,
+    audioUrl: audioUrl ?? rawMetadata.audioUrl,
+    durationMs: rawMetadata.durationMs ?? row.duration_ms,
+    wordTimestamps: rawMetadata.wordTimestamps ?? row.word_timestamps,
+    timestampSource: rawMetadata.timestampSource ?? row.timestamp_source,
+    fallbackUsed: rawMetadata.fallbackUsed ?? row.fallback_used,
+    fallbackReason: rawMetadata.fallbackReason ?? row.fallback_reason,
+    charsUsed: rawMetadata.charsUsed ?? row.chars_used,
+    tokensUsed: rawMetadata.tokensUsed ?? row.tokens_used,
+    createdAt: rawMetadata.createdAt ?? row.created_at,
+  });
+}
+
 function rowToVoicePreview(row: Record<string, unknown>, audioUrl: string | null): ReelNarrationVoicePreview {
+  const generationMetadata = buildPreviewMetadataFromRow(row, audioUrl);
+  const activeNarration = row.active_narration && typeof row.active_narration === 'object'
+    ? row.active_narration as ActiveNarration
+    : undefined;
   return {
     id: row.id as string,
     storyId: row.story_id as string,
+    nodeId: (row.node_id as string | null) || undefined,
     userId: row.user_id as string,
     label: row.label as string,
     voiceDisplayName: (row.voice_display_name as string) ?? '',
@@ -556,23 +618,35 @@ function rowToVoicePreview(row: Record<string, unknown>, audioUrl: string | null
     audioUrl,
     settingsSnapshot: row.settings_snapshot as ReelNarrationSettings,
     previewScope: (row.preview_scope as NarrationVoicePreviewScope) ?? '1_beat',
+    generationMetadata,
+    activeNarration,
+    reelCaptions: Array.isArray(row.reel_captions)
+      ? row.reel_captions as ReelNarrationVoicePreview['reelCaptions']
+      : undefined,
     isActive: (row.is_active as boolean) ?? false,
     createdAt: row.created_at as string,
   };
 }
 
 export async function listReelNarrationVoicePreviewsAction(
-  storyId: string
+  storyId: string,
+  nodeId?: string | null
 ): Promise<ReelNarrationVoicePreview[]> {
   const userId = await getCurrentUserId(true);
   const supabase = await createClient();
-  const { data, error } = await supabase
+  let query = supabase
     .from('reel_narration_voice_previews')
     .select('*')
     .eq('story_id', storyId)
     .eq('user_id', userId)
     .order('created_at', { ascending: true })
     .limit(MAX_VOICE_PREVIEWS);
+
+  if (nodeId) {
+    query = query.or(`node_id.is.null,node_id.eq.${nodeId}`);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     if (isMissingNarrationTableError(error)) return [];
@@ -590,10 +664,13 @@ export async function listReelNarrationVoicePreviewsAction(
 
 export async function saveReelNarrationVoicePreviewAction(input: {
   storyId: string;
+  nodeId?: string;
   audioDataUrl: string;
   settings: ReelNarrationSettings;
   scope: NarrationVoicePreviewScope;
   voiceDisplayName: string;
+  generationMetadata?: BeatNarrationMetadata | NarrationPreviewMetadata;
+  reelCaptions?: ReelNarrationVoicePreview['reelCaptions'];
 }): Promise<ReelNarrationVoicePreview> {
   const userId = await getCurrentUserId(true);
   const supabase = await createClient();
@@ -647,6 +724,7 @@ export async function saveReelNarrationVoicePreviewAction(input: {
     .from('reel_narration_voice_previews')
     .insert({
       story_id: input.storyId,
+      node_id: input.nodeId ?? null,
       user_id: userId,
       label,
       voice_display_name: input.voiceDisplayName,
@@ -654,6 +732,27 @@ export async function saveReelNarrationVoicePreviewAction(input: {
       audio_mime_type: mimeType,
       settings_snapshot: input.settings as unknown as Record<string, unknown>,
       preview_scope: input.scope,
+      provider_used: input.generationMetadata?.provider ?? null,
+      selected_model: input.generationMetadata?.model ?? null,
+      voice_id: input.generationMetadata?.voiceId ?? input.settings.voiceId,
+      language: input.generationMetadata?.language ?? input.settings.language,
+      duration_ms: input.generationMetadata?.durationMs ?? null,
+      word_timestamps: (input.generationMetadata?.wordTimestamps as unknown as Record<string, unknown>[] | undefined) ?? null,
+      text_highlight_supported: input.generationMetadata?.textHighlightSupported ?? false,
+      timestamp_source: input.generationMetadata?.timestampSource ?? 'none',
+      fallback_used: input.generationMetadata?.fallbackUsed ?? false,
+      fallback_reason: input.generationMetadata?.fallbackReason ?? null,
+      chars_used: input.generationMetadata?.charsUsed ?? null,
+      tokens_used: input.generationMetadata?.tokensUsed ?? null,
+      reel_captions: (input.reelCaptions as unknown as Record<string, unknown>[] | undefined) ?? null,
+      generation_metadata: input.generationMetadata
+        ? {
+            ...input.generationMetadata,
+            audioUrl: urlOrReference,
+            voiceName: input.voiceDisplayName,
+            scope: previewScopeToMetadataScope(input.scope),
+          } as unknown as Record<string, unknown>
+        : {},
       is_active: false,
     })
     .select()
@@ -681,14 +780,15 @@ export async function deleteReelNarrationVoicePreviewAction(id: string): Promise
 }
 
 export async function applyReelNarrationVoicePreviewAction(
-  id: string
-): Promise<ReelNarrationSettings> {
+  id: string,
+  targetNodeId?: string | null
+): Promise<{ settings: ReelNarrationSettings; preview: ReelNarrationVoicePreview }> {
   const userId = await getCurrentUserId(true);
   const supabase = await createClient();
 
   const { data, error } = await supabase
     .from('reel_narration_voice_previews')
-    .select('story_id, settings_snapshot, preview_scope')
+    .select('*')
     .eq('id', id)
     .eq('user_id', userId)
     .single();
@@ -697,17 +797,75 @@ export async function applyReelNarrationVoicePreviewAction(
   if ((data.preview_scope as NarrationVoicePreviewScope) !== 'full') {
     throw new Error('Only full beat previews can be applied.');
   }
+  const applyNodeId = (data.node_id as string | null) || targetNodeId || null;
 
-  // Mark this one active, clear others for the same story
-  await supabase
+  // Mark this one active, clear older active previews for the same beat.
+  let clearActiveQuery = supabase
     .from('reel_narration_voice_previews')
-    .update({ is_active: false })
+    .update({ is_active: false, active_narration: null })
     .eq('story_id', data.story_id)
     .eq('user_id', userId);
+  clearActiveQuery = applyNodeId
+    ? clearActiveQuery.eq('node_id', applyNodeId)
+    : clearActiveQuery.is('node_id', null);
+  await clearActiveQuery;
   await supabase
     .from('reel_narration_voice_previews')
-    .update({ is_active: true })
+    .update({
+      is_active: true,
+      ...(applyNodeId ? { node_id: applyNodeId } : {}),
+    })
     .eq('id', id);
 
-  return data.settings_snapshot as unknown as ReelNarrationSettings;
+  const signedAudioUrl = await createR2SignedGetUrl(data.audio_r2_key as string).catch(() => null);
+  const preview = rowToVoicePreview(data as Record<string, unknown>, signedAudioUrl);
+  const previewMetadata: NarrationPreviewMetadata | undefined = preview.generationMetadata
+    ? {
+        ...preview.generationMetadata,
+        scope: 'full',
+        audioUrl: data.audio_r2_key as string,
+      }
+    : undefined;
+  const beatMetadata: BeatNarrationMetadata | undefined = previewMetadata
+    ? {
+        ...previewMetadata,
+        previewId: id,
+      }
+    : undefined;
+  const activeNarration: ActiveNarration | undefined = previewMetadata
+    ? {
+        ...previewMetadata,
+        previewId: id,
+        scope: 'full',
+        audioUrl: data.audio_r2_key as string,
+      }
+    : undefined;
+
+  if (applyNodeId) {
+    await updateBeatMediaState(data.story_id as string, applyNodeId, {
+      audioUrl: data.audio_r2_key as string,
+      audioStatus: 'ready',
+      audioError: null,
+      narrationVoiceId: preview.settingsSnapshot.voiceId,
+      narrationMetadata: beatMetadata,
+      activeNarrationPreviewId: id,
+      ...(preview.reelCaptions?.length ? { reelCaptions: preview.reelCaptions } : {}),
+    });
+  }
+
+  await supabase
+    .from('reel_narration_voice_previews')
+    .update({ active_narration: activeNarration ? activeNarration as unknown as Record<string, unknown> : null })
+    .eq('id', id);
+
+  return {
+    settings: data.settings_snapshot as unknown as ReelNarrationSettings,
+    preview: {
+      ...preview,
+      nodeId: applyNodeId ?? preview.nodeId,
+      isActive: true,
+      activeNarration,
+      generationMetadata: previewMetadata,
+    },
+  };
 }
