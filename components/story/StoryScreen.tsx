@@ -118,6 +118,7 @@ import {
 } from '@/lib/reel/narration';
 
 const MAX_VOICE_PREVIEWS_LOCAL = 4;
+type ApplyReelNarrationPreviewResult = Awaited<ReturnType<typeof applyReelNarrationVoicePreviewAction>>;
 
 function formatNarrationProvider(provider: string | undefined): string {
   if (provider === 'elevenlabs') return 'ElevenLabs';
@@ -152,6 +153,14 @@ function stripUnsupportedWordTimings(beat: StoryBeat): StoryBeat {
       wordTimings: undefined,
     })),
   };
+}
+
+function hasFinalReelNarration(beat: StoryBeat): boolean {
+  const normalizedBeat = normalizeBeatMediaFields(beat);
+  if (!normalizedBeat.audioUrl || normalizedBeat.audioStatus !== 'ready') return false;
+  if (normalizedBeat.activeNarrationPreviewId) return true;
+  if (normalizedBeat.narrationMetadata?.scope === 'sample') return false;
+  return true;
 }
 
 function StoryboardCycler({
@@ -2450,7 +2459,10 @@ function StoryScreenInner({
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
-  updateReelNarrationSettings: (settings: ReelNarrationSettings) => Promise<{ clearedNarration: boolean }>;
+  updateReelNarrationSettings: (
+    settings: ReelNarrationSettings,
+    options?: { preserveExistingNarration?: boolean }
+  ) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlaySettings: (settings: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => Promise<void>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
@@ -2616,6 +2628,8 @@ function StoryScreenInner({
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
     [isReelStory, session.storyMap]
   );
+  const reelBeatCount = reelTimelineNodes?.length ?? 0;
+  const isSingleBeatReel = reelBeatCount <= 1;
   const [reelPlayAllActive, setReelPlayAllActive] = useState(false);
   const reelPlayAllNodeIdsRef = useRef<string[]>([]);
   const pendingReelPlayAllNodeIdRef = useRef<string | null>(null);
@@ -2882,13 +2896,18 @@ function StoryScreenInner({
   const isReelTransitionSaving = reelTransitionSaveState === 'saving';
   const hasUnsavedReelNarrationSettings = isReelStory
     && reelNarrationSettingsKey(reelNarrationDraft) !== reelNarrationSettingsKey(savedReelNarrationSettings);
+  const activeFullPreviewMatchesNarrationDraft = Boolean(
+    activeFullVoicePreview
+    && reelNarrationSettingsKey(reelNarrationDraft) === reelNarrationSettingsKey(activeFullVoicePreview.settingsSnapshot)
+  );
+  const hasBlockingUnsavedReelNarrationSettings = hasUnsavedReelNarrationSettings && !activeFullPreviewMatchesNarrationDraft;
   const isReelNarrationSaving = reelNarrationSaveState === 'saving';
   const activeReelSectionHasUnsavedChanges = activeReelEditorSection === 'text'
     ? hasUnsavedReelText
     : activeReelEditorSection === 'style'
     ? hasUnsavedReelOverlayStyle
     : activeReelEditorSection === 'voice'
-    ? hasUnsavedReelNarrationSettings
+    ? hasBlockingUnsavedReelNarrationSettings
     : hasUnsavedReelTransitionSettings;
   const activeReelSectionIsSaving = activeReelEditorSection === 'text'
     ? isReelTextSaving
@@ -2912,9 +2931,9 @@ function StoryScreenInner({
     return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl) && normalizedBeat.imageStatus === 'ready';
   });
   const reelHasAllAudio = reelHasCompletePath && reelDistributionBeats.every((beat) => {
-    const normalizedBeat = normalizeBeatMediaFields(beat);
-    return Boolean(normalizedBeat.audioUrl) && normalizedBeat.audioStatus === 'ready';
+    return hasFinalReelNarration(beat);
   });
+  const reelHasAnyFinalNarration = reelDistributionBeats.some(hasFinalReelNarration);
   const reelHasPendingWork = isGeneratingAudio || isRegeneratingImage || showPendingImageState;
   const reelReadyForDistribution = Boolean(
     isReelStory &&
@@ -2924,13 +2943,15 @@ function StoryScreenInner({
     !hasUnsavedReelText &&
     !hasUnsavedReelOverlayStyle &&
     !hasUnsavedReelTransitionSettings &&
-    !hasUnsavedReelNarrationSettings &&
+    !hasBlockingUnsavedReelNarrationSettings &&
     !reelHasPendingWork
   );
   const reelDistributionBlockReason = !isEnding
     ? 'Finish generating the reel first.'
     : !reelHasAllImages
     ? 'Reel publishing and export need an image on every beat.'
+    : !reelHasAllAudio && !isSingleBeatReel && reelHasAnyFinalNarration
+    ? 'Generate narration for all beats to enable export.'
     : !reelHasAllAudio
     ? 'Generate narration before publishing or exporting.'
     : hasUnsavedReelText
@@ -2939,7 +2960,7 @@ function StoryScreenInner({
     ? 'Save text settings before publishing or exporting.'
     : hasUnsavedReelTransitionSettings
     ? 'Save transitions before publishing or exporting.'
-    : hasUnsavedReelNarrationSettings
+    : hasBlockingUnsavedReelNarrationSettings
     ? 'Save voice settings before publishing or exporting.'
     : reelHasPendingWork
     ? 'Wait for image and narration generation to finish.'
@@ -2949,15 +2970,26 @@ function StoryScreenInner({
       const normalizedBeat = normalizeBeatMediaFields(node.data);
       return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl)
         && normalizedBeat.imageStatus === 'ready'
-        && Boolean(normalizedBeat.audioUrl)
-        && normalizedBeat.audioStatus === 'ready';
+        && hasFinalReelNarration(normalizedBeat);
     }),
     [reelTimelineNodes]
   );
   const reelBeatsNeedingNarration = useMemo(
-    () => (reelTimelineNodes ?? []).filter((n) => !normalizeBeatMediaFields(n.data).audioUrl),
+    () => (reelTimelineNodes ?? []).filter((node) => !hasFinalReelNarration(node.data)),
     [reelTimelineNodes]
   );
+  const shouldHighlightGenerateAllNarration = Boolean(
+    isReelStory
+    && !isSingleBeatReel
+    && reelHasAnyFinalNarration
+    && !reelHasAllAudio
+  );
+  const generateNarrationCtaLabel = isSingleBeatReel
+    ? 'Generate narration'
+    : 'Generate narration for all beats';
+  const generateNarrationCtaTitle = shouldHighlightGenerateAllNarration
+    ? 'Generate narration for all beats to enable export.'
+    : generateNarrationCtaLabel;
   const reelPreviewSequence = useMemo(
     () => reelPlayableNodes.map((node) => {
       const beat = normalizeBeatMediaFields(node.data);
@@ -2977,7 +3009,7 @@ function StoryScreenInner({
     && !hasUnsavedReelText
     && !hasUnsavedReelOverlayStyle
     && !hasUnsavedReelTransitionSettings
-    && !hasUnsavedReelNarrationSettings
+    && !hasBlockingUnsavedReelNarrationSettings
     && !reelHasPendingWork
   );
   const canPlayCurrentBeat = Boolean(
@@ -3444,6 +3476,56 @@ function StoryScreenInner({
     playVoicePreviewAudio(preview);
   }, [playVoicePreviewAudio, playingVoicePreviewId, stopPlayingVoicePreview]);
 
+  const applyVoicePreviewResultToLocalBeat = useCallback((
+    result: ApplyReelNarrationPreviewResult,
+    targetNodeId: string,
+    fallbackAudioUrl?: string | null
+  ) => {
+    useStoryStore.setState((state) => {
+      const currentSession = state.session;
+      const node = currentSession?.storyMap.nodes[targetNodeId];
+      if (!currentSession || !node) return state;
+      const appliedAudioUrl = result.preview.activeNarration?.audioUrl
+        ?? result.preview.audioR2Key
+        ?? result.preview.audioUrl
+        ?? fallbackAudioUrl;
+      const narrationMetadata = result.preview.activeNarration
+        ?? (result.preview.generationMetadata
+          ? {
+              ...result.preview.generationMetadata,
+              previewId: result.preview.id,
+              scope: 'full' as const,
+            }
+          : undefined);
+      const updatedMap = {
+        ...currentSession.storyMap,
+        nodes: {
+          ...currentSession.storyMap.nodes,
+          [targetNodeId]: {
+            ...node,
+            data: normalizeBeatMediaFields({
+              ...node.data,
+              audioUrl: appliedAudioUrl || node.data.audioUrl,
+              audioStatus: 'ready',
+              audioError: undefined,
+              narrationVoiceId: result.settings.voiceId,
+              narrationMetadata,
+              activeNarrationPreviewId: result.preview.id,
+              ...(result.preview.reelCaptions?.length ? { reelCaptions: result.preview.reelCaptions } : {}),
+            }),
+          },
+        },
+      };
+      return {
+        ...state,
+        session: {
+          ...currentSession,
+          storyMap: updatedMap,
+        },
+      };
+    });
+  }, []);
+
   const handleApplyVoicePreview = useCallback(async (preview: ReelNarrationVoicePreview) => {
     if (preview.previewScope !== 'full') {
       setReelNarrationMessage('Only full beat previews can be applied.');
@@ -3458,58 +3540,134 @@ function StoryScreenInner({
           ? { ...p, ...result.preview, audioUrl: preview.audioUrl ?? result.preview.audioUrl, isActive: true }
           : { ...p, isActive: false, activeNarration: undefined }
       )));
-      useStoryStore.setState((state) => {
-        const currentSession = state.session;
-        const node = currentSession?.storyMap.nodes[currentNodeId];
-        if (!currentSession || !node) return state;
-        const appliedAudioUrl = result.preview.activeNarration?.audioUrl
-          ?? result.preview.audioR2Key
-          ?? result.preview.audioUrl
-          ?? preview.audioUrl;
-        const updatedMap = {
-          ...currentSession.storyMap,
-          nodes: {
-            ...currentSession.storyMap.nodes,
-            [currentNodeId]: {
-              ...node,
-              data: normalizeBeatMediaFields({
-                ...node.data,
-                audioUrl: appliedAudioUrl || node.data.audioUrl,
-                audioStatus: 'ready',
-                audioError: undefined,
-                narrationVoiceId: result.settings.voiceId,
-                narrationMetadata: result.preview.generationMetadata,
-                activeNarrationPreviewId: result.preview.id,
-                ...(result.preview.reelCaptions?.length ? { reelCaptions: result.preview.reelCaptions } : {}),
-              }),
-            },
-          },
-        };
-        return {
-          ...state,
-          session: {
-            ...currentSession,
-            storyMap: updatedMap,
-          },
-        };
-      });
+      applyVoicePreviewResultToLocalBeat(result, currentNodeId, preview.audioUrl);
       setReelNarrationMessage(result.preview.generationMetadata?.textHighlightSupported
         ? 'Full preview applied to beat playback with word highlight.'
         : 'Full preview applied. Text highlight is unavailable for this narration.');
     } catch (error) {
       setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to apply preview.');
     }
-  }, [currentNodeId, setReelNarrationDraft, stopPlayingVoicePreview]);
+  }, [applyVoicePreviewResultToLocalBeat, currentNodeId, setReelNarrationDraft, stopPlayingVoicePreview]);
 
   const handleDeleteVoicePreview = useCallback(async (previewId: string) => {
     if (playingVoicePreviewId === previewId) stopPlayingVoicePreview();
+    const deletingActivePreview = voicePreviews.find((preview) => preview.id === previewId)?.isActive === true;
     try {
       await deleteReelNarrationVoicePreviewAction(previewId);
       setVoicePreviews((prev) => prev.filter((p) => p.id !== previewId));
+      if (deletingActivePreview) {
+        useStoryStore.setState((state) => {
+          const currentSession = state.session;
+          const node = currentSession?.storyMap.nodes[currentNodeId];
+          if (!currentSession || !node) return state;
+          return {
+            ...state,
+            session: {
+              ...currentSession,
+              storyMap: {
+                ...currentSession.storyMap,
+                nodes: {
+                  ...currentSession.storyMap.nodes,
+                  [currentNodeId]: {
+                    ...node,
+                    data: normalizeBeatMediaFields({
+                      ...node.data,
+                      audioUrl: undefined,
+                      audioStatus: 'not_requested',
+                      audioError: undefined,
+                      narrationMetadata: undefined,
+                      activeNarrationPreviewId: undefined,
+                    }),
+                  },
+                },
+              },
+            },
+          };
+        });
+      }
     } catch {
       // best-effort
     }
-  }, [playingVoicePreviewId, stopPlayingVoicePreview]);
+  }, [currentNodeId, playingVoicePreviewId, stopPlayingVoicePreview, voicePreviews]);
+
+  const getVoiceDisplayNameForSettings = useCallback((settings: ReelNarrationSettings): string => {
+    const voiceOptions = getReelNarrationVoiceOptions({
+      adminSettings: effectiveReelNarrationAdminSettings,
+      language: settings.language,
+      userTier: reelNarrationTier,
+      gender: settings.voiceGender,
+    });
+    return voiceOptions.find((voice) => voice.voiceId === settings.voiceId)?.label
+      ?? allReelVoiceOptions.find((voice) => voice.voiceId === settings.voiceId)?.label
+      ?? settings.voiceId;
+  }, [allReelVoiceOptions, effectiveReelNarrationAdminSettings, reelNarrationTier]);
+
+  const generateAndApplyFullNarrationPreview = useCallback(async (
+    nodeId: string,
+    settingsSeed: ReelNarrationSettings
+  ): Promise<ApplyReelNarrationPreviewResult | null> => {
+    const latestSession = useStoryStore.getState().session ?? session;
+    const node = latestSession.storyMap.nodes[nodeId];
+    if (!node) return null;
+
+    if (!latestSession.savedStoryId) {
+      await generateNarrationForNode(nodeId);
+      return null;
+    }
+
+    const beat = normalizeBeatMediaFields(node.data);
+    const settings = normalizeReelNarrationSettings(settingsSeed, {
+      storyLanguage: latestSession.storyConfig.language,
+      adminSettings: effectiveReelNarrationAdminSettings,
+    });
+    const result = await previewReelNarrationAction({
+      text: beat.storyText,
+      settings,
+      scope: 'full',
+      reelCaptions: beat.reelCaptions,
+      storyLanguage: latestSession.storyConfig.language,
+      panelPauseMs: normalizeReelTransitionSettings(latestSession.storyConfig.reel.transitionSettings).pauseMs,
+    });
+    const saved = await saveReelNarrationVoicePreviewAction({
+      storyId: latestSession.savedStoryId,
+      nodeId,
+      audioDataUrl: result.audioUrl,
+      settings: result.settings,
+      scope: 'full',
+      voiceDisplayName: getVoiceDisplayNameForSettings(result.settings),
+      generationMetadata: {
+        ...result.narrationMetadata,
+        scope: 'full',
+        voiceName: getVoiceDisplayNameForSettings(result.settings),
+      },
+      reelCaptions: result.reelCaptions,
+    });
+    const applied = await applyReelNarrationVoicePreviewAction(saved.id, nodeId);
+    applyVoicePreviewResultToLocalBeat(applied, nodeId, result.audioUrl);
+
+    if (nodeId === currentNodeId) {
+      const generatedPreview = {
+        ...saved,
+        ...applied.preview,
+        audioUrl: result.audioUrl ?? applied.preview.audioUrl ?? saved.audioUrl,
+        isActive: true,
+      };
+      setVoicePreviews((prev) => {
+        const cleared = prev.map((preview) => ({ ...preview, isActive: false, activeNarration: undefined }));
+        const withoutGenerated = cleared.filter((preview) => preview.id !== generatedPreview.id);
+        return [...withoutGenerated, generatedPreview].slice(-MAX_VOICE_PREVIEWS_LOCAL);
+      });
+    }
+
+    return applied;
+  }, [
+    applyVoicePreviewResultToLocalBeat,
+    currentNodeId,
+    effectiveReelNarrationAdminSettings,
+    generateNarrationForNode,
+    getVoiceDisplayNameForSettings,
+    session,
+  ]);
 
   const handleSaveReelNarrationSettings = useCallback(async () => {
     if (!isReelStory || !hasUnsavedReelNarrationSettings || isReelNarrationSaving) return;
@@ -3517,7 +3675,9 @@ function StoryScreenInner({
     setReelNarrationSaveState('saving');
     setReelNarrationMessage(null);
     try {
-      const result = await updateReelNarrationSettings(reelNarrationDraft);
+      const result = await updateReelNarrationSettings(reelNarrationDraft, {
+        preserveExistingNarration: activeFullPreviewMatchesNarrationDraft,
+      });
       setReelNarrationSaveState('idle');
       setReelNarrationMessage(result.clearedNarration ? 'Voice saved. Existing narration was cleared.' : 'Voice saved.');
       setReelEditorNavigationMessage(null);
@@ -3526,6 +3686,7 @@ function StoryScreenInner({
       setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to save voice settings.');
     }
   }, [
+    activeFullPreviewMatchesNarrationDraft,
     hasUnsavedReelNarrationSettings,
     isReelNarrationSaving,
     isReelStory,
@@ -3626,20 +3787,46 @@ function StoryScreenInner({
     }
   }, [narrationPresets, reelNarrationDraft.presetId, updateReelNarrationDraft]);
 
-  const handleGenerateNarration = useCallback(() => {
+  const handleGenerateNarration = useCallback(async () => {
     if (isReelStory && hasUnsavedReelText) {
       setReelTextSaveState('error');
       setReelTextMessage('Save panel text before generating narration.');
       return;
     }
-    if (isReelStory && hasUnsavedReelNarrationSettings) {
+    if (isReelStory && hasBlockingUnsavedReelNarrationSettings) {
       setReelNarrationSaveState('error');
       setReelNarrationMessage('Save voice settings before generating narration.');
       setActiveReelEditorSection('voice');
       return;
     }
-    void generateNarrationForNode(currentNodeId);
-  }, [currentNodeId, generateNarrationForNode, hasUnsavedReelNarrationSettings, hasUnsavedReelText, isReelStory]);
+    if (!isReelStory) {
+      await generateNarrationForNode(currentNodeId);
+      return;
+    }
+
+    useStoryStore.setState({ isGeneratingAudio: true });
+    try {
+      const seedSettings = activeFullVoicePreview?.settingsSnapshot ?? reelNarrationDraft;
+      const applied = await generateAndApplyFullNarrationPreview(currentNodeId, seedSettings);
+      if (applied) {
+        setReelNarrationMessage('Full narration generated and applied to this beat.');
+      }
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to generate narration.');
+    } finally {
+      useStoryStore.setState({ isGeneratingAudio: false });
+    }
+  }, [
+    activeFullVoicePreview,
+    currentNodeId,
+    generateAndApplyFullNarrationPreview,
+    generateNarrationForNode,
+    hasBlockingUnsavedReelNarrationSettings,
+    hasUnsavedReelText,
+    isReelStory,
+    reelNarrationDraft,
+  ]);
 
   const handleGenerateAllNarration = useCallback(async () => {
     if (!isReelStory) return;
@@ -3648,21 +3835,39 @@ function StoryScreenInner({
       setReelTextMessage('Save panel text before generating narration.');
       return;
     }
-    if (hasUnsavedReelNarrationSettings) {
+    if (hasBlockingUnsavedReelNarrationSettings) {
       setReelNarrationSaveState('error');
       setReelNarrationMessage('Save voice settings before generating narration.');
       setActiveReelEditorSection('voice');
       return;
     }
     const pendingIds = reelBeatsNeedingNarration.map((n) => n.id);
-    for (const nodeId of pendingIds) {
-      await generateNarrationForNode(nodeId);
+    if (pendingIds.length === 0) return;
+
+    useStoryStore.setState({ isGeneratingAudio: true });
+    try {
+      const seedSettings = activeFullVoicePreview?.settingsSnapshot ?? reelNarrationDraft;
+      let generatedCount = 0;
+      for (const nodeId of pendingIds) {
+        const applied = await generateAndApplyFullNarrationPreview(nodeId, seedSettings);
+        if (applied) generatedCount += 1;
+      }
+      setReelNarrationMessage(generatedCount > 1
+        ? `Generated and applied narration for ${generatedCount} beats.`
+        : 'Generated and applied narration.');
+    } catch (error) {
+      setReelNarrationSaveState('error');
+      setReelNarrationMessage(error instanceof Error ? error.message : 'Failed to generate narration for all beats.');
+    } finally {
+      useStoryStore.setState({ isGeneratingAudio: false });
     }
   }, [
-    generateNarrationForNode,
-    hasUnsavedReelNarrationSettings,
+    activeFullVoicePreview,
+    generateAndApplyFullNarrationPreview,
+    hasBlockingUnsavedReelNarrationSettings,
     hasUnsavedReelText,
     isReelStory,
+    reelNarrationDraft,
     reelBeatsNeedingNarration,
   ]);
 
@@ -3684,7 +3889,7 @@ function StoryScreenInner({
 
   const handleReelGenerateNarration = useCallback(() => {
     cancelReelPlayAll();
-    handleGenerateNarration();
+    void handleGenerateNarration();
   }, [cancelReelPlayAll, handleGenerateNarration]);
 
   const handleToggleReelPlayAll = useCallback(() => {
@@ -3783,7 +3988,7 @@ function StoryScreenInner({
       if (narrationAudioUrl) {
         togglePlayPause();
       } else if (!isGeneratingAudio) {
-        handleGenerateNarration();
+        void handleGenerateNarration();
       }
     },
     timelineNodes: reelTimelineNodes,
@@ -5140,11 +5345,16 @@ function StoryScreenInner({
           <button
             type="button"
             onClick={() => void handleGenerateAllNarration()}
-            disabled={isGeneratingAudio || hasUnsavedReelNarrationSettings || hasUnsavedReelText}
-            className="order-7 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs font-medium text-neutral-300 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={isGeneratingAudio || hasBlockingUnsavedReelNarrationSettings || hasUnsavedReelText}
+            title={generateNarrationCtaTitle}
+            className={`order-7 inline-flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              shouldHighlightGenerateAllNarration
+                ? 'border-amber-400/40 bg-amber-400/10 text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.16)] hover:bg-amber-400/15'
+                : 'border-white/10 bg-white/[0.04] text-neutral-300 hover:bg-white/10'
+            }`}
           >
             {isGeneratingAudio ? <Loader2 className="h-4 w-4 animate-spin" /> : <Volume2 className="h-4 w-4" />}
-            Generate narration for all beats
+            {generateNarrationCtaLabel}
           </button>
         )}
 
@@ -5523,7 +5733,7 @@ function StoryScreenInner({
                   )}
                   {isReelStory && !normalizedCurrentBeat.audioUrl && (
                     <button
-                      onClick={() => !isGeneratingAudio && handleGenerateNarration()}
+                      onClick={() => !isGeneratingAudio && void handleGenerateNarration()}
                       disabled={isGeneratingAudio || hasUnsavedReelText}
                       className="absolute bottom-4 right-4 z-20 p-2.5 rounded-full bg-black/50 backdrop-blur-sm border border-white/20 text-white/70 hover:text-white hover:border-white/40 transition-all disabled:cursor-wait"
                       title={hasUnsavedReelText ? 'Save panel text before generating narration' : isGeneratingAudio ? 'Generating narration...' : 'Generate narration'}

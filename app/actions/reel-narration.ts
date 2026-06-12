@@ -682,12 +682,16 @@ export async function saveReelNarrationVoicePreviewAction(input: {
   const audioBuffer = Buffer.from(base64Data, 'base64');
 
   // Enforce max 4: delete oldest if at capacity
-  const { data: existing } = await supabase
+  let existingQuery = supabase
     .from('reel_narration_voice_previews')
     .select('id, label, audio_r2_key, created_at')
     .eq('story_id', input.storyId)
     .eq('user_id', userId)
     .order('created_at', { ascending: true });
+  existingQuery = input.nodeId
+    ? existingQuery.eq('node_id', input.nodeId)
+    : existingQuery.is('node_id', null);
+  const { data: existing } = await existingQuery;
 
   if (existing && existing.length >= MAX_VOICE_PREVIEWS) {
     const oldest = existing[0];
@@ -769,12 +773,21 @@ export async function deleteReelNarrationVoicePreviewAction(id: string): Promise
   const supabase = await createClient();
   const { data, error } = await supabase
     .from('reel_narration_voice_previews')
-    .select('audio_r2_key')
+    .select('story_id, node_id, audio_r2_key, is_active')
     .eq('id', id)
     .eq('user_id', userId)
     .single();
 
   if (error) throw new Error(`Voice preview not found: ${error.message}`);
+  if (data.is_active && data.node_id) {
+    await updateBeatMediaState(data.story_id as string, data.node_id as string, {
+      audioUrl: null,
+      audioStatus: 'not_requested',
+      audioError: null,
+      narrationMetadata: null,
+      activeNarrationPreviewId: null,
+    });
+  }
   await deleteR2Object(data.audio_r2_key as string).catch(() => {});
   await supabase.from('reel_narration_voice_previews').delete().eq('id', id).eq('user_id', userId);
 }

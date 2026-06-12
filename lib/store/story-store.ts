@@ -144,7 +144,10 @@ interface StoryState {
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
-  updateReelNarrationSettings: (settings: ReelNarrationSettings) => Promise<{ clearedNarration: boolean }>;
+  updateReelNarrationSettings: (
+    settings: ReelNarrationSettings,
+    options?: { preserveExistingNarration?: boolean }
+  ) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlaySettings: (settings: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => Promise<void>;
   updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
@@ -3535,7 +3538,10 @@ export const useStoryStore = create<StoryState>()(
         return { clearedNarration };
       },
 
-      updateReelNarrationSettings: async (settings: ReelNarrationSettings) => {
+      updateReelNarrationSettings: async (
+        settings: ReelNarrationSettings,
+        options: { preserveExistingNarration?: boolean } = {}
+      ) => {
         const { session } = get();
         if (!session || !isReelStoryConfig(session.storyConfig)) {
           return { clearedNarration: false };
@@ -3544,10 +3550,12 @@ export const useStoryStore = create<StoryState>()(
         const normalizedSettings = normalizeReelNarrationSettings(settings, {
           storyLanguage: session.storyConfig.language,
         });
-        const clearedNarration = Object.values(session.storyMap.nodes).some((node) => {
-          const beat = normalizeBeatMediaFields(node.data);
-          return Boolean(beat.audioUrl || beat.audioStatus === 'ready' || beat.audioStatus === 'pending');
-        });
+        const clearedNarration = options.preserveExistingNarration
+          ? false
+          : Object.values(session.storyMap.nodes).some((node) => {
+              const beat = normalizeBeatMediaFields(node.data);
+              return Boolean(beat.audioUrl || beat.audioStatus === 'ready' || beat.audioStatus === 'pending');
+            });
         const nextStoryConfig = normalizeStoryConfig({
           ...session.storyConfig,
           reel: {
