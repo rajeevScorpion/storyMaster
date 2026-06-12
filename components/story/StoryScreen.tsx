@@ -85,7 +85,7 @@ import {
   reelTransitionSettingsKey,
   type ReelTransitionSettings,
 } from '@/lib/reel/transitions';
-import { REEL_PANEL_COUNT, hasCompleteCaptionEnding, splitTextIntoCompleteCaptionPanels } from '@/lib/reel/captions';
+import { REEL_PANEL_COUNT, getEditableReelPanelTexts, splitTextIntoCompleteCaptionPanels } from '@/lib/reel/captions';
 import {
   blobToDataUrl,
   compressImageFile,
@@ -291,25 +291,8 @@ function ReelFieldLabel({
   );
 }
 
-function splitReelTextIntoPanels(text: string): string[] {
-  return splitTextIntoCompleteCaptionPanels(text, REEL_PANEL_COUNT);
-}
-
 function getReelPanelTexts(beat: Pick<StoryBeat, 'storyText' | 'reelCaptions'>): string[] {
-  const fallback = splitReelTextIntoPanels(beat.storyText || '');
-  const savedCaptionTexts = Array.from({ length: REEL_PANEL_COUNT }, (_, index) => (
-    beat.reelCaptions?.find((item) => item.panelIndex === index)?.text?.trim() || ''
-  ));
-  const sentenceSafeSavedCaptions = savedCaptionTexts.some(Boolean)
-    ? splitTextIntoCompleteCaptionPanels(savedCaptionTexts.filter(Boolean).join(' '), REEL_PANEL_COUNT)
-    : [];
-
-  return Array.from({ length: REEL_PANEL_COUNT }, (_, index) => {
-    return sentenceSafeSavedCaptions[index]
-      || (hasCompleteCaptionEnding(savedCaptionTexts[index]) ? savedCaptionTexts[index] : '')
-      || fallback[index]
-      || '';
-  });
+  return getEditableReelPanelTexts(beat, REEL_PANEL_COUNT);
 }
 
 function reelOverlayStyleKey(style: ReelTextOverlayStyle | null | undefined): string {
@@ -2254,7 +2237,10 @@ function StoryScreenInner({
   isRegeneratingImage: boolean;
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
-  updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
+  updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{
+    clearedNarration: boolean;
+    deletedPreviewIds: string[];
+  }>;
   updateReelNarrationSettings: (
     settings: ReelNarrationSettings,
     options?: { preserveExistingNarration?: boolean }
@@ -2370,10 +2356,23 @@ function StoryScreenInner({
 
   useEffect(() => {
     const storyId = session.savedStoryId;
-    if (!isReelStory || !storyId) return;
+    let cancelled = false;
+    playingVoicePreviewAudioRef.current?.pause();
+    playingVoicePreviewAudioRef.current = null;
+    setVoicePreviews([]);
+    setPlayingVoicePreviewId(null);
+    setPendingAutoPlayVoicePreviewId(null);
+    if (!isReelStory || !storyId) return () => {
+      cancelled = true;
+    };
     listReelNarrationVoicePreviewsAction(storyId, currentNodeId)
-      .then(setVoicePreviews)
+      .then((previews) => {
+        if (!cancelled) setVoicePreviews(previews);
+      })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [currentNodeId, isReelStory, session.savedStoryId]);
   const { scrollRef, isAutoScrolling, toggleAutoScroll, stopAutoScroll } = useStoryAutoScroll<HTMLDivElement>({
     enabled: !isReelStory && cycleSettings.storyUiAutoScrollEnabled && !isMinimized && visibleReaderPanel === 'story',
@@ -2675,10 +2674,13 @@ function StoryScreenInner({
   ], [narrationPresets]);
   const selectedReelPreset = narrationPresets.find((preset) => preset.id === reelNarrationDraft.presetId);
   const selectedReelPresetIsUser = selectedReelPreset?.presetScope === 'user';
-  const hasReelAudio = Boolean(
+  const hasReelNarrationArtifacts = Boolean(
     normalizedCurrentBeat.audioUrl
     || normalizedCurrentBeat.audioStatus === 'ready'
     || normalizedCurrentBeat.audioStatus === 'pending'
+    || normalizedCurrentBeat.narrationMetadata
+    || normalizedCurrentBeat.activeNarrationPreviewId
+    || voicePreviews.length > 0
   );
   const hasUnsavedReelText = isReelStory && reelPanelDraft.some((text, index) =>
     text.trim() !== (savedReelPanelTexts[index] || '').trim()
@@ -2969,9 +2971,9 @@ function StoryScreenInner({
   const handleSaveReelText = useCallback(async (confirmClearNarration = false) => {
     if (!isReelStory || !hasUnsavedReelText || isReelTextSaving) return;
 
-    if (hasReelAudio && !confirmClearNarration) {
+    if (hasReelNarrationArtifacts && !confirmClearNarration) {
       setReelTextSaveState('warning');
-      setReelTextMessage('Saving text will clear the existing narration for this beat.');
+      setReelTextMessage('Saving text will clear the existing narration and voice previews for this beat.');
       return;
     }
 
@@ -2980,6 +2982,14 @@ function StoryScreenInner({
 
     try {
       const result = await updateReelPanelCaptions(currentNodeId, reelPanelDraft);
+      if (result.deletedPreviewIds.length > 0) {
+        playingVoicePreviewAudioRef.current?.pause();
+        playingVoicePreviewAudioRef.current = null;
+        setPlayingVoicePreviewId(null);
+        setPendingAutoPlayVoicePreviewId(null);
+        const deletedPreviewIds = new Set(result.deletedPreviewIds);
+        setVoicePreviews((current) => current.filter((preview) => !deletedPreviewIds.has(preview.id)));
+      }
       setReelTextSaveState('saved');
       setReelTextMessage(result.clearedNarration
         ? 'Text saved. Narration was cleared.'
@@ -2991,7 +3001,7 @@ function StoryScreenInner({
     }
   }, [
     currentNodeId,
-    hasReelAudio,
+    hasReelNarrationArtifacts,
     hasUnsavedReelText,
     isReelStory,
     isReelTextSaving,

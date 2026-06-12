@@ -792,6 +792,57 @@ export async function deleteReelNarrationVoicePreviewAction(id: string): Promise
   await supabase.from('reel_narration_voice_previews').delete().eq('id', id).eq('user_id', userId);
 }
 
+export async function clearReelNarrationForBeatAction(
+  storyId: string,
+  nodeId: string
+): Promise<{ deletedPreviewIds: string[] }> {
+  const userId = await getCurrentUserId(true);
+  const supabase = await createClient();
+  const matchingNodeFilter = `node_id.is.null,node_id.eq.${nodeId}`;
+
+  const { data: previews, error: previewListError } = await supabase
+    .from('reel_narration_voice_previews')
+    .select('id, audio_r2_key')
+    .eq('story_id', storyId)
+    .eq('user_id', userId)
+    .or(matchingNodeFilter);
+
+  if (previewListError && !isMissingNarrationTableError(previewListError)) {
+    throw new Error(`Failed to load narration previews for clearing: ${previewListError.message}`);
+  }
+
+  await updateBeatMediaState(storyId, nodeId, {
+    audioUrl: null,
+    audioStatus: 'not_requested',
+    audioError: null,
+    narrationVoiceId: null,
+    narrationMetadata: null,
+    activeNarrationPreviewId: null,
+  });
+
+  const deletedPreviewIds = (previews ?? []).map((preview) => preview.id as string);
+  if (deletedPreviewIds.length === 0) {
+    return { deletedPreviewIds };
+  }
+
+  const { error: previewDeleteError } = await supabase
+    .from('reel_narration_voice_previews')
+    .delete()
+    .eq('story_id', storyId)
+    .eq('user_id', userId)
+    .or(matchingNodeFilter);
+
+  if (previewDeleteError && !isMissingNarrationTableError(previewDeleteError)) {
+    throw new Error(`Failed to clear narration previews: ${previewDeleteError.message}`);
+  }
+
+  await Promise.allSettled(
+    (previews ?? []).map((preview) => deleteR2Object(preview.audio_r2_key as string))
+  );
+
+  return { deletedPreviewIds };
+}
+
 export async function applyReelNarrationVoicePreviewAction(
   id: string,
   targetNodeId?: string | null

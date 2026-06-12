@@ -16,7 +16,7 @@ import {
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
-import { saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
+import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import {
   authorizeCurrentUserBillableAction,
@@ -25,7 +25,7 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, isReelStoryConfig, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { DEFAULT_REEL_STORY_SETTINGS, findReelDefiner, normalizeReelStorySettings } from '@/lib/reel/settings';
-import { ensureCompleteCaptionSentence, hasCompleteCaptionEnding, splitTextIntoCompleteCaptionPanels } from '@/lib/reel/captions';
+import { normalizeEditedReelPanelTexts } from '@/lib/reel/captions';
 import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import { normalizeReelTransitionSettings, type ReelTransitionSettings } from '@/lib/reel/transitions';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
@@ -143,7 +143,10 @@ interface StoryState {
   restartExploration: () => void;
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
-  updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{ clearedNarration: boolean }>;
+  updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{
+    clearedNarration: boolean;
+    deletedPreviewIds: string[];
+  }>;
   updateReelNarrationSettings: (
     settings: ReelNarrationSettings,
     options?: { preserveExistingNarration?: boolean }
@@ -3437,20 +3440,15 @@ export const useStoryStore = create<StoryState>()(
       updateReelPanelCaptions: async (nodeId: string, panelTexts: string[]) => {
         const { session } = get();
         if (!session || !isReelStoryConfig(session.storyConfig)) {
-          return { clearedNarration: false };
+          return { clearedNarration: false, deletedPreviewIds: [] };
         }
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) {
-          return { clearedNarration: false };
+          return { clearedNarration: false, deletedPreviewIds: [] };
         }
 
-        const normalizedTexts = splitTextIntoCompleteCaptionPanels(
-          panelTexts.filter(Boolean).join(' '),
-          4
-        ).map((text, index) => ensureCompleteCaptionSentence(
-          text || (hasCompleteCaptionEnding(panelTexts[index] || '') ? panelTexts[index] : '')
-        ));
+        const normalizedTexts = normalizeEditedReelPanelTexts(panelTexts);
         if (!normalizedTexts.some(Boolean)) {
           throw new Error('Add text to at least one panel before saving.');
         }
@@ -3460,20 +3458,24 @@ export const useStoryStore = create<StoryState>()(
           panelIndex,
           text,
         }));
-        const clearedNarration = Boolean(node.data.audioUrl || node.data.audioStatus === 'ready' || node.data.audioStatus === 'pending');
+        const hadActiveNarration = Boolean(
+          node.data.audioUrl
+          || node.data.audioStatus === 'ready'
+          || node.data.audioStatus === 'pending'
+          || node.data.narrationMetadata
+          || node.data.activeNarrationPreviewId
+        );
 
         const nextMap = updateStoryMapBeat(session.storyMap, nodeId, (beat) => ({
           ...beat,
           storyText: nextStoryText,
           reelCaptions: nextCaptions,
-          ...(clearedNarration
-            ? {
-                audioUrl: undefined,
-                audioStatus: 'not_requested' as const,
-                audioError: undefined,
-                narrationVoiceId: undefined,
-              }
-            : {}),
+          audioUrl: undefined,
+          audioStatus: 'not_requested' as const,
+          audioError: undefined,
+          narrationVoiceId: undefined,
+          narrationMetadata: undefined,
+          activeNarrationPreviewId: undefined,
         }));
 
         updateStoreSaveUi({
@@ -3481,22 +3483,17 @@ export const useStoryStore = create<StoryState>()(
           isSaving: Boolean(session.savedStoryId),
           saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
           error: null,
-          audioReadyNodeId: clearedNarration && get().audioReadyNodeId === nodeId ? null : get().audioReadyNodeId,
+          audioReadyNodeId: hadActiveNarration && get().audioReadyNodeId === nodeId ? null : get().audioReadyNodeId,
         });
 
         if (!session.savedStoryId) {
-          return { clearedNarration };
+          return { clearedNarration: hadActiveNarration, deletedPreviewIds: [] };
         }
 
         try {
           await saveBeatAction(session.savedStoryId, nodeId, nextMap.nodes[nodeId]);
-          if (clearedNarration) {
-            await updateBeatMediaState(session.savedStoryId, nodeId, {
-              audioUrl: null,
-              audioStatus: 'not_requested',
-              audioError: null,
-            });
-          }
+          const { deletedPreviewIds } = await clearReelNarrationForBeatAction(session.savedStoryId, nodeId);
+          const clearedNarration = hadActiveNarration || deletedPreviewIds.length > 0;
 
           const latestSession = get().session;
           if (latestSession?.storyMap.nodes[nodeId]) {
@@ -3504,14 +3501,12 @@ export const useStoryStore = create<StoryState>()(
               ...beat,
               storyText: nextStoryText,
               reelCaptions: nextCaptions,
-              ...(clearedNarration
-                ? {
-                    audioUrl: undefined,
-                    audioStatus: 'not_requested' as const,
-                    audioError: undefined,
-                    narrationVoiceId: undefined,
-                  }
-                : {}),
+              audioUrl: undefined,
+              audioStatus: 'not_requested' as const,
+              audioError: undefined,
+              narrationVoiceId: undefined,
+              narrationMetadata: undefined,
+              activeNarrationPreviewId: undefined,
             }));
             updateStoreSaveUi({
               session: deriveSessionFields(latestSession, confirmedMap),
@@ -3526,6 +3521,7 @@ export const useStoryStore = create<StoryState>()(
               error: null,
             });
           }
+          return { clearedNarration, deletedPreviewIds };
         } catch (error) {
           updateStoreSaveUi({
             isSaving: false,
@@ -3534,8 +3530,6 @@ export const useStoryStore = create<StoryState>()(
           });
           throw error;
         }
-
-        return { clearedNarration };
       },
 
       updateReelNarrationSettings: async (

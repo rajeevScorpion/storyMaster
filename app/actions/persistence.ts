@@ -1085,7 +1085,7 @@ export async function updateBeatMediaState(
     audioUrl?: string | null;
     audioStatus?: BeatMediaStatus;
     audioError?: string | null;
-    narrationVoiceId?: string;
+    narrationVoiceId?: string | null;
     narrationMetadata?: StoryBeat['narrationMetadata'] | null;
     activeNarrationPreviewId?: string | null;
     characters?: Character[];
@@ -1125,7 +1125,9 @@ export async function updateBeatMediaState(
   } else if ('audioUrl' in patch || patch.audioStatus) {
     updateData.audio_synced_at = null;
   }
-  if (patch.narrationVoiceId) updateData.narration_voice_id = patch.narrationVoiceId;
+  if ('narrationVoiceId' in patch) {
+    updateData.narration_voice_id = patch.narrationVoiceId ?? null;
+  }
   if ('narrationMetadata' in patch) {
     updateData.narration_metadata = patch.narrationMetadata
       ? patch.narrationMetadata as unknown as Record<string, unknown>
@@ -1202,7 +1204,7 @@ export async function updateBeatMediaState(
     ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),
     ...(patch.audioStatus ? { audioStatus: patch.audioStatus } : {}),
     ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
-    ...(patch.narrationVoiceId ? { narrationVoiceId: patch.narrationVoiceId } : {}),
+    ...('narrationVoiceId' in patch ? { narrationVoiceId: patch.narrationVoiceId || undefined } : {}),
     ...('narrationMetadata' in patch ? { narrationMetadata: patch.narrationMetadata || undefined } : {}),
     ...('activeNarrationPreviewId' in patch ? { activeNarrationPreviewId: patch.activeNarrationPreviewId || undefined } : {}),
     ...(patch.characters ? { characters: patch.characters } : {}),

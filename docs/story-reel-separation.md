@@ -25,8 +25,11 @@ The separation rule is:
 - `components/story/ReelCanvasPreview.tsx`: reel canvas preview.
 - `lib/reel/timeline.ts`: reel panel, caption, word, and transition timeline.
 - `lib/reel/renderer.ts`: reel frame rendering.
+- `lib/reel/captions.ts`: reel panel text distribution and preservation of user-edited panel boundaries.
 - `lib/hooks/useReelVideoExport.ts`: reel export orchestration.
 - Reel narration actions and metadata under `app/actions/narration.ts`, `app/actions/reel-narration.ts`, and `lib/reel/narration.ts`.
+
+Reel text edits invalidate narration for that beat. Saving edited panel text must preserve the four submitted panel boundaries, clear the beat's active narration metadata, and delete saved voice previews tied to that beat before new narration can be applied or exported.
 
 ### Shared infrastructure
 

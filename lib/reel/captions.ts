@@ -108,3 +108,28 @@ export function splitTextIntoCompleteCaptionPanels(value: string, count = REEL_P
   }
   return groupSentencesIntoPanels(sentences, normalizedCount);
 }
+
+export function normalizeEditedReelPanelTexts(
+  panelTexts: readonly string[],
+  count = REEL_PANEL_COUNT
+): string[] {
+  const normalizedCount = Math.max(1, Math.round(count));
+  return Array.from({ length: normalizedCount }, (_, index) => (
+    normalizeCaptionWhitespace(panelTexts[index] || '')
+  ));
+}
+
+export function getEditableReelPanelTexts(input: {
+  storyText: string;
+  reelCaptions?: Array<{ panelIndex: number; text: string }> | null;
+}, count = REEL_PANEL_COUNT): string[] {
+  const savedPanelTexts = Array.from({ length: Math.max(1, Math.round(count)) }, (_, index) => (
+    normalizeCaptionWhitespace(
+      input.reelCaptions?.find((caption) => caption.panelIndex === index)?.text || ''
+    )
+  ));
+
+  return savedPanelTexts.some(Boolean)
+    ? savedPanelTexts
+    : splitTextIntoCompleteCaptionPanels(input.storyText || '', count);
+}
