@@ -6,7 +6,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -21,6 +21,8 @@ import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
+import StoryNarrationTimingDialog from './StoryNarrationTimingDialog';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
@@ -2000,6 +2002,7 @@ export default function StoryScreen() {
   const isRegeneratingImage = useStoryStore((state) => state.isRegeneratingImage);
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
+  const updateStoryboardNarrationTiming = useStoryStore((state) => state.updateStoryboardNarrationTiming);
   const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
   const updateReelNarrationSettings = useStoryStore((state) => state.updateReelNarrationSettings);
   const updateReelTextOverlaySettings = useStoryStore((state) => state.updateReelTextOverlaySettings);
@@ -2147,6 +2150,7 @@ export default function StoryScreen() {
       isRegeneratingImage={isRegeneratingImage}
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
+      updateStoryboardNarrationTiming={updateStoryboardNarrationTiming}
       updateReelPanelCaptions={updateReelPanelCaptions}
       updateReelNarrationSettings={updateReelNarrationSettings}
       updateReelTextOverlaySettings={updateReelTextOverlaySettings}
@@ -2197,6 +2201,7 @@ function StoryScreenInner({
   isRegeneratingImage,
   audioReadyNodeId,
   generateNarrationForNode,
+  updateStoryboardNarrationTiming,
   updateReelPanelCaptions,
   updateReelNarrationSettings,
   updateReelTextOverlaySettings,
@@ -2237,6 +2242,10 @@ function StoryScreenInner({
   isRegeneratingImage: boolean;
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
+  updateStoryboardNarrationTiming: (
+    nodeId: string,
+    timing: StoryBeat['storyboardNarrationTiming'] | null
+  ) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{
     clearedNarration: boolean;
     deletedPreviewIds: string[];
@@ -2325,6 +2334,7 @@ function StoryScreenInner({
 
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
+  const [showStoryNarrationTiming, setShowStoryNarrationTiming] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
   const [isDiscardingReel, setIsDiscardingReel] = useState(false);
   const [discardReelError, setDiscardReelError] = useState<string | null>(null);
@@ -2430,7 +2440,12 @@ function StoryScreenInner({
   const pendingReelPlayAllNodeIdRef = useRef<string | null>(null);
   const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
-  const isStoryboard = !!normalizedCurrentBeat.isStoryboard && !!normalizedCurrentBeat.imageUrl;
+  const isStoryboard = Boolean(
+    normalizedCurrentBeat.imageUrl
+    && isStoryboardBeat(normalizedCurrentBeat, {
+      assumeGeneratedStoryboard: !isReelStory && !isPromptOnlyStory,
+    })
+  );
   const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || getBeatDisplayImageUrl(normalizedCurrentBeat);
   const imageKey = normalizedCurrentBeat.imageUrl || displayImageUrl;
   const visualKey = displayImageUrl ?? currentNodeId;
@@ -2489,6 +2504,7 @@ function StoryScreenInner({
     playbackState,
     togglePlayPause,
     play: playAudio,
+    stop: stopAudio,
     currentTimeMs: reelAudioTimeMs,
     durationMs: reelAudioDurationMs,
     isMuted,
@@ -5491,6 +5507,7 @@ function StoryScreenInner({
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
                 captions={normalizedCurrentBeat.reelCaptions}
+                narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
                 textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                 textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
@@ -5526,6 +5543,7 @@ function StoryScreenInner({
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
                       captions={normalizedCurrentBeat.reelCaptions}
+                      narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
                       textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                       textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
@@ -5678,6 +5696,7 @@ function StoryScreenInner({
                   playbackState={playbackState}
                   imageClassName="mobile-scene-shuttle"
                   captions={normalizedCurrentBeat.reelCaptions}
+                  narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
                   textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                   textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
@@ -5823,6 +5842,22 @@ function StoryScreenInner({
                     <Layers className="w-5 h-5" />
                   </button>
                 </>
+              )}
+              {isStoryboard && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!normalizedCurrentBeat.audioUrl) return;
+                    stopAudio();
+                    setShowStoryNarrationTiming(true);
+                  }}
+                  disabled={!normalizedCurrentBeat.audioUrl}
+                  className="rounded-full bg-white/5 p-2 text-neutral-300 backdrop-blur-md transition-colors hover:bg-emerald-400/10 hover:text-emerald-300 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-white/5"
+                  title={normalizedCurrentBeat.audioUrl ? 'Story Narration Timing' : 'Generate narration first'}
+                  aria-label={normalizedCurrentBeat.audioUrl ? 'Open Story Narration Timing' : 'Generate narration first'}
+                >
+                  <Clock3 className="h-5 w-5" />
+                </button>
               )}
             </div>
 
@@ -7062,6 +7097,17 @@ function StoryScreenInner({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <StoryNarrationTimingDialog
+        open={showStoryNarrationTiming}
+        nodeId={currentNodeId}
+        beat={normalizedCurrentBeat}
+        aspectRatio={session.storyConfig.aspectRatio}
+        vignetteEnabled={cycleSettings.vignetteEnabled}
+        vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+        onClose={() => setShowStoryNarrationTiming(false)}
+        onSave={(timing) => updateStoryboardNarrationTiming(currentNodeId, timing)}
+      />
 
       <AnimatePresence>
         {showDiscardReelDialog && (

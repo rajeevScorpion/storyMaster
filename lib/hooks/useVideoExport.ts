@@ -8,7 +8,9 @@ import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { DEFAULT_VIDEO_EXPORT_PRESET, normalizeVideoExportPreset, type VideoExportPreset } from '@/lib/types/pricing';
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
-import { getStoryboardPanelDurationsSeconds } from '@/lib/storyboard/timing';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
+import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
+import type { ExportPhase, VideoExportOptions as BaseVideoExportOptions, VideoExportState } from '@/lib/video-export/types';
 import {
   DEFAULT_REEL_TEXT_OVERLAY_STYLE,
   clampNumber,
@@ -713,20 +715,47 @@ async function renderStoryboardPanelBytes(
   return canvasToJpegBytes(canvas);
 }
 
-export type ExportPhase = 'idle' | 'loading' | 'preparing' | 'encoding' | 'finalizing';
-
-export interface VideoExportState {
-  isExporting: boolean;
-  progress: number;
-  phase: ExportPhase;
-  error: string | null;
+export interface VideoExportOptions extends BaseVideoExportOptions {
+  exportKind?: VideoExportKind;
+  cycleOverride?: boolean;
+  cycleMs?: number;
 }
 
-export interface VideoExportOptions {
-  aspectRatio?: StoryAspectRatio;
-  exportKind?: VideoExportKind;
-  videoExportPreset?: VideoExportPreset | null;
-  showWatermark?: boolean;
+function buildAbsoluteCaptionFrameSlices(
+  caption: ReelCaption | undefined,
+  panelStartMs: number,
+  panelDurationSeconds: number
+): CaptionFrameSlice[] {
+  const panelDurationMs = Math.max(1, panelDurationSeconds * 1000);
+  const panelEndMs = panelStartMs + panelDurationMs;
+  const wordTimings = caption?.wordTimings;
+  if (!caption || !wordTimings?.length) {
+    return [{ duration: panelDurationSeconds, isPanelFirst: true, isPanelLast: true }];
+  }
+
+  const minSliceMs = 1000 / FPS;
+  const slices: Array<{ startMs: number; endMs: number; activeWordIndex?: number }> = [];
+  let cursorMs = panelStartMs;
+  wordTimings.forEach((word, activeWordIndex) => {
+    const startMs = clampNumber(word.startMs, panelStartMs, panelEndMs);
+    const endMs = clampNumber(word.endMs, panelStartMs, panelEndMs);
+    if (startMs > cursorMs + minSliceMs) slices.push({ startMs: cursorMs, endMs: startMs });
+    if (endMs > startMs + minSliceMs) {
+      slices.push({ startMs, endMs, activeWordIndex });
+      cursorMs = endMs;
+    }
+  });
+  if (cursorMs < panelEndMs - minSliceMs) slices.push({ startMs: cursorMs, endMs: panelEndMs });
+  if (slices.length === 0) {
+    return [{ duration: panelDurationSeconds, isPanelFirst: true, isPanelLast: true }];
+  }
+
+  return slices.map((slice, index) => ({
+    duration: Math.max(minSliceMs / 1000, (slice.endMs - slice.startMs) / 1000),
+    activeWordIndex: slice.activeWordIndex,
+    isPanelFirst: index === 0,
+    isPanelLast: index === slices.length - 1,
+  }));
 }
 
 export function useVideoExport() {
@@ -758,6 +787,7 @@ export function useVideoExport() {
       ffmpegInstance = null;
     }
     activeFfmpegRef.current = null;
+    setState({ isExporting: false, progress: 0, phase: 'idle', error: null });
   }, []);
 
   const exportVideo = useCallback(
@@ -809,18 +839,33 @@ export function useVideoExport() {
       await waitForExportFonts();
 
       let preparedSegmentCount = 0;
-      const segments: BeatSegment[] = await Promise.all(
-        videoBeats.map(async (beat, index) => {
+      let segments: BeatSegment[];
+      try {
+        segments = await Promise.all(videoBeats.map(async (beat, index) => {
           const imageUrl = toExportFetchUrl(beat.imageUrl!);
           const audioUrl = beat.audioUrl ? toExportFetchUrl(beat.audioUrl) : null;
           const audioDuration = audioUrl ? await probeAudioDuration(audioUrl) : 0;
-          const isStoryboard = beat.isStoryboard === true;
+          if (cancelledRef.current) throw new Error('Export cancelled.');
+          const isStoryboard = isStoryboardBeat(beat);
           const fallbackSeconds = STORYBOARD_ADVANCE_MS / 1000;
+          const fallbackPanelDurationMs = options.cycleOverride
+            ? Math.max(100, options.cycleMs ?? STORYBOARD_ADVANCE_MS)
+            : STORYBOARD_ADVANCE_MS;
           const panelDurations = isStoryboard
             ? isReelExport
               ? getCaptionTimedStoryboardPanelDurationsSeconds(beat, audioDuration)
-              : getStoryboardPanelDurationsSeconds(audioDuration)
-            : [audioDuration > 0 ? audioDuration : fallbackSeconds];
+              : audioDuration > 0
+                ? (() => {
+                    const boundaries = getStoryboardPanelBoundariesMs(
+                      audioDuration * 1000,
+                      beat.storyboardNarrationTiming
+                    );
+                    return boundaries.slice(1).map((boundary, panelIndex) => (
+                      (boundary - boundaries[panelIndex]) / 1000
+                    ));
+                  })()
+                : Array.from({ length: 4 }, () => fallbackPanelDurationMs / 1000)
+            : [audioDuration > 0 ? audioDuration : fallbackPanelDurationMs / 1000];
           const panelDuration = panelDurations[0] ?? fallbackSeconds;
           const endHoldDuration = isReelExport && index === videoBeats.length - 1
             ? REEL_EXPORT_END_HOLD_SECONDS
@@ -850,8 +895,16 @@ export function useVideoExport() {
           }
 
           return segment;
-        })
-      );
+        }));
+      } catch (error) {
+        setState({
+          isExporting: false,
+          progress: 0,
+          phase: 'idle',
+          error: cancelledRef.current ? null : (error instanceof Error ? error.message : 'Failed to prepare story scenes.'),
+        });
+        return false;
+      }
 
       setState((current) => ({
         ...current,
@@ -981,10 +1034,15 @@ export function useVideoExport() {
 
             for (let panelIndex = 0; panelIndex < 4; panelIndex += 1) {
               const panelDuration = segment.panelDurations[panelIndex] ?? segment.panelDuration;
+              const panelStartMs = segment.panelDurations
+                .slice(0, panelIndex)
+                .reduce((sum, duration) => sum + duration * 1000, 0);
               const caption = segment.textOverlayEnabled
                 ? segment.reelCaptions?.find((item) => item.panelIndex === panelIndex)
                 : undefined;
-              const frameSlices = buildCaptionFrameSlices(caption, panelDuration, isReelExport);
+              const frameSlices = isReelExport
+                ? buildCaptionFrameSlices(caption, panelDuration, true)
+                : buildAbsoluteCaptionFrameSlices(caption, panelStartMs, panelDuration);
               const willAppendFinalHoldAfterPanel = segment.endHoldDuration > 0 && panelIndex === 3;
 
               for (let sliceIndex = 0; sliceIndex < frameSlices.length; sliceIndex += 1) {

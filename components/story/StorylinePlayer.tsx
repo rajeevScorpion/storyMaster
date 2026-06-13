@@ -36,7 +36,7 @@ import {
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { useVideoExport } from '@/lib/hooks/useVideoExport';
+import { useStoryVideoExport } from '@/lib/hooks/useStoryVideoExport';
 import {
   authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
@@ -53,6 +53,7 @@ import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
@@ -169,7 +170,17 @@ export default function StorylinePlayer({
     videoExportPreset,
     pricing.snapshot.canAccessUnbrandedExports
   );
-  const { exportVideo, cancel: cancelExport, isExporting, progress: exportProgress, phase: exportPhase, error: exportError } = useVideoExport();
+  const {
+    exportVideo,
+    cancel: cancelExport,
+    isExporting,
+    progress: exportProgress,
+    phase: exportPhase,
+    error: exportError,
+    engine: exportEngine,
+    stage: exportStage,
+    fallbackReason: exportFallbackReason,
+  } = useStoryVideoExport();
   const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
 
   useEffect(() => {
@@ -263,7 +274,7 @@ export default function StorylinePlayer({
   }, [storylineId, isLoggedIn]);
 
   const currentBeat = currentBeats[currentIndex];
-  const isStoryboard = !!currentBeat.isStoryboard && !!currentBeat.imageUrl;
+  const isStoryboard = Boolean(currentBeat.imageUrl && isStoryboardBeat(currentBeat));
   const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
   const visualKey = displayImageUrl ?? `storyline-${currentIndex}`;
   const {
@@ -290,6 +301,7 @@ export default function StorylinePlayer({
     : exportPhase === 'finalizing'
     ? 'Finalizing file'
     : 'Exporting video';
+  const isCompatibilityExport = exportEngine === 'compatibility';
 
   const {
     playbackState,
@@ -501,6 +513,7 @@ export default function StorylinePlayer({
                   vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                   playbackState={playbackState}
                   captions={currentBeat.reelCaptions}
+                  narrationTiming={currentBeat.storyboardNarrationTiming}
                   textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
                   textOverlayStyle={currentBeat.reelTextOverlayStyle}
                 />
@@ -547,6 +560,7 @@ export default function StorylinePlayer({
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
                       captions={currentBeat.reelCaptions}
+                      narrationTiming={currentBeat.storyboardNarrationTiming}
                       textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
                       textOverlayStyle={currentBeat.reelTextOverlayStyle}
                     />
@@ -669,6 +683,8 @@ export default function StorylinePlayer({
                       aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
                       videoExportPreset,
                       showWatermark: showVideoWatermark,
+                      cycleOverride: cycleSettings.cycleOverride,
+                      cycleMs: cycleSettings.cycleMs,
                     });
                     if (auth.status === 'allowed' && auth.reservationId) {
                       if (ok) {
@@ -682,6 +698,8 @@ export default function StorylinePlayer({
                       aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
                       videoExportPreset,
                       showWatermark: showVideoWatermark,
+                      cycleOverride: cycleSettings.cycleOverride,
+                      cycleMs: cycleSettings.cycleMs,
                     });
                   }
                 }}
@@ -787,6 +805,7 @@ export default function StorylinePlayer({
                 playbackState={playbackState}
                 imageClassName="mobile-scene-shuttle"
                 captions={currentBeat.reelCaptions}
+                narrationTiming={currentBeat.storyboardNarrationTiming}
                 textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
                 textOverlayStyle={currentBeat.reelTextOverlayStyle}
               />
@@ -1300,6 +1319,22 @@ export default function StorylinePlayer({
                 <p className="mt-4 text-sm font-sans leading-6 text-neutral-200/90">
                   Keep this tab open while your video is being rendered. Leaving, refreshing, or closing the tab can stop the export.
                 </p>
+
+                {isCompatibilityExport && (
+                  <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-400/10 px-3.5 py-3 text-sm font-sans text-amber-100">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+                      <div>
+                        <p>Fast export was unavailable. Continuing with compatibility export, which takes longer.</p>
+                        {process.env.NODE_ENV !== 'production' && exportFallbackReason && (
+                          <p className="mt-1 line-clamp-2 text-xs text-amber-100/65" title={exportFallbackReason}>
+                            {exportFallbackReason} ({exportStage})
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-5">
                   <div className="flex items-center justify-between text-xs font-sans uppercase tracking-[0.22em] text-neutral-300/80">

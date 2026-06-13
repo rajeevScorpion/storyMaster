@@ -358,6 +358,7 @@ export async function repairMissingReadyBeatImageUrls(
 const ADDITIVE_BEAT_COLUMNS = [
   'is_storyboard',
   'reel_captions',
+  'storyboard_narration_timing',
   'origin_kind',
   'seed_plan_beat_index',
   'canonical_option_id',
@@ -516,6 +517,10 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     row.reel_captions = normalizedBeat.reelCaptions as unknown as Record<string, unknown>[];
   }
 
+  if (normalizedBeat.storyboardNarrationTiming) {
+    row.storyboard_narration_timing = normalizedBeat.storyboardNarrationTiming as unknown as Record<string, unknown>;
+  }
+
   row.image_gallery = (normalizedBeat.imageGallery ?? []).map((entry) => ({
     url: normalizeStorageUrl(entry.url, 'story-assets'),
     storage_key: entry.storageKey,
@@ -566,6 +571,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     reelCaptions: Array.isArray(beat.reel_captions)
       ? beat.reel_captions as StoryBeat['reelCaptions']
       : undefined,
+    storyboardNarrationTiming: beat.storyboard_narration_timing || undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -903,6 +909,10 @@ export async function loadStory(storyId: string): Promise<StorySession> {
               && jsonbNode.data.reelCaptions
               ? { reelCaptions: jsonbNode.data.reelCaptions }
               : {}),
+            ...(!storyMap.nodes[nodeId].data.storyboardNarrationTiming
+              && jsonbNode.data.storyboardNarrationTiming
+              ? { storyboardNarrationTiming: jsonbNode.data.storyboardNarrationTiming }
+              : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
@@ -1090,6 +1100,7 @@ export async function updateBeatMediaState(
     activeNarrationPreviewId?: string | null;
     characters?: Character[];
     reelCaptions?: StoryBeat['reelCaptions'] | null;
+    storyboardNarrationTiming?: StoryBeat['storyboardNarrationTiming'] | null;
   }
 ): Promise<void> {
   const supabase = await createClient();
@@ -1117,6 +1128,9 @@ export async function updateBeatMediaState(
   }
   if ('audioUrl' in patch) {
     updateData.audio_url = patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : null;
+    if (!('storyboardNarrationTiming' in patch)) {
+      updateData.storyboard_narration_timing = null;
+    }
   }
   if (patch.audioStatus) updateData.audio_status = patch.audioStatus;
   if ('audioError' in patch) updateData.audio_error = patch.audioError ?? null;
@@ -1142,6 +1156,11 @@ export async function updateBeatMediaState(
   if ('reelCaptions' in patch) {
     updateData.reel_captions = patch.reelCaptions
       ? patch.reelCaptions as unknown as Record<string, unknown>[]
+      : null;
+  }
+  if ('storyboardNarrationTiming' in patch) {
+    updateData.storyboard_narration_timing = patch.storyboardNarrationTiming
+      ? patch.storyboardNarrationTiming as unknown as Record<string, unknown>
       : null;
   }
 
@@ -1202,6 +1221,7 @@ export async function updateBeatMediaState(
       })),
     } : {}),
     ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),
+    ...('audioUrl' in patch && !('storyboardNarrationTiming' in patch) ? { storyboardNarrationTiming: undefined } : {}),
     ...(patch.audioStatus ? { audioStatus: patch.audioStatus } : {}),
     ...('audioError' in patch ? { audioError: patch.audioError || undefined } : {}),
     ...('narrationVoiceId' in patch ? { narrationVoiceId: patch.narrationVoiceId || undefined } : {}),
@@ -1209,6 +1229,9 @@ export async function updateBeatMediaState(
     ...('activeNarrationPreviewId' in patch ? { activeNarrationPreviewId: patch.activeNarrationPreviewId || undefined } : {}),
     ...(patch.characters ? { characters: patch.characters } : {}),
     ...('reelCaptions' in patch ? { reelCaptions: patch.reelCaptions || undefined } : {}),
+    ...('storyboardNarrationTiming' in patch ? {
+      storyboardNarrationTiming: patch.storyboardNarrationTiming || undefined,
+    } : {}),
   });
 
   const patchedMap: StoryMap = {
@@ -1404,6 +1427,7 @@ export async function autoPublishStoryline(
     activeNarrationPreviewId: b.active_narration_preview_id || undefined,
     isStoryboard: b.is_storyboard || undefined,
     reelCaptions: Array.isArray(b.reel_captions) ? b.reel_captions as StoryBeat['reelCaptions'] : undefined,
+    storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
     reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,
     reelTextOverlayStyle: storyConfig.reel.textOverlayStyle,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,

@@ -24,7 +24,13 @@ import {
   type ExportPhase,
   type VideoExportOptions,
   type VideoExportState,
-} from '@/lib/hooks/useVideoExport';
+} from '@/lib/video-export/types';
+import {
+  cancelMediaBunnyOutput,
+  downloadMp4,
+  loadVerifiedMediaBunny,
+  waitForVideoExportFonts,
+} from '@/lib/video-export/mediabunny';
 
 const REEL_FPS = 24;
 const AUDIO_SAMPLE_RATE = 48000;
@@ -33,7 +39,6 @@ const AUDIO_BITRATE = '96k';
 const EXPORT_IMAGE_QUALITY = 0.92;
 
 let reelFallbackFfmpegInstance: FFmpeg | null = null;
-const verifiedMediabunnyConfigs = new Set<string>();
 
 export type ReelExportEngine = 'fast' | 'compatibility';
 export type ReelExportStage =
@@ -47,7 +52,7 @@ export type ReelExportStage =
   | 'compatibility-rendering'
   | 'compatibility-finalizing';
 
-export interface ReelVideoExportOptions extends Omit<VideoExportOptions, 'exportKind'> {
+export interface ReelVideoExportOptions extends VideoExportOptions {
   textOverlayEnabled?: boolean;
   textOverlayStyle?: ReelTextOverlayStyle;
   transitionSettings: ReelTransitionSettings;
@@ -73,11 +78,6 @@ async function getReelFallbackFfmpeg(): Promise<FFmpeg> {
   });
   reelFallbackFfmpegInstance = ffmpeg;
   return ffmpeg;
-}
-
-async function waitForExportFonts(): Promise<void> {
-  if (!document.fonts?.ready) return;
-  await document.fonts.ready.catch(() => undefined);
 }
 
 async function decodeAudioBuffer(context: AudioContext, url: string): Promise<AudioBuffer> {
@@ -114,60 +114,6 @@ function logExportTiming(stage: string, startedAt: number, details: Record<strin
     durationMs: Math.round(performance.now() - startedAt),
     ...details,
   });
-}
-
-async function verifyMediabunnyOutput(
-  mediabunny: typeof import('mediabunny'),
-  canvasSize: { width: number; height: number }
-): Promise<void> {
-  const configKey = `${canvasSize.width}x${canvasSize.height}:avc-aac:${AUDIO_CHANNELS}:${AUDIO_SAMPLE_RATE}`;
-  if (verifiedMediabunnyConfigs.has(configKey)) return;
-
-  const canvas = document.createElement('canvas');
-  canvas.width = canvasSize.width;
-  canvas.height = canvasSize.height;
-  const target = new mediabunny.BufferTarget();
-  const output = new mediabunny.Output({ format: new mediabunny.Mp4OutputFormat(), target });
-  const videoSource = new mediabunny.CanvasSource(canvas, {
-    codec: 'avc',
-    bitrate: mediabunny.QUALITY_HIGH,
-    latencyMode: 'quality',
-  });
-  const audioSource = new mediabunny.AudioBufferSource({
-    codec: 'aac',
-    bitrate: mediabunny.QUALITY_HIGH,
-  });
-  const probeAudio = new AudioBuffer({
-    numberOfChannels: AUDIO_CHANNELS,
-    length: Math.ceil(AUDIO_SAMPLE_RATE * 0.05),
-    sampleRate: AUDIO_SAMPLE_RATE,
-  });
-  output.addVideoTrack(videoSource, { frameRate: REEL_FPS });
-  output.addAudioTrack(audioSource);
-
-  try {
-    await output.start();
-    await videoSource.add(0, 0.05, { keyFrame: true });
-    await audioSource.add(probeAudio);
-    await output.finalize();
-    if (!target.buffer?.byteLength) throw new Error('Fast export produced an empty MP4.');
-    verifiedMediabunnyConfigs.add(configKey);
-  } finally {
-    if (output.state !== 'finalized' && output.state !== 'canceled') {
-      await output.cancel().catch(() => undefined);
-    }
-  }
-}
-
-function triggerVideoDownload(buffer: BlobPart, title: string) {
-  const url = URL.createObjectURL(new Blob([buffer], { type: 'video/mp4' }));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'reel'}.mp4`;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function canvasToJpegBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
@@ -215,7 +161,7 @@ export function useReelVideoExport() {
       }
       activeFfmpegRef.current = null;
     }
-    void activeOutputRef.current?.cancel().catch(() => undefined);
+    void cancelMediaBunnyOutput(activeOutputRef.current);
     void activeAudioContextRef.current?.close().catch(() => undefined);
   }, []);
 
@@ -245,7 +191,7 @@ export function useReelVideoExport() {
       ffmpeg = await getReelFallbackFfmpeg();
       activeFfmpegRef.current = ffmpeg;
       activeAudioContextRef.current = audioContext;
-      await waitForExportFonts();
+      await waitForVideoExportFonts();
       const audioBuffers = await Promise.all(videoBeats.map((beat) => decodeAudioBuffer(audioContext, beat.audioUrl!)));
       const preparedBeats = videoBeats.map((beat, index) => ({
         beat,
@@ -353,7 +299,7 @@ export function useReelVideoExport() {
       const bytes = outputData instanceof Uint8Array
         ? outputData.slice()
         : new TextEncoder().encode(outputData as string);
-      triggerVideoDownload(bytes, title);
+      downloadMp4(bytes, title, 'reel');
       await ffmpeg.deleteFile(outputFile).catch(() => undefined);
       logExportTiming('compatibility.total', fallbackStartedAt, { frameCount: frameSamples.length });
       setState(idleState());
@@ -407,7 +353,12 @@ export function useReelVideoExport() {
     setState({ isExporting: true, progress: 0, phase: 'loading', error: null });
 
     try {
-      const mediabunny = await import('mediabunny');
+      const mediabunny = await loadVerifiedMediaBunny({
+        ...canvasSize,
+        fps: REEL_FPS,
+        sampleRate: AUDIO_SAMPLE_RATE,
+        channels: AUDIO_CHANNELS,
+      });
       const {
         AudioBufferSource,
         BufferTarget: MediabunnyBufferTarget,
@@ -415,34 +366,13 @@ export function useReelVideoExport() {
         Mp4OutputFormat: MediabunnyMp4OutputFormat,
         Output: MediabunnyOutput,
         QUALITY_HIGH,
-        canEncodeAudio,
-        canEncodeVideo,
       } = mediabunny;
-      const canEncodeAvc = await canEncodeVideo('avc', {
-        width: canvasSize.width,
-        height: canvasSize.height,
-        bitrate: QUALITY_HIGH,
-      });
-      if (!canEncodeAvc) throw new Error('Native AVC video encoding is unavailable.');
-
-      if (!(await canEncodeAudio('aac', {
-        numberOfChannels: AUDIO_CHANNELS,
-        sampleRate: AUDIO_SAMPLE_RATE,
-        bitrate: QUALITY_HIGH,
-      }))) {
-        const { registerAacEncoder } = await import('@mediabunny/aac-encoder');
-        registerAacEncoder();
-      }
-
-      const preflightStartedAt = performance.now();
-      await verifyMediabunnyOutput(mediabunny, canvasSize);
-      logExportTiming('fast.preflight', preflightStartedAt);
 
       const preparationStartedAt = performance.now();
       setStage('preparing');
       setState({ isExporting: true, progress: 5, phase: 'preparing', error: null });
       activeAudioContextRef.current = audioContext;
-      await waitForExportFonts();
+      await waitForVideoExportFonts();
       const audioBuffers = await Promise.all(videoBeats.map((beat) => decodeAudioBuffer(audioContext, beat.audioUrl!)));
       const soundtrack = await buildReelSoundtrack(audioBuffers);
       if (cancelledRef.current) return false;
@@ -484,7 +414,7 @@ export function useReelVideoExport() {
       const frameSamples = buildReelFrameSamples(timeline, REEL_FPS);
       for (let frameIndex = 0; frameIndex < frameSamples.length; frameIndex += 1) {
         if (cancelledRef.current) {
-          await output.cancel();
+          await cancelMediaBunnyOutput(output);
           setState(idleState());
           return false;
         }
@@ -530,7 +460,7 @@ export function useReelVideoExport() {
       }
       if (!target.buffer) throw new Error('The rendered reel file is empty.');
       setState((current) => ({ ...current, progress: 100, phase: 'finalizing' }));
-      triggerVideoDownload(target.buffer, title);
+      downloadMp4(target.buffer, title, 'reel');
       logExportTiming('fast.total', fastExportStartedAt, { frameCount: frameSamples.length });
       setState(idleState());
       return true;
@@ -541,7 +471,7 @@ export function useReelVideoExport() {
         return false;
       }
       if (output && output.state !== 'finalized' && output.state !== 'canceled') {
-        await output.cancel().catch(() => undefined);
+        await cancelMediaBunnyOutput(output);
         output = null;
         activeOutputRef.current = null;
       }
@@ -558,7 +488,7 @@ export function useReelVideoExport() {
       return exportWithFfmpeg(beats, title, options, videoExportPreset);
     } finally {
       if (output && output.state !== 'finalized' && output.state !== 'canceled') {
-        await output.cancel().catch(() => undefined);
+        await cancelMediaBunnyOutput(output);
       }
       if (assets) releaseReelImageAssets(assets);
       await audioContext.close().catch(() => undefined);

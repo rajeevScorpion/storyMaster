@@ -6,6 +6,10 @@ import { AnimatePresence, motion } from 'motion/react';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { probeStoryAudioDurationMs } from '@/lib/storyboard/audio-duration';
 import { getStoryboardPanelCropStyle, STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
+import {
+  getStoryboardPanelFromNarrationTiming,
+  normalizeStoryboardNarrationTiming,
+} from '@/lib/storyboard/narration-timing';
 import { getEqualSplitStoryboardPanel } from '@/lib/storyboard/timing';
 import type { StoryBeat } from '@/lib/types/story';
 
@@ -27,6 +31,7 @@ interface StoryStoryboardPlayerProps {
   imageClassName?: string;
   showIndicators?: boolean;
   captions?: StoryBeat['reelCaptions'];
+  narrationTiming?: StoryBeat['storyboardNarrationTiming'];
   textOverlayEnabled?: boolean;
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
   textHighlightSupported?: boolean;
@@ -47,6 +52,7 @@ export default function StoryStoryboardPlayer({
   imageClassName,
   showIndicators = true,
   captions,
+  narrationTiming,
   textOverlayEnabled = true,
   textOverlayStyle,
   textHighlightSupported = true,
@@ -59,32 +65,41 @@ export default function StoryStoryboardPlayer({
     : probedDuration && probedDuration.audioUrl === audioUrl
       ? probedDuration.durationMs
       : 0;
+  const validNarrationTiming = normalizeStoryboardNarrationTiming(
+    narrationTiming,
+    resolvedAudioDurationMs
+  );
+  const useNarrationTimeline = hasAudio && resolvedAudioDurationMs > 0;
   const panelDurationMs = cycleOverride ? cycleMs : STORYBOARD_ADVANCE_MS;
 
   useEffect(() => {
-    if (!audioUrl || audioDurationMs > 0 || cycleOverride) return;
+    if (!audioUrl || audioDurationMs > 0) return;
     const controller = new AbortController();
     probeStoryAudioDurationMs(audioUrl, controller.signal).then((durationMs) => {
       if (durationMs > 0) setProbedDuration({ audioUrl, durationMs });
     });
     return () => controller.abort();
-  }, [audioDurationMs, audioUrl, cycleOverride]);
+  }, [audioDurationMs, audioUrl]);
 
   useEffect(() => {
-    if (hasAudio && !cycleOverride) return;
-    const shouldCycle = !hasAudio || cycleOverride || playbackState === 'playing';
+    if (useNarrationTimeline) return;
+    const shouldCycle = !hasAudio || playbackState === 'playing';
     if (!shouldCycle) return;
     const id = window.setInterval(
       () => setIntervalPanel((panel) => Math.min(panel + 1, 3)),
       panelDurationMs
     );
     return () => window.clearInterval(id);
-  }, [cycleOverride, hasAudio, panelDurationMs, playbackState]);
+  }, [hasAudio, panelDurationMs, playbackState, useNarrationTimeline]);
 
-  const activePanel = hasAudio && !cycleOverride
-    ? resolvedAudioDurationMs > 0
-      ? getEqualSplitStoryboardPanel(audioElapsedMs, resolvedAudioDurationMs)
-      : 0
+  const activePanel = useNarrationTimeline
+    ? validNarrationTiming
+      ? getStoryboardPanelFromNarrationTiming(
+          audioElapsedMs,
+          resolvedAudioDurationMs,
+          validNarrationTiming
+        )
+      : getEqualSplitStoryboardPanel(audioElapsedMs, resolvedAudioDurationMs)
     : intervalPanel;
   const activeCaptionObj = textOverlayEnabled
     ? captions?.find((caption) => caption.panelIndex === activePanel)

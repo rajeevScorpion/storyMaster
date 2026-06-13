@@ -39,6 +39,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,
     narrationVoiceId: beat.narration_voice_id || undefined,
+    narrationMetadata: beat.narration_metadata as StoryBeat['narrationMetadata'] | undefined,
+    activeNarrationPreviewId: beat.active_narration_preview_id || undefined,
+    storyboardNarrationTiming: beat.storyboard_narration_timing || undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -118,6 +121,7 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     storyboardPlan: beat.storyboardPlan || fallback.storyboardPlan,
     storyboardPromptText: beat.storyboardPromptText || fallback.storyboardPromptText,
     reelCaptions: beat.reelCaptions || fallback.reelCaptions,
+    storyboardNarrationTiming: beat.storyboardNarrationTiming || fallback.storyboardNarrationTiming,
     reelTextOverlayEnabled: beat.reelTextOverlayEnabled ?? fallback.reelTextOverlayEnabled,
     reelTextOverlayStyle: beat.reelTextOverlayStyle || fallback.reelTextOverlayStyle,
     finalImagePromptText: beat.finalImagePromptText || fallback.finalImagePromptText,
@@ -466,6 +470,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         reelCaptions: Array.isArray(b.reel_captions)
           ? b.reel_captions as StoryBeat['reelCaptions']
           : undefined,
+        storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
         reelTextOverlayEnabled: sourceStoryConfig.reel.textOverlayEnabled,
         reelTextOverlayStyle: sourceStoryConfig.reel.textOverlayStyle,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
@@ -616,6 +621,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         reelCaptions: Array.isArray(b.reel_captions)
           ? b.reel_captions as StoryBeat['reelCaptions']
           : undefined,
+        storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,

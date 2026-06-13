@@ -49,6 +49,8 @@ import {
   hasBeatImpossibleImageState,
   getActiveGalleryStorageKey,
 } from '@/lib/types/beat-media';
+import { normalizeStoryboardNarrationTiming } from '@/lib/storyboard/narration-timing';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import {
   createStoryLoadingStage,
   type StoryLoadingFlow,
@@ -143,6 +145,10 @@ interface StoryState {
   restartExploration: () => void;
   setLoadingClues: (clues: string[]) => void;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
+  updateStoryboardNarrationTiming: (
+    nodeId: string,
+    timing: StoryBeat['storyboardNarrationTiming'] | null
+  ) => Promise<void>;
   updateReelPanelCaptions: (nodeId: string, panelTexts: string[]) => Promise<{
     clearedNarration: boolean;
     deletedPreviewIds: string[];
@@ -3393,6 +3399,7 @@ export const useStoryStore = create<StoryState>()(
               data: normalizeBeatMediaFields({
                 ...latestSession.storyMap.nodes[nodeId].data,
                 audioUrl,
+                storyboardNarrationTiming: undefined,
                 ...(reelCaptions?.length ? { reelCaptions } : {}),
                 ...(narrationMetadata ? {
                   narrationMetadata,
@@ -3434,6 +3441,55 @@ export const useStoryStore = create<StoryState>()(
           } else {
             set({ isGeneratingAudio: false });
           }
+        }
+      },
+
+      updateStoryboardNarrationTiming: async (nodeId, timing) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig)) return;
+
+        const node = session.storyMap.nodes[nodeId];
+        if (
+          !node?.data.audioUrl
+          || !isStoryboardBeat(node.data, {
+            assumeGeneratedStoryboard: session.storyConfig.imageGenerationMode !== 'prompt_only',
+          })
+        ) return;
+
+        const normalizedTiming = timing
+          ? normalizeStoryboardNarrationTiming(timing, timing.audioDurationMs)
+          : null;
+        if (timing && !normalizedTiming) {
+          throw new Error('Story narration timing is invalid. Each panel must be at least 100 ms long.');
+        }
+
+        updateStoreSaveUi({
+          session: updateSessionBeat(session, nodeId, (beat) => ({
+            ...beat,
+            storyboardNarrationTiming: normalizedTiming || undefined,
+          })),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+        });
+
+        if (!session.savedStoryId) return;
+
+        try {
+          await updateBeatMediaState(session.savedStoryId, nodeId, {
+            storyboardNarrationTiming: normalizedTiming,
+          });
+          updateStoreSaveUi({ saveStatus: 'saved' });
+        } catch (error) {
+          const latestSession = get().session;
+          if (latestSession) {
+            updateStoreSaveUi({
+              session: updateSessionBeat(latestSession, nodeId, (beat) => ({
+                ...beat,
+                storyboardNarrationTiming: node.data.storyboardNarrationTiming,
+              })),
+              saveStatus: 'unsaved',
+            });
+          }
+          throw error;
         }
       },
 

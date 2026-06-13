@@ -15,7 +15,7 @@ import type {
 } from './pricing';
 import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
 import type { BeatMediaStatus } from './beat-media';
-import type { ReelPanelCaption, StoryAspectRatio, StoryKind } from './story';
+import type { ReelPanelCaption, StoryAspectRatio, StoryboardNarrationTiming, StoryKind } from './story';
 
 export type StorylineShareCoverSource =
   | 'custom_generated'
@@ -175,6 +175,7 @@ export interface DbBeat {
   active_narration_preview_id?: string | null;
   is_storyboard: boolean;
   reel_captions?: ReelPanelCaption[] | null;
+  storyboard_narration_timing?: StoryboardNarrationTiming | null;
   origin_kind: string | null;
   seed_plan_beat_index: number | null;
   canonical_option_id: string | null;

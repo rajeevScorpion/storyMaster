@@ -108,6 +108,12 @@ export interface ReelPanelCaption {
   wordTimings?: WordTiming[];
 }
 
+export interface StoryboardNarrationTiming {
+  version: 1;
+  panelEndTimesMs: [number, number, number];
+  audioDurationMs: number;
+}
+
 export interface BeatImageGalleryEntry {
   url: string;
   storageKey: string;
@@ -133,6 +139,7 @@ export interface StoryBeat {
   storyboardPlan?: StoryboardPlan;
   storyboardPromptText?: string;
   reelCaptions?: ReelPanelCaption[];
+  storyboardNarrationTiming?: StoryboardNarrationTiming;
   reelTextOverlayEnabled?: boolean;
   reelTextOverlayStyle?: ReelTextOverlayStyle;
   finalImagePromptText?: string;
