@@ -41,6 +41,10 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     narrationVoiceId: beat.narration_voice_id || undefined,
     narrationMetadata: beat.narration_metadata as StoryBeat['narrationMetadata'] | undefined,
     activeNarrationPreviewId: beat.active_narration_preview_id || undefined,
+    isStoryboard: beat.is_storyboard || undefined,
+    reelCaptions: Array.isArray(beat.reel_captions)
+      ? beat.reel_captions as StoryBeat['reelCaptions']
+      : undefined,
     storyboardNarrationTiming: beat.storyboard_narration_timing || undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,

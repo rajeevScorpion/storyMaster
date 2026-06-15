@@ -2019,6 +2019,8 @@ export default function StoryScreen() {
   const retryPendingBeatAssetSync = useStoryStore((state) => state.retryPendingBeatAssetSync);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
+  const signedUrlRefreshInFlightRef = useRef(false);
+  const lastSignedUrlRefreshAtRef = useRef(Date.now());
   const setPromptOnlyBeatImage = useStoryStore((state) => state.setPromptOnlyBeatImage);
   const selectPromptOnlyBeatImage = useStoryStore((state) => state.selectPromptOnlyBeatImage);
   const deletePromptOnlyBeatImage = useStoryStore((state) => state.deletePromptOnlyBeatImage);
@@ -2089,13 +2091,45 @@ export default function StoryScreen() {
     };
   }, [user?.id]);
 
-  // Refresh signed URLs every 50 minutes to prevent expiry
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refreshSignedUrls();
-    }, 50 * 60 * 1000);
-    return () => clearInterval(interval);
+  const refreshSignedUrlsIfNeeded = useCallback(async (force = false) => {
+    const refreshIntervalMs = 50 * 60 * 1000;
+    if (
+      signedUrlRefreshInFlightRef.current
+      || (!force && Date.now() - lastSignedUrlRefreshAtRef.current < refreshIntervalMs)
+    ) {
+      return;
+    }
+
+    signedUrlRefreshInFlightRef.current = true;
+    try {
+      const refreshed = await refreshSignedUrls();
+      if (refreshed) lastSignedUrlRefreshAtRef.current = Date.now();
+    } finally {
+      signedUrlRefreshInFlightRef.current = false;
+    }
   }, [refreshSignedUrls]);
+
+  // Refresh before expiry and catch up after browser suspension throttles timers.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void refreshSignedUrlsIfNeeded(true);
+    }, 50 * 60 * 1000);
+    const handleForeground = () => {
+      if (!document.hidden) void refreshSignedUrlsIfNeeded();
+    };
+
+    document.addEventListener('visibilitychange', handleForeground);
+    window.addEventListener('focus', handleForeground);
+    window.addEventListener('online', handleForeground);
+    window.addEventListener('pageshow', handleForeground);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleForeground);
+      window.removeEventListener('focus', handleForeground);
+      window.removeEventListener('online', handleForeground);
+      window.removeEventListener('pageshow', handleForeground);
+    };
+  }, [refreshSignedUrlsIfNeeded]);
 
   useEffect(() => {
     if (!cycleSettings.storyIncrementalAssetSyncEnabled) return;

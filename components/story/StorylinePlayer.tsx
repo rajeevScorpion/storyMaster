@@ -59,6 +59,7 @@ import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
+import { mergeRefreshedStorylineBeatAssetUrls } from '@/lib/media/refresh-merge';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
@@ -154,6 +155,8 @@ export default function StorylinePlayer({
   const containerRef = useRef<HTMLDivElement>(null);
   const choiceHoldTimerRef = useRef<number | null>(null);
   const choiceAdvanceTimerRef = useRef<number | null>(null);
+  const signedUrlRefreshInFlightRef = useRef(false);
+  const lastSignedUrlRefreshAtRef = useRef(Date.now());
   const { data: pricing } = usePricingRuntime();
   // Video download gating:
   // 1. Global master toggle must be ON (admin Global Settings)
@@ -210,13 +213,49 @@ export default function StorylinePlayer({
     const interval = setInterval(async () => {
       try {
         const refreshed = await refreshStorylineSignedUrls(storylineId);
-        setCurrentBeats(refreshed);
+        setCurrentBeats((current) => mergeRefreshedStorylineBeatAssetUrls(current, refreshed));
+        lastSignedUrlRefreshAtRef.current = Date.now();
       } catch {
         // Silent fail — URLs will still work until full expiry
       }
     }, SIGNED_URL_REFRESH_INTERVAL);
 
     return () => clearInterval(interval);
+  }, [storylineId]);
+
+  useEffect(() => {
+    const handleForeground = async () => {
+      if (
+        document.hidden
+        || signedUrlRefreshInFlightRef.current
+        || Date.now() - lastSignedUrlRefreshAtRef.current < SIGNED_URL_REFRESH_INTERVAL
+      ) {
+        return;
+      }
+
+      signedUrlRefreshInFlightRef.current = true;
+      try {
+        const refreshed = await refreshStorylineSignedUrls(storylineId);
+        setCurrentBeats((current) => mergeRefreshedStorylineBeatAssetUrls(current, refreshed));
+        lastSignedUrlRefreshAtRef.current = Date.now();
+      } catch {
+        // Retry on the next foreground event while the current URLs remain usable.
+      } finally {
+        signedUrlRefreshInFlightRef.current = false;
+      }
+    };
+
+    const resume = () => void handleForeground();
+    document.addEventListener('visibilitychange', resume);
+    window.addEventListener('focus', resume);
+    window.addEventListener('online', resume);
+    window.addEventListener('pageshow', resume);
+    return () => {
+      document.removeEventListener('visibilitychange', resume);
+      window.removeEventListener('focus', resume);
+      window.removeEventListener('online', resume);
+      window.removeEventListener('pageshow', resume);
+    };
   }, [storylineId]);
 
   const handleToggleSave = async () => {

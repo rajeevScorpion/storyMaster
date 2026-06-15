@@ -42,6 +42,7 @@ import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploa
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
+import { mergeRefreshedStoryMapAssetUrls } from '@/lib/media/refresh-merge';
 import {
   normalizeBeatMediaFields,
   isBeatRowNotFoundError,
@@ -168,7 +169,7 @@ interface StoryState {
   saveStoryToCloudImmediate: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
-  refreshSignedUrls: () => Promise<void>;
+  refreshSignedUrls: () => Promise<boolean>;
   retryPendingBeatAssetSync: () => Promise<void>;
   setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
@@ -4247,18 +4248,21 @@ export const useStoryStore = create<StoryState>()(
 
       refreshSignedUrls: async () => {
         const session = get().session;
-        if (!session?.savedStoryId) return;
+        if (!session?.savedStoryId) return false;
         try {
           const refreshedMap = await refreshStoryMapAction(session.savedStoryId);
           const current = get().session;
-          if (!current || current.savedStoryId !== session.savedStoryId) return;
-          const hydratedMap = await overlayPendingBeatImages(refreshedMap, session.savedStoryId);
+          if (!current || current.savedStoryId !== session.savedStoryId) return false;
+          const mergedMap = mergeRefreshedStoryMapAssetUrls(current.storyMap, refreshedMap);
+          const hydratedMap = await overlayPendingBeatImages(mergedMap, session.savedStoryId);
           updateStoreSaveUi({
             session: deriveSessionFields(current, hydratedMap),
           });
           void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+          return true;
         } catch {
-          // Silent fail — URLs will still work until full expiry
+          // Existing URLs may still be valid; foreground or online events will retry.
+          return false;
         }
       },
 
