@@ -26,6 +26,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     nextBeatGoal: beat.next_beat_goal || '',
     endingForecast: (beat.ending_forecast || []) as string[],
     imageUrl: beat.image_url || undefined,
+    imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
     imageGallery: Array.isArray(beat.image_gallery)
@@ -36,6 +37,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
         }))
       : [],
     audioUrl: beat.audio_url || undefined,
+    audioVersion: beat.audio_synced_at || undefined,
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,
     narrationVoiceId: beat.narration_voice_id || undefined,
@@ -286,6 +288,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
     savedStoryId: dbStory.id,
     explorationMode: !isOwner,
     sourceStoryOwnerId: dbStory.user_id,
+    sourceUpdatedAt: dbStory.updated_at,
     userPrompt: dbStory.user_prompt,
     title: dbStory.title,
     genre: dbStory.genre || 'adventure',
@@ -400,6 +403,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     author_name: string | null;
     is_public: boolean;
     created_at: string;
+    source_updated_at: string;
   };
   beats: StoryBeat[];
   choices: { fromBeat: number; optionLabel: string }[];
@@ -411,7 +415,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   // Fetch storyline metadata
   const { data: storyline, error: slError } = await supabase
     .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio)')
+    .select('id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio, updated_at)')
     .eq('id', storylineId)
     .single();
 
@@ -422,6 +426,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     story_kind?: string | null;
     is_vertical_story?: boolean | null;
     aspect_ratio?: string | null;
+    updated_at?: string | null;
   } | null;
   const sourceStoryConfig = normalizeStoryConfig({
     ...(sourceStory?.story_config ?? {}),
@@ -464,9 +469,11 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         nextBeatGoal: b.next_beat_goal || '',
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
+        imageVersion: b.image_synced_at || undefined,
         imageStatus: b.image_status,
         imageError: b.image_error || undefined,
         audioUrl: b.audio_url || undefined,
+        audioVersion: b.audio_synced_at || undefined,
         audioStatus: b.audio_status,
         audioError: b.audio_error || undefined,
         narrationVoiceId: b.narration_voice_id || undefined,
@@ -506,6 +513,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         author_name: storyline.author_name,
         is_public: storyline.is_public,
         created_at: storyline.created_at,
+        source_updated_at: sourceStory?.updated_at || storyline.created_at,
       },
       beats: signedBeats,
       choices,
@@ -539,6 +547,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       author_name: storyline.author_name,
       is_public: storyline.is_public,
       created_at: storyline.created_at,
+      source_updated_at: sourceStory?.updated_at || storyline.created_at,
     },
     beats: signedLegacyBeats,
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
@@ -615,9 +624,11 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         nextBeatGoal: b.next_beat_goal || '',
         endingForecast: (b.ending_forecast || []) as string[],
         imageUrl: b.image_url || undefined,
+        imageVersion: b.image_synced_at || undefined,
         imageStatus: b.image_status,
         imageError: b.image_error || undefined,
         audioUrl: b.audio_url || undefined,
+        audioVersion: b.audio_synced_at || undefined,
         audioStatus: b.audio_status,
         audioError: b.audio_error || undefined,
         narrationVoiceId: b.narration_voice_id || undefined,

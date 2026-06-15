@@ -1,10 +1,11 @@
 'use client';
 
-import { createContext, useEffect, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import AuthDialog, { type AuthActionResult, type AuthDialogMode } from '@/components/auth/AuthDialog';
 import type { User } from '@supabase/supabase-js';
+import { getStoryPersistence } from '@/lib/persistence';
 
 export interface AuthContextType {
   user: User | null;
@@ -38,24 +39,34 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthDialogOpen, setIsAuthDialogOpen] = useState(false);
   const [authDialogMode, setAuthDialogMode] = useState<AuthDialogMode>('sign_in');
   const [pendingReturnTo, setPendingReturnTo] = useState<string | null>(null);
+  const activeUserIdRef = useRef<string | null>(null);
   const supabase = createClient();
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUser(user);
-      setIsLoading(false);
-      if (user) {
-        useMyStoriesStore.getState().prefetchAll();
+    const applyUser = (nextUser: User | null) => {
+      const previousUserId = activeUserIdRef.current;
+      if (previousUserId && previousUserId !== nextUser?.id) {
+        void getStoryPersistence().clearUser(previousUserId);
       }
-    });
+      activeUserIdRef.current = nextUser?.id ?? null;
+      setUser(nextUser);
+      setIsLoading(false);
+      if (nextUser) useMyStoriesStore.getState().prefetchAll();
+    };
+
+    void Promise.all([supabase.auth.getUser(), supabase.auth.getSession()])
+      .then(([validated, local]) => {
+        const offlineUser = validated.error && !navigator.onLine
+          ? local.data.session?.user ?? null
+          : null;
+        applyUser(validated.data.user ?? offlineUser);
+      });
 
     // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
-      setUser(session?.user ?? null);
-      setIsLoading(false);
+      applyUser(session?.user ?? null);
       if (event === 'SIGNED_IN') {
         useMyStoriesStore.getState().prefetchAll();
       } else if (event === 'SIGNED_OUT') {
@@ -64,7 +75,15 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       }
     });
 
-    return () => subscription.unsubscribe();
+    const revalidateOnline = () => {
+      void supabase.auth.getUser().then(({ data: { user: nextUser } }) => applyUser(nextUser));
+    };
+    window.addEventListener('online', revalidateOnline);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener('online', revalidateOnline);
+    };
   }, [supabase.auth]);
 
   const openAuthDialog = useCallback((mode: AuthDialogMode = 'sign_in', returnTo?: string) => {

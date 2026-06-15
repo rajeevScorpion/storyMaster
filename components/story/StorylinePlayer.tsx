@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -60,6 +60,9 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
 import { mergeRefreshedStorylineBeatAssetUrls } from '@/lib/media/refresh-merge';
+import { useResolvedStoryMedia, useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
+import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset, type StorylineManifestPayload } from '@/lib/persistence';
+import { saveStorylineAndPrefetch, saveStorylineProgress } from '@/lib/persistence/runtime';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
@@ -83,6 +86,8 @@ interface StorylinePlayerProps {
   isLiked?: boolean;
   likeCount?: number;
   isLoggedIn?: boolean;
+  persistenceUserId?: string;
+  sourceUpdatedAt?: string;
 }
 
 export default function StorylinePlayer({
@@ -99,6 +104,8 @@ export default function StorylinePlayer({
   isLiked: initialLiked = false,
   likeCount: initialLikeCount = 0,
   isLoggedIn = false,
+  persistenceUserId,
+  sourceUpdatedAt = 'legacy',
 }: StorylinePlayerProps) {
   const isVerticalStoryline = isVerticalStory || aspectRatio === '9:16';
   const [currentBeats, setCurrentBeats] = useState(beats);
@@ -124,6 +131,8 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
+  const [restoredAudioTimeMs, setRestoredAudioTimeMs] = useState(0);
+  const [audioEndedCount, setAudioEndedCount] = useState(0);
   const [cycleSettings, setCycleSettings] = useState<{
     cycleOverride: boolean;
     cycleMs: number;
@@ -157,6 +166,7 @@ export default function StorylinePlayer({
   const choiceAdvanceTimerRef = useRef<number | null>(null);
   const signedUrlRefreshInFlightRef = useRef(false);
   const lastSignedUrlRefreshAtRef = useRef(Date.now());
+  const progressRestoredRef = useRef(false);
   const { data: pricing } = usePricingRuntime();
   // Video download gating:
   // 1. Global master toggle must be ON (admin Global Settings)
@@ -190,6 +200,10 @@ export default function StorylinePlayer({
     getStoryboardSettings().then(setCycleSettings).catch(() => {/* use defaults */});
   }, []);
 
+  useEffect(() => {
+    setCurrentBeats(beats);
+  }, [beats]);
+
   // Check if current user is admin (for bypass gating — server-verified against ADMIN_USER_ID)
   useEffect(() => {
     if (isLoggedIn) {
@@ -207,6 +221,27 @@ export default function StorylinePlayer({
     }
     window.history.replaceState(null, '', url.toString());
   }, [currentIndex]);
+
+  useEffect(() => {
+    if (!persistenceUserId || progressRestoredRef.current) return;
+    progressRestoredRef.current = true;
+    void getStoryPersistence().getProgress({
+      readerKind: 'storyline',
+      storyId,
+      storylineId,
+      userId: persistenceUserId,
+    }).then((progress) => {
+      if (!progress || progress.readerKind !== 'storyline') return;
+      const hasExplicitBeat = new URLSearchParams(window.location.search).has('beat');
+      const nextIndex = !hasExplicitBeat
+        && progress.currentPageIndex >= 0
+        && progress.currentPageIndex < currentBeats.length
+        ? progress.currentPageIndex
+        : currentIndex;
+      setCurrentIndex(nextIndex);
+      if (progress.currentPageIndex === nextIndex) setRestoredAudioTimeMs(progress.audioTimeMs);
+    });
+  }, [currentBeats.length, currentIndex, persistenceUserId, storyId, storylineId]);
 
   // Refresh signed URLs before they expire (every 50 minutes)
   useEffect(() => {
@@ -313,8 +348,37 @@ export default function StorylinePlayer({
   }, [storylineId, isLoggedIn]);
 
   const currentBeat = currentBeats[currentIndex];
-  const isStoryboard = Boolean(currentBeat.imageUrl && isStoryboardBeat(currentBeat));
-  const displayImageUrl = currentBeat.portraitImageUrl || currentBeat.imageUrl;
+  const imageAsset = useMemo<StoryMediaAsset | undefined>(() => {
+    if (!persistenceUserId || !currentBeat.imageUrl || currentBeat.imageUrl.startsWith('data:')) return undefined;
+    return {
+      assetId: getStableMediaIdentity(currentBeat.imageUrl, 'image'),
+      storyId,
+      storylineId,
+      pageId: String(currentIndex),
+      userId: persistenceUserId,
+      kind: 'image',
+      remoteUrl: currentBeat.imageUrl,
+      version: currentBeat.imageVersion || sourceUpdatedAt,
+    };
+  }, [currentBeat.imageUrl, currentBeat.imageVersion, currentIndex, persistenceUserId, sourceUpdatedAt, storyId, storylineId]);
+  const audioAsset = useMemo<StoryMediaAsset | undefined>(() => {
+    if (!persistenceUserId || !currentBeat.audioUrl || currentBeat.audioUrl.startsWith('data:')) return undefined;
+    return {
+      assetId: getStableMediaIdentity(currentBeat.audioUrl, 'audio'),
+      storyId,
+      storylineId,
+      pageId: String(currentIndex),
+      userId: persistenceUserId,
+      kind: 'audio',
+      remoteUrl: currentBeat.audioUrl,
+      version: currentBeat.audioVersion || sourceUpdatedAt,
+    };
+  }, [currentBeat.audioUrl, currentBeat.audioVersion, currentIndex, persistenceUserId, sourceUpdatedAt, storyId, storylineId]);
+  const resolvedImageUrl = useResolvedStoryMedia(imageAsset) || currentBeat.imageUrl;
+  const resolvedAudio = useResolvedStoryMediaState(audioAsset);
+  const resolvedAudioUrl = resolvedAudio.url || currentBeat.audioUrl;
+  const isStoryboard = Boolean(resolvedImageUrl && isStoryboardBeat(currentBeat));
+  const displayImageUrl = currentBeat.portraitImageUrl || resolvedImageUrl;
   const visualKey = displayImageUrl ?? `storyline-${currentIndex}`;
   const {
     scrollRef: storyScrollRef,
@@ -352,12 +416,64 @@ export default function StorylinePlayer({
     volume,
     setVolume,
   } = useAudioPlayer(
-    currentBeat.audioUrl || undefined,
-    `storyline-${currentIndex}`
+    resolvedAudioUrl || undefined,
+    `storyline-${currentIndex}`,
+    {
+      initialTimeMs: restoredAudioTimeMs,
+      onEnded: () => setAudioEndedCount((count) => count + 1),
+      onProgress: (audioTimeMs) => {
+        if (!persistenceUserId) return;
+        void saveStorylineProgress({
+          storylineId,
+          storyId,
+          userId: persistenceUserId,
+          currentPageIndex: currentIndex,
+          audioTimeMs,
+          completed: currentIndex === currentBeats.length - 1 && currentBeat.isEnding,
+        });
+      },
+    }
   );
   const storyboardAudioDurationMs = audioDurationMs > 0
     ? audioDurationMs
     : currentBeat.narrationMetadata?.durationMs ?? 0;
+
+  useEffect(() => {
+    if (!persistenceUserId) return;
+    const payload: StorylineManifestPayload = {
+      storylineId,
+      storyId,
+      title,
+      isVerticalStory: isVerticalStoryline,
+      aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
+      beats: currentBeats,
+      choices,
+      authorName,
+      isOwner,
+      isSaved,
+      isLiked,
+      likeCount,
+      isLoggedIn,
+    };
+    void saveStorylineAndPrefetch({
+      payload,
+      userId: persistenceUserId,
+      sourceUpdatedAt,
+      currentPageIndex: currentIndex,
+    });
+  }, [authorName, choices, currentBeats, currentIndex, isLoggedIn, isLiked, isOwner, isSaved, isVerticalStoryline, likeCount, persistenceUserId, sourceUpdatedAt, storyId, storylineId, title]);
+
+  const persistPage = useCallback((pageIndex: number) => {
+    if (!persistenceUserId) return;
+    const beat = currentBeats[pageIndex];
+    void saveStorylineProgress({
+      storylineId,
+      storyId,
+      userId: persistenceUserId,
+      currentPageIndex: pageIndex,
+      completed: pageIndex === currentBeats.length - 1 && Boolean(beat?.isEnding),
+    });
+  }, [currentBeats, persistenceUserId, storyId, storylineId]);
 
   const clearChoiceTransitionTimers = useCallback(() => {
     if (choiceHoldTimerRef.current) {
@@ -380,20 +496,25 @@ export default function StorylinePlayer({
     if (isLast || showChoice) return;
 
     const nextChoice = choices[currentIndex];
-    const advanceToNextBeat = () => setCurrentIndex((i) => Math.min(i + 1, currentBeats.length - 1));
+    const advanceToNextBeat = () => {
+      const nextIndex = Math.min(currentIndex + 1, currentBeats.length - 1);
+      setRestoredAudioTimeMs(0);
+      setCurrentIndex(nextIndex);
+      persistPage(nextIndex);
+    };
 
     if (cycleSettings.storylineChoiceFlashEnabled && nextChoice) {
-      stopAudio();
+      if (playbackState !== 'idle') stopAudio();
       clearChoiceTransitionTimers();
       setTransitionChoice(nextChoice);
       setShowChoice(true);
       choiceHoldTimerRef.current = window.setTimeout(() => {
+        advanceToNextBeat();
         setShowChoice(false);
         choiceHoldTimerRef.current = null;
         choiceAdvanceTimerRef.current = window.setTimeout(() => {
           setTransitionChoice(null);
           choiceAdvanceTimerRef.current = null;
-          advanceToNextBeat();
         }, CHOICE_TRANSITION_FADE_MS);
       }, Math.max(500, cycleSettings.storylineChoiceFlashMs));
       return;
@@ -409,6 +530,8 @@ export default function StorylinePlayer({
     cycleSettings.storylineChoiceFlashEnabled,
     cycleSettings.storylineChoiceFlashMs,
     isLast,
+    persistPage,
+    playbackState,
     choices,
     showChoice,
     stopAudio,
@@ -418,53 +541,68 @@ export default function StorylinePlayer({
     if (isFirst) return;
     stopAudio();
     clearChoiceTransition();
-    setCurrentIndex((i) => i - 1);
-  }, [clearChoiceTransition, isFirst, stopAudio]);
+    const nextIndex = currentIndex - 1;
+    setRestoredAudioTimeMs(0);
+    setCurrentIndex(nextIndex);
+    persistPage(nextIndex);
+  }, [clearChoiceTransition, currentIndex, isFirst, persistPage, stopAudio]);
 
   const jumpToBeat = useCallback((index: number) => {
     if (index === currentIndex) return;
     stopAudio();
     clearChoiceTransition();
+    setRestoredAudioTimeMs(0);
     setCurrentIndex(index);
-  }, [clearChoiceTransition, currentIndex, stopAudio]);
+    persistPage(index);
+  }, [clearChoiceTransition, currentIndex, persistPage, stopAudio]);
 
   const replay = useCallback(() => {
     stopAudio();
     clearChoiceTransition();
     setShowEndModal(false);
+    setRestoredAudioTimeMs(0);
     setCurrentIndex(0);
-  }, [clearChoiceTransition, stopAudio]);
+    persistPage(0);
+  }, [clearChoiceTransition, persistPage, stopAudio]);
 
   // Auto-play narration when beat changes and autoPlay is on
   const prevIndexRef = useRef(currentIndex);
+  const pendingAutoPlayIndexRef = useRef<number | null>(null);
   useEffect(() => {
     if (prevIndexRef.current !== currentIndex) {
       prevIndexRef.current = currentIndex;
-      if (autoPlay && currentBeat.audioUrl && playbackState === 'idle') {
-        playAudio();
-      }
+      pendingAutoPlayIndexRef.current = currentIndex;
     }
-  }, [currentIndex, autoPlay, currentBeat.audioUrl, playbackState, playAudio]);
+    if (!autoPlay) {
+      pendingAutoPlayIndexRef.current = null;
+      return;
+    }
+    if (
+      pendingAutoPlayIndexRef.current === currentIndex
+      && !resolvedAudio.isResolving
+      && !transitionChoice
+      && resolvedAudioUrl
+      && playbackState === 'idle'
+    ) {
+      pendingAutoPlayIndexRef.current = null;
+      playAudio();
+    }
+  }, [currentIndex, autoPlay, resolvedAudio.isResolving, resolvedAudioUrl, playbackState, playAudio, transitionChoice]);
 
-  // Auto-advance when audio finishes (playbackState goes from 'playing' to 'idle')
-  const wasPlayingRef = useRef(false);
+  // Advance only for a genuine media-ended event. Pauses and manual navigation must not advance.
+  const handledAudioEndedCountRef = useRef(0);
   useEffect(() => {
-    if (playbackState === 'playing') {
-      wasPlayingRef.current = true;
-    } else if (playbackState === 'idle' && wasPlayingRef.current && autoPlay) {
-      wasPlayingRef.current = false;
-      if (isLast && currentBeat.isEnding) {
-        setTimeout(() => setShowEndModal(true), 1500);
-        return;
-      } else if (isLast && autoReplay) {
-        queueMicrotask(() => replay());
-      } else if (!isLast) {
-        queueMicrotask(() => goNext());
-      }
-    } else if (playbackState === 'idle') {
-      wasPlayingRef.current = false;
+    if (handledAudioEndedCountRef.current === audioEndedCount) return;
+    handledAudioEndedCountRef.current = audioEndedCount;
+    if (!autoPlay) return;
+    if (isLast && currentBeat.isEnding) {
+      setTimeout(() => setShowEndModal(true), 1500);
+    } else if (isLast && autoReplay) {
+      queueMicrotask(() => replay());
+    } else if (!isLast) {
+      queueMicrotask(() => goNext());
     }
-  }, [playbackState, autoPlay, autoReplay, isLast, currentBeat.isEnding, goNext, replay]);
+  }, [audioEndedCount, autoPlay, autoReplay, isLast, currentBeat.isEnding, goNext, replay]);
 
   // Show end modal after delay when manually navigating to ending beat without audio
   useEffect(() => {
@@ -542,8 +680,8 @@ export default function StorylinePlayer({
               }`}>
                 <StoryStoryboardPlayer
                   key={`${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                  gridUrl={currentBeat.imageUrl!}
-                  audioUrl={currentBeat.audioUrl || undefined}
+                  gridUrl={resolvedImageUrl!}
+                  audioUrl={resolvedAudioUrl || undefined}
                   audioElapsedMs={audioElapsedMs}
                   audioDurationMs={storyboardAudioDurationMs}
                   cycleOverride={cycleSettings.cycleOverride}
@@ -589,8 +727,8 @@ export default function StorylinePlayer({
                   {isStoryboard ? (
                     <StoryStoryboardPlayer
                       key={`vertical-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                      gridUrl={currentBeat.imageUrl!}
-                      audioUrl={currentBeat.audioUrl || undefined}
+                      gridUrl={resolvedImageUrl!}
+                      audioUrl={resolvedAudioUrl || undefined}
                       audioElapsedMs={audioElapsedMs}
                       audioDurationMs={storyboardAudioDurationMs}
                       cycleOverride={cycleSettings.cycleOverride}
@@ -833,8 +971,8 @@ export default function StorylinePlayer({
             {isStoryboard ? (
               <StoryStoryboardPlayer
                 key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                gridUrl={currentBeat.imageUrl!}
-                audioUrl={currentBeat.audioUrl || undefined}
+                gridUrl={resolvedImageUrl!}
+                audioUrl={resolvedAudioUrl || undefined}
                 audioElapsedMs={audioElapsedMs}
                 audioDurationMs={storyboardAudioDurationMs}
                 cycleOverride={cycleSettings.cycleOverride}
@@ -917,7 +1055,7 @@ export default function StorylinePlayer({
         <AnimatePresence>
           {showChoice && transitionChoice && cycleSettings.storylineChoiceFlashEnabled && (
             <ChoiceTransition
-              key={`${currentIndex}:${transitionChoice.optionLabel}`}
+              key={`${transitionChoice.fromBeat}:${transitionChoice.optionLabel}`}
               optionLabel={transitionChoice.optionLabel}
               className="mb-3 md:mb-4"
             />

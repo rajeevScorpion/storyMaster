@@ -21,6 +21,9 @@ interface UseAudioPlayerReturn {
 
 interface UseAudioPlayerOptions {
   onEnded?: () => void;
+  initialTimeMs?: number;
+  onProgress?: (timeMs: number) => void;
+  progressIntervalMs?: number;
 }
 
 export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseAudioPlayerOptions = {}): UseAudioPlayerReturn {
@@ -34,6 +37,10 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const volumeRef = useRef(volume);
   const isMutedRef = useRef(isMuted);
   const onEndedRef = useRef(options.onEnded);
+  const onProgressRef = useRef(options.onProgress);
+  const initialTimeMsRef = useRef(options.initialTimeMs ?? 0);
+  const progressIntervalMsRef = useRef(options.progressIntervalMs ?? 5000);
+  const lastProgressSavedAtRef = useRef(0);
 
   // Keep volumeRef and isMutedRef in sync
   useEffect(() => {
@@ -48,8 +55,38 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     onEndedRef.current = options.onEnded;
   }, [options.onEnded]);
 
+  useEffect(() => {
+    onProgressRef.current = options.onProgress;
+  }, [options.onProgress]);
+
+  useEffect(() => {
+    initialTimeMsRef.current = options.initialTimeMs ?? 0;
+    const audio = audioRef.current;
+    if (audio && initialTimeMsRef.current > 0) {
+      const durationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
+      const nextTimeMs = Math.max(0, Math.min(initialTimeMsRef.current, durationMs || initialTimeMsRef.current));
+      audio.currentTime = nextTimeMs / 1000;
+      setCurrentTimeMs(nextTimeMs);
+    }
+  }, [options.initialTimeMs]);
+
+  useEffect(() => {
+    progressIntervalMsRef.current = options.progressIntervalMs ?? 5000;
+  }, [options.progressIntervalMs]);
+
+  useEffect(() => {
+    const flushProgress = () => {
+      if (document.hidden && audioRef.current?.currentTime) {
+        onProgressRef.current?.(audioRef.current.currentTime * 1000);
+      }
+    };
+    document.addEventListener('visibilitychange', flushProgress);
+    return () => document.removeEventListener('visibilitychange', flushProgress);
+  }, []);
+
   const handleEnded = useCallback(() => {
     setPlaybackState('idle');
+    if (audioRef.current) onProgressRef.current?.(audioRef.current.duration * 1000);
     onEndedRef.current?.();
   }, []);
 
@@ -65,6 +102,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       setPlaybackState('idle');
       setCurrentTimeMs(0);
       setDurationMs(0);
+      lastProgressSavedAtRef.current = 0;
       prevNodeIdRef.current = nodeId;
     }
   }, [nodeId]);
@@ -83,14 +121,31 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     const audio = new Audio(toMediaFetchUrl(audioUrl));
     audio.volume = volumeRef.current;
     audio.muted = isMutedRef.current;
-    const syncMetadata = () => setDurationMs(Number.isFinite(audio.duration) ? audio.duration * 1000 : 0);
-    const syncTime = () => setCurrentTimeMs(audio.currentTime * 1000);
+    const syncMetadata = () => {
+      const nextDurationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
+      setDurationMs(nextDurationMs);
+      const initialTimeMs = Math.max(0, Math.min(initialTimeMsRef.current, nextDurationMs || initialTimeMsRef.current));
+      if (initialTimeMs > 0) {
+        audio.currentTime = initialTimeMs / 1000;
+        setCurrentTimeMs(initialTimeMs);
+        lastProgressSavedAtRef.current = initialTimeMs;
+      }
+    };
+    const syncTime = () => {
+      const nextTimeMs = audio.currentTime * 1000;
+      setCurrentTimeMs(nextTimeMs);
+      if (Math.abs(nextTimeMs - lastProgressSavedAtRef.current) >= progressIntervalMsRef.current) {
+        lastProgressSavedAtRef.current = nextTimeMs;
+        onProgressRef.current?.(nextTimeMs);
+      }
+    };
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('loadedmetadata', syncMetadata);
     audio.addEventListener('timeupdate', syncTime);
     audioRef.current = audio;
 
     return () => {
+      if (audio.currentTime > 0) onProgressRef.current?.(audio.currentTime * 1000);
       audio.pause();
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('loadedmetadata', syncMetadata);
@@ -137,6 +192,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
 
     if (playbackState === 'playing') {
       audio.pause();
+      onProgressRef.current?.(audio.currentTime * 1000);
       setPlaybackState('paused');
     } else {
       audio.play().then(() => setPlaybackState('playing')).catch(() => {});
@@ -153,6 +209,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     const audio = audioRef.current;
     if (!audio) return;
     audio.pause();
+    onProgressRef.current?.(audio.currentTime * 1000);
     audio.currentTime = 0;
     setCurrentTimeMs(0);
     setPlaybackState('idle');

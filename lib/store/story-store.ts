@@ -76,6 +76,12 @@ import {
   getChoiceHistoryToNode,
   getCurrentNode,
 } from '../utils/story-map';
+import {
+  getLocalSessionUserId,
+  loadCachedTreeStory,
+  saveTreeProgress,
+  saveTreeStoryAndPrefetch,
+} from '@/lib/persistence/runtime';
 
 interface PublishResult {
   alreadyPublished: boolean;
@@ -3245,7 +3251,23 @@ export const useStoryStore = create<StoryState>()(
         if (!session || !session.storyMap.nodes[nodeId]) return;
 
         const updatedMap = { ...session.storyMap, currentNodeId: nodeId };
-        set({ session: deriveSessionFields(session, updatedMap) });
+        const updatedSession = deriveSessionFields(session, updatedMap);
+        set({ session: updatedSession });
+
+        if (session.savedStoryId) {
+          void getLocalSessionUserId().then((userId) => {
+            if (!userId) return;
+            const readerKind = session.explorationMode ? 'explore' : 'story';
+            void saveTreeProgress({
+              readerKind,
+              storyId: session.savedStoryId!,
+              userId,
+              currentNodeId: nodeId,
+              completed: updatedSession.status === 'completed',
+            });
+            void saveTreeStoryAndPrefetch({ readerKind, session: updatedSession, userId });
+          });
+        }
 
         // Fire-and-forget: track exploration position for non-owners
         if (session.explorationMode && session.savedStoryId) {
@@ -4183,12 +4205,32 @@ export const useStoryStore = create<StoryState>()(
       loadStoryFromCloud: async (storyId: string) => {
         set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null });
 
+        const persistenceUserId = await getLocalSessionUserId().catch(() => null);
+        const cached = persistenceUserId
+          ? await loadCachedTreeStory({ readerKind: 'story', storyId, userId: persistenceUserId }).catch(() => null)
+          : null;
+        const cachedNodeId = cached?.session.storyMap.currentNodeId;
+        if (cached) {
+          updateStoreSaveUi({
+            session: deriveSessionFields(cached.session, cached.session.storyMap),
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            isSaving: false,
+            saveStatus: 'saved',
+          });
+        }
+
         try {
           const session = await loadStoryAction(storyId);
           const hydratedMap = session.savedStoryId
             ? await overlayPendingBeatImages(session.storyMap, session.savedStoryId)
             : session.storyMap;
-          const fullSession = deriveSessionFields(session, hydratedMap);
+          const restoredMap = cachedNodeId && hydratedMap.nodes[cachedNodeId]
+            ? { ...hydratedMap, currentNodeId: cachedNodeId }
+            : hydratedMap;
+          const fullSession = deriveSessionFields(session, restoredMap);
 
           if (process.env.NODE_ENV === 'development') {
             const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
@@ -4209,20 +4251,49 @@ export const useStoryStore = create<StoryState>()(
           if (session.savedStoryId) {
             void retryPendingBeatAssetSyncInternal(session.savedStoryId);
           }
+          if (persistenceUserId) {
+            void saveTreeStoryAndPrefetch({ readerKind: 'story', session: fullSession, userId: persistenceUserId });
+          }
         } catch (error: any) {
-          set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story' });
+          set({
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            error: cached ? null : error.message || 'Failed to load story',
+          });
         }
       },
 
       exploreStoryTree: async (storyId: string) => {
         set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null, lastPublishResult: null });
 
+        const persistenceUserId = await getLocalSessionUserId().catch(() => null);
+        const cached = persistenceUserId
+          ? await loadCachedTreeStory({ readerKind: 'explore', storyId, userId: persistenceUserId }).catch(() => null)
+          : null;
+        const cachedNodeId = cached?.session.storyMap.currentNodeId;
+        if (cached) {
+          updateStoreSaveUi({
+            session: deriveSessionFields(cached.session, cached.session.storyMap),
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            isSaving: false,
+            saveStatus: 'saved',
+          });
+        }
+
         try {
           const session = await loadStoryTreeAction(storyId);
           const hydratedMap = session.savedStoryId
             ? await overlayPendingBeatImages(session.storyMap, session.savedStoryId)
             : session.storyMap;
-          const fullSession = deriveSessionFields(session, hydratedMap);
+          const restoredMap = cachedNodeId && hydratedMap.nodes[cachedNodeId]
+            ? { ...hydratedMap, currentNodeId: cachedNodeId }
+            : hydratedMap;
+          const fullSession = deriveSessionFields(session, restoredMap);
 
           if (process.env.NODE_ENV === 'development') {
             const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
@@ -4241,8 +4312,17 @@ export const useStoryStore = create<StoryState>()(
           if (session.savedStoryId) {
             void retryPendingBeatAssetSyncInternal(session.savedStoryId);
           }
+          if (persistenceUserId) {
+            void saveTreeStoryAndPrefetch({ readerKind: 'explore', session: fullSession, userId: persistenceUserId });
+          }
         } catch (error: any) {
-          set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story for exploration' });
+          set({
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            error: cached ? null : error.message || 'Failed to load story for exploration',
+          });
         }
       },
 
