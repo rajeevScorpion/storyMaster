@@ -156,6 +156,7 @@ export default function ReelCanvasPreview({
   const [sequenceDurationsMs, setSequenceDurationsMs] = useState<number[]>([]);
   const [backdropSize, setBackdropSize] = useState({ width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT });
   const [manualElapsedMs, setManualElapsedMs] = useState<number | null>(null);
+  const [renderEpoch, setRenderEpoch] = useState(0);
   const audioDurationKey = useMemo(
     () => previewSequence.map((item) => `${item.nodeId}:${item.audioUrl ?? ''}`).join('|'),
     [previewSequence]
@@ -205,6 +206,22 @@ export default function ReelCanvasPreview({
     onImageLoadRef.current = onImageLoad;
     onImageErrorRef.current = onImageError;
   }, [onImageError, onImageLoad]);
+
+  useEffect(() => {
+    const redraw = () => {
+      if (!document.hidden) setRenderEpoch((epoch) => epoch + 1);
+    };
+    const canvas = canvasRef.current;
+
+    document.addEventListener('visibilitychange', redraw);
+    window.addEventListener('pageshow', redraw);
+    canvas?.addEventListener('contextrestored', redraw);
+    return () => {
+      document.removeEventListener('visibilitychange', redraw);
+      window.removeEventListener('pageshow', redraw);
+      canvas?.removeEventListener('contextrestored', redraw);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -266,7 +283,7 @@ export default function ReelCanvasPreview({
       vignetteAmountPercent,
       visualFit: isBackdrop ? 'cover' : 'fill',
     });
-  }, [renderElapsedMs, assets, isBackdrop, textOverlayEnabled, textOverlayStyle, timeline, vignetteAmountPercent, vignetteEnabled]);
+  }, [renderElapsedMs, assets, isBackdrop, renderEpoch, textOverlayEnabled, textOverlayStyle, timeline, vignetteAmountPercent, vignetteEnabled]);
 
   // Clear manual panel override once audio starts advancing
   useEffect(() => {

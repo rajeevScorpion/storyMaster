@@ -42,6 +42,7 @@ import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploa
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
+import { mergeRefreshedStoryMapAssetUrls } from '@/lib/media/refresh-merge';
 import {
   normalizeBeatMediaFields,
   isBeatRowNotFoundError,
@@ -75,6 +76,12 @@ import {
   getChoiceHistoryToNode,
   getCurrentNode,
 } from '../utils/story-map';
+import {
+  getLocalSessionUserId,
+  loadCachedTreeStory,
+  saveTreeProgress,
+  saveTreeStoryAndPrefetch,
+} from '@/lib/persistence/runtime';
 
 interface PublishResult {
   alreadyPublished: boolean;
@@ -168,7 +175,7 @@ interface StoryState {
   saveStoryToCloudImmediate: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
-  refreshSignedUrls: () => Promise<void>;
+  refreshSignedUrls: () => Promise<boolean>;
   retryPendingBeatAssetSync: () => Promise<void>;
   setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
@@ -3244,7 +3251,23 @@ export const useStoryStore = create<StoryState>()(
         if (!session || !session.storyMap.nodes[nodeId]) return;
 
         const updatedMap = { ...session.storyMap, currentNodeId: nodeId };
-        set({ session: deriveSessionFields(session, updatedMap) });
+        const updatedSession = deriveSessionFields(session, updatedMap);
+        set({ session: updatedSession });
+
+        if (session.savedStoryId) {
+          void getLocalSessionUserId().then((userId) => {
+            if (!userId) return;
+            const readerKind = session.explorationMode ? 'explore' : 'story';
+            void saveTreeProgress({
+              readerKind,
+              storyId: session.savedStoryId!,
+              userId,
+              currentNodeId: nodeId,
+              completed: updatedSession.status === 'completed',
+            });
+            void saveTreeStoryAndPrefetch({ readerKind, session: updatedSession, userId });
+          });
+        }
 
         // Fire-and-forget: track exploration position for non-owners
         if (session.explorationMode && session.savedStoryId) {
@@ -4182,12 +4205,32 @@ export const useStoryStore = create<StoryState>()(
       loadStoryFromCloud: async (storyId: string) => {
         set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null });
 
+        const persistenceUserId = await getLocalSessionUserId().catch(() => null);
+        const cached = persistenceUserId
+          ? await loadCachedTreeStory({ readerKind: 'story', storyId, userId: persistenceUserId }).catch(() => null)
+          : null;
+        const cachedNodeId = cached?.session.storyMap.currentNodeId;
+        if (cached) {
+          updateStoreSaveUi({
+            session: deriveSessionFields(cached.session, cached.session.storyMap),
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            isSaving: false,
+            saveStatus: 'saved',
+          });
+        }
+
         try {
           const session = await loadStoryAction(storyId);
           const hydratedMap = session.savedStoryId
             ? await overlayPendingBeatImages(session.storyMap, session.savedStoryId)
             : session.storyMap;
-          const fullSession = deriveSessionFields(session, hydratedMap);
+          const restoredMap = cachedNodeId && hydratedMap.nodes[cachedNodeId]
+            ? { ...hydratedMap, currentNodeId: cachedNodeId }
+            : hydratedMap;
+          const fullSession = deriveSessionFields(session, restoredMap);
 
           if (process.env.NODE_ENV === 'development') {
             const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
@@ -4208,20 +4251,49 @@ export const useStoryStore = create<StoryState>()(
           if (session.savedStoryId) {
             void retryPendingBeatAssetSyncInternal(session.savedStoryId);
           }
+          if (persistenceUserId) {
+            void saveTreeStoryAndPrefetch({ readerKind: 'story', session: fullSession, userId: persistenceUserId });
+          }
         } catch (error: any) {
-          set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story' });
+          set({
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            error: cached ? null : error.message || 'Failed to load story',
+          });
         }
       },
 
       exploreStoryTree: async (storyId: string) => {
         set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null, lastPublishResult: null });
 
+        const persistenceUserId = await getLocalSessionUserId().catch(() => null);
+        const cached = persistenceUserId
+          ? await loadCachedTreeStory({ readerKind: 'explore', storyId, userId: persistenceUserId }).catch(() => null)
+          : null;
+        const cachedNodeId = cached?.session.storyMap.currentNodeId;
+        if (cached) {
+          updateStoreSaveUi({
+            session: deriveSessionFields(cached.session, cached.session.storyMap),
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            isSaving: false,
+            saveStatus: 'saved',
+          });
+        }
+
         try {
           const session = await loadStoryTreeAction(storyId);
           const hydratedMap = session.savedStoryId
             ? await overlayPendingBeatImages(session.storyMap, session.savedStoryId)
             : session.storyMap;
-          const fullSession = deriveSessionFields(session, hydratedMap);
+          const restoredMap = cachedNodeId && hydratedMap.nodes[cachedNodeId]
+            ? { ...hydratedMap, currentNodeId: cachedNodeId }
+            : hydratedMap;
+          const fullSession = deriveSessionFields(session, restoredMap);
 
           if (process.env.NODE_ENV === 'development') {
             const nodeCount = Object.keys(fullSession.storyMap.nodes).length;
@@ -4240,25 +4312,37 @@ export const useStoryStore = create<StoryState>()(
           if (session.savedStoryId) {
             void retryPendingBeatAssetSyncInternal(session.savedStoryId);
           }
+          if (persistenceUserId) {
+            void saveTreeStoryAndPrefetch({ readerKind: 'explore', session: fullSession, userId: persistenceUserId });
+          }
         } catch (error: any) {
-          set({ isLoading: false, loadingClues: [], loadingStage: null, loadingReader: null, error: error.message || 'Failed to load story for exploration' });
+          set({
+            isLoading: false,
+            loadingClues: [],
+            loadingStage: null,
+            loadingReader: null,
+            error: cached ? null : error.message || 'Failed to load story for exploration',
+          });
         }
       },
 
       refreshSignedUrls: async () => {
         const session = get().session;
-        if (!session?.savedStoryId) return;
+        if (!session?.savedStoryId) return false;
         try {
           const refreshedMap = await refreshStoryMapAction(session.savedStoryId);
           const current = get().session;
-          if (!current || current.savedStoryId !== session.savedStoryId) return;
-          const hydratedMap = await overlayPendingBeatImages(refreshedMap, session.savedStoryId);
+          if (!current || current.savedStoryId !== session.savedStoryId) return false;
+          const mergedMap = mergeRefreshedStoryMapAssetUrls(current.storyMap, refreshedMap);
+          const hydratedMap = await overlayPendingBeatImages(mergedMap, session.savedStoryId);
           updateStoreSaveUi({
             session: deriveSessionFields(current, hydratedMap),
           });
           void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+          return true;
         } catch {
-          // Silent fail — URLs will still work until full expiry
+          // Existing URLs may still be valid; foreground or online events will retry.
+          return false;
         }
       },
 

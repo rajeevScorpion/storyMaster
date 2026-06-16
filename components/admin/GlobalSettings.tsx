@@ -42,6 +42,7 @@ import {
   setTtsTimeout,
   setCloudSaveTimeout,
   setStoryAssetSignedUrlSwap,
+  setClientStoryPersistenceEnabled,
   setStoryIncrementalAssetSync,
   setStoryAssetUploadPauseDuringGeneration,
   setStoryAssetSyncWarningTimeout,
@@ -312,6 +313,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [storyUiTextLineCountSaving, setStoryUiTextLineCountSaving] = useState(false);
   const [storyUiAutoScrollEnabled, setStoryUiAutoScrollEnabledState] = useState(true);
   const [storyUiAutoScrollToggling, setStoryUiAutoScrollToggling] = useState(false);
+  const [clientStoryPersistenceEnabled, setClientStoryPersistenceEnabledState] = useState(false);
+  const [clientStoryPersistenceToggling, setClientStoryPersistenceToggling] = useState(false);
   const [storylineChoiceFlashEnabled, setStorylineChoiceFlashEnabledState] = useState(true);
   const [storylineChoiceFlashToggling, setStorylineChoiceFlashToggling] = useState(false);
   const [storylineChoiceFlashMs, setStorylineChoiceFlashMsState] = useState(3000);
@@ -425,6 +428,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         loadingReaderScrollSpeedPxPerSecond: readerScrollSpeed,
         storyUiTextLineCount: uiTextLineCount,
         storyUiAutoScrollEnabled: uiAutoScrollEnabled,
+        clientStoryPersistenceEnabled: persistenceEnabled,
         storylineChoiceFlashEnabled: choiceFlashEnabled,
         storylineChoiceFlashMs: choiceFlashMs,
         freePlusCharacterSheetsEnabled: fpSheets,
@@ -475,6 +479,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setStoryUiTextLineCountState(uiTextLineCount);
         setStoryUiTextLineCountInput(String(uiTextLineCount));
         setStoryUiAutoScrollEnabledState(uiAutoScrollEnabled);
+        setClientStoryPersistenceEnabledState(persistenceEnabled);
         setStorylineChoiceFlashEnabledState(choiceFlashEnabled);
         setStorylineChoiceFlashMsState(choiceFlashMs);
         setStorylineChoiceFlashInput(String(choiceFlashMs / 1000));
@@ -1162,6 +1167,23 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   setStoryUiAutoScrollEnabledState(next);
                 } finally {
                   setStoryUiAutoScrollToggling(false);
+                }
+              }}
+            />
+
+            <ToggleRow
+              label="Client Story Persistence"
+              description="Cache story manifests, progress, images, and narration on the current device for faster repeat playback and offline-ready reads."
+              checked={clientStoryPersistenceEnabled}
+              toggling={clientStoryPersistenceToggling}
+              onToggle={async () => {
+                setClientStoryPersistenceToggling(true);
+                const next = !clientStoryPersistenceEnabled;
+                try {
+                  await setClientStoryPersistenceEnabled(next);
+                  setClientStoryPersistenceEnabledState(next);
+                } finally {
+                  setClientStoryPersistenceToggling(false);
                 }
               }}
             />

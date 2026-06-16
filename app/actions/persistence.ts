@@ -454,8 +454,29 @@ async function buildReelStoryPersistencePatch(
 /**
  * Convert a StoryNode + beat data into a beats table row object.
  */
-function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId: string) {
+function nodeToBeatRow(
+  storyId: string,
+  nodeId: string,
+  node: StoryNode,
+  userId: string,
+  existingBeat?: {
+    imageUrl?: string;
+    audioUrl?: string;
+    imageSyncedAt?: string;
+    audioSyncedAt?: string;
+  }
+) {
   const normalizedBeat = normalizeBeatMediaFields(node.data);
+  const imageUrl = resolvePersistedImageUrlForSave(normalizedBeat);
+  const audioUrl = resolvePersistedAudioUrlForSave(normalizedBeat);
+  const normalizedImageUrl = imageUrl ? normalizeStorageUrl(imageUrl, 'story-assets') : undefined;
+  const normalizedAudioUrl = audioUrl ? normalizeStorageUrl(audioUrl, 'story-assets') : undefined;
+  const existingImageUrl = existingBeat?.imageUrl
+    ? normalizeStorageUrl(existingBeat.imageUrl, 'story-assets')
+    : undefined;
+  const existingAudioUrl = existingBeat?.audioUrl
+    ? normalizeStorageUrl(existingBeat.audioUrl, 'story-assets')
+    : undefined;
   const row: Record<string, unknown> = {
     story_id: storyId,
     node_id: nodeId,
@@ -479,22 +500,28 @@ function nodeToBeatRow(storyId: string, nodeId: string, node: StoryNode, userId:
     canonical_option_id: normalizedBeat.canonicalOptionId || null,
     image_status: normalizedBeat.imageStatus,
     image_error: normalizedBeat.imageError || null,
-    image_synced_at: normalizedBeat.imageStatus === 'ready' ? new Date().toISOString() : null,
+    image_synced_at: normalizedBeat.imageStatus === 'ready'
+      ? (normalizedImageUrl === existingImageUrl && existingBeat?.imageSyncedAt
+          ? existingBeat.imageSyncedAt
+          : new Date().toISOString())
+      : null,
     audio_status: normalizedBeat.audioStatus,
     audio_error: normalizedBeat.audioError || null,
-    audio_synced_at: normalizedBeat.audioStatus === 'ready' ? new Date().toISOString() : null,
+    audio_synced_at: normalizedBeat.audioStatus === 'ready'
+      ? (normalizedAudioUrl === existingAudioUrl && existingBeat?.audioSyncedAt
+          ? existingBeat.audioSyncedAt
+          : new Date().toISOString())
+      : null,
   };
 
   // Only include asset URLs when they have values — prevents UPSERT from
   // overwriting audio_url set by generateAndPersistNarration (race condition)
-  const imageUrl = resolvePersistedImageUrlForSave(normalizedBeat);
-  if (imageUrl) {
-    row.image_url = normalizeStorageUrl(imageUrl, 'story-assets');
+  if (normalizedImageUrl) {
+    row.image_url = normalizedImageUrl;
   }
 
-  const audioUrl = resolvePersistedAudioUrlForSave(normalizedBeat);
-  if (audioUrl) {
-    row.audio_url = normalizeStorageUrl(audioUrl, 'story-assets');
+  if (normalizedAudioUrl) {
+    row.audio_url = normalizedAudioUrl;
   }
 
   if (normalizedBeat.narrationVoiceId) {
@@ -549,6 +576,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     nextBeatGoal: beat.next_beat_goal || '',
     endingForecast: (beat.ending_forecast || []) as string[],
     imageUrl: beat.image_url || undefined,
+    imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
     imageGallery: Array.isArray(beat.image_gallery)
@@ -562,6 +590,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
         }))
       : [],
     audioUrl: beat.audio_url || undefined,
+    audioVersion: beat.audio_synced_at || undefined,
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,
     narrationVoiceId: beat.narration_voice_id || undefined,
@@ -640,7 +669,12 @@ export async function saveStory(
   if (authError || !user) throw new Error('Not authenticated');
 
   let existingStoryMap: StoryMap | null = null;
-  const existingBeatUrlMap = new Map<string, { imageUrl?: string; audioUrl?: string }>();
+  const existingBeatUrlMap = new Map<string, {
+    imageUrl?: string;
+    audioUrl?: string;
+    imageSyncedAt?: string;
+    audioSyncedAt?: string;
+  }>();
   if (session.savedStoryId) {
     const { data: existingStory, error: existingStoryError } = await supabase
       .from('stories')
@@ -660,7 +694,7 @@ export async function saveStory(
 
     const { data: existingBeatRows, error: existingBeatRowsError } = await supabase
       .from('beats')
-      .select('node_id, image_url, audio_url')
+      .select('node_id, image_url, audio_url, image_synced_at, audio_synced_at')
       .eq('story_id', session.savedStoryId)
       .eq('generated_by', user.id);
 
@@ -672,6 +706,8 @@ export async function saveStory(
       existingBeatUrlMap.set(beat.node_id, {
         imageUrl: beat.image_url || undefined,
         audioUrl: beat.audio_url || undefined,
+        imageSyncedAt: beat.image_synced_at || undefined,
+        audioSyncedAt: beat.audio_synced_at || undefined,
       });
     }
   }
@@ -787,7 +823,7 @@ export async function saveStory(
 
   // Dual-write: batch upsert all nodes into beats table
   const beatRows = Object.entries(cleanMap.nodes).map(([nodeId, node]) =>
-    nodeToBeatRow(storyId, nodeId, node, user.id)
+    nodeToBeatRow(storyId, nodeId, node, user.id, existingBeatUrlMap.get(nodeId))
   );
 
   if (beatRows.length > 0) {
@@ -923,6 +959,8 @@ export async function loadStory(storyId: string): Promise<StorySession> {
               : {}),
           },
         };
+        storyMap.nodes[nodeId].data.imageVersion = repairedBeats.find((beat) => beat.node_id === nodeId)?.image_synced_at || undefined;
+        storyMap.nodes[nodeId].data.audioVersion = repairedBeats.find((beat) => beat.node_id === nodeId)?.audio_synced_at || undefined;
         storyMap.nodes[nodeId].data = normalizeBeatMediaFields(storyMap.nodes[nodeId].data);
       }
     }
@@ -954,6 +992,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     storySessionId: story.id,
     savedStoryId: story.id,
     savedByUserId: story.user_id,
+    sourceUpdatedAt: story.updated_at,
     userPrompt: story.user_prompt,
     title: story.title,
     genre: story.genre || 'adventure',
@@ -998,7 +1037,7 @@ export async function saveBeat(
 
   const { data: existingBeat } = await supabase
     .from('beats')
-    .select('image_url, audio_url')
+      .select('image_url, audio_url, image_synced_at, audio_synced_at')
     .eq('story_id', storyId)
     .eq('node_id', nodeId)
     .eq('generated_by', user.id)
@@ -1018,7 +1057,14 @@ export async function saveBeat(
     },
   };
 
-  const beatRow = nodeToBeatRow(storyId, nodeId, beatForSave, user.id);
+  const beatRow = nodeToBeatRow(storyId, nodeId, beatForSave, user.id, existingBeat
+    ? {
+        imageUrl: existingBeat.image_url || undefined,
+        audioUrl: existingBeat.audio_url || undefined,
+        imageSyncedAt: existingBeat.image_synced_at || undefined,
+        audioSyncedAt: existingBeat.audio_synced_at || undefined,
+      }
+    : undefined);
 
   const { data, error } = await supabase
     .from('beats')

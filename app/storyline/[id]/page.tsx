@@ -1,11 +1,9 @@
 import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
-import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
-import StorylinePlayer from '@/components/story/StorylinePlayer';
+import StorylinePersistenceLoader from '@/components/story/StorylinePersistenceLoader';
 import StorylinePreview from '@/components/story/StorylinePreview';
-import type { StorylineChoice } from '@/lib/utils/storyline';
 import type { Metadata } from 'next';
 import {
   resolveStorylineShareCover,
@@ -184,25 +182,20 @@ export default async function StorylinePage({ params }: PageProps) {
   isLiked = (likeCheck ?? 0) > 0;
   const likeCount = storyline.like_count ?? 0;
 
-  // Load beats via junction table (falls back to JSONB) with fresh signed URLs
-  const { storyline: loadedStoryline, beats, choices } = await loadStorylineWithBeats(id);
-
   return (
     <Suspense>
-      <StorylinePlayer
+      <StorylinePersistenceLoader
         storylineId={storyline.id}
         storyId={storyline.story_id}
+        userId={user.id}
         title={storyline.title}
-        isVerticalStory={loadedStoryline.is_vertical_story === true || loadedStoryline.aspect_ratio === '9:16'}
-        aspectRatio={loadedStoryline.aspect_ratio === '9:16' ? '9:16' : '16:9'}
-        beats={beats}
-        choices={choices as StorylineChoice[]}
+        isVerticalStory={storyline.is_vertical_story === true || storyline.aspect_ratio === '9:16'}
+        aspectRatio={storyline.aspect_ratio === '9:16' ? '9:16' : '16:9'}
         authorName={storyline.author_name}
         isOwner={isOwner}
         isSaved={isSaved}
         isLiked={isLiked}
         likeCount={likeCount}
-        isLoggedIn={true}
       />
     </Suspense>
   );

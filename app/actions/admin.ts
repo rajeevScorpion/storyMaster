@@ -454,6 +454,7 @@ export async function getGlobalSettings(): Promise<{
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  clientStoryPersistenceEnabled: boolean;
   storylineChoiceFlashEnabled: boolean;
   storylineChoiceFlashMs: number;
   freePlusCharacterSheetsEnabled: boolean;
@@ -482,7 +483,7 @@ export async function getGlobalSettings(): Promise<{
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -496,6 +497,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlagValue('story_ui_text_line_count'),
     getFeatureFlag('story_ui_auto_scroll_enabled', true),
+    getFeatureFlag('client_story_persistence_enabled', false),
     getFeatureFlag('storyline_choice_flash_enabled', true),
     getFeatureFlagValue('storyline_choice_flash_ms'),
     getFeatureFlag('character_sheet_enabled_free_plus'),
@@ -549,6 +551,7 @@ export async function getGlobalSettings(): Promise<{
       : 24,
     storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
     storyUiAutoScrollEnabled,
+    clientStoryPersistenceEnabled,
     storylineChoiceFlashEnabled,
     storylineChoiceFlashMs: Number.isFinite(parsedStorylineChoiceFlashMs)
       ? Math.max(500, Math.min(30000, parsedStorylineChoiceFlashMs))
@@ -726,6 +729,11 @@ export async function setVideoDownloadAdminBypass(enabled: boolean): Promise<voi
 export async function setStoryAssetSignedUrlSwap(enabled: boolean): Promise<void> {
   await verifyAdmin();
   await setFeatureFlag('story_asset_signed_url_swap_enabled', enabled);
+}
+
+export async function setClientStoryPersistenceEnabled(enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  await setFeatureFlag('client_story_persistence_enabled', enabled);
 }
 
 export async function getStoryAssetSignedUrlSwapEnabled(): Promise<boolean> {

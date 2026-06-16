@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 import { createClient } from '@/lib/supabase/server';
-import { verifyUserCanWriteMediaObject } from '@/lib/media/media-access';
+import { verifyUserCanReadMediaObject } from '@/lib/media/media-access';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { getR2ObjectBuffer } from '@/lib/media/r2-server';
 import { parseR2UrlLikeReference, toR2Reference } from '@/lib/media/r2-reference';
@@ -78,7 +78,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Invalid R2 object request.' }, { status: 400 });
   }
 
-  const accessCheck = await verifyUserCanWriteMediaObject(supabase, user.id, { objectKey: objectRef.objectKey });
+  const accessCheck = await verifyUserCanReadMediaObject(supabase, { objectKey: objectRef.objectKey });
   if (!accessCheck.allowed) {
     return NextResponse.json({ error: 'Not authorized to access media for this story.' }, { status: 403 });
   }

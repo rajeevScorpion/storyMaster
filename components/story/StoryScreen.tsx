@@ -27,6 +27,9 @@ import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
+import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset } from '@/lib/persistence';
+import { saveTreeProgress } from '@/lib/persistence/runtime';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
 import {
@@ -2019,6 +2022,8 @@ export default function StoryScreen() {
   const retryPendingBeatAssetSync = useStoryStore((state) => state.retryPendingBeatAssetSync);
   const lastPublishResult = useStoryStore((state) => state.lastPublishResult);
   const refreshSignedUrls = useStoryStore((state) => state.refreshSignedUrls);
+  const signedUrlRefreshInFlightRef = useRef(false);
+  const lastSignedUrlRefreshAtRef = useRef(Date.now());
   const setPromptOnlyBeatImage = useStoryStore((state) => state.setPromptOnlyBeatImage);
   const selectPromptOnlyBeatImage = useStoryStore((state) => state.selectPromptOnlyBeatImage);
   const deletePromptOnlyBeatImage = useStoryStore((state) => state.deletePromptOnlyBeatImage);
@@ -2089,13 +2094,45 @@ export default function StoryScreen() {
     };
   }, [user?.id]);
 
-  // Refresh signed URLs every 50 minutes to prevent expiry
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refreshSignedUrls();
-    }, 50 * 60 * 1000);
-    return () => clearInterval(interval);
+  const refreshSignedUrlsIfNeeded = useCallback(async (force = false) => {
+    const refreshIntervalMs = 50 * 60 * 1000;
+    if (
+      signedUrlRefreshInFlightRef.current
+      || (!force && Date.now() - lastSignedUrlRefreshAtRef.current < refreshIntervalMs)
+    ) {
+      return;
+    }
+
+    signedUrlRefreshInFlightRef.current = true;
+    try {
+      const refreshed = await refreshSignedUrls();
+      if (refreshed) lastSignedUrlRefreshAtRef.current = Date.now();
+    } finally {
+      signedUrlRefreshInFlightRef.current = false;
+    }
   }, [refreshSignedUrls]);
+
+  // Refresh before expiry and catch up after browser suspension throttles timers.
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void refreshSignedUrlsIfNeeded(true);
+    }, 50 * 60 * 1000);
+    const handleForeground = () => {
+      if (!document.hidden) void refreshSignedUrlsIfNeeded();
+    };
+
+    document.addEventListener('visibilitychange', handleForeground);
+    window.addEventListener('focus', handleForeground);
+    window.addEventListener('online', handleForeground);
+    window.addEventListener('pageshow', handleForeground);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleForeground);
+      window.removeEventListener('focus', handleForeground);
+      window.removeEventListener('online', handleForeground);
+      window.removeEventListener('pageshow', handleForeground);
+    };
+  }, [refreshSignedUrlsIfNeeded]);
 
   useEffect(() => {
     if (!cycleSettings.storyIncrementalAssetSyncEnabled) return;
@@ -2182,6 +2219,7 @@ export default function StoryScreen() {
       selectCharacterReferenceSheet={selectCharacterReferenceSheet}
       deleteCharacterReferenceSheet={deleteCharacterReferenceSheet}
       permanentlyDeleteCharacterReferenceSheet={permanentlyDeleteCharacterReferenceSheet}
+      persistenceUserId={user?.id}
     />
   );
 }
@@ -2228,6 +2266,7 @@ function StoryScreenInner({
   selectCharacterReferenceSheet,
   deleteCharacterReferenceSheet,
   permanentlyDeleteCharacterReferenceSheet,
+  persistenceUserId,
 }: {
   session: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>;
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
@@ -2278,6 +2317,7 @@ function StoryScreenInner({
   selectCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   deleteCharacterReferenceSheet: (characterId: string) => Promise<void>;
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
+  persistenceUserId?: string;
 }) {
   const router = useRouter();
   const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -2428,6 +2468,56 @@ function StoryScreenInner({
 
   // Audio player
   const normalizedCurrentBeat = normalizeBeatMediaFields(currentBeat);
+  const persistedStoryId = session.savedStoryId || session.storySessionId;
+  const mediaVersionFallback = session.sourceUpdatedAt || 'legacy';
+  const imageAsset = useMemo<StoryMediaAsset | undefined>(() => {
+    if (!persistenceUserId || !normalizedCurrentBeat.imageUrl || normalizedCurrentBeat.imageUrl.startsWith('data:')) return undefined;
+    return {
+      assetId: getStableMediaIdentity(normalizedCurrentBeat.imageUrl, 'image'),
+      storyId: persistedStoryId,
+      pageId: currentNodeId,
+      userId: persistenceUserId,
+      kind: 'image',
+      remoteUrl: normalizedCurrentBeat.imageUrl,
+      version: normalizedCurrentBeat.imageVersion || mediaVersionFallback,
+    };
+  }, [currentNodeId, mediaVersionFallback, normalizedCurrentBeat.imageUrl, normalizedCurrentBeat.imageVersion, persistedStoryId, persistenceUserId]);
+  const audioAsset = useMemo<StoryMediaAsset | undefined>(() => {
+    if (!persistenceUserId || !normalizedCurrentBeat.audioUrl || normalizedCurrentBeat.audioUrl.startsWith('data:')) return undefined;
+    return {
+      assetId: getStableMediaIdentity(normalizedCurrentBeat.audioUrl, 'audio'),
+      storyId: persistedStoryId,
+      pageId: currentNodeId,
+      userId: persistenceUserId,
+      kind: 'audio',
+      remoteUrl: normalizedCurrentBeat.audioUrl,
+      version: normalizedCurrentBeat.audioVersion || mediaVersionFallback,
+    };
+  }, [currentNodeId, mediaVersionFallback, normalizedCurrentBeat.audioUrl, normalizedCurrentBeat.audioVersion, persistedStoryId, persistenceUserId]);
+  const resolvedBeatImage = useResolvedStoryMediaState(imageAsset);
+  const resolvedBeatImageUrl = imageAsset ? resolvedBeatImage.url : normalizedCurrentBeat.imageUrl;
+  const imageIsResolving = Boolean(imageAsset && resolvedBeatImage.isResolving);
+  const resolvedBeatAudio = useResolvedStoryMediaState(audioAsset);
+  const resolvedBeatAudioUrl = audioAsset ? resolvedBeatAudio.url : normalizedCurrentBeat.audioUrl;
+  const audioIsResolving = Boolean(audioAsset && resolvedBeatAudio.isResolving);
+  const [restoredAudioTimeMs, setRestoredAudioTimeMs] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setRestoredAudioTimeMs(0);
+    if (!persistenceUserId || !session.savedStoryId) return;
+    const readerKind = session.explorationMode ? 'explore' : 'story';
+    void getStoryPersistence().getProgress({
+      readerKind,
+      storyId: session.savedStoryId,
+      userId: persistenceUserId,
+    }).then((progress) => {
+      if (active && progress && progress.readerKind !== 'storyline' && progress.currentNodeId === currentNodeId) {
+        setRestoredAudioTimeMs(progress.audioTimeMs);
+      }
+    });
+    return () => { active = false; };
+  }, [currentNodeId, persistenceUserId, session.explorationMode, session.savedStoryId]);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
   const reelTimelineNodes = useMemo(
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
@@ -2446,13 +2536,14 @@ function StoryScreenInner({
       assumeGeneratedStoryboard: !isReelStory && !isPromptOnlyStory,
     })
   );
-  const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || getBeatDisplayImageUrl(normalizedCurrentBeat);
-  const imageKey = normalizedCurrentBeat.imageUrl || displayImageUrl;
-  const visualKey = displayImageUrl ?? currentNodeId;
+  const displayImageUrl = normalizedCurrentBeat.portraitImageUrl || resolvedBeatImageUrl || (!imageAsset ? getBeatDisplayImageUrl(normalizedCurrentBeat) : undefined);
+  const imageKey = resolvedBeatImageUrl || displayImageUrl;
+  const visualKey = `${currentNodeId}:${normalizedCurrentBeat.portraitImageUrl ?? normalizedCurrentBeat.imageUrl ?? 'no-image'}`;
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
-  const showPendingImageState = !displayImageUrl && normalizedCurrentBeat.imageStatus === 'pending';
-  const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showPendingImageState;
-  const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
+  const showResolvingImageState = imageIsResolving && Boolean(normalizedCurrentBeat.imageUrl);
+  const showPendingImageState = !displayImageUrl && !showResolvingImageState && normalizedCurrentBeat.imageStatus === 'pending';
+  const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showResolvingImageState && !showPendingImageState;
+  const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && !showResolvingImageState && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
   const canRegenerateImage = !isPromptOnlyStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
   const cancelReelPlayAll = useCallback(() => {
@@ -2487,7 +2578,7 @@ function StoryScreenInner({
   const activeNarrationHighlightSupported = activeNarrationMetadata?.textHighlightSupported === true;
   const currentBeatPlaybackAudioUrl = !reelPlayAllActive && activeFullVoicePreview?.audioUrl
     ? activeFullVoicePreview.audioUrl
-    : normalizedCurrentBeat.audioUrl;
+    : resolvedBeatAudioUrl;
   const currentBeatPlaybackKey = isReelStory
     ? `${currentNodeId}:${reelPlayAllActive ? 'play-all' : activeFullVoicePreview?.id ?? 'beat-audio'}`
     : currentNodeId;
@@ -2512,7 +2603,21 @@ function StoryScreenInner({
   } = useAudioPlayer(
     currentBeatPlaybackAudioUrl,
     currentBeatPlaybackKey,
-    { onEnded: handleReelAudioEnded }
+    {
+      onEnded: handleReelAudioEnded,
+      initialTimeMs: restoredAudioTimeMs,
+      onProgress: (audioTimeMs) => {
+        if (!persistenceUserId || !session.savedStoryId) return;
+        void saveTreeProgress({
+          readerKind: session.explorationMode ? 'explore' : 'story',
+          storyId: session.savedStoryId,
+          userId: persistenceUserId,
+          currentNodeId,
+          audioTimeMs,
+          completed: normalizedCurrentBeat.isEnding,
+        });
+      },
+    }
   );
   const storyboardAudioDurationMs = reelAudioDurationMs > 0
     ? reelAudioDurationMs
@@ -2573,6 +2678,7 @@ function StoryScreenInner({
     cycleSettings.audioStorylinePublishEnabled
   );
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
+  const pendingStoryModeAutoplayNodeIdRef = useRef<string | null>(null);
   const orderedOptions = currentBeat.canonicalOptionId
     ? [
         ...currentBeat.options.filter((option) => option.id === currentBeat.canonicalOptionId),
@@ -2834,6 +2940,7 @@ function StoryScreenInner({
     && normalizedCurrentBeat.imageUrl
     && currentBeatPlaybackAudioUrl
   );
+  const narrationIsResolving = Boolean(normalizedCurrentBeat.audioUrl && !currentBeatPlaybackAudioUrl && audioIsResolving);
   const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
   const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
   const canAccessVideoExport = adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads);
@@ -3752,13 +3859,18 @@ function StoryScreenInner({
   ]);
 
   useEffect(() => {
-    if (!reelPlayAllActive || pendingReelPlayAllNodeIdRef.current !== currentNodeId || !normalizedCurrentBeat.audioUrl) {
+    if (
+      !reelPlayAllActive
+      || pendingReelPlayAllNodeIdRef.current !== currentNodeId
+      || !currentBeatPlaybackAudioUrl
+      || audioIsResolving
+    ) {
       return;
     }
 
     pendingReelPlayAllNodeIdRef.current = null;
     playAudio();
-  }, [currentNodeId, normalizedCurrentBeat.audioUrl, playAudio, reelPlayAllActive]);
+  }, [audioIsResolving, currentBeatPlaybackAudioUrl, currentNodeId, playAudio, reelPlayAllActive]);
 
   useEffect(() => {
     if (!canPlayFullReel && reelPlayAllActive) {
@@ -3768,20 +3880,34 @@ function StoryScreenInner({
 
   // Autoplay narration in story mode when navigating to a node with audio
   useEffect(() => {
+    if (!storyMode) {
+      pendingStoryModeAutoplayNodeIdRef.current = null;
+      prevNodeIdForAutoplay.current = currentNodeId;
+      return;
+    }
+
     if (prevNodeIdForAutoplay.current !== currentNodeId) {
       prevNodeIdForAutoplay.current = currentNodeId;
-      if (storyMode && normalizedCurrentBeat.audioUrl && playbackState === 'idle') {
-        playAudio();
-      }
+      pendingStoryModeAutoplayNodeIdRef.current = normalizedCurrentBeat.audioUrl ? currentNodeId : null;
     }
-  }, [currentNodeId, storyMode, normalizedCurrentBeat.audioUrl, playbackState, playAudio]);
+
+    if (
+      pendingStoryModeAutoplayNodeIdRef.current === currentNodeId
+      && currentBeatPlaybackAudioUrl
+      && !audioIsResolving
+      && playbackState === 'idle'
+    ) {
+      pendingStoryModeAutoplayNodeIdRef.current = null;
+      playAudio();
+    }
+  }, [audioIsResolving, currentBeatPlaybackAudioUrl, currentNodeId, storyMode, normalizedCurrentBeat.audioUrl, playbackState, playAudio]);
 
   // Autoplay when audio becomes ready on current node in story mode
   useEffect(() => {
-    if (storyMode && isAudioReady && normalizedCurrentBeat.audioUrl && playbackState === 'idle') {
+    if (storyMode && isAudioReady && currentBeatPlaybackAudioUrl && !audioIsResolving && playbackState === 'idle') {
       playAudio();
     }
-  }, [storyMode, isAudioReady, normalizedCurrentBeat.audioUrl, playbackState, playAudio]);
+  }, [audioIsResolving, currentBeatPlaybackAudioUrl, storyMode, isAudioReady, playbackState, playAudio]);
 
   // Chime when audio becomes ready for current node
   useEffect(() => {
@@ -3809,10 +3935,10 @@ function StoryScreenInner({
         setReelTextMessage('Save panel text before using narration.');
         return;
       }
-      const narrationAudioUrl = isReelStory ? currentBeatPlaybackAudioUrl : normalizedCurrentBeat.audioUrl;
-      if (narrationAudioUrl) {
+      const hasNarration = isReelStory ? currentBeatPlaybackAudioUrl : normalizedCurrentBeat.audioUrl;
+      if (currentBeatPlaybackAudioUrl) {
         togglePlayPause();
-      } else if (!isGeneratingAudio) {
+      } else if (!hasNarration && !isGeneratingAudio && !audioIsResolving) {
         void handleGenerateNarration();
       }
     },
@@ -4389,6 +4515,8 @@ function StoryScreenInner({
             onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
             onError={() => setFailedImageUrl(displayImageUrl)}
           />
+        ) : showResolvingImageState ? (
+          <div className="absolute inset-0 bg-neutral-950" />
         ) : showPromptOnlyPlaceholder ? (
           <div
             className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
@@ -5494,11 +5622,11 @@ function StoryScreenInner({
                   ].join(', '),
                 }}
               />
-            ) : isStoryboard ? (
+            ) : isStoryboard && resolvedBeatImageUrl ? (
               <StoryStoryboardPlayer
                 key={`${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                gridUrl={normalizedCurrentBeat.imageUrl!}
-                audioUrl={normalizedCurrentBeat.audioUrl}
+                gridUrl={resolvedBeatImageUrl!}
+                audioUrl={resolvedBeatAudioUrl}
                 audioElapsedMs={reelAudioTimeMs}
                 audioDurationMs={storyboardAudioDurationMs}
                 cycleOverride={cycleSettings.cycleOverride}
@@ -5510,10 +5638,10 @@ function StoryScreenInner({
                 narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
                 textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                 textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
-                onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
-                onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
+                onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
+                onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
               />
-            ) : displayImageUrl && (
+            ) : displayImageUrl ? (
               <Image
                 src={displayImageUrl}
                 alt={currentBeat.sceneSummary}
@@ -5525,16 +5653,18 @@ function StoryScreenInner({
                 onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                 onError={() => setFailedImageUrl(displayImageUrl)}
               />
-            )}
+            ) : showResolvingImageState ? (
+              <div className="absolute inset-0 bg-neutral-950" />
+            ) : null}
             </div>
-            {!isReelStory && isVerticalStory && displayImageUrl && (
+            {!isReelStory && isVerticalStory && (displayImageUrl || showResolvingImageState) && (
               <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
                 <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
-                  {isStoryboard ? (
+                  {isStoryboard && resolvedBeatImageUrl ? (
                     <StoryStoryboardPlayer
                       key={`vertical-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                      gridUrl={normalizedCurrentBeat.imageUrl!}
-                      audioUrl={normalizedCurrentBeat.audioUrl}
+                      gridUrl={resolvedBeatImageUrl!}
+                      audioUrl={resolvedBeatAudioUrl}
                       audioElapsedMs={reelAudioTimeMs}
                       audioDurationMs={storyboardAudioDurationMs}
                       cycleOverride={cycleSettings.cycleOverride}
@@ -5546,10 +5676,10 @@ function StoryScreenInner({
                       narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
                       textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                       textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
-                      onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
-                      onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
+                      onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
+                      onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                     />
-                  ) : (
+                  ) : displayImageUrl ? (
                     <Image
                       src={displayImageUrl}
                       alt={currentBeat.sceneSummary}
@@ -5561,7 +5691,9 @@ function StoryScreenInner({
                       onLoad={() => setFailedImageUrl((prev) => (prev === displayImageUrl ? null : prev))}
                       onError={() => setFailedImageUrl(displayImageUrl)}
                     />
-                  )}
+                  ) : showResolvingImageState ? (
+                    <div className="absolute inset-0 bg-neutral-950" />
+                  ) : null}
                   {isReelStory && !normalizedCurrentBeat.audioUrl && (
                     <button
                       onClick={() => !isGeneratingAudio && void handleGenerateNarration()}
@@ -5680,13 +5812,13 @@ function StoryScreenInner({
         {isReelStory ? reelEditorLayout : (
           <>
         <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStory ? 'hidden' : 'flex'}`}>
-          {(displayImageUrl || showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
+          {(displayImageUrl || showResolvingImageState || showPendingImageState || showFailedImageState || showPromptOnlyPlaceholder) && (
             <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
-              {isStoryboard ? (
+              {isStoryboard && resolvedBeatImageUrl ? (
                 <StoryStoryboardPlayer
                   key={`mobile-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
-                  gridUrl={normalizedCurrentBeat.imageUrl!}
-                  audioUrl={normalizedCurrentBeat.audioUrl}
+                  gridUrl={resolvedBeatImageUrl!}
+                  audioUrl={resolvedBeatAudioUrl}
                   audioElapsedMs={reelAudioTimeMs}
                   audioDurationMs={storyboardAudioDurationMs}
                   cycleOverride={cycleSettings.cycleOverride}
@@ -5699,8 +5831,8 @@ function StoryScreenInner({
                   narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
                   textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
                   textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
-                  onImageLoad={() => setFailedImageUrl((prev) => (prev === normalizedCurrentBeat.imageUrl ? null : prev))}
-                  onImageError={() => setFailedImageUrl(normalizedCurrentBeat.imageUrl!)}
+                  onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
+                  onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                 />
               ) : displayImageUrl ? (
                 <div className="mobile-scene-shuttle absolute inset-0">
@@ -5716,6 +5848,8 @@ function StoryScreenInner({
                     onError={() => setFailedImageUrl(displayImageUrl)}
                   />
                 </div>
+              ) : showResolvingImageState ? (
+                <div className="absolute inset-0 bg-neutral-950" />
               ) : showPromptOnlyPlaceholder ? (
                 <div
                   className="absolute inset-0 flex items-center justify-center bg-neutral-900/70 text-neutral-300"
@@ -5911,8 +6045,8 @@ function StoryScreenInner({
                   onClearGlow={clearAudioReady}
                   storyMode={storyMode}
                   onToggleStoryMode={toggleStoryMode}
-                  disabled={isReelStory && hasUnsavedReelText}
-                  disabledReason="Save panel text before generating narration"
+                  disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
+                  disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
                 />
               </div>
             )}

@@ -145,12 +145,14 @@ export interface StoryBeat {
   finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;
+  imageVersion?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
   imageGallery?: BeatImageGalleryEntry[];
   isStoryboard?: boolean;
   portraitImageUrl?: string;
   audioUrl?: string;
+  audioVersion?: string;
   audioStatus?: BeatMediaStatus;
   audioError?: string;
   narrationVoiceId?: string;
@@ -265,6 +267,7 @@ export interface StorySession {
   storySessionId: string;
   savedStoryId?: string;
   savedByUserId?: string;
+  sourceUpdatedAt?: string;
   explorationMode?: boolean;
   sourceStoryOwnerId?: string;
   userPrompt: string;

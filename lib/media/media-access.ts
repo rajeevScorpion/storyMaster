@@ -26,6 +26,51 @@ async function userOwnsStory(
   return !error && Boolean(data);
 }
 
+async function userCanReadStory(
+  supabase: SupabaseClient,
+  storyId: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('stories')
+    .select('id')
+    .eq('id', storyId)
+    .maybeSingle();
+
+  return !error && Boolean(data);
+}
+
+async function loadReadableStoryline(
+  supabase: SupabaseClient,
+  storylineId: string
+): Promise<{ id: string; story_id: string } | null> {
+  const { data, error } = await supabase
+    .from('storylines')
+    .select('id, story_id')
+    .eq('id', storylineId)
+    .maybeSingle();
+
+  return !error && data ? data as { id: string; story_id: string } : null;
+}
+
+export async function verifyUserCanReadMediaObject(
+  supabase: SupabaseClient,
+  input: { objectKey: string }
+): Promise<{ allowed: boolean; storyId: string | null; storylineId: string | null }> {
+  const scopeId = extractMediaObjectScopeId(input.objectKey);
+  if (!scopeId) return { allowed: false, storyId: null, storylineId: null };
+
+  if (await userCanReadStory(supabase, scopeId)) {
+    return { allowed: true, storyId: scopeId, storylineId: null };
+  }
+
+  const storyline = await loadReadableStoryline(supabase, scopeId);
+  if (storyline && await userCanReadStory(supabase, storyline.story_id)) {
+    return { allowed: true, storyId: storyline.story_id, storylineId: storyline.id };
+  }
+
+  return { allowed: false, storyId: null, storylineId: null };
+}
+
 async function loadOwnedStoryline(
   supabase: SupabaseClient,
   userId: string,
