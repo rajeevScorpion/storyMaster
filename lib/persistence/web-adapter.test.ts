@@ -89,14 +89,20 @@ describe('WebStoryPersistenceAdapter', () => {
     expect((await adapter.getProgress({ readerKind: 'story', userId: 'user-1', storyId: 'story-1' }))?.audioTimeMs).toBe(1200);
   });
 
-  it('reuses cached media and releases blob URLs', async () => {
+  it('returns remote media on cache miss and reuses cached media later', async () => {
     const adapter = new WebStoryPersistenceAdapter();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(new Blob(['image']), { status: 200, headers: { 'Content-Type': 'image/webp' } })
     );
 
     const first = await adapter.resolveMedia(asset());
-    adapter.releaseMedia(first.url);
+    expect(first.source).toBe('remote');
+    expect(first.cacheHit).toBe(false);
+    expect(first.url).toBe(asset().remoteUrl);
+    expect(createObjectURL).not.toHaveBeenCalled();
+
+    await adapter.prefetchMedia(asset());
+
     const second = await adapter.resolveMedia(asset());
     adapter.releaseMedia(second.url);
 
@@ -105,8 +111,9 @@ describe('WebStoryPersistenceAdapter', () => {
       asset().remoteUrl,
       { credentials: 'same-origin' }
     );
+    expect(second.source).toBe('cache-storage');
     expect(second.cacheHit).toBe(true);
-    expect(revokeObjectURL).toHaveBeenCalledTimes(2);
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1);
   });
 
   it('invalidates media when an asset version changes', async () => {

@@ -60,7 +60,7 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
 import { mergeRefreshedStorylineBeatAssetUrls } from '@/lib/media/refresh-merge';
-import { useResolvedStoryMedia, useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
+import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset, type StorylineManifestPayload } from '@/lib/persistence';
 import { saveStorylineAndPrefetch, saveStorylineProgress } from '@/lib/persistence/runtime';
 
@@ -374,12 +374,14 @@ export default function StorylinePlayer({
       version: currentBeat.audioVersion || sourceUpdatedAt,
     };
   }, [currentBeat.audioUrl, currentBeat.audioVersion, currentIndex, persistenceUserId, sourceUpdatedAt, storyId, storylineId]);
-  const resolvedImageUrl = useResolvedStoryMedia(imageAsset) || currentBeat.imageUrl;
+  const resolvedImage = useResolvedStoryMediaState(imageAsset);
+  const resolvedImageUrl = imageAsset ? resolvedImage.url : currentBeat.imageUrl;
+  const imageIsResolving = Boolean(imageAsset && resolvedImage.isResolving);
   const resolvedAudio = useResolvedStoryMediaState(audioAsset);
-  const resolvedAudioUrl = resolvedAudio.url || currentBeat.audioUrl;
-  const isStoryboard = Boolean(resolvedImageUrl && isStoryboardBeat(currentBeat));
+  const resolvedAudioUrl = audioAsset ? resolvedAudio.url : currentBeat.audioUrl;
+  const isStoryboard = Boolean(currentBeat.imageUrl && isStoryboardBeat(currentBeat));
   const displayImageUrl = currentBeat.portraitImageUrl || resolvedImageUrl;
-  const visualKey = displayImageUrl ?? `storyline-${currentIndex}`;
+  const visualKey = `storyline-${currentIndex}:${currentBeat.portraitImageUrl ?? currentBeat.imageUrl ?? 'audio'}`;
   const {
     scrollRef: storyScrollRef,
     isAutoScrolling,
@@ -674,7 +676,7 @@ export default function StorylinePlayer({
             className={isVerticalStoryline ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
             <div className={isVerticalStoryline ? 'absolute inset-0 md:scale-110 md:blur-2xl' : 'contents'}>
-            {isStoryboard ? (
+            {isStoryboard && resolvedImageUrl ? (
               <div className={`absolute inset-0 transition-opacity duration-500 ${
                 isVerticalStoryline ? (isMinimized ? 'opacity-95 md:opacity-60' : 'opacity-95 md:opacity-40') : (isMinimized ? 'opacity-60' : 'opacity-40')
               }`}>
@@ -707,6 +709,8 @@ export default function StorylinePlayer({
                 priority
                 unoptimized
               />
+            ) : imageIsResolving ? (
+              <div className="absolute inset-0 bg-neutral-950" />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.16),transparent_40%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.96))] px-6 text-center">
                 <div className="max-w-md rounded-3xl border border-white/10 bg-neutral-950/35 px-6 py-5 backdrop-blur-md">
@@ -721,10 +725,10 @@ export default function StorylinePlayer({
               </div>
             )}
             </div>
-            {isVerticalStoryline && displayImageUrl && (
+            {isVerticalStoryline && (displayImageUrl || imageIsResolving) && (
               <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
                 <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
-                  {isStoryboard ? (
+                  {isStoryboard && resolvedImageUrl ? (
                     <StoryStoryboardPlayer
                       key={`vertical-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                       gridUrl={resolvedImageUrl!}
@@ -741,7 +745,7 @@ export default function StorylinePlayer({
                       textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
                       textOverlayStyle={currentBeat.reelTextOverlayStyle}
                     />
-                  ) : (
+                  ) : displayImageUrl ? (
                     <Image
                       src={displayImageUrl}
                       alt={currentBeat.sceneSummary}
@@ -751,7 +755,9 @@ export default function StorylinePlayer({
                       priority
                       unoptimized
                     />
-                  )}
+                  ) : imageIsResolving ? (
+                    <div className="absolute inset-0 bg-neutral-950" />
+                  ) : null}
                 </div>
               </div>
             )}
@@ -968,7 +974,7 @@ export default function StorylinePlayer({
       >
         <div className={`min-h-0 flex-none items-start justify-center pb-3 md:hidden ${isVerticalStoryline ? 'hidden' : 'flex'}`}>
           <div className="relative w-full aspect-[4/3] overflow-hidden rounded-3xl border border-white/10 bg-neutral-950/40 shadow-2xl">
-            {isStoryboard ? (
+            {isStoryboard && resolvedImageUrl ? (
               <StoryStoryboardPlayer
                 key={`mobile-window:${currentBeat.imageUrl}:${currentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
                 gridUrl={resolvedImageUrl!}
@@ -998,6 +1004,8 @@ export default function StorylinePlayer({
                   unoptimized
                 />
               </div>
+            ) : imageIsResolving ? (
+              <div className="absolute inset-0 bg-neutral-950" />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.18),transparent_42%),linear-gradient(180deg,rgba(15,23,42,0.88),rgba(2,6,23,0.96))] px-5 text-center text-neutral-200">
                 <BookOpen className="h-8 w-8 text-sky-200" />

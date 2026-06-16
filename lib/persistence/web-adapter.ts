@@ -171,10 +171,18 @@ export class WebStoryPersistenceAdapter implements StoryPersistence {
   async resolveMedia(asset: StoryMediaAsset): Promise<ResolvedMedia> {
     try {
       const cached = await getCachedResponse(asset);
-      const response = cached ?? await fetchAndCache(asset);
-      const url = await responseToObjectUrl(asset, response);
-      logPersistenceEvent(cached ? 'story_media_cache_hit' : 'story_media_cache_miss', { assetId: asset.assetId });
-      return { assetId: asset.assetId, source: 'cache-storage', url, cacheHit: Boolean(cached), resolvedAt: new Date().toISOString() };
+      if (cached) {
+        const url = await responseToObjectUrl(asset, cached);
+        logPersistenceEvent('story_media_cache_hit', { assetId: asset.assetId });
+        return { assetId: asset.assetId, source: 'cache-storage', url, cacheHit: true, resolvedAt: new Date().toISOString() };
+      }
+
+      void fetchAndCache(asset)
+        .then(() => logPersistenceEvent('story_media_prefetch_success', { assetId: asset.assetId }))
+        .catch((error) => logPersistenceEvent('story_media_prefetch_failed', { assetId: asset.assetId, error: String(error) }));
+
+      logPersistenceEvent('story_media_cache_miss', { assetId: asset.assetId });
+      return { assetId: asset.assetId, source: 'remote', url: toMediaFetchUrl(asset.remoteUrl), cacheHit: false, resolvedAt: new Date().toISOString() };
     } catch (error) {
       logPersistenceEvent('story_media_prefetch_failed', { assetId: asset.assetId, error: String(error) });
       return { assetId: asset.assetId, source: 'remote', url: toMediaFetchUrl(asset.remoteUrl), cacheHit: false, resolvedAt: new Date().toISOString() };

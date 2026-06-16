@@ -27,17 +27,20 @@ export function useResolvedStoryMediaState(asset?: StoryMediaAsset): ResolvedSto
     const currentAssetKey = `${asset.userId}:${asset.assetId}:${asset.version}`;
 
     const persistence = getStoryPersistence();
-    void isClientStoryPersistenceEnabled().then((enabled) => enabled
-      ? persistence.resolveMedia(asset)
-      : { assetId: asset.assetId, source: 'remote' as const, url: asset.remoteUrl, cacheHit: false, resolvedAt: new Date().toISOString() }
-    ).then((resolved) => {
-      if (!active) {
-        if (resolved.source === 'cache-storage') persistence.releaseMedia(resolved.url);
-        return;
-      }
-      localUrl = resolved.source === 'cache-storage' ? resolved.url : undefined;
-      setResolvedMedia({ assetKey: currentAssetKey, url: resolved.url, source: resolved.source });
-    });
+    void isClientStoryPersistenceEnabled()
+      .then((enabled) => enabled
+        ? persistence.resolveMedia(asset)
+        : { assetId: asset.assetId, source: 'remote' as const, url: asset.remoteUrl, cacheHit: false, resolvedAt: new Date().toISOString() }
+      )
+      .catch(() => ({ assetId: asset.assetId, source: 'remote' as const, url: asset.remoteUrl, cacheHit: false, resolvedAt: new Date().toISOString() }))
+      .then((resolved) => {
+        if (!active) {
+          if (resolved.source === 'cache-storage') persistence.releaseMedia(resolved.url);
+          return;
+        }
+        localUrl = resolved.source === 'cache-storage' ? resolved.url : undefined;
+        setResolvedMedia({ assetKey: currentAssetKey, url: resolved.url, source: resolved.source });
+      });
 
     return () => {
       active = false;
@@ -47,7 +50,7 @@ export function useResolvedStoryMediaState(asset?: StoryMediaAsset): ResolvedSto
 
   const currentResolution = resolvedMedia?.assetKey === assetKey ? resolvedMedia : undefined;
   return {
-    url: currentResolution?.url ?? asset?.remoteUrl,
+    url: currentResolution?.url,
     isResolving: Boolean(asset && !currentResolution),
     source: currentResolution?.source,
   };
