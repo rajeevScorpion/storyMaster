@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence/runtime';
 import type { StorylineManifestPayload } from '@/lib/persistence';
+import { preloadImageForDisplay } from '@/lib/hooks/useImagePreload';
+import { getBeatFirstVisualUrl } from '@/lib/story/first-visual';
 import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
 
@@ -21,6 +23,10 @@ interface StorylinePersistenceLoaderProps {
   likeCount: number;
   isVerticalStory: boolean;
   aspectRatio: '16:9' | '9:16';
+}
+
+async function preloadFirstStorylineVisual(beats: StorylineManifestPayload['beats']) {
+  await preloadImageForDisplay(getBeatFirstVisualUrl(beats[0]));
 }
 
 export default function StorylinePersistenceLoader(props: StorylinePersistenceLoaderProps) {
@@ -44,8 +50,12 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
 
       const networkPromise = loadStorylineWithBeats(props.storylineId);
 
-      void cachePromise.then((cached) => {
+      void cachePromise.then(async (cached) => {
         if (!active || !cached || cached.manifest.payload.beats.length === 0) return;
+        setLoadMessage('Preparing saved scenes...');
+        setLoadPhaseIndex(2);
+        await preloadFirstStorylineVisual(cached.manifest.payload.beats);
+        if (!active || hasDisplayedPayload) return;
         hasDisplayedPayload = true;
         setPayload({
           ...cached.manifest.payload,
@@ -67,8 +77,9 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
         if (loaded.beats.length === 0) {
           throw new Error('This storyline is still preparing its pages. Please try again shortly.');
         }
-        setLoadMessage('Preparing scenes and narration...');
+        setLoadMessage('Preparing the first scene...');
         setLoadPhaseIndex(2);
+        await preloadFirstStorylineVisual(loaded.beats);
         const nextPayload: StorylineManifestPayload = {
           storylineId: props.storylineId,
           storyId: props.storyId,
@@ -85,6 +96,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           isLoggedIn: true,
         };
         if (!active) return;
+        setLoadPhaseIndex(3);
         hasDisplayedPayload = true;
         setPayload(nextPayload);
         setSourceUpdatedAt(loaded.storyline.source_updated_at);

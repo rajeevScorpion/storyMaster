@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
@@ -11,6 +11,8 @@ import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import { requestHomeStoryReset } from '@/lib/story/home-navigation';
+import { getSessionCurrentVisualUrl } from '@/lib/story/first-visual';
+import { useImagePreload } from '@/lib/hooks/useImagePreload';
 
 export default function ExplorePage() {
   const params = useParams();
@@ -28,6 +30,18 @@ export default function ExplorePage() {
   const clearError = useStoryStore((s) => s.clearError);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
+  const [isOpeningExploreSession, setIsOpeningExploreSession] = useState(() => !hasMatchingSession);
+  const openingVisualUrl = useMemo(
+    () => (hasMatchingSession ? getSessionCurrentVisualUrl(session) : undefined),
+    [hasMatchingSession, session]
+  );
+  const openingVisualKey = `${storyId}:${session?.storyMap.currentNodeId ?? 'pending'}:${openingVisualUrl ?? 'no-image'}`;
+  const { isReady: isOpeningVisualReady } = useImagePreload(
+    hasMatchingSession && isOpeningExploreSession ? openingVisualUrl : undefined,
+    openingVisualKey
+  );
+  const shouldHoldForFirstVisual = hasMatchingSession && isOpeningExploreSession && !isOpeningVisualReady;
+  const shouldShowExploreLoader = !hasMatchingSession || shouldHoldForFirstVisual;
 
   useEffect(() => {
     if (isNavigatingHomeRef.current) return;
@@ -48,6 +62,24 @@ export default function ExplorePage() {
       exploreStoryTree(storyId);
     }
   }, [storyId, user, authLoading, session, exploreStoryTree, openAuthDialog]);
+
+  useEffect(() => {
+    if (hasMatchingSession) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) setIsOpeningExploreSession(true);
+    });
+    return () => { active = false; };
+  }, [hasMatchingSession, storyId]);
+
+  useEffect(() => {
+    if (!hasMatchingSession || !isOpeningVisualReady) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) setIsOpeningExploreSession(false);
+    });
+    return () => { active = false; };
+  }, [hasMatchingSession, isOpeningVisualReady]);
 
   const handleLogoClick = () => {
     isNavigatingHomeRef.current = true;
@@ -107,15 +139,15 @@ export default function ExplorePage() {
         </div>
       )}
 
-      {hasMatchingSession ? (
-        <StoryScreen />
-      ) : (
+      {shouldShowExploreLoader ? (
         <div className="relative min-h-screen overflow-hidden">
           <LoadingAmbientBackdrop />
         </div>
+      ) : (
+        <StoryScreen />
       )}
 
-      {(authLoading || isLoading) && <LoadingState backdropMode="scene" />}
+      {(authLoading || isLoading || shouldHoldForFirstVisual) && <LoadingState backdropMode="scene" />}
     </div>
   );
 }
