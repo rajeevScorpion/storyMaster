@@ -10,6 +10,7 @@ import LoadingAmbientBackdrop from '@/components/story/LoadingAmbientBackdrop';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
+import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 
 export default function ExplorePage() {
   const params = useParams();
@@ -26,7 +27,6 @@ export default function ExplorePage() {
   const errorAction = useStoryStore((s) => s.errorAction);
   const clearError = useStoryStore((s) => s.clearError);
   const exploreStoryTree = useStoryStore((s) => s.exploreStoryTree);
-  const resetStory = useStoryStore((s) => s.resetStory);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
 
   useEffect(() => {
@@ -51,7 +51,7 @@ export default function ExplorePage() {
 
   const handleLogoClick = () => {
     isNavigatingHomeRef.current = true;
-    resetStory();
+    requestHomeStoryReset();
   };
 
   if (error && !hasMatchingSession) {

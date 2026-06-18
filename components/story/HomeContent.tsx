@@ -14,6 +14,7 @@ import KissagoLogo from '@/components/ui/KissagoLogo';
 import ManagedFooter from '@/components/layout/ManagedFooter';
 import { AnimatePresence } from 'motion/react';
 import type { StoryConfig } from '@/lib/types/story';
+import { consumeHomeStoryResetRequest, hasHomeStoryResetRequest } from '@/lib/story/home-navigation';
 import type { LandingInitialData } from '@/lib/story/landing-ui';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
 
@@ -32,21 +33,33 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
   const { user, openAuthDialog } = useAuth();
   const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
+  const [isConsumingHomeReset, setIsConsumingHomeReset] = useState(() => hasHomeStoryResetRequest());
   const hasRedirected = useRef(false);
+  const sessionForDisplay = isConsumingHomeReset ? null : session;
 
   useEffect(() => {
+    if (!isConsumingHomeReset) return;
+    consumeHomeStoryResetRequest();
+    hasRedirected.current = false;
+    resetStory();
+    const timeoutId = window.setTimeout(() => setIsConsumingHomeReset(false), 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [isConsumingHomeReset, resetStory]);
+
+  useEffect(() => {
+    if (isConsumingHomeReset) return;
     if (
-      session?.savedStoryId &&
-      !session.explorationMode &&
+      sessionForDisplay?.savedStoryId &&
+      !sessionForDisplay.explorationMode &&
       !hasRedirected.current
     ) {
       hasRedirected.current = true;
-      router.replace(`/story/${session.savedStoryId}`);
+      router.replace(`/story/${sessionForDisplay.savedStoryId}`);
     }
-    if (!session) {
+    if (!sessionForDisplay) {
       hasRedirected.current = false;
     }
-  }, [session, router]);
+  }, [isConsumingHomeReset, sessionForDisplay, router]);
 
   const handleBegin = async (prompt: string, config?: StoryConfig) => {
     if (!user) {
@@ -63,7 +76,7 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
   };
 
   const handleLogoClick = () => {
-    if (!session) return;
+    if (!sessionForDisplay) return;
     hasRedirected.current = false;
     resetStory();
   };
@@ -108,7 +121,7 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
       )}
 
       <AnimatePresence mode="wait">
-        {!session ? (
+        {!sessionForDisplay ? (
           <LandingScreen
             key="landing"
             onBegin={handleBegin}
@@ -124,7 +137,7 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
         {isLoading && <LoadingState key="loading" />}
       </AnimatePresence>
 
-      {!session && <ManagedFooter />}
+      {!sessionForDisplay && <ManagedFooter />}
     </main>
   );
 }

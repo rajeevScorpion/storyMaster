@@ -105,7 +105,6 @@ export default function OpenFlowLoader({
   const displayTitle = title?.trim() || config.fallbackTitle;
   const displayPrompt = userPrompt?.trim() || config.fallbackPrompt;
   const currentDetail = statusText || config.details[currentPhaseIndex] || config.details[0];
-  const showReelFrame = kind === 'reel';
   const backgroundImageClass = coverIsStoryboard
     ? 'absolute left-0 top-0 h-[200%] w-[200%] max-w-none object-cover object-left-top blur-sm'
     : 'h-full w-full scale-[1.03] object-cover blur-sm';
@@ -131,34 +130,16 @@ export default function OpenFlowLoader({
       <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(10,10,10,0.54),rgba(10,10,10,0.88)_56%,rgba(10,10,10,0.98))]" />
 
       <div className="relative z-10 flex min-h-screen items-center justify-center px-5 py-10 md:px-10">
-        <div className={`mx-auto grid w-full items-center gap-8 ${
-          showReelFrame
-            ? 'max-w-5xl text-center lg:grid-cols-[minmax(12rem,17rem)_minmax(0,1fr)] lg:text-left'
-            : 'max-w-3xl text-center'
-        }`}>
-          {showReelFrame && (
-            <div className="hidden justify-center lg:flex">
-              <div className="relative aspect-[9/16] h-[min(58dvh,29rem)] overflow-hidden rounded-[2rem] border border-white/14 bg-white/[0.035] shadow-[0_24px_90px_rgba(0,0,0,0.36)]">
-                <div className="absolute inset-4 rounded-[1.5rem] border border-white/10" />
-                <div className="absolute left-1/2 top-6 h-1.5 w-14 -translate-x-1/2 rounded-full bg-white/12" />
-                <div className="absolute inset-x-0 bottom-6 flex items-center justify-center gap-2 text-[10px] uppercase tracking-[0.22em] text-neutral-400">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  <span>{config.frameLabel}</span>
-                </div>
-                <Icon className={`absolute left-1/2 top-1/2 h-10 w-10 -translate-x-1/2 -translate-y-1/2 ${config.accentClass} opacity-70`} />
-              </div>
-            </div>
-          )}
-
+        <div className="mx-auto grid w-full max-w-3xl items-center gap-8 text-center">
           <div className="min-w-0">
-            <div className={`flex items-center gap-3 text-[11px] uppercase tracking-[0.28em] text-neutral-400 ${showReelFrame ? 'justify-center lg:justify-start' : 'justify-center'}`}>
+            <div className="flex items-center justify-center gap-3 text-[11px] uppercase tracking-[0.28em] text-neutral-400">
               <Icon className={`h-4 w-4 ${config.accentClass}`} />
               <span>{config.eyebrow}</span>
             </div>
-            <h1 className={`mt-5 text-3xl font-serif leading-tight text-white md:text-5xl ${showReelFrame ? 'mx-auto max-w-2xl lg:mx-0' : 'mx-auto max-w-3xl'}`}>
+            <h1 className="mx-auto mt-5 max-w-3xl text-3xl font-serif leading-tight text-white md:text-5xl">
               {displayTitle}
             </h1>
-            <p className={`mt-4 text-sm leading-relaxed text-neutral-300 md:text-base ${showReelFrame ? 'mx-auto max-w-xl lg:mx-0' : 'mx-auto max-w-xl'}`}>
+            <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-neutral-300 md:text-base">
               {displayPrompt}
             </p>
             <p className="mt-4 text-xs uppercase tracking-[0.22em] text-neutral-500">
@@ -166,7 +147,7 @@ export default function OpenFlowLoader({
             </p>
 
             <div className="mt-8">
-              <div className={`flex items-center gap-2 text-sm text-neutral-300 ${showReelFrame ? 'justify-center lg:justify-start' : 'justify-center'}`}>
+              <div className="flex items-center justify-center gap-2 text-sm text-neutral-300">
                 <Loader2 className={`h-4 w-4 animate-spin ${config.accentClass}`} />
                 <span>{currentDetail}</span>
               </div>

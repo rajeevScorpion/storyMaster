@@ -10,6 +10,7 @@ import OpenFlowLoader from '@/components/story/OpenFlowLoader';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
+import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 import { readOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 
 export default function StoryPage() {
@@ -27,7 +28,6 @@ export default function StoryPage() {
   const errorAction = useStoryStore((s) => s.errorAction);
   const clearError = useStoryStore((s) => s.clearError);
   const loadStoryFromCloud = useStoryStore((s) => s.loadStoryFromCloud);
-  const resetStory = useStoryStore((s) => s.resetStory);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
   const [openMeta] = useState(() => {
     const meta = readOpenFlowNavMeta();
@@ -61,7 +61,7 @@ export default function StoryPage() {
 
   const handleLogoClick = () => {
     isNavigatingHomeRef.current = true;
-    resetStory();
+    requestHomeStoryReset();
   };
 
   if (error && !hasMatchingSession) {

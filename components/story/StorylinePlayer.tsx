@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useStoryStore } from '@/lib/store/story-store';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import {
   ChevronLeft,
@@ -63,6 +62,7 @@ import { mergeRefreshedStorylineBeatAssetUrls } from '@/lib/media/refresh-merge'
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset, type StorylineManifestPayload } from '@/lib/persistence';
 import { saveStorylineAndPrefetch, saveStorylineProgress } from '@/lib/persistence/runtime';
+import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
@@ -169,7 +169,6 @@ export default function StorylinePlayer({
   });
   const [isAdminUser, setIsAdminUser] = useState(false);
   const router = useRouter();
-  const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
   const choiceHoldTimerRef = useRef<number | null>(null);
   const choiceAdvanceTimerRef = useRef<number | null>(null);
@@ -347,6 +346,9 @@ export default function StorylinePlayer({
         console.error('Failed to copy share link:', error);
       }
     }
+  };
+  const handleLogoClick = () => {
+    requestHomeStoryReset();
   };
 
   // Record view on mount (fire-and-forget)
@@ -788,7 +790,7 @@ export default function StorylinePlayer({
         <div className="flex items-center justify-between gap-3">
           <div className="flex shrink-0 items-center gap-4">
             {/* Kissago branding — matches main page style */}
-            <KissagoLogo fixed={false} onClick={resetStory} />
+            <KissagoLogo fixed={false} onClick={handleLogoClick} />
             <div className="hidden md:block">
               <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
               {authorName && (
