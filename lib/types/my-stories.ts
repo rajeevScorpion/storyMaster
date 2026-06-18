@@ -7,6 +7,7 @@ export interface SavedStory {
   is_archived: boolean;
   updated_at: string;
   user_prompt: string;
+  cover_image_url: string | null;
 }
 
 export interface UserReel {
@@ -18,6 +19,7 @@ export interface UserReel {
   user_prompt: string;
   story_kind: 'reel';
   beat_count: number;
+  cover_image_url: string | null;
 }
 
 export interface ExploredStory {

@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BookOpen, Loader2 } from 'lucide-react';
 import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence/runtime';
 import type { StorylineManifestPayload } from '@/lib/persistence';
+import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
 
 interface StorylinePersistenceLoaderProps {
@@ -23,60 +23,19 @@ interface StorylinePersistenceLoaderProps {
   aspectRatio: '16:9' | '9:16';
 }
 
-function StorylineInitialLoader({
-  title,
-  authorName,
-  coverImageUrl,
-  beatCount,
-  message,
-}: {
-  title: string;
-  authorName: string | null;
-  coverImageUrl?: string | null;
-  beatCount: number;
-  message: string;
-}) {
-  return (
-    <div className="relative min-h-screen overflow-hidden bg-neutral-950 text-neutral-100">
-      {coverImageUrl && (
-        <div className="absolute inset-0 opacity-35">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={coverImageUrl} alt="" className="h-full w-full object-cover blur-sm" />
-        </div>
-      )}
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(10,10,10,0.72),rgba(10,10,10,0.96))]" />
-
-      <div className="relative z-10 flex min-h-screen items-center justify-center px-5">
-        <div className="w-full max-w-sm text-center">
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-white/5">
-            <BookOpen className="h-7 w-7 text-emerald-200" />
-          </div>
-          <h1 className="mt-6 text-2xl font-serif leading-snug text-white">{title || 'Opening storyline'}</h1>
-          {authorName && <p className="mt-2 text-sm text-neutral-400">by {authorName}</p>}
-          <div className="mt-6 flex items-center justify-center gap-2 text-sm text-neutral-300">
-            <Loader2 className="h-4 w-4 animate-spin text-emerald-300" />
-            <span>{message}</span>
-          </div>
-          <p className="mt-3 text-xs uppercase tracking-[0.22em] text-neutral-500">
-            {beatCount > 0 ? `${beatCount} beats` : 'Preparing reader'}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function StorylinePersistenceLoader(props: StorylinePersistenceLoaderProps) {
   const [payload, setPayload] = useState<StorylineManifestPayload | null>(null);
   const [sourceUpdatedAt, setSourceUpdatedAt] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadMessage, setLoadMessage] = useState('Checking saved copy...');
+  const [loadPhaseIndex, setLoadPhaseIndex] = useState(0);
 
   useEffect(() => {
     let active = true;
     let hasDisplayedPayload = false;
     void (async () => {
       setLoadMessage('Checking saved copy...');
+      setLoadPhaseIndex(0);
       const cachePromise = loadCachedStoryline({
         storylineId: props.storylineId,
         storyId: props.storyId,
@@ -98,14 +57,18 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
         });
         setSourceUpdatedAt(cached.manifest.sourceUpdatedAt);
         setLoadMessage('Refreshing latest version...');
+        setLoadPhaseIndex(1);
       });
 
       try {
-        setLoadMessage('Opening latest storyline...');
+        setLoadMessage('Loading latest published version...');
+        setLoadPhaseIndex(1);
         const loaded = await networkPromise;
         if (loaded.beats.length === 0) {
           throw new Error('This storyline is still preparing its pages. Please try again shortly.');
         }
+        setLoadMessage('Preparing scenes and narration...');
+        setLoadPhaseIndex(2);
         const nextPayload: StorylineManifestPayload = {
           storylineId: props.storylineId,
           storyId: props.storyId,
@@ -157,12 +120,13 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
   }
   if (!payload) {
     return (
-      <StorylineInitialLoader
+      <OpenFlowLoader
+        kind="storyline"
         title={props.title}
-        authorName={props.authorName}
         coverImageUrl={props.coverImageUrl}
         beatCount={props.beatCount ?? 0}
-        message={loadMessage}
+        activePhaseIndex={loadPhaseIndex}
+        statusText={loadMessage}
       />
     );
   }

@@ -6,10 +6,11 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import StoryScreen from '@/components/story/StoryScreen';
 import LoadingState from '@/components/story/LoadingState';
-import LoadingAmbientBackdrop from '@/components/story/LoadingAmbientBackdrop';
+import OpenFlowLoader from '@/components/story/OpenFlowLoader';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
+import { readOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 
 export default function StoryPage() {
   const params = useParams();
@@ -28,6 +29,11 @@ export default function StoryPage() {
   const loadStoryFromCloud = useStoryStore((s) => s.loadStoryFromCloud);
   const resetStory = useStoryStore((s) => s.resetStory);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
+  const [openMeta] = useState(() => {
+    const meta = readOpenFlowNavMeta();
+    return meta?.kind === 'story' || meta?.kind === 'reel' ? meta : null;
+  });
+  const openKind = openMeta?.kind === 'reel' ? 'reel' : 'story';
 
   useEffect(() => {
     if (isNavigatingHomeRef.current) return;
@@ -113,12 +119,18 @@ export default function StoryPage() {
       {hasMatchingSession ? (
         <StoryScreen />
       ) : (
-        <div className="relative min-h-screen overflow-hidden">
-          <LoadingAmbientBackdrop />
-        </div>
+        <OpenFlowLoader
+          kind={openKind}
+          title={openMeta?.title}
+          coverImageUrl={openMeta?.coverImageUrl}
+          coverIsStoryboard={openMeta?.coverIsStoryboard}
+          status={openMeta?.status}
+          beatCount={openMeta?.beatCount}
+          userPrompt={openMeta?.userPrompt}
+        />
       )}
 
-      {(authLoading || isLoading) && <LoadingState backdropMode="scene" />}
+      {hasMatchingSession && isLoading && <LoadingState backdropMode="scene" />}
     </div>
   );
 }

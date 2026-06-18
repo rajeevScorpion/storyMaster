@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { motion } from 'motion/react';
 import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Share2 } from 'lucide-react';
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
+import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import type { GalleryItem } from '@/lib/types/database';
 
 interface GalleryItemCardProps {
@@ -43,14 +44,13 @@ export default function GalleryItemCard({
       return;
     }
     if (item.type === 'storyline') {
-      try {
-        sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
-          title: item.title,
-          coverImageUrl: item.coverImageUrl,
-          authorName: item.authorName,
-          beatCount: item.beatCount,
-        }));
-      } catch {}
+      writeOpenFlowNavMeta({
+        kind: 'storyline',
+        title: item.title,
+        coverImageUrl: item.coverImageUrl,
+        coverIsStoryboard: item.coverIsStoryboard,
+        beatCount: item.beatCount,
+      });
     }
   };
 

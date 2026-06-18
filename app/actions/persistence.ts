@@ -1663,6 +1663,7 @@ export async function listUserStories(): Promise<Array<{
   is_archived: boolean;
   updated_at: string;
   user_prompt: string;
+  cover_image_url: string | null;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -1670,7 +1671,7 @@ export async function listUserStories(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt')
+    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url')
     .eq('user_id', user.id)
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
@@ -1691,6 +1692,7 @@ export async function listUserReels(): Promise<Array<{
   user_prompt: string;
   story_kind: 'reel';
   beat_count: number;
+  cover_image_url: string | null;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -1698,7 +1700,7 @@ export async function listUserReels(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map')
+    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url')
     .eq('user_id', user.id)
     .eq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
@@ -1721,6 +1723,7 @@ export async function listUserReels(): Promise<Array<{
       user_prompt: story.user_prompt,
       story_kind: 'reel',
       beat_count: nodeCount || (Number.isFinite(configBeatCount) ? configBeatCount : 0),
+      cover_image_url: story.cover_image_url,
     };
   });
 }
