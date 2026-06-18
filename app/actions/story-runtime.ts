@@ -1,6 +1,6 @@
 'use client';
 
-import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio } from '@/lib/types/story';
+import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
 import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
 import {
@@ -89,6 +89,17 @@ const VERTICAL_STORY_PROMPT_INSTRUCTION = [
   'Maintain the existing storyboard-style visual composition unless otherwise specified.',
 ].join(' ');
 
+const STORY_TEXT_PART_COUNT = 4;
+const STORY_TEXT_PARTS_PLACEHOLDER = /{{\s*storyTextParts\s*}}/;
+
+const STORY_TEXT_PARTS_OUTPUT_CONTRACT = [
+  'Storyboard narration sync contract:',
+  '- Return storyTextParts as exactly 4 non-empty strings.',
+  '- The parts must preserve storyText in order and split it into near-equal spoken-duration chunks.',
+  '- Do not add labels, numbering, brackets, timing markers, or visible separators to storyText.',
+  '- storyTextParts are hidden internal metadata for panel sync only.',
+].join('\n');
+
 interface StoryboardImagePromptOptions {
   aspectRatio?: StoryAspectRatio;
   task?: Extract<TaskKey, 'image_generation' | 'reel_image_generation'>;
@@ -137,6 +148,88 @@ function describeReelTextOverlayMode(storyConfig: StoryConfig): string {
   return storyConfig.reel.textOverlayEnabled
     ? 'Visible overlay text is rendered by the player/export layer; reserve clean space and do not place text inside the generated image.'
     : 'Overlay text is hidden for this reel; narration still runs, and generated images must still contain no text.';
+}
+
+function compactWhitespace(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function toStoryTextParts(parts: string[]): StoryTextParts {
+  return [
+    compactWhitespace(parts[0] || ''),
+    compactWhitespace(parts[1] || ''),
+    compactWhitespace(parts[2] || ''),
+    compactWhitespace(parts[3] || ''),
+  ];
+}
+
+function hasUsableStoryTextParts(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length === STORY_TEXT_PART_COUNT
+    && value.every((part) => typeof part === 'string' && compactWhitespace(part).length > 0);
+}
+
+function splitStoryTextByWords(storyText: string): StoryTextParts {
+  const text = compactWhitespace(storyText);
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length >= STORY_TEXT_PART_COUNT) {
+    return toStoryTextParts(Array.from({ length: STORY_TEXT_PART_COUNT }, (_, index) => {
+      const start = Math.round((words.length * index) / STORY_TEXT_PART_COUNT);
+      const end = Math.round((words.length * (index + 1)) / STORY_TEXT_PART_COUNT);
+      return words.slice(start, Math.max(start + 1, end)).join(' ');
+    }));
+  }
+
+  const chars = Array.from(text);
+  if (chars.length === 0) return toStoryTextParts([]);
+  return toStoryTextParts(Array.from({ length: STORY_TEXT_PART_COUNT }, (_, index) => {
+    const start = Math.round((chars.length * index) / STORY_TEXT_PART_COUNT);
+    const end = Math.round((chars.length * (index + 1)) / STORY_TEXT_PART_COUNT);
+    return chars.slice(start, Math.max(start + 1, end)).join('');
+  }));
+}
+
+function splitStoryTextIntoBalancedParts(storyText: string): StoryTextParts {
+  const sentencePanels = splitTextIntoCompleteCaptionPanels(storyText, STORY_TEXT_PART_COUNT);
+  if (sentencePanels.length === STORY_TEXT_PART_COUNT && sentencePanels.every((part) => compactWhitespace(part))) {
+    return toStoryTextParts(sentencePanels);
+  }
+  return splitStoryTextByWords(storyText);
+}
+
+function normalizeStoryTextParts(value: unknown, storyText: string): StoryTextParts {
+  return hasUsableStoryTextParts(value)
+    ? toStoryTextParts(value)
+    : splitStoryTextIntoBalancedParts(storyText);
+}
+
+function normalizeStoryBeatTextParts(beat: StoryBeat): StoryBeat {
+  return {
+    ...beat,
+    storyTextParts: normalizeStoryTextParts(beat.storyTextParts, beat.storyText),
+  };
+}
+
+function appendStoryTextPartsOutputContract(prompt: string): string {
+  return `${prompt}\n\n${STORY_TEXT_PARTS_OUTPUT_CONTRACT}`;
+}
+
+function appendStoryTextPartsComposerContract(
+  prompt: string,
+  template: string,
+  storyTextParts: StoryTextParts
+): string {
+  if (STORY_TEXT_PARTS_PLACEHOLDER.test(template)) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    '',
+    'Hidden Story Text Parts for storyboard timing:',
+    JSON.stringify(storyTextParts),
+    'Use part 1 for topLeft, part 2 for topRight, part 3 for bottomLeft, and part 4 for bottomRight.',
+  ].join('\n');
 }
 
 function getStoryboardLayoutHardRequirements(aspectRatio?: StoryAspectRatio | string | null): string {
@@ -299,14 +392,14 @@ export async function materializeSeededBeat(
   const materializationTemplate = validatePromptTemplate('seeded_beat_materialization', materializationTemplateCandidate).isValid
     ? materializationTemplateCandidate
     : getDefaultPromptBody('seeded_beat_materialization');
-  const basePrompt = resolvePromptTemplate(materializationTemplate, {
+  const basePrompt = appendStoryTextPartsOutputContract(resolvePromptTemplate(materializationTemplate, {
     language: storyConfig.language,
     storyConfig: formatStoryConfig(normalizedSessionState),
     storyState: formatStoryState(normalizedSessionState),
     sourceText: getSeedSourceText(storyConfig),
     guidanceText: storyConfig.authoring.guidanceText || '',
     seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
-  });
+  }));
 
   const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
     const text = await callGeminiText({
@@ -334,7 +427,7 @@ export async function materializeSeededBeat(
     }
   }
 
-  return beat;
+  return normalizeStoryBeatTextParts(beat);
 }
 
 interface CharacterReferenceGenerationOptions {
@@ -415,13 +508,13 @@ export async function generateStoryBeat(
   const storyTemplate = validatePromptTemplate('story_generation', storyTemplateCandidate).isValid
     ? storyTemplateCandidate
     : getDefaultPromptBody('story_generation');
-  const basePrompt = resolvePromptTemplate(storyTemplate, {
+  const basePrompt = appendStoryTextPartsOutputContract(resolvePromptTemplate(storyTemplate, {
     language: lang,
     userPrompt,
     storyConfig: formatStoryConfig(normalizedSessionState),
     storyState: formatStoryState(normalizedSessionState, selectedOptionLabel),
     selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
-  });
+  }));
 
   try {
     const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => timeRuntimeStep(
@@ -463,7 +556,7 @@ export async function generateStoryBeat(
       }
     }
 
-    return beat;
+    return normalizeStoryBeatTextParts(beat);
   } catch (error) {
     console.error('Story beat generation failed:', error);
     throw error;
@@ -722,6 +815,8 @@ function buildFallbackStoryboardPlan(
   const scene = compactPromptText(beat.sceneSummary || beat.imagePrompt || beat.storyText, 220);
   const imageIntent = compactPromptText(beat.imagePrompt || beat.sceneSummary || beat.storyText, 260);
   const characterAnchors = compactPromptText(buildPromptCharacterAnchors(beat.characters), 700);
+  const storyTextParts = normalizeStoryTextParts(beat.storyTextParts, beat.storyText)
+    .map((part) => compactPromptText(part, 180));
   const sharedPrompt = [
     imageIntent,
     `Scene: ${scene}`,
@@ -768,25 +863,25 @@ function buildFallbackStoryboardPlan(
         ].join(' '),
       })),
     topLeft: makeFrame(
-      `Opening establishing moment for the beat: ${scene}`,
+      `Opening storyboard moment aligned to narration part 1: ${storyTextParts[0] || scene}`,
       'wide establishing shot',
       'anticipation',
       ['setting', 'main characters', 'opening action']
     ),
     topRight: makeFrame(
-      `The characters notice or react to the central situation: ${scene}`,
+      `Second storyboard moment aligned to narration part 2: ${storyTextParts[1] || scene}`,
       'medium character shot',
       'discovery',
       ['character reaction', 'relationship', 'story tension']
     ),
     bottomLeft: makeFrame(
-      `The main action or choice in the beat becomes clear: ${scene}`,
+      `Third storyboard moment aligned to narration part 3: ${storyTextParts[2] || scene}`,
       'dynamic close-up',
       'focus',
       ['key action', 'hands or faces', 'turning point']
     ),
     bottomRight: makeFrame(
-      `The emotional result or reveal of the beat lands: ${scene}`,
+      `Final storyboard moment aligned to narration part 4: ${storyTextParts[3] || scene}`,
       'cinematic payoff shot',
       'resolution',
       ['emotional payoff', 'consequence', 'next-story hook']
@@ -878,8 +973,10 @@ export async function composeStoryboardPlan(
         ? composerTemplateCandidate
         : getDefaultPromptBody(promptTask);
       const previousBeat = sessionState?.beats?.[sessionState.beats.length - 1];
-      const prompt = resolvePromptTemplate(composerTemplate, {
+      const storyTextParts = normalizeStoryTextParts(beat.storyTextParts, beat.storyText);
+      const resolvedComposerPrompt = resolvePromptTemplate(composerTemplate, {
         storyText: beat.storyText,
+        storyTextParts: JSON.stringify(storyTextParts),
         sceneSummary: beat.sceneSummary,
         imageIntent: beat.imagePrompt,
         characters: buildPromptCharacterAnchors(beat.characters),
@@ -895,6 +992,9 @@ export async function composeStoryboardPlan(
         changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat)),
         previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
       });
+      const prompt = isReel
+        ? resolvedComposerPrompt
+        : appendStoryTextPartsComposerContract(resolvedComposerPrompt, composerTemplate, storyTextParts);
 
       let text = '';
       try {
@@ -941,6 +1041,7 @@ function mergeSeededBeatWithGeneratedFields(seedBeat: SeedBeatOutline, generated
     beatNumber: normalizedSeedBeat.beatIndex,
     isEnding: normalizedSeedBeat.isEnding,
     storyText: normalizedSeedBeat.storyText,
+    storyTextParts: normalizeStoryTextParts(generatedBeat.storyTextParts, normalizedSeedBeat.storyText),
     sceneSummary: normalizedSeedBeat.sceneSummary,
     options: normalizedSeedBeat.isEnding
       ? []

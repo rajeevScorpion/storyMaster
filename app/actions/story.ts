@@ -30,6 +30,10 @@ const beatSchema = {
     beatNumber: { type: Type.INTEGER },
     isEnding: { type: Type.BOOLEAN },
     storyText: { type: Type.STRING },
+    storyTextParts: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
     sceneSummary: { type: Type.STRING },
     options: {
       type: Type.ARRAY,
@@ -77,6 +81,7 @@ const beatSchema = {
     'beatNumber',
     'isEnding',
     'storyText',
+    'storyTextParts',
     'sceneSummary',
     'options',
     'characters',
@@ -104,6 +109,12 @@ export async function generateStoryBeat(
         beatNumber: 1,
         isEnding: false,
         storyText: "Miko the monkey hopped from stone to stone on the misty mountain trail. Ahead of him rested what looked like an enormous grey rock, warm in the morning sun. Curious as ever, he leaned forward and whispered, 'What a strange rock to be sleeping here all alone.'",
+        storyTextParts: [
+          'Miko the monkey hopped from stone to stone on the misty mountain trail.',
+          'Ahead of him rested what looked like an enormous grey rock, warm in the morning sun.',
+          "Curious as ever, he leaned forward and whispered, 'What a strange rock",
+          "to be sleeping here all alone.'",
+        ],
         sceneSummary: "A monkey mistakes a resting elephant for a giant rock on a mountain path.",
         options: [
           { id: "opt_1", label: "Miko jumps onto the rock", intent: "playful action" },
@@ -126,6 +137,12 @@ export async function generateStoryBeat(
         beatNumber: (sessionState?.currentBeat || 1) + 1,
         isEnding: true,
         storyText: "The giant rock slowly opened one eye, then let out a deep, rumbling laugh that shook the leaves from the trees. 'Little monkey,' Bhoora the elephant chuckled, 'I am no rock, but I make an excellent climbing frame.' Miko grinned, realizing he had just made the biggest friend in the forest.",
+        storyTextParts: [
+          'The giant rock slowly opened one eye, then let out a deep, rumbling laugh that shook the leaves from the trees.',
+          "'Little monkey,' Bhoora the elephant chuckled, 'I am no rock,",
+          "but I make an excellent climbing frame.' Miko grinned,",
+          'realizing he had just made the biggest friend in the forest.',
+        ],
         sceneSummary: "The elephant wakes up and befriends the monkey.",
         options: [],
         characters: sessionState?.characters || [],

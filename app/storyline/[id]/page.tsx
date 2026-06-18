@@ -189,6 +189,8 @@ export default async function StorylinePage({ params }: PageProps) {
         storyId={storyline.story_id}
         userId={user.id}
         title={storyline.title}
+        coverImageUrl={storyline.cover_image_url}
+        beatCount={storyline.beat_count}
         isVerticalStory={storyline.is_vertical_story === true || storyline.aspect_ratio === '9:16'}
         aspectRatio={storyline.aspect_ratio === '9:16' ? '9:16' : '16:9'}
         authorName={storyline.author_name}

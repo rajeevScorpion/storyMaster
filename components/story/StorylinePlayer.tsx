@@ -72,6 +72,15 @@ const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
 const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer';
 const DESKTOP_CONTROL_ICON_CLASS = 'w-5 h-5';
 
+function StoryMediaLoadingFallback({ className = '' }: { className?: string }) {
+  return (
+    <div className={`absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-950 text-neutral-300 ${className}`}>
+      <Loader2 className="h-6 w-6 animate-spin text-emerald-300" />
+      <span className="text-xs uppercase tracking-[0.2em] text-neutral-400">Loading scene</span>
+    </div>
+  );
+}
+
 interface StorylinePlayerProps {
   storylineId: string;
   storyId: string;
@@ -710,7 +719,7 @@ export default function StorylinePlayer({
                 unoptimized
               />
             ) : imageIsResolving ? (
-              <div className="absolute inset-0 bg-neutral-950" />
+              <StoryMediaLoadingFallback />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.16),transparent_40%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.96))] px-6 text-center">
                 <div className="max-w-md rounded-3xl border border-white/10 bg-neutral-950/35 px-6 py-5 backdrop-blur-md">
@@ -756,7 +765,7 @@ export default function StorylinePlayer({
                       unoptimized
                     />
                   ) : imageIsResolving ? (
-                    <div className="absolute inset-0 bg-neutral-950" />
+                    <StoryMediaLoadingFallback />
                   ) : null}
                 </div>
               </div>
@@ -1005,7 +1014,7 @@ export default function StorylinePlayer({
                 />
               </div>
             ) : imageIsResolving ? (
-              <div className="absolute inset-0 bg-neutral-950" />
+              <StoryMediaLoadingFallback />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.18),transparent_42%),linear-gradient(180deg,rgba(15,23,42,0.88),rgba(2,6,23,0.96))] px-5 text-center text-neutral-200">
                 <BookOpen className="h-8 w-8 text-sky-200" />

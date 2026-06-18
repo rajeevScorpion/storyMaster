@@ -937,6 +937,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
                 }
               : {}),
             ...(jsonbNode.data.isStoryboard ? { isStoryboard: true } : {}),
+            ...(jsonbNode.data.storyTextParts ? { storyTextParts: jsonbNode.data.storyTextParts } : {}),
             ...(jsonbNode.data.newCharacterIds ? { newCharacterIds: jsonbNode.data.newCharacterIds } : {}),
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),

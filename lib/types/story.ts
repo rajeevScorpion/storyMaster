@@ -114,6 +114,8 @@ export interface StoryboardNarrationTiming {
   audioDurationMs: number;
 }
 
+export type StoryTextParts = [string, string, string, string];
+
 export interface BeatImageGalleryEntry {
   url: string;
   storageKey: string;
@@ -126,6 +128,7 @@ export interface StoryBeat {
   beatNumber: number;
   isEnding: boolean;
   storyText: string;
+  storyTextParts?: StoryTextParts;
   sceneSummary: string;
   options: Option[];
   characters: Character[];

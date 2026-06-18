@@ -76,6 +76,7 @@ Core behavior rules:
 20. Explicitly flag newly introduced named characters in newCharacterIds.
 21. Explicitly flag characters with major visible changes in changedCharacterIds.
 22. imagePrompt is a high-level visual intent for the beat. The visual composer will break it into four storyboard frames later.
+22a. Also return storyTextParts as exactly 4 hidden narration chunks that divide storyText into near-equal spoken-duration parts for storyboard sync. These parts are internal and are not shown to the user.
 23. Never duplicate a named character in a beat or panel unless the runtime story state explicitly requires multiple copies of that same character.
 24. If a named character is absent from the beat, omit them instead of cloning or reintroducing them visually.
 25. Preserve one-to-one identity for every named character across beats, including species, face, body proportions, colors, clothing logic, and distinguishing features.
@@ -114,6 +115,13 @@ Branch bridge rules:
 - The storyText must remain readable and continuous even if the selected option label is not displayed separately in the UI.
 - Weave the selected option into the scene naturally. Do not write UI language such as "You chose" or "the selected option".
 
+Storyboard narration sync rules:
+- storyTextParts must contain exactly 4 strings in narration order: top-left, top-right, bottom-left, bottom-right.
+- The four parts must preserve the same words and meaning as storyText, split in sequence without adding hidden facts or alternate wording.
+- Balance the parts for spoken duration, not just character count. Avoid one very long part and three short parts.
+- Prefer complete clauses or sentences per part when possible, but do not make the user-facing storyText look segmented.
+- These parts are internal alignment metadata only. Do not add visible labels, numbering, brackets, or markers to storyText.
+
 Continuity rules:
 - Treat {{storyState}} as the highest source of truth.
 - If there is a conflict between invention and runtime state, follow the runtime state.
@@ -129,6 +137,7 @@ Return a JSON object with these keys:
 - beatNumber
 - isEnding
 - storyText
+- storyTextParts
 - sceneSummary
 - options
 - characters
@@ -305,12 +314,14 @@ Core rules:
 18. Never duplicate a named character in the beat unless the source beat explicitly requires multiple copies.
 19. If a named character is absent from the seeded beat, omit them instead of visually cloning them into the moment.
 20. Preserve one-to-one character identity across all later storyboard panels for this beat.
+21. Return storyTextParts as exactly 4 hidden narration chunks that split the final storyText into near-equal spoken-duration parts for storyboard sync. Preserve the source wording and do not show this split to the user.
 
 Return a JSON object with these keys:
 - title
 - beatNumber
 - isEnding
 - storyText
+- storyTextParts
 - sceneSummary
 - options
 - characters
@@ -402,6 +413,8 @@ Core rules:
 17. Never duplicate a named character across panels unless the beat explicitly requires multiple copies of that same character.
 18. If a named character is not present in a given panel, omit them from that panel instead of echoing them for balance.
 19. Preserve one-to-one identity for each named character across all four panels.
+20. Use Hidden Story Text Parts as the timing spine for the four panels: part 1 maps to topLeft, part 2 to topRight, part 3 to bottomLeft, and part 4 to bottomRight.
+21. Each frame should visualize the narrative content and emotional beat of its matching storyTextPart. Do not let one part's action drift into a different panel unless the story explicitly requires overlap.
 
 Frame design rules:
 - topLeft should establish the beat or its opening emotional note
@@ -449,6 +462,9 @@ Intent example 2:
 
 Story Beat Text:
 {{storyText}}
+
+Hidden Story Text Parts:
+{{storyTextParts}}
 
 Scene Summary:
 {{sceneSummary}}
@@ -645,11 +661,11 @@ Requirements:
 - No text, labels, or watermarks`;
 
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
-  story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
+  story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
   reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the reel draft schema { beatCount, beats: [...] } exactly: produce all beats in one response. Each beat carries only beatIndex, title, storyText, sceneSummary, imagePrompt. Do not return options, characters, continuityNotes, clues, or any branching fields. Reels are linear inspirational quote sequences, not stories.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
-  seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure.',
-  visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only.',
+  seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration.',
+  visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only. Align topLeft, topRight, bottomLeft, and bottomRight to storyTextParts 1, 2, 3, and 4 when provided.',
   reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly. Optimize the four frames for vertical reel pacing as abstract/symbolic visuals that complement an inspirational quote. portraitTasks MUST be an empty array — reels have no recurring characters.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
   reel_image_generation: 'Return only the final reel image prompt as plain text. Do not add explanations, numbering, or markdown. Never request text inside the generated image. Prefer abstract, symbolic, no-face vertical reel visuals unless the brief explicitly requires otherwise.',
@@ -729,6 +745,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
     description: 'Controls how a story beat is decomposed into a structured 4-frame storyboard plan plus portrait tasks.',
     placeholders: [
       { key: 'storyText', label: 'Story Text', description: 'The beat story text written by the story generator.', required: true },
+      { key: 'storyTextParts', label: 'Story Text Parts', description: 'Hidden four-part narration split aligned to storyboard panels.', required: false },
       { key: 'sceneSummary', label: 'Scene Summary', description: 'Compact summary of the beat scene.', required: true },
       { key: 'imageIntent', label: 'Image Intent', description: 'High-level visual intent from the story writer.', required: true },
       { key: 'characters', label: 'Characters', description: 'Character continuity details.', required: true },
