@@ -28,6 +28,10 @@ const beatSchema = {
     beatNumber: { type: Type.INTEGER },
     isEnding: { type: Type.BOOLEAN },
     storyText: { type: Type.STRING },
+    storyTextParts: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
     sceneSummary: { type: Type.STRING },
     options: {
       type: Type.ARRAY,
@@ -62,7 +66,7 @@ const beatSchema = {
     endingForecast: { type: Type.ARRAY, items: { type: Type.STRING } },
   },
   required: [
-    'title', 'beatNumber', 'isEnding', 'storyText', 'sceneSummary',
+    'title', 'beatNumber', 'isEnding', 'storyText', 'storyTextParts', 'sceneSummary',
     'options', 'characters', 'continuityNotes', 'imagePrompt', 'clues',
     'nextBeatGoal', 'endingForecast',
   ],

@@ -1,15 +1,19 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useStoryStore } from '@/lib/store/story-store';
 import { useAuth } from '@/lib/hooks/useAuth';
 import StoryScreen from '@/components/story/StoryScreen';
 import LoadingState from '@/components/story/LoadingState';
-import LoadingAmbientBackdrop from '@/components/story/LoadingAmbientBackdrop';
+import OpenFlowLoader from '@/components/story/OpenFlowLoader';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
+import { requestHomeStoryReset } from '@/lib/story/home-navigation';
+import { readOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
+import { getSessionCurrentVisualUrl } from '@/lib/story/first-visual';
+import { useImagePreload } from '@/lib/hooks/useImagePreload';
 
 export default function StoryPage() {
   const params = useParams();
@@ -26,8 +30,24 @@ export default function StoryPage() {
   const errorAction = useStoryStore((s) => s.errorAction);
   const clearError = useStoryStore((s) => s.clearError);
   const loadStoryFromCloud = useStoryStore((s) => s.loadStoryFromCloud);
-  const resetStory = useStoryStore((s) => s.resetStory);
   const hasMatchingSession = !!session && session.savedStoryId === storyId;
+  const [isOpeningExistingSession, setIsOpeningExistingSession] = useState(() => !hasMatchingSession);
+  const [openMeta] = useState(() => {
+    const meta = readOpenFlowNavMeta();
+    return meta?.kind === 'story' || meta?.kind === 'reel' ? meta : null;
+  });
+  const openKind = openMeta?.kind === 'reel' ? 'reel' : 'story';
+  const openingVisualUrl = useMemo(
+    () => (hasMatchingSession ? getSessionCurrentVisualUrl(session) : undefined),
+    [hasMatchingSession, session]
+  );
+  const openingVisualKey = `${storyId}:${session?.storyMap.currentNodeId ?? 'pending'}:${openingVisualUrl ?? 'no-image'}`;
+  const { isReady: isOpeningVisualReady } = useImagePreload(
+    hasMatchingSession && isOpeningExistingSession ? openingVisualUrl : undefined,
+    openingVisualKey
+  );
+  const shouldHoldForFirstVisual = hasMatchingSession && isOpeningExistingSession && !isOpeningVisualReady;
+  const shouldShowOpenLoader = !hasMatchingSession || shouldHoldForFirstVisual;
 
   useEffect(() => {
     if (isNavigatingHomeRef.current) return;
@@ -53,9 +73,27 @@ export default function StoryPage() {
     }
   }, [storyId, user, authLoading, session, loadStoryFromCloud, openAuthDialog]);
 
+  useEffect(() => {
+    if (hasMatchingSession) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) setIsOpeningExistingSession(true);
+    });
+    return () => { active = false; };
+  }, [hasMatchingSession, storyId]);
+
+  useEffect(() => {
+    if (!hasMatchingSession || !isOpeningVisualReady) return;
+    let active = true;
+    void Promise.resolve().then(() => {
+      if (active) setIsOpeningExistingSession(false);
+    });
+    return () => { active = false; };
+  }, [hasMatchingSession, isOpeningVisualReady]);
+
   const handleLogoClick = () => {
     isNavigatingHomeRef.current = true;
-    resetStory();
+    requestHomeStoryReset();
   };
 
   if (error && !hasMatchingSession) {
@@ -110,15 +148,27 @@ export default function StoryPage() {
         </div>
       )}
 
-      {hasMatchingSession ? (
-        <StoryScreen />
+      {shouldShowOpenLoader ? (
+        <OpenFlowLoader
+          kind={openKind}
+          title={openMeta?.title}
+          coverImageUrl={openMeta?.coverImageUrl}
+          coverIsStoryboard={openMeta?.coverIsStoryboard}
+          status={openMeta?.status}
+          beatCount={openMeta?.beatCount}
+          userPrompt={openMeta?.userPrompt}
+          activePhaseIndex={shouldHoldForFirstVisual ? 2 : undefined}
+          statusText={shouldHoldForFirstVisual
+            ? openKind === 'reel'
+              ? 'Preparing the first panel...'
+              : 'Preparing the first scene...'
+            : undefined}
+        />
       ) : (
-        <div className="relative min-h-screen overflow-hidden">
-          <LoadingAmbientBackdrop />
-        </div>
+        <StoryScreen />
       )}
 
-      {(authLoading || isLoading) && <LoadingState backdropMode="scene" />}
+      {hasMatchingSession && isLoading && !shouldHoldForFirstVisual && <LoadingState backdropMode="scene" />}
     </div>
   );
 }

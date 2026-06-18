@@ -189,6 +189,12 @@ const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
   },
   visual_prompt: {
     storyText: 'Pip steps into Mr. Huckle\'s antique shop to escape the rain, discovers a strange indigo umbrella between a grandfather clock and dusty globe, turns the brass sun dial, and watches golden light flood the room.',
+    storyTextParts: JSON.stringify([
+      'Pip steps into Mr. Huckle\'s antique shop to escape the rain.',
+      'She discovers a strange indigo umbrella between a grandfather clock and dusty globe.',
+      'She turns the brass sun dial.',
+      'Golden light floods the room.',
+    ], null, 2),
     sceneSummary: 'Pip discovers a magical umbrella inside a dim antique shop and triggers a burst of sunlight.',
     imageIntent: 'storybook beat showing Pip entering from the rain, discovering the umbrella, touching the brass dial, and seeing sunlight transform the shop',
     characters: DEFAULT_CHARACTER_ANCHORS,
@@ -645,6 +651,9 @@ export default function PlaygroundStudio({
       return (
         <div className="grid gap-3">
           <textarea value={inputs.storyText || ''} onChange={(event) => setInputs((current) => ({ ...current, storyText: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat story text" />
+          {!isReelVisual && (
+            <textarea value={inputs.storyTextParts || ''} onChange={(event) => setInputs((current) => ({ ...current, storyTextParts: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Hidden storyTextParts JSON array" />
+          )}
           <textarea value={inputs.sceneSummary || ''} onChange={(event) => setInputs((current) => ({ ...current, sceneSummary: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Scene summary" />
           <textarea value={inputs.imageIntent || ''} onChange={(event) => setInputs((current) => ({ ...current, imageIntent: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Story writer visual intent" />
           <textarea value={inputs.characters || ''} onChange={(event) => setInputs((current) => ({ ...current, characters: event.target.value }))} rows={6} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Character continuity JSON" />

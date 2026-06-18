@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useStoryStore } from '@/lib/store/story-store';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import {
   ChevronLeft,
@@ -63,6 +62,7 @@ import { mergeRefreshedStorylineBeatAssetUrls } from '@/lib/media/refresh-merge'
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset, type StorylineManifestPayload } from '@/lib/persistence';
 import { saveStorylineAndPrefetch, saveStorylineProgress } from '@/lib/persistence/runtime';
+import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
@@ -71,6 +71,15 @@ const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cu
 const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
 const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer';
 const DESKTOP_CONTROL_ICON_CLASS = 'w-5 h-5';
+
+function StoryMediaLoadingFallback({ className = '' }: { className?: string }) {
+  return (
+    <div className={`absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-950 text-neutral-300 ${className}`}>
+      <Loader2 className="h-6 w-6 animate-spin text-emerald-300" />
+      <span className="text-xs uppercase tracking-[0.2em] text-neutral-400">Loading scene</span>
+    </div>
+  );
+}
 
 interface StorylinePlayerProps {
   storylineId: string;
@@ -160,7 +169,6 @@ export default function StorylinePlayer({
   });
   const [isAdminUser, setIsAdminUser] = useState(false);
   const router = useRouter();
-  const resetStory = useStoryStore((state) => state.resetStory);
   const containerRef = useRef<HTMLDivElement>(null);
   const choiceHoldTimerRef = useRef<number | null>(null);
   const choiceAdvanceTimerRef = useRef<number | null>(null);
@@ -338,6 +346,9 @@ export default function StorylinePlayer({
         console.error('Failed to copy share link:', error);
       }
     }
+  };
+  const handleLogoClick = () => {
+    requestHomeStoryReset();
   };
 
   // Record view on mount (fire-and-forget)
@@ -710,7 +721,7 @@ export default function StorylinePlayer({
                 unoptimized
               />
             ) : imageIsResolving ? (
-              <div className="absolute inset-0 bg-neutral-950" />
+              <StoryMediaLoadingFallback />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.16),transparent_40%),linear-gradient(180deg,rgba(15,23,42,0.86),rgba(2,6,23,0.96))] px-6 text-center">
                 <div className="max-w-md rounded-3xl border border-white/10 bg-neutral-950/35 px-6 py-5 backdrop-blur-md">
@@ -756,7 +767,7 @@ export default function StorylinePlayer({
                       unoptimized
                     />
                   ) : imageIsResolving ? (
-                    <div className="absolute inset-0 bg-neutral-950" />
+                    <StoryMediaLoadingFallback />
                   ) : null}
                 </div>
               </div>
@@ -779,7 +790,7 @@ export default function StorylinePlayer({
         <div className="flex items-center justify-between gap-3">
           <div className="flex shrink-0 items-center gap-4">
             {/* Kissago branding — matches main page style */}
-            <KissagoLogo fixed={false} onClick={resetStory} />
+            <KissagoLogo fixed={false} onClick={handleLogoClick} />
             <div className="hidden md:block">
               <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
               {authorName && (
@@ -1005,7 +1016,7 @@ export default function StorylinePlayer({
                 />
               </div>
             ) : imageIsResolving ? (
-              <div className="absolute inset-0 bg-neutral-950" />
+              <StoryMediaLoadingFallback />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.18),transparent_42%),linear-gradient(180deg,rgba(15,23,42,0.88),rgba(2,6,23,0.96))] px-5 text-center text-neutral-200">
                 <BookOpen className="h-8 w-8 text-sky-200" />

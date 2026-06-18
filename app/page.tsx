@@ -1,8 +1,7 @@
 import { Suspense } from 'react';
-import { unstable_cache, unstable_noStore as noStore } from 'next/cache';
+import { unstable_cache } from 'next/cache';
 import { getReelStorySetupSettings, getStoryboardSettings } from '@/app/actions/admin';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
-import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import HomeContent from '@/components/story/HomeContent';
 import {
   DEFAULT_LANDING_SETUP_SETTINGS,
@@ -10,7 +9,6 @@ import {
   normalizeLandingInitialData,
   type LandingInitialData,
 } from '@/lib/story/landing-ui';
-import type { PricingRuntimeContext } from '@/lib/types/pricing';
 
 const getCachedLandingInitialData = unstable_cache(
   async (): Promise<LandingInitialData> => {
@@ -38,22 +36,13 @@ const getCachedLandingInitialData = unstable_cache(
   { revalidate: 60 }
 );
 
-async function getInitialPricing(): Promise<PricingRuntimeContext | null> {
-  noStore();
-  return getPricingRuntimeContext().catch(() => null);
-}
-
 export default async function Home() {
-  const [initialLandingData, initialPricing] = await Promise.all([
-    getCachedLandingInitialData(),
-    getInitialPricing(),
-  ]);
+  const initialLandingData = await getCachedLandingInitialData();
 
   return (
     <Suspense>
       <HomeContent
         initialLandingData={initialLandingData}
-        initialPricing={initialPricing}
       />
     </Suspense>
   );

@@ -6,8 +6,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
+import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import Link from 'next/link';
-import type { TabId } from '@/lib/types/my-stories';
+import type { SavedStory, SavedStorylineItem, TabId, UserReel } from '@/lib/types/my-stories';
 
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 
@@ -49,9 +50,39 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
 
   const isLoading = loading[activeTab];
 
-  const handleLoadStory = (storyId: string) => {
+  const handleLoadStory = (story: SavedStory) => {
+    writeOpenFlowNavMeta({
+      kind: 'story',
+      title: story.title,
+      coverImageUrl: story.cover_image_url,
+      status: story.status,
+      userPrompt: story.user_prompt,
+    });
     onClose();
-    router.push(`/story/${storyId}`);
+    router.push(`/story/${story.id}`);
+  };
+
+  const handleLoadReel = (reel: UserReel) => {
+    writeOpenFlowNavMeta({
+      kind: 'reel',
+      title: reel.title,
+      coverImageUrl: reel.cover_image_url,
+      status: reel.status,
+      beatCount: reel.beat_count,
+      userPrompt: reel.user_prompt,
+    });
+    onClose();
+    router.push(`/story/${reel.id}`);
+  };
+
+  const handleOpenStoryline = (item: SavedStorylineItem) => {
+    writeOpenFlowNavMeta({
+      kind: 'storyline',
+      title: item.storyline?.title || 'Untitled Storyline',
+      coverImageUrl: item.storyline?.cover_image_url || null,
+      beatCount: item.storyline?.beat_count || null,
+    });
+    onClose();
   };
 
   const handleExplore = (storyId: string) => {
@@ -155,7 +186,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         }`}
       >
         <button
-          onClick={() => handleLoadStory(story.id)}
+          onClick={() => handleLoadStory(story)}
           className="w-full text-left p-5 pr-20"
         >
           <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
@@ -239,7 +270,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         }`}
       >
         <button
-          onClick={() => handleLoadStory(reel.id)}
+          onClick={() => handleLoadReel(reel)}
           className="w-full text-left p-5 pr-20"
         >
           <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
@@ -358,17 +389,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         <div className="p-5 pr-32">
           <Link
             href={`/storyline/${item.storyline_id}`}
-            onClick={() => {
-              try {
-                sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
-                  title: item.storyline?.title || 'Untitled Storyline',
-                  coverImageUrl: item.storyline?.cover_image_url || null,
-                  authorName: item.storyline?.author_name || null,
-                  beatCount: item.storyline?.beat_count || null,
-                }));
-              } catch {}
-              onClose();
-            }}
+            onClick={() => handleOpenStoryline(item)}
             className="block"
           >
             <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
@@ -395,17 +416,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         <div className="touch-visible absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
           <Link
             href={`/storyline/${item.storyline_id}`}
-            onClick={() => {
-              try {
-                sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
-                  title: item.storyline?.title || 'Untitled Storyline',
-                  coverImageUrl: item.storyline?.cover_image_url || null,
-                  authorName: item.storyline?.author_name || null,
-                  beatCount: item.storyline?.beat_count || null,
-                }));
-              } catch {}
-              onClose();
-            }}
+            onClick={() => handleOpenStoryline(item)}
             className="p-2 hover:bg-purple-500/10 rounded-full transition-all"
             title="Play storyline"
           >

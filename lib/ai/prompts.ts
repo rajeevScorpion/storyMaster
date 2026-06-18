@@ -29,6 +29,7 @@ Core behavior rules:
 16. Avoid graphic violence, cruelty, adult content, hateful content, or disturbing imagery.
 17. Never output markdown. Output strict valid JSON only.
 18. Do not include explanatory text before or after JSON.
+19. Return storyTextParts as exactly 4 hidden narration chunks that split storyText into near-equal spoken-duration parts for storyboard sync. Do not show this split in storyText.
 
 Narrative design rules:
 - The user's choice must clearly shape what happens next.
@@ -87,6 +88,7 @@ Return a JSON object with these keys:
 - beatNumber
 - isEnding
 - storyText
+- storyTextParts
 - sceneSummary
 - options
 - characters

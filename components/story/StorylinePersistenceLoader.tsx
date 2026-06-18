@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence/runtime';
 import type { StorylineManifestPayload } from '@/lib/persistence';
+import { preloadImageForDisplay } from '@/lib/hooks/useImagePreload';
+import { getBeatFirstVisualUrl } from '@/lib/story/first-visual';
+import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
 
 interface StorylinePersistenceLoaderProps {
@@ -12,6 +15,8 @@ interface StorylinePersistenceLoaderProps {
   userId: string;
   title: string;
   authorName: string | null;
+  coverImageUrl?: string | null;
+  beatCount?: number | null;
   isOwner: boolean;
   isSaved: boolean;
   isLiked: boolean;
@@ -20,20 +25,38 @@ interface StorylinePersistenceLoaderProps {
   aspectRatio: '16:9' | '9:16';
 }
 
+async function preloadFirstStorylineVisual(beats: StorylineManifestPayload['beats']) {
+  await preloadImageForDisplay(getBeatFirstVisualUrl(beats[0]));
+}
+
 export default function StorylinePersistenceLoader(props: StorylinePersistenceLoaderProps) {
   const [payload, setPayload] = useState<StorylineManifestPayload | null>(null);
   const [sourceUpdatedAt, setSourceUpdatedAt] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [loadMessage, setLoadMessage] = useState('Checking saved copy...');
+  const [loadPhaseIndex, setLoadPhaseIndex] = useState(0);
 
   useEffect(() => {
     let active = true;
+    let hasDisplayedPayload = false;
     void (async () => {
-      const cached = await loadCachedStoryline({
+      setLoadMessage('Checking saved copy...');
+      setLoadPhaseIndex(0);
+      const cachePromise = loadCachedStoryline({
         storylineId: props.storylineId,
         storyId: props.storyId,
         userId: props.userId,
       }).catch(() => null);
-      if (active && cached) {
+
+      const networkPromise = loadStorylineWithBeats(props.storylineId);
+
+      void cachePromise.then(async (cached) => {
+        if (!active || !cached || cached.manifest.payload.beats.length === 0) return;
+        setLoadMessage('Preparing saved scenes...');
+        setLoadPhaseIndex(2);
+        await preloadFirstStorylineVisual(cached.manifest.payload.beats);
+        if (!active || hasDisplayedPayload) return;
+        hasDisplayedPayload = true;
         setPayload({
           ...cached.manifest.payload,
           isOwner: props.isOwner,
@@ -43,10 +66,20 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           isLoggedIn: true,
         });
         setSourceUpdatedAt(cached.manifest.sourceUpdatedAt);
-      }
+        setLoadMessage('Refreshing latest version...');
+        setLoadPhaseIndex(1);
+      });
 
       try {
-        const loaded = await loadStorylineWithBeats(props.storylineId);
+        setLoadMessage('Loading latest published version...');
+        setLoadPhaseIndex(1);
+        const loaded = await networkPromise;
+        if (loaded.beats.length === 0) {
+          throw new Error('This storyline is still preparing its pages. Please try again shortly.');
+        }
+        setLoadMessage('Preparing the first scene...');
+        setLoadPhaseIndex(2);
+        await preloadFirstStorylineVisual(loaded.beats);
         const nextPayload: StorylineManifestPayload = {
           storylineId: props.storylineId,
           storyId: props.storyId,
@@ -63,6 +96,8 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           isLoggedIn: true,
         };
         if (!active) return;
+        setLoadPhaseIndex(3);
+        hasDisplayedPayload = true;
         setPayload(nextPayload);
         setSourceUpdatedAt(loaded.storyline.source_updated_at);
         setError(null);
@@ -73,7 +108,8 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           currentPageIndex: 0,
         });
       } catch (loadError) {
-        if (active && !cached) {
+        const cached = await cachePromise;
+        if (active && !hasDisplayedPayload && !cached) {
           setError(loadError instanceof Error ? loadError.message : 'Unable to load storyline');
         }
       }
@@ -95,7 +131,16 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
     return <div className="min-h-screen bg-neutral-950 p-8 text-center text-neutral-300">{error}</div>;
   }
   if (!payload) {
-    return <div className="min-h-screen animate-pulse bg-neutral-950" />;
+    return (
+      <OpenFlowLoader
+        kind="storyline"
+        title={props.title}
+        coverImageUrl={props.coverImageUrl}
+        beatCount={props.beatCount ?? 0}
+        activePhaseIndex={loadPhaseIndex}
+        statusText={loadMessage}
+      />
+    );
   }
 
   return (

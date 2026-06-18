@@ -7,6 +7,10 @@ export const beatSchema = {
     beatNumber: { type: Type.INTEGER },
     isEnding: { type: Type.BOOLEAN },
     storyText: { type: Type.STRING },
+    storyTextParts: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
     sceneSummary: { type: Type.STRING },
     options: {
       type: Type.ARRAY,
@@ -62,6 +66,7 @@ export const beatSchema = {
     'beatNumber',
     'isEnding',
     'storyText',
+    'storyTextParts',
     'sceneSummary',
     'options',
     'characters',

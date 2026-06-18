@@ -104,9 +104,15 @@ export function validateGeneratedBeat(
   const seenIds = new Set<string>();
   const newCharacterIds = Array.isArray(beat.newCharacterIds) ? beat.newCharacterIds : [];
   const changedCharacterIds = Array.isArray(beat.changedCharacterIds) ? beat.changedCharacterIds : [];
+  const storyTextParts = Array.isArray(beat.storyTextParts) ? beat.storyTextParts : [];
 
   if (!beat.title?.trim()) issues.push('title is missing');
   if (!beat.storyText?.trim()) issues.push('storyText is missing');
+  if (storyTextParts.length !== 4) {
+    issues.push('storyTextParts must contain exactly 4 hidden narration chunks');
+  } else if (storyTextParts.some((part) => typeof part !== 'string' || !part.trim())) {
+    issues.push('storyTextParts must contain 4 non-empty strings');
+  }
   if (!beat.sceneSummary?.trim()) issues.push('sceneSummary is missing');
   if (!beat.imagePrompt?.trim()) issues.push('imagePrompt is missing');
   if (!beat.nextBeatGoal?.trim()) issues.push('nextBeatGoal is missing');

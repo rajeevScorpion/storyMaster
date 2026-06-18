@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { toMediaFetchUrl } from '@/lib/media/client';
 import { getStoryPersistence, type StoryMediaAsset } from '@/lib/persistence';
 import { isClientStoryPersistenceEnabled } from '@/lib/persistence/runtime';
 
@@ -49,10 +50,11 @@ export function useResolvedStoryMediaState(asset?: StoryMediaAsset): ResolvedSto
   }, [asset, assetKey]);
 
   const currentResolution = resolvedMedia?.assetKey === assetKey ? resolvedMedia : undefined;
+  const remoteFallbackUrl = asset ? toMediaFetchUrl(asset.remoteUrl) : undefined;
   return {
-    url: currentResolution?.url,
+    url: currentResolution?.url ?? remoteFallbackUrl,
     isResolving: Boolean(asset && !currentResolution),
-    source: currentResolution?.source,
+    source: currentResolution?.source ?? (remoteFallbackUrl ? 'remote' : undefined),
   };
 }
 

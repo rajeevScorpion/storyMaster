@@ -14,7 +14,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { beatSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, reelDraftSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import {
   getPromptPlaygroundState,
   getPublishedPrompt,
@@ -304,7 +304,7 @@ async function runReelStoryGenerationTest(
     config: {
       systemInstruction: LOCKED_PROMPT_GUARDRAILS.reel_story_generation,
       responseMimeType: 'application/json',
-      responseSchema: beatSchema,
+      responseSchema: reelDraftSchema,
       temperature,
     },
   });
@@ -321,6 +321,7 @@ async function runVisualPromptTest(
 ): Promise<TestResult> {
   const prompt = resolvePromptTemplate(promptBody, {
     storyText: inputs.storyText || '',
+    storyTextParts: inputs.storyTextParts || '[]',
     sceneSummary: inputs.sceneSummary || '',
     imageIntent: inputs.imageIntent || '',
     characters: inputs.characters || '[]',
@@ -357,6 +358,7 @@ async function runReelVisualPromptTest(
 ): Promise<TestResult> {
   const prompt = resolvePromptTemplate(promptBody, {
     storyText: inputs.storyText || '',
+    storyTextParts: inputs.storyTextParts || '[]',
     sceneSummary: inputs.sceneSummary || '',
     imageIntent: inputs.imageIntent || '',
     characters: inputs.characters || '[]',

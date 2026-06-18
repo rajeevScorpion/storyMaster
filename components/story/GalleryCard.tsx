@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { motion } from 'motion/react';
 import { BookOpen, Eye, Heart, Share2 } from 'lucide-react';
+import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from './StoryboardThumbnail';
 
 interface GalleryCardProps {
@@ -33,14 +34,13 @@ export default function GalleryCard({
       return;
     }
 
-    try {
-      sessionStorage.setItem('storyline-nav-meta', JSON.stringify({
-        title,
-        coverImageUrl,
-        authorName,
-        beatCount,
-      }));
-    } catch {}
+    writeOpenFlowNavMeta({
+      kind: 'storyline',
+      title,
+      coverImageUrl,
+      coverIsStoryboard,
+      beatCount,
+    });
   };
 
   return (
