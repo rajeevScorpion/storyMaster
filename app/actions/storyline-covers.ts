@@ -10,6 +10,7 @@ import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
+  getStoryboardSharePanelSourceCrop,
   isAbsoluteCrawlerSafeImageUrl,
   processAndUploadStorylineAsset,
   resolveStorylineShareCover,
@@ -18,6 +19,7 @@ import {
   type ProcessedStorylineAsset,
   type StorylineShareCoverRow,
 } from '@/lib/story/share-cover';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import {
   buildStoryCoverPromptInputFromPublishedStoryline,
   generateStoryCoverPrompt,
@@ -73,6 +75,11 @@ type DiagnosticImageProbe = {
   contentType: string | null;
   contentLength: string | null;
   error: string | null;
+};
+
+type FallbackBeatImage = {
+  url: string;
+  isStoryboard: boolean;
 };
 
 export type PublishedStorylineCoverEditorState = {
@@ -411,12 +418,14 @@ function reelThumbnailUpdate(asset: ProcessedStorylineAsset): StorylineAssetUpda
   };
 }
 
-function readLegacyBeatCover(beats: StoryBeat[] | null | undefined): string | null {
+function readLegacyBeatCover(beats: StoryBeat[] | null | undefined): FallbackBeatImage | null {
   if (!beats?.length) return null;
   const preferred = beats.length > 1 ? beats[1] : beats[0];
-  return cleanString(preferred?.imageUrl)
+  if (!preferred) return null;
+  const url = cleanString(preferred?.imageUrl)
     ?? cleanString(preferred?.persistedImageUrl)
     ?? null;
+  return url ? { url, isStoryboard: isStoryboardBeat(preferred) } : null;
 }
 
 async function resolveFallbackBeatImageUrl(
@@ -428,21 +437,33 @@ async function resolveFallbackBeatImageUrl(
     coverImageUrl?: string | null;
     beats?: StoryBeat[] | null;
   }
-): Promise<string | null> {
-  const direct = cleanString(input.coverImageUrl) ?? readLegacyBeatCover(input.beats);
-  if (direct) return direct;
+): Promise<FallbackBeatImage | null> {
+  const legacyCover = readLegacyBeatCover(input.beats);
+  const direct = cleanString(input.coverImageUrl);
+  if (direct) {
+    return {
+      url: direct,
+      isStoryboard: legacyCover?.isStoryboard ?? false,
+    };
+  }
+  if (legacyCover) return legacyCover;
 
   const nodePath = Array.isArray(input.nodePath) ? input.nodePath : [];
   const coverNodeId = nodePath.length > 1 ? nodePath[1] : nodePath[0];
   if (coverNodeId) {
     const { data } = await supabase
       .from('beats')
-      .select('image_url')
+      .select('image_url, is_storyboard')
       .eq('story_id', input.storyId)
       .eq('node_id', coverNodeId)
       .maybeSingle();
     const imageUrl = cleanString((data as { image_url?: string | null } | null)?.image_url);
-    if (imageUrl) return imageUrl;
+    if (imageUrl) {
+      return {
+        url: imageUrl,
+        isStoryboard: (data as { is_storyboard?: boolean | null } | null)?.is_storyboard === true,
+      };
+    }
   }
 
   if (input.storylineId) {
@@ -457,10 +478,16 @@ async function resolveFallbackBeatImageUrl(
     if (beatId) {
       const { data } = await supabase
         .from('beats')
-        .select('image_url')
+        .select('image_url, is_storyboard')
         .eq('id', beatId)
         .maybeSingle();
-      return cleanString((data as { image_url?: string | null } | null)?.image_url);
+      const imageUrl = cleanString((data as { image_url?: string | null } | null)?.image_url);
+      return imageUrl
+        ? {
+          url: imageUrl,
+          isStoryboard: (data as { is_storyboard?: boolean | null } | null)?.is_storyboard === true,
+        }
+        : null;
     }
   }
 
@@ -549,8 +576,9 @@ export async function finalizeStorylineShareAssets(
           storylineId: input.storylineId,
           kind: 'share_cover',
           source: 'fallback_beat',
-          sourceUrlOrDataUrl: fallbackBeatImage,
-          versionSeed: `${input.storylineId}:fallback:${fallbackBeatImage}`,
+          sourceUrlOrDataUrl: fallbackBeatImage.url,
+          sourceCrop: fallbackBeatImage.isStoryboard ? getStoryboardSharePanelSourceCrop(0) : null,
+          versionSeed: `${input.storylineId}:fallback:${fallbackBeatImage.isStoryboard ? 'storyboard-panel-0:' : ''}${fallbackBeatImage.url}`,
         });
         Object.assign(updatePatch, shareCoverUpdate(fallbackAsset));
       }
@@ -876,7 +904,7 @@ export async function repairPublishedStorylineShareCovers(options: { limit?: num
 
       let asset: ProcessedStorylineAsset | null = null;
       if (row.story_format !== 'audio_story') {
-        const fallbackUrl = await resolveFallbackBeatImageUrl(supabase, {
+        const fallbackBeatImage = await resolveFallbackBeatImageUrl(supabase, {
           storylineId: row.id,
           storyId,
           nodePath: row.node_path,
@@ -884,7 +912,7 @@ export async function repairPublishedStorylineShareCovers(options: { limit?: num
           beats: Array.isArray(row.beats) ? row.beats as unknown as StoryBeat[] : null,
         });
 
-        if (fallbackUrl) {
+        if (fallbackBeatImage) {
           asset = await processAndUploadStorylineAsset({
             supabase,
             userId,
@@ -892,8 +920,9 @@ export async function repairPublishedStorylineShareCovers(options: { limit?: num
             storylineId: row.id,
             kind: 'share_cover',
             source: 'fallback_beat',
-            sourceUrlOrDataUrl: fallbackUrl,
-            versionSeed: `${row.id}:repair:${fallbackUrl}`,
+            sourceUrlOrDataUrl: fallbackBeatImage.url,
+            sourceCrop: fallbackBeatImage.isStoryboard ? getStoryboardSharePanelSourceCrop(0) : null,
+            versionSeed: `${row.id}:repair:${fallbackBeatImage.isStoryboard ? 'storyboard-panel-0:' : ''}${fallbackBeatImage.url}`,
           });
           processedFromBeat += 1;
         }

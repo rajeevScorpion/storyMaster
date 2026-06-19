@@ -53,6 +53,7 @@ import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
+import { getFirstBeatShareExcerpt } from '@/lib/story/share-message';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
 import type { StoryBeat } from '@/lib/types/story';
@@ -335,11 +336,12 @@ export default function StorylinePlayer({
 
   const handleShare = async () => {
     const url = `${window.location.origin}/storyline/${storylineId}`;
+    const text = getFirstBeatShareExcerpt(currentBeats) ?? undefined;
     if (navigator.share) {
-      navigator.share({ title, url }).catch(() => {});
+      navigator.share({ title, text, url }).catch(() => {});
     } else {
       try {
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(text ? `${title}\n\n${text}\n\n${url}` : url);
         setShareToastVisible(true);
         setTimeout(() => setShareToastVisible(false), 3000);
       } catch (error) {
