@@ -9,6 +9,7 @@ import {
   resolveStorylineShareCover,
   type StorylineShareCoverRow,
 } from '@/lib/story/share-cover';
+import { getFirstBeatShareExcerpt } from '@/lib/story/share-message';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,6 +66,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       title,
       author_name,
       cover_image_url,
+      beats,
       is_vertical_story,
       aspect_ratio,
       share_cover_url,
@@ -91,9 +93,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
   if (!storyline) return { title: 'Storyline - Kissago' };
 
-  const description = storyline.author_name
+  const defaultDescription = storyline.author_name
     ? `A storyline by ${storyline.author_name} on Kissago`
     : 'An interactive storyline on Kissago';
+  const description = getFirstBeatShareExcerpt((storyline as { beats?: unknown }).beats)
+    ?? defaultDescription;
   const origin = await getRequestOrigin();
   const canonicalUrl = origin ? new URL(`/storyline/${id}`, origin).toString() : undefined;
   const cover = resolveStorylineShareCover(storyline as StorylineShareCoverRow, { origin });

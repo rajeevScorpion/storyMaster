@@ -31,6 +31,13 @@ const GLOBAL_DEFAULT_VERSION = 'global-default-v1';
 type CoverBucket = typeof STORYLINE_PUBLIC_ASSET_BUCKET | typeof STORYLINE_PRIVATE_ASSET_BUCKET;
 export type StorylineShareAssetKind = 'share_cover' | 'youtube_thumbnail' | 'reel_thumbnail';
 
+export type StorylineImageSourceCrop = {
+  leftRatio: number;
+  topRatio: number;
+  widthRatio: number;
+  heightRatio: number;
+};
+
 export type StorylineShareCoverRow = {
   id: string;
   story_id?: string | null;
@@ -180,6 +187,47 @@ function isUsableShareUrl(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+function clampRatio(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+async function cropImageSourceBuffer(input: Buffer, crop: StorylineImageSourceCrop): Promise<Buffer> {
+  const normalized = await sharp(input, { failOn: 'none' }).rotate().toBuffer();
+  const metadata = await sharp(normalized, { failOn: 'none' }).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  if (width <= 1 || height <= 1) return normalized;
+
+  const leftRatio = clampRatio(crop.leftRatio, 0, 0.99);
+  const topRatio = clampRatio(crop.topRatio, 0, 0.99);
+  const widthRatio = clampRatio(crop.widthRatio, 0.01, 1 - leftRatio);
+  const heightRatio = clampRatio(crop.heightRatio, 0.01, 1 - topRatio);
+  const left = Math.min(width - 1, Math.max(0, Math.floor(width * leftRatio)));
+  const top = Math.min(height - 1, Math.max(0, Math.floor(height * topRatio)));
+  const cropWidth = Math.max(1, Math.min(width - left, Math.round(width * widthRatio)));
+  const cropHeight = Math.max(1, Math.min(height - top, Math.round(height * heightRatio)));
+
+  return sharp(normalized, { failOn: 'none' })
+    .extract({ left, top, width: cropWidth, height: cropHeight })
+    .toBuffer();
+}
+
+export function getStoryboardSharePanelSourceCrop(panelIndex = 0): StorylineImageSourceCrop {
+  const clampedPanel = Math.max(0, Math.min(3, Math.floor(panelIndex)));
+  const col = clampedPanel % 2;
+  const row = clampedPanel >= 2 ? 1 : 0;
+  const panelRatio = 0.5;
+  const insetRatio = 0.0125;
+
+  return {
+    leftRatio: col * panelRatio + insetRatio,
+    topRatio: row * panelRatio + insetRatio,
+    widthRatio: panelRatio - insetRatio * 2,
+    heightRatio: panelRatio - insetRatio * 2,
+  };
 }
 
 export function isAbsoluteCrawlerSafeImageUrl(value: unknown): value is string {
@@ -332,9 +380,11 @@ export async function readImageSourceBuffer(
 
 export async function processCoverImageBuffer(
   input: Buffer,
-  target: { width: number; height: number }
+  target: { width: number; height: number },
+  options: { sourceCrop?: StorylineImageSourceCrop | null } = {}
 ): Promise<{ buffer: Buffer; width: number; height: number; mimeType: string }> {
-  const output = await sharp(input, { failOn: 'none' })
+  const source = options.sourceCrop ? await cropImageSourceBuffer(input, options.sourceCrop) : input;
+  const output = await sharp(source, { failOn: 'none' })
     .rotate()
     .resize(target.width, target.height, {
       fit: 'cover',
@@ -498,6 +548,7 @@ export async function processAndUploadStorylineAsset(input: {
   kind: StorylineShareAssetKind;
   source: StorylineShareCoverSource;
   sourceUrlOrDataUrl: string;
+  sourceCrop?: StorylineImageSourceCrop | null;
   versionSeed?: string | null;
   enforceSourceDimensions?: boolean;
 }): Promise<ProcessedStorylineAsset> {
@@ -511,7 +562,7 @@ export async function processAndUploadStorylineAsset(input: {
     await validateSourceImageForKind(source.buffer, input.kind);
   }
 
-  const processed = await processCoverImageBuffer(source.buffer, target);
+  const processed = await processCoverImageBuffer(source.buffer, target, { sourceCrop: input.sourceCrop });
   const version = createVersion(input.versionSeed ?? input.sourceUrlOrDataUrl);
   const path = `${input.userId}/${input.storylineId}/${getFolderForKind(input.kind)}/${version}.webp`;
   const objectKey = `stories/${input.storyId ?? input.storylineId}/covers/${getFolderForKind(input.kind)}/${version}.webp`;
