@@ -3,6 +3,12 @@ import type {
   StoryTextOverlayPosition,
   StoryTextOverlayStyle,
 } from './types';
+import {
+  DEFAULT_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+  MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+  MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+  normalizeStoryTextOverlayWordsPerLine,
+} from './captions';
 
 export const STORY_TEXT_FONT_PRESETS = [
   { label: 'Inter', value: 'var(--font-sans), Inter, system-ui, sans-serif', languages: ['english'] },
@@ -33,12 +39,14 @@ export const DEFAULT_STORY_TEXT_OVERLAY_STYLE: Required<StoryTextOverlayStyle> =
   position: 'lower',
   verticalOffset: 0,
   align: 'center',
+  wordsPerLine: DEFAULT_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
   wordHighlightColor: '#00D49B',
   wordHighlightOpacity: 0.72,
   wordHighlightPaddingX: 4,
   wordHighlightPaddingY: 2,
   wordHighlightBorderRadius: 5,
   wordHighlightWordSpacing: 5,
+  wordHighlightScale: 1.08,
 };
 
 export const STORY_TEXT_OVERLAY_VERTICAL_OFFSET_MIN = -30;
@@ -55,8 +63,14 @@ export const STORY_TEXT_OVERLAY_HIGHLIGHT_RADIUS_MIN = 0;
 export const STORY_TEXT_OVERLAY_HIGHLIGHT_RADIUS_MAX = 24;
 export const STORY_TEXT_OVERLAY_HIGHLIGHT_WORD_SPACING_MIN = 0;
 export const STORY_TEXT_OVERLAY_HIGHLIGHT_WORD_SPACING_MAX = 28;
+export const STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MIN = 1;
+export const STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MAX = 1.35;
 export const STORY_TEXT_OVERLAY_TOP_SAFE_MIN = 12;
 export const STORY_TEXT_OVERLAY_TOP_SAFE_MAX = 88;
+export {
+  MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+  MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+};
 
 export function clampStoryOverlayNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -199,6 +213,7 @@ export function normalizeStoryTextOverlayStyle(value: unknown): StoryTextOverlay
   const wordHighlightPaddingY = Number(raw.wordHighlightPaddingY);
   const wordHighlightBorderRadius = Number(raw.wordHighlightBorderRadius);
   const wordHighlightWordSpacing = Number(raw.wordHighlightWordSpacing);
+  const wordHighlightScale = Number(raw.wordHighlightScale);
 
   return {
     fontFamily: normalizeFontFamily(raw.fontFamily),
@@ -240,6 +255,7 @@ export function normalizeStoryTextOverlayStyle(value: unknown): StoryTextOverlay
       ? Math.round(clampStoryOverlayNumber(verticalOffset, STORY_TEXT_OVERLAY_VERTICAL_OFFSET_MIN, STORY_TEXT_OVERLAY_VERTICAL_OFFSET_MAX))
       : DEFAULT_STORY_TEXT_OVERLAY_STYLE.verticalOffset,
     align: normalizeAlign(raw.align),
+    wordsPerLine: normalizeStoryTextOverlayWordsPerLine(raw.wordsPerLine),
     wordHighlightColor: typeof raw.wordHighlightColor === 'string' && raw.wordHighlightColor.trim()
       ? raw.wordHighlightColor.trim()
       : DEFAULT_STORY_TEXT_OVERLAY_STYLE.wordHighlightColor,
@@ -258,5 +274,8 @@ export function normalizeStoryTextOverlayStyle(value: unknown): StoryTextOverlay
     wordHighlightWordSpacing: Number.isFinite(wordHighlightWordSpacing)
       ? Math.round(clampStoryOverlayNumber(wordHighlightWordSpacing, STORY_TEXT_OVERLAY_HIGHLIGHT_WORD_SPACING_MIN, STORY_TEXT_OVERLAY_HIGHLIGHT_WORD_SPACING_MAX))
       : DEFAULT_STORY_TEXT_OVERLAY_STYLE.wordHighlightWordSpacing,
+    wordHighlightScale: Number.isFinite(wordHighlightScale)
+      ? roundToTwo(clampStoryOverlayNumber(wordHighlightScale, STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MIN, STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MAX))
+      : DEFAULT_STORY_TEXT_OVERLAY_STYLE.wordHighlightScale,
   };
 }

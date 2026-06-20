@@ -33,12 +33,14 @@ export interface StoryTextOverlayStyle {
   position?: StoryTextOverlayPosition;
   verticalOffset?: number;
   align?: StoryTextOverlayAlign;
+  wordsPerLine?: number;
   wordHighlightColor?: string;
   wordHighlightOpacity?: number;
   wordHighlightPaddingX?: number;
   wordHighlightPaddingY?: number;
   wordHighlightBorderRadius?: number;
   wordHighlightWordSpacing?: number;
+  wordHighlightScale?: number;
 }
 
 export interface StoryTextOverlayAlignment {

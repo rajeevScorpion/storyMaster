@@ -13,7 +13,11 @@ import {
 import {
   DEFAULT_STORY_TEXT_OVERLAY_STYLE,
   getStoryTextFontPresetsForLanguage,
+  MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+  MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
   normalizeStoryTextOverlayStyle,
+  STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MAX,
+  STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MIN,
   storyOverlayColorInputValue,
 } from '@/lib/story-overlay/styles';
 import type { StoryTextOverlayMode, StoryTextOverlayStyle } from '@/lib/story-overlay/types';
@@ -191,7 +195,11 @@ export default function StoryTextOverlayDialog({
     }
     setEnabled(beat.storyTextOverlayEnabled !== false);
     setMode(beat.storyTextOverlayMode === 'line' ? 'line' : 'word');
-    setStyle(normalizeStoryTextOverlayStyle(beat.storyTextOverlayStyle ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE));
+    setStyle(normalizeStoryTextOverlayStyle({
+      ...DEFAULT_STORY_TEXT_OVERLAY_STYLE,
+      wordsPerLine,
+      ...(beat.storyTextOverlayStyle ?? {}),
+    }));
     setPreviewCaptions(beat.storyTextOverlayCaptions);
     setPreviewAlignment(beat.storyTextOverlayAlignment);
     setGenerationMessage(null);
@@ -204,6 +212,7 @@ export default function StoryTextOverlayDialog({
     beat.storyTextOverlayStyle,
     open,
     stop,
+    wordsPerLine,
   ]);
 
   useEffect(() => {
@@ -254,7 +263,11 @@ export default function StoryTextOverlayDialog({
   const applyGeneratedPreview = (result: StoryTextOverlayBeatGenerationPreviewResult) => {
     setEnabled(result.storyTextOverlayEnabled);
     setMode(result.storyTextOverlayMode);
-    setStyle(normalizeStoryTextOverlayStyle(result.storyTextOverlayStyle));
+    setStyle(normalizeStoryTextOverlayStyle({
+      ...DEFAULT_STORY_TEXT_OVERLAY_STYLE,
+      wordsPerLine,
+      ...result.storyTextOverlayStyle,
+    }));
     setPreviewCaptions(result.storyTextOverlayCaptions);
     setPreviewAlignment(result.storyTextOverlayAlignment);
     setGenerationMessage(
@@ -371,7 +384,7 @@ export default function StoryTextOverlayDialog({
                 storyTextOverlayEnabled={enabled}
                 storyTextOverlayMode={mode}
                 storyTextOverlayStyle={normalizedStyle}
-                storyTextOverlayWordsPerLine={wordsPerLine}
+                storyTextOverlayWordsPerLine={normalizedStyle.wordsPerLine ?? wordsPerLine}
                 storyTextOverlayTextHighlightSupported={previewBeat.storyTextOverlayAlignment?.textHighlightSupported !== false}
               />
             </div>
@@ -466,6 +479,15 @@ export default function StoryTextOverlayDialog({
                   </button>
                 ))}
               </div>
+              <div className="mt-4">
+                <RangeControl
+                  label="Words per line"
+                  min={MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
+                  max={MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
+                  value={normalizedStyle.wordsPerLine ?? wordsPerLine}
+                  onChange={(lineWords) => updateStyle({ wordsPerLine: lineWords })}
+                />
+              </div>
             </div>
 
             <div className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:grid-cols-2">
@@ -501,6 +523,14 @@ export default function StoryTextOverlayDialog({
               <RangeControl label="Highlight Y" min={0} max={12} value={normalizedStyle.wordHighlightPaddingY ?? 0} onChange={(wordHighlightPaddingY) => updateStyle({ wordHighlightPaddingY })} />
               <RangeControl label="Highlight Radius" min={0} max={24} value={normalizedStyle.wordHighlightBorderRadius ?? 0} onChange={(wordHighlightBorderRadius) => updateStyle({ wordHighlightBorderRadius })} />
               <RangeControl label="Word Gap" min={0} max={28} value={normalizedStyle.wordHighlightWordSpacing ?? 0} onChange={(wordHighlightWordSpacing) => updateStyle({ wordHighlightWordSpacing })} />
+              <RangeControl
+                label="Pop Scale"
+                min={STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MIN}
+                max={STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MAX}
+                step={0.01}
+                value={normalizedStyle.wordHighlightScale ?? 1}
+                onChange={(wordHighlightScale) => updateStyle({ wordHighlightScale })}
+              />
             </div>
 
             {error && <p className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-300">{error}</p>}

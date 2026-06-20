@@ -38,12 +38,13 @@ describe('story overlay captions', () => {
   it('finds active word and line from timings', () => {
     const timings = [
       { word: 'one', startMs: 0, endMs: 300 },
-      { word: 'two', startMs: 300, endMs: 600 },
-      { word: 'three', startMs: 600, endMs: 900 },
+      { word: 'two', startMs: 400, endMs: 600 },
+      { word: 'three', startMs: 700, endMs: 900 },
     ];
 
-    expect(getActiveStoryOverlayWordIndex(timings, 650)).toBe(2);
-    expect(getActiveStoryOverlayLineIndex(timings, 650, 2)).toBe(1);
+    expect(getActiveStoryOverlayWordIndex(timings, 650)).toBe(1);
+    expect(getActiveStoryOverlayWordIndex(timings, 750)).toBe(2);
+    expect(getActiveStoryOverlayLineIndex(timings, 750, 2)).toBe(1);
   });
 
   it('normalizes persisted captions defensively', () => {

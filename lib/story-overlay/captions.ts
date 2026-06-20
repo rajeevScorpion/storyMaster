@@ -55,7 +55,11 @@ export function getActiveStoryOverlayWordIndex(
 ): number | undefined {
   if (!wordTimings?.length || elapsedMs == null) return undefined;
   const index = wordTimings.findIndex((word) => elapsedMs >= word.startMs && elapsedMs < word.endMs);
-  return index >= 0 ? index : undefined;
+  if (index >= 0) return index;
+  const nextIndex = wordTimings.findIndex((word) => elapsedMs < word.startMs);
+  if (nextIndex === 0) return 0;
+  if (nextIndex > 0) return nextIndex - 1;
+  return wordTimings.length - 1;
 }
 
 export function getActiveStoryOverlayLineIndex(

@@ -5,6 +5,7 @@ import {
   getActiveStoryOverlayWordIndex,
   getStoryOverlayCaptionWords,
   groupStoryOverlayWords,
+  normalizeStoryTextOverlayWordsPerLine,
 } from '@/lib/story-overlay/captions';
 import {
   getStoryOverlayTopPercent,
@@ -43,21 +44,28 @@ export default function StoryTextOverlay({
   if (!enabled || !caption?.text?.trim()) return null;
 
   const normalizedStyle = normalizeStoryTextOverlayStyle(style);
+  const resolvedWordsPerLine = normalizeStoryTextOverlayWordsPerLine(
+    normalizedStyle.wordsPerLine ?? wordsPerLine
+  );
   const words = getStoryOverlayCaptionWords(caption).map((word, absoluteIndex) => ({
     ...word,
     absoluteIndex,
   }));
-  const lines = groupStoryOverlayWords<IndexedWord>(words, wordsPerLine);
+  const lines = groupStoryOverlayWords<IndexedWord>(words, resolvedWordsPerLine);
   if (lines.length === 0) return null;
 
-  const activeLineIndex = Math.min(
-    lines.length - 1,
-    getActiveStoryOverlayLineIndex(caption.wordTimings, elapsedMs, wordsPerLine)
-  );
-  const activeWordIndex = mode === 'word' && textHighlightSupported
+  const activeWordIndex = textHighlightSupported
     ? getActiveStoryOverlayWordIndex(caption.wordTimings, elapsedMs)
     : undefined;
-  const activeLine = lines[activeLineIndex] ?? lines[0];
+  const activeLineIndex = mode === 'line'
+    ? Math.min(
+        lines.length - 1,
+        getActiveStoryOverlayLineIndex(caption.wordTimings, elapsedMs, resolvedWordsPerLine)
+      )
+    : 0;
+  const activeLine = mode === 'word'
+    ? [words[activeWordIndex ?? 0] ?? words[0]].filter((word): word is IndexedWord => Boolean(word))
+    : lines[activeLineIndex] ?? lines[0];
   const top = getStoryOverlayTopPercent(normalizedStyle);
   const justifyContent = normalizedStyle.align === 'left'
     ? 'flex-start'
@@ -123,6 +131,10 @@ export default function StoryTextOverlay({
                         normalizedStyle.wordHighlightOpacity
                       )
                     : undefined,
+                  transform: highlighted ? `scale(${normalizedStyle.wordHighlightScale ?? 1})` : 'scale(1)',
+                  transformOrigin: 'center',
+                  transition: 'transform 140ms ease, background-color 140ms ease',
+                  willChange: highlighted ? 'transform' : undefined,
                 }}
               >
                 {word.word}

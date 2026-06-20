@@ -4,6 +4,7 @@ import {
   getActiveStoryOverlayWordIndex,
   getStoryOverlayCaptionWords,
   groupStoryOverlayWords,
+  normalizeStoryTextOverlayWordsPerLine,
 } from '@/lib/story-overlay/captions';
 import {
   DEFAULT_STORY_TEXT_OVERLAY_STYLE,
@@ -122,6 +123,9 @@ function drawStoryTextOverlay(
 ) {
   if (!scene.storyTextOverlayCaption?.text?.trim()) return;
   const style = normalizeStoryTextOverlayStyle(scene.storyTextOverlayStyle);
+  const resolvedWordsPerLine = normalizeStoryTextOverlayWordsPerLine(
+    style.wordsPerLine ?? wordsPerLine
+  );
   const scale = context.canvas.width / 425;
   const fontSize = Math.max(1, Math.round((style.fontSize ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE.fontSize) * scale));
   const paddingX = Math.round((style.wordHighlightPaddingX ?? 0) * scale);
@@ -136,20 +140,28 @@ function drawStoryTextOverlay(
   context.textBaseline = 'middle';
   const words = getStoryOverlayCaptionWords(scene.storyTextOverlayCaption)
     .map((word, index) => ({ text: word.word, index }));
-  const groupedLines = groupStoryOverlayWords<WrappedWord>(words, wordsPerLine);
+  const groupedLines = groupStoryOverlayWords<WrappedWord>(words, resolvedWordsPerLine);
   const localBeatTimeMs = timeMs - scene.beatStartMs;
-  const activeLineIndex = Math.min(
-    groupedLines.length - 1,
-    getActiveStoryOverlayLineIndex(scene.storyTextOverlayCaption.wordTimings, localBeatTimeMs, wordsPerLine)
-  );
-  const lines = [groupedLines[activeLineIndex] ?? groupedLines[0] ?? []].filter((line) => line.length > 0);
-  if (lines.length === 0) {
+  const activeWordIndex = scene.storyTextOverlayTextHighlightSupported
+    ? getActiveStoryWordIndex(scene, timeMs)
+    : undefined;
+  const activeLineIndex = scene.storyTextOverlayMode === 'line'
+    ? Math.min(
+        groupedLines.length - 1,
+        getActiveStoryOverlayLineIndex(scene.storyTextOverlayCaption.wordTimings, localBeatTimeMs, resolvedWordsPerLine)
+      )
+    : 0;
+  const lines = scene.storyTextOverlayMode === 'word'
+    ? [[words[activeWordIndex ?? 0] ?? words[0]].filter((word): word is WrappedWord => Boolean(word))]
+    : [groupedLines[activeLineIndex] ?? groupedLines[0] ?? []];
+  const visibleLines = lines.filter((line) => line.length > 0);
+  if (visibleLines.length === 0) {
     context.restore();
     return;
   }
-  const widths = lines.map((line) => measureWords(context, line, paddingX, spacing));
+  const widths = visibleLines.map((line) => measureWords(context, line, paddingX, spacing));
   const boxWidth = Math.max(...widths, 1) + boxPaddingX * 2;
-  const boxHeight = lineHeight * lines.length + boxPaddingY * 2;
+  const boxHeight = lineHeight * visibleLines.length + boxPaddingY * 2;
   const safe = 12 * scale;
   const x = style.align === 'left'
     ? safe
@@ -165,10 +177,7 @@ function drawStoryTextOverlay(
     context.fill();
   }
 
-  const activeWordIndex = scene.storyTextOverlayMode !== 'line' && scene.storyTextOverlayTextHighlightSupported
-    ? getActiveStoryWordIndex(scene, timeMs)
-    : undefined;
-  lines.forEach((line, lineIndex) => {
+  visibleLines.forEach((line, lineIndex) => {
     const lineWidth = widths[lineIndex];
     let cursorX = style.align === 'left'
       ? x + boxPaddingX
@@ -179,7 +188,15 @@ function drawStoryTextOverlay(
     line.forEach((word, index) => {
       const wordWidth = context.measureText(word.text).width;
       const wordBoxWidth = wordWidth + paddingX * 2;
-      if (word.index === activeWordIndex) {
+      const highlighted = word.index === activeWordIndex;
+      const highlightScale = highlighted ? style.wordHighlightScale ?? 1 : 1;
+      context.save();
+      if (highlightScale !== 1) {
+        context.translate(cursorX + wordBoxWidth / 2, textY);
+        context.scale(highlightScale, highlightScale);
+        context.translate(-(cursorX + wordBoxWidth / 2), -textY);
+      }
+      if (highlighted) {
         context.fillStyle = storyOverlayColorWithOpacity(style.wordHighlightColor, style.wordHighlightOpacity);
         roundedRect(context, cursorX, textY - lineHeight / 2, wordBoxWidth, lineHeight, (style.wordHighlightBorderRadius ?? 0) * scale);
         context.fill();
@@ -195,6 +212,7 @@ function drawStoryTextOverlay(
       }
       context.fillStyle = storyOverlayColorWithOpacity(style.color, style.textOpacity);
       context.fillText(word.text, cursorX + paddingX, textY);
+      context.restore();
       cursorX += wordBoxWidth + (index < line.length - 1 ? spacing : 0);
     });
   });
