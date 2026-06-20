@@ -19,6 +19,7 @@ import {
   DEFAULT_STORY_TEXT_OVERLAY_STYLE,
   normalizeStoryTextOverlayStyle,
 } from '@/lib/story-overlay/styles';
+import { getR2ObjectBuffer } from '@/lib/media/r2-server';
 import { createClient } from '@/lib/supabase/server';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { DbBeat } from '@/lib/types/database';
@@ -126,6 +127,18 @@ async function readAudioUrl(
   const dataPayload = parseDataAudioUrl(audioUrl);
   if (dataPayload) return dataPayload;
 
+  const r2Payload = await getR2ObjectBuffer(audioUrl).catch((error) => {
+    throw new Error(
+      `Unable to load story narration audio from R2: ${error instanceof Error ? error.message : 'download failed'}`
+    );
+  });
+  if (r2Payload) {
+    return {
+      buffer: r2Payload.buffer,
+      mimeType: r2Payload.contentType || 'audio/wav',
+    };
+  }
+
   const storagePath = supabase ? extractStoragePath(audioUrl, 'story-assets') : null;
   if (storagePath && supabase) {
     const { data, error } = await supabase.storage.from('story-assets').download(storagePath);
@@ -138,7 +151,11 @@ async function readAudioUrl(
     };
   }
 
-  const response = await fetch(audioUrl);
+  const response = await fetch(audioUrl).catch((error) => {
+    throw new Error(
+      `Unable to load story narration audio URL: ${error instanceof Error ? error.message : 'fetch failed'}`
+    );
+  });
   if (!response.ok) {
     throw new Error(`Unable to load story narration audio for alignment: ${response.status}`);
   }
@@ -181,6 +198,10 @@ async function callElevenLabsForcedAlignment(input: {
         'xi-api-key': apiKey,
       },
       body: formData,
+    }).catch((error) => {
+      throw new Error(
+        `Unable to reach ElevenLabs forced alignment: ${error instanceof Error ? error.message : 'fetch failed'}`
+      );
     }),
     ELEVENLABS_FORCED_ALIGNMENT_TIMEOUT_MS,
     'ElevenLabs forced alignment'
