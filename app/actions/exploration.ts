@@ -48,6 +48,15 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       ? beat.reel_captions as StoryBeat['reelCaptions']
       : undefined,
     storyboardNarrationTiming: beat.storyboard_narration_timing || undefined,
+    storyTextOverlayEnabled: typeof beat.story_text_overlay_enabled === 'boolean'
+      ? beat.story_text_overlay_enabled
+      : undefined,
+    storyTextOverlayMode: beat.story_text_overlay_mode || undefined,
+    storyTextOverlayStyle: beat.story_text_overlay_style || undefined,
+    storyTextOverlayCaptions: Array.isArray(beat.story_text_overlay_captions)
+      ? beat.story_text_overlay_captions
+      : undefined,
+    storyTextOverlayAlignment: beat.story_text_overlay_alignment || undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -129,6 +138,11 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     storyboardPromptText: beat.storyboardPromptText || fallback.storyboardPromptText,
     reelCaptions: beat.reelCaptions || fallback.reelCaptions,
     storyboardNarrationTiming: beat.storyboardNarrationTiming || fallback.storyboardNarrationTiming,
+    storyTextOverlayEnabled: beat.storyTextOverlayEnabled ?? fallback.storyTextOverlayEnabled,
+    storyTextOverlayMode: beat.storyTextOverlayMode || fallback.storyTextOverlayMode,
+    storyTextOverlayStyle: beat.storyTextOverlayStyle || fallback.storyTextOverlayStyle,
+    storyTextOverlayCaptions: beat.storyTextOverlayCaptions || fallback.storyTextOverlayCaptions,
+    storyTextOverlayAlignment: beat.storyTextOverlayAlignment || fallback.storyTextOverlayAlignment,
     reelTextOverlayEnabled: beat.reelTextOverlayEnabled ?? fallback.reelTextOverlayEnabled,
     reelTextOverlayStyle: beat.reelTextOverlayStyle || fallback.reelTextOverlayStyle,
     finalImagePromptText: beat.finalImagePromptText || fallback.finalImagePromptText,
@@ -233,6 +247,26 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
             ...(jsonbNode.data.changedCharacterIds ? { changedCharacterIds: jsonbNode.data.changedCharacterIds } : {}),
             ...(jsonbNode.data.storyboardPlan ? { storyboardPlan: jsonbNode.data.storyboardPlan } : {}),
             ...(jsonbNode.data.storyboardPromptText ? { storyboardPromptText: jsonbNode.data.storyboardPromptText } : {}),
+            ...(typeof storyMap.nodes[nodeId].data.storyTextOverlayEnabled !== 'boolean'
+              && typeof jsonbNode.data.storyTextOverlayEnabled === 'boolean'
+              ? { storyTextOverlayEnabled: jsonbNode.data.storyTextOverlayEnabled }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyTextOverlayMode
+              && jsonbNode.data.storyTextOverlayMode
+              ? { storyTextOverlayMode: jsonbNode.data.storyTextOverlayMode }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyTextOverlayStyle
+              && jsonbNode.data.storyTextOverlayStyle
+              ? { storyTextOverlayStyle: jsonbNode.data.storyTextOverlayStyle }
+              : {}),
+            ...((!storyMap.nodes[nodeId].data.storyTextOverlayCaptions || storyMap.nodes[nodeId].data.storyTextOverlayCaptions.length === 0)
+              && jsonbNode.data.storyTextOverlayCaptions
+              ? { storyTextOverlayCaptions: jsonbNode.data.storyTextOverlayCaptions }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyTextOverlayAlignment
+              && jsonbNode.data.storyTextOverlayAlignment
+              ? { storyTextOverlayAlignment: jsonbNode.data.storyTextOverlayAlignment }
+              : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
@@ -484,6 +518,15 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
           ? b.reel_captions as StoryBeat['reelCaptions']
           : undefined,
         storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
+        storyTextOverlayEnabled: typeof b.story_text_overlay_enabled === 'boolean'
+          ? b.story_text_overlay_enabled
+          : sourceStoryConfig.storyTextOverlay.enabled,
+        storyTextOverlayMode: b.story_text_overlay_mode || sourceStoryConfig.storyTextOverlay.mode,
+        storyTextOverlayStyle: b.story_text_overlay_style || sourceStoryConfig.storyTextOverlay.style,
+        storyTextOverlayCaptions: Array.isArray(b.story_text_overlay_captions)
+          ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
+          : undefined,
+        storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
         reelTextOverlayEnabled: sourceStoryConfig.reel.textOverlayEnabled,
         reelTextOverlayStyle: sourceStoryConfig.reel.textOverlayStyle,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
@@ -639,6 +682,15 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
           ? b.reel_captions as StoryBeat['reelCaptions']
           : undefined,
         storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
+        storyTextOverlayEnabled: typeof b.story_text_overlay_enabled === 'boolean'
+          ? b.story_text_overlay_enabled
+          : undefined,
+        storyTextOverlayMode: b.story_text_overlay_mode || undefined,
+        storyTextOverlayStyle: b.story_text_overlay_style || undefined,
+        storyTextOverlayCaptions: Array.isArray(b.story_text_overlay_captions)
+          ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
+          : undefined,
+        storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,

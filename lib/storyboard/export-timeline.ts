@@ -1,7 +1,8 @@
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
-import type { ReelPanelCaption, StoryBeat } from '@/lib/types/story';
+import type { StoryTextOverlayCaption } from '@/lib/story-overlay/types';
+import type { StoryBeat } from '@/lib/types/story';
 
 export const STORY_EXPORT_FADE_MS = 600;
 
@@ -20,9 +21,11 @@ export interface StoryExportScene {
   imageUrl: string;
   isStoryboard: boolean;
   panelIndex: number;
-  caption?: ReelPanelCaption;
-  textOverlayEnabled: boolean;
-  textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
+  storyTextOverlayCaption?: StoryTextOverlayCaption;
+  storyTextOverlayEnabled: boolean;
+  storyTextOverlayMode?: StoryBeat['storyTextOverlayMode'];
+  storyTextOverlayStyle?: StoryBeat['storyTextOverlayStyle'];
+  storyTextOverlayTextHighlightSupported: boolean;
 }
 
 export interface StoryExportTimeline {
@@ -65,11 +68,13 @@ export function buildStoryExportTimeline(
         imageUrl: input.imageUrl,
         isStoryboard,
         panelIndex,
-        caption: isStoryboard
-          ? input.beat.reelCaptions?.find((caption) => caption.panelIndex === panelIndex)
+        storyTextOverlayCaption: isStoryboard
+          ? input.beat.storyTextOverlayCaptions?.find((caption) => caption.panelIndex === panelIndex)
           : undefined,
-        textOverlayEnabled: input.beat.reelTextOverlayEnabled !== false,
-        textOverlayStyle: input.beat.reelTextOverlayStyle,
+        storyTextOverlayEnabled: input.beat.storyTextOverlayEnabled !== false,
+        storyTextOverlayMode: input.beat.storyTextOverlayMode,
+        storyTextOverlayStyle: input.beat.storyTextOverlayStyle,
+        storyTextOverlayTextHighlightSupported: input.beat.storyTextOverlayAlignment?.textHighlightSupported !== false,
       });
     }
 
@@ -102,7 +107,7 @@ export function buildStoryExportFrameSamples(
     const fadeMs = Math.min(STORY_EXPORT_FADE_MS, Math.max(0, (scene.endMs - scene.startMs) / 2));
     for (let timeMs = scene.startMs; timeMs < scene.startMs + fadeMs; timeMs += frameMs) add(timeMs);
     for (let timeMs = Math.max(scene.startMs, scene.endMs - fadeMs); timeMs < scene.endMs; timeMs += frameMs) add(timeMs);
-    scene.caption?.wordTimings?.forEach((word) => {
+    scene.storyTextOverlayCaption?.wordTimings?.forEach((word) => {
       add(scene.beatStartMs + word.startMs);
       add(scene.beatStartMs + word.endMs);
     });

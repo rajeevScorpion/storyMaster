@@ -15,7 +15,15 @@ import {
   type StoryModelOverrides,
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
-import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateNarrationOnly, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
+import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
+import {
+  generateAndPersistStoryNarrationWithOverlay,
+  generateStoryNarrationOnlyWithOverlay,
+  generateStoryTextOverlayForBeat as generateStoryTextOverlayForBeatAction,
+  generateStoryTextOverlayForStory as generateStoryTextOverlayForStoryAction,
+  type StoryTextOverlayBeatGenerationResult,
+  type StoryTextOverlayStoryGenerationResult,
+} from '@/app/actions/story-narration';
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import {
@@ -27,6 +35,11 @@ import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, isReelStor
 import { DEFAULT_REEL_STORY_SETTINGS, findReelDefiner, normalizeReelStorySettings } from '@/lib/reel/settings';
 import { normalizeEditedReelPanelTexts } from '@/lib/reel/captions';
 import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
+import { buildStoryTextOverlayCaptions } from '@/lib/story-overlay/captions';
+import {
+  DEFAULT_STORY_TEXT_OVERLAY_STYLE,
+  normalizeStoryTextOverlayStyle,
+} from '@/lib/story-overlay/styles';
 import { normalizeReelTransitionSettings, type ReelTransitionSettings } from '@/lib/reel/transitions';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
@@ -166,6 +179,26 @@ interface StoryState {
   ) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlaySettings: (settings: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => Promise<void>;
   updateReelTextOverlayStyle: (style: StoryBeat['reelTextOverlayStyle']) => Promise<void>;
+  updateStoryTextOverlaySettings: (settings: {
+    enabled: boolean;
+    mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+    style: StoryBeat['storyTextOverlayStyle'];
+  }) => Promise<void>;
+  generateStoryTextOverlayForNode: (
+    nodeId: string,
+    settings: {
+      enabled: boolean;
+      mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+      style: StoryBeat['storyTextOverlayStyle'];
+    }
+  ) => Promise<StoryTextOverlayBeatGenerationResult>;
+  generateStoryTextOverlayForCurrentPath: (
+    settings: {
+      enabled: boolean;
+      mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+      style: StoryBeat['storyTextOverlayStyle'];
+    }
+  ) => Promise<StoryTextOverlayStoryGenerationResult>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
@@ -1266,6 +1299,25 @@ function applyReelBeatMetadata(beat: StoryBeat, storyConfig: StoryConfig): Story
   };
 }
 
+function applyStoryTextOverlayBeatMetadata(beat: StoryBeat, storyConfig: StoryConfig): StoryBeat {
+  if (isReelStoryConfig(storyConfig)) return beat;
+  const storyTextOverlay = normalizeStoryConfig(storyConfig).storyTextOverlay;
+  return {
+    ...beat,
+    storyTextOverlayEnabled: beat.storyTextOverlayEnabled ?? storyTextOverlay.enabled,
+    storyTextOverlayMode: beat.storyTextOverlayMode || storyTextOverlay.mode,
+    storyTextOverlayStyle: normalizeStoryTextOverlayStyle(
+      beat.storyTextOverlayStyle ?? storyTextOverlay.style ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE
+    ),
+    storyTextOverlayCaptions: beat.storyTextOverlayCaptions?.length
+      ? beat.storyTextOverlayCaptions
+      : buildStoryTextOverlayCaptions({
+          storyText: beat.storyText,
+          storyTextParts: beat.storyTextParts,
+        }),
+  };
+}
+
 function canPublishStoryPathAsStandard(
   storyMap: StoryMap,
   endingNodeId: string
@@ -1798,6 +1850,8 @@ export const useStoryStore = create<StoryState>()(
               reelSettings: modelOverrides?.reelSettings,
               storyConfig,
             });
+          } else {
+            beat = applyStoryTextOverlayBeatMetadata(beat, storyConfig);
           }
 
           const portraitRefs = initialSession.enableReferenceImages && !promptOnly
@@ -1838,6 +1892,11 @@ export const useStoryStore = create<StoryState>()(
           // Track resolved audio URL for merging after image resolves
           let resolvedAudioUrl: string | undefined;
           let resolvedNarrationMetadata: StoryBeat['narrationMetadata'];
+          let resolvedStoryTextOverlayCaptions: StoryBeat['storyTextOverlayCaptions'];
+          let resolvedStoryTextOverlayAlignment: StoryBeat['storyTextOverlayAlignment'];
+          let resolvedStoryTextOverlayEnabled: StoryBeat['storyTextOverlayEnabled'];
+          let resolvedStoryTextOverlayMode: StoryBeat['storyTextOverlayMode'];
+          let resolvedStoryTextOverlayStyle: StoryBeat['storyTextOverlayStyle'];
           let earlySavedStoryId: string | undefined;
           let earlySavedByUserId: string | undefined;
           const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
@@ -1911,48 +1970,35 @@ export const useStoryStore = create<StoryState>()(
               set({ isGeneratingAudio: true });
               const narrationStartedAt = nowMs();
 
-              const isReelNarration = isReelStoryConfig(storyConfig);
-              const reelNarrationOptions = isReelNarration
-                ? {
-                  reelCaptions: beat.reelCaptions,
-                  reelSettings: modelOverrides?.reelSettings,
-                  narrationSettings: storyConfig.reel.narrationSettings,
-                  generationMode: 'final' as const,
-                  panelPauseMs: normalizeReelTransitionSettings(storyConfig.reel.transitionSettings).pauseMs,
-                }
-              : {};
-              const narrationFn: Promise<{ audioUrl: string; reelCaptions?: StoryBeat['reelCaptions']; narrationMetadata?: StoryBeat['narrationMetadata'] }> = storyId
-                ? generateAndPersistNarration(
+              const narrationFn = storyId
+                ? generateAndPersistStoryNarrationWithOverlay(
                   beat.storyText, initialSession.tone!, initialSession.genre!,
                   voiceResolution.voiceId, voiceResolution.languageCode, storyId, rootNodeId,
                   costPhase({ ...baseCostTelemetry, storyId }, 'tts'),
                   {
-                    taskKey: isReelNarration ? 'reel_tts' : 'tts',
-                    narrationStyle: getReelNarrationStyle(modelOverrides, storyConfig),
-                    ...reelNarrationOptions,
+                    storyTextParts: beat.storyTextParts,
+                    overlayConfig: storyConfig.storyTextOverlay,
                   }
                 )
-                : isReelNarration
-                  ? generateReelNarrationOnly(
-                    beat.storyText, initialSession.tone!, initialSession.genre!,
-                    voiceResolution.voiceId, voiceResolution.languageCode,
-                    costPhase(baseCostTelemetry, 'tts'),
-                    {
-                      narrationStyle: getReelNarrationStyle(modelOverrides, storyConfig),
-                      ...reelNarrationOptions,
-                    }
-                  )
-                  : generateNarrationOnly(
+                : generateStoryNarrationOnlyWithOverlay(
                   beat.storyText, initialSession.tone!, initialSession.genre!,
                   voiceResolution.voiceId, voiceResolution.languageCode,
                   costPhase(baseCostTelemetry, 'tts'),
                   {
-                    taskKey: 'tts',
-                    narrationStyle: getReelNarrationStyle(modelOverrides, storyConfig),
+                    storyTextParts: beat.storyTextParts,
+                    overlayConfig: storyConfig.storyTextOverlay,
                   }
-                ).then((audioUrl) => ({ audioUrl }));
+                );
 
-              narrationFn.then(({ audioUrl, reelCaptions, narrationMetadata }) => {
+              narrationFn.then(({
+                audioUrl,
+                narrationMetadata,
+                storyTextOverlayCaptions,
+                storyTextOverlayAlignment,
+                storyTextOverlayEnabled,
+                storyTextOverlayMode,
+                storyTextOverlayStyle,
+              }) => {
                 console.info('[timing:start_story.narration]', {
                   durationMs: Math.round(nowMs() - narrationStartedAt),
                   mode: storyId ? 'persisted' : 'base64_fallback',
@@ -1960,9 +2006,16 @@ export const useStoryStore = create<StoryState>()(
                 });
                 resolvedAudioUrl = audioUrl;
                 resolvedNarrationMetadata = narrationMetadata;
-                if (reelCaptions?.length) {
-                  beat.reelCaptions = reelCaptions;
-                }
+                resolvedStoryTextOverlayCaptions = storyTextOverlayCaptions;
+                resolvedStoryTextOverlayAlignment = storyTextOverlayAlignment;
+                resolvedStoryTextOverlayEnabled = storyTextOverlayEnabled;
+                resolvedStoryTextOverlayMode = storyTextOverlayMode;
+                resolvedStoryTextOverlayStyle = storyTextOverlayStyle;
+                beat.storyTextOverlayCaptions = storyTextOverlayCaptions;
+                beat.storyTextOverlayAlignment = storyTextOverlayAlignment;
+                beat.storyTextOverlayEnabled = storyTextOverlayEnabled;
+                beat.storyTextOverlayMode = storyTextOverlayMode;
+                beat.storyTextOverlayStyle = storyTextOverlayStyle;
                 const latestSession = get().session;
                 if (!latestSession) return;
                 const rootId = latestSession.storyMap.rootNodeId;
@@ -1976,11 +2029,15 @@ export const useStoryStore = create<StoryState>()(
                     data: normalizeBeatMediaFields({
                       ...rootNode.data,
                       audioUrl,
-                      ...(reelCaptions?.length ? { reelCaptions } : {}),
                       ...(narrationMetadata ? {
                         narrationMetadata,
                         activeNarrationPreviewId: undefined,
                       } : {}),
+                      storyTextOverlayEnabled,
+                      storyTextOverlayMode,
+                      storyTextOverlayStyle,
+                      storyTextOverlayCaptions,
+                      storyTextOverlayAlignment,
                       narrationVoiceId: voiceResolution.voiceId,
                       audioStatus: storyId ? 'ready' : 'not_requested',
                       audioError: undefined,
@@ -2124,6 +2181,17 @@ export const useStoryStore = create<StoryState>()(
                 narrationMetadata: resolvedNarrationMetadata,
                 activeNarrationPreviewId: undefined,
               } : {}),
+              ...(typeof resolvedStoryTextOverlayEnabled === 'boolean'
+                ? { storyTextOverlayEnabled: resolvedStoryTextOverlayEnabled }
+                : {}),
+              ...(resolvedStoryTextOverlayMode ? { storyTextOverlayMode: resolvedStoryTextOverlayMode } : {}),
+              ...(resolvedStoryTextOverlayStyle ? { storyTextOverlayStyle: resolvedStoryTextOverlayStyle } : {}),
+              ...(resolvedStoryTextOverlayCaptions?.length
+                ? { storyTextOverlayCaptions: resolvedStoryTextOverlayCaptions }
+                : {}),
+              ...(resolvedStoryTextOverlayAlignment
+                ? { storyTextOverlayAlignment: resolvedStoryTextOverlayAlignment }
+                : {}),
             },
           };
 
@@ -2738,6 +2806,8 @@ export const useStoryStore = create<StoryState>()(
               textLength: session.storyConfig.reel.textLength,
               reelSettings: modelOverrides?.reelSettings,
             });
+          } else {
+            beat = applyStoryTextOverlayBeatMetadata(beat, session.storyConfig);
           }
           const portraitRefs = session.enableReferenceImages && !promptOnly
             ? await measureAsyncStep(
@@ -2775,6 +2845,11 @@ export const useStoryStore = create<StoryState>()(
           // so we capture the URL and apply it during the merge.
           let resolvedAudioUrl: string | undefined;
           let resolvedNarrationMetadata: StoryBeat['narrationMetadata'];
+          let resolvedStoryTextOverlayCaptions: StoryBeat['storyTextOverlayCaptions'];
+          let resolvedStoryTextOverlayAlignment: StoryBeat['storyTextOverlayAlignment'];
+          let resolvedStoryTextOverlayEnabled: StoryBeat['storyTextOverlayEnabled'];
+          let resolvedStoryTextOverlayMode: StoryBeat['storyTextOverlayMode'];
+          let resolvedStoryTextOverlayStyle: StoryBeat['storyTextOverlayStyle'];
 
           // Fire-and-forget: start narration in parallel with image generation
           // Voice is locked at story start — use it directly or fall back to default constant
@@ -2810,7 +2885,15 @@ export const useStoryStore = create<StoryState>()(
             const handleNarrationResolved = (
               audioUrl: string,
               reelCaptions?: StoryBeat['reelCaptions'],
-              narrationMetadata?: StoryBeat['narrationMetadata']
+              narrationMetadata?: StoryBeat['narrationMetadata'],
+              storyOverlay?: Pick<
+                StoryBeat,
+                | 'storyTextOverlayCaptions'
+                | 'storyTextOverlayAlignment'
+                | 'storyTextOverlayEnabled'
+                | 'storyTextOverlayMode'
+                | 'storyTextOverlayStyle'
+              >
             ) => {
               console.info('[timing:continue_story.narration]', {
                 durationMs: Math.round(nowMs() - narrationStartedAt),
@@ -2822,6 +2905,18 @@ export const useStoryStore = create<StoryState>()(
               resolvedNarrationMetadata = narrationMetadata;
               if (reelCaptions?.length) {
                 beat.reelCaptions = reelCaptions;
+              }
+              if (storyOverlay) {
+                resolvedStoryTextOverlayCaptions = storyOverlay.storyTextOverlayCaptions;
+                resolvedStoryTextOverlayAlignment = storyOverlay.storyTextOverlayAlignment;
+                resolvedStoryTextOverlayEnabled = storyOverlay.storyTextOverlayEnabled;
+                resolvedStoryTextOverlayMode = storyOverlay.storyTextOverlayMode;
+                resolvedStoryTextOverlayStyle = storyOverlay.storyTextOverlayStyle;
+                beat.storyTextOverlayCaptions = storyOverlay.storyTextOverlayCaptions;
+                beat.storyTextOverlayAlignment = storyOverlay.storyTextOverlayAlignment;
+                beat.storyTextOverlayEnabled = storyOverlay.storyTextOverlayEnabled;
+                beat.storyTextOverlayMode = storyOverlay.storyTextOverlayMode;
+                beat.storyTextOverlayStyle = storyOverlay.storyTextOverlayStyle;
               }
               if (narrationMetadata) {
                 beat.narrationMetadata = narrationMetadata;
@@ -2843,6 +2938,21 @@ export const useStoryStore = create<StoryState>()(
                     ...(narrationMetadata ? {
                       narrationMetadata,
                       activeNarrationPreviewId: undefined,
+                    } : {}),
+                    ...(storyOverlay?.storyTextOverlayCaptions?.length ? {
+                      storyTextOverlayCaptions: storyOverlay.storyTextOverlayCaptions,
+                    } : {}),
+                    ...(storyOverlay?.storyTextOverlayAlignment ? {
+                      storyTextOverlayAlignment: storyOverlay.storyTextOverlayAlignment,
+                    } : {}),
+                    ...(typeof storyOverlay?.storyTextOverlayEnabled === 'boolean' ? {
+                      storyTextOverlayEnabled: storyOverlay.storyTextOverlayEnabled,
+                    } : {}),
+                    ...(storyOverlay?.storyTextOverlayMode ? {
+                      storyTextOverlayMode: storyOverlay.storyTextOverlayMode,
+                    } : {}),
+                    ...(storyOverlay?.storyTextOverlayStyle ? {
+                      storyTextOverlayStyle: storyOverlay.storyTextOverlayStyle,
                     } : {}),
                     narrationVoiceId: voiceForBeat,
                     audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
@@ -2893,7 +3003,7 @@ export const useStoryStore = create<StoryState>()(
                 }
               : {};
 
-            if (session.savedStoryId) {
+            if (session.savedStoryId && isReelNarration) {
               // Server-side: generate + upload to Supabase in one round trip
               narrationPromise = generateAndPersistNarration(
                 beat.storyText, session.tone, session.genre,
@@ -2906,6 +3016,24 @@ export const useStoryStore = create<StoryState>()(
                   ...reelNarrationOptions,
                 }
               ).then(({ audioUrl, reelCaptions, narrationMetadata }) => handleNarrationResolved(audioUrl, reelCaptions, narrationMetadata))
+                .catch(handleNarrationError);
+            } else if (session.savedStoryId) {
+              narrationPromise = generateAndPersistStoryNarrationWithOverlay(
+                beat.storyText, session.tone, session.genre,
+                voiceForBeat, narrationLanguageCode,
+                session.savedStoryId, newNodeId,
+                costPhase(baseCostTelemetry, 'tts'),
+                {
+                  storyTextParts: beat.storyTextParts,
+                  overlayConfig: session.storyConfig.storyTextOverlay,
+                }
+              ).then((result) => handleNarrationResolved(result.audioUrl, undefined, result.narrationMetadata, {
+                storyTextOverlayEnabled: result.storyTextOverlayEnabled,
+                storyTextOverlayMode: result.storyTextOverlayMode,
+                storyTextOverlayStyle: result.storyTextOverlayStyle,
+                storyTextOverlayCaptions: result.storyTextOverlayCaptions,
+                storyTextOverlayAlignment: result.storyTextOverlayAlignment,
+              }))
                 .catch(handleNarrationError);
             } else if (isReelNarration) {
               narrationPromise = generateReelNarrationOnly(
@@ -2920,15 +3048,21 @@ export const useStoryStore = create<StoryState>()(
                 .catch(handleNarrationError);
             } else {
               // Fallback: generate only (no persistence yet)
-              narrationPromise = generateNarrationOnly(
+              narrationPromise = generateStoryNarrationOnlyWithOverlay(
                 beat.storyText, session.tone, session.genre,
                 voiceForBeat, narrationLanguageCode,
                 costPhase(baseCostTelemetry, 'tts'),
                 {
-                  taskKey: 'tts',
-                  narrationStyle: getReelNarrationStyle(modelOverrides, session.storyConfig),
+                  storyTextParts: beat.storyTextParts,
+                  overlayConfig: session.storyConfig.storyTextOverlay,
                 }
-              ).then(handleNarrationResolved)
+              ).then((result) => handleNarrationResolved(result.audioUrl, undefined, result.narrationMetadata, {
+                storyTextOverlayEnabled: result.storyTextOverlayEnabled,
+                storyTextOverlayMode: result.storyTextOverlayMode,
+                storyTextOverlayStyle: result.storyTextOverlayStyle,
+                storyTextOverlayCaptions: result.storyTextOverlayCaptions,
+                storyTextOverlayAlignment: result.storyTextOverlayAlignment,
+              }))
                 .catch(handleNarrationError);
             }
           }
@@ -3017,6 +3151,17 @@ export const useStoryStore = create<StoryState>()(
                     narrationMetadata: resolvedNarrationMetadata,
                     activeNarrationPreviewId: undefined,
                   } : {}),
+                  ...(typeof resolvedStoryTextOverlayEnabled === 'boolean'
+                    ? { storyTextOverlayEnabled: resolvedStoryTextOverlayEnabled }
+                    : {}),
+                  ...(resolvedStoryTextOverlayMode ? { storyTextOverlayMode: resolvedStoryTextOverlayMode } : {}),
+                  ...(resolvedStoryTextOverlayStyle ? { storyTextOverlayStyle: resolvedStoryTextOverlayStyle } : {}),
+                  ...(resolvedStoryTextOverlayCaptions?.length
+                    ? { storyTextOverlayCaptions: resolvedStoryTextOverlayCaptions }
+                    : {}),
+                  ...(resolvedStoryTextOverlayAlignment
+                    ? { storyTextOverlayAlignment: resolvedStoryTextOverlayAlignment }
+                    : {}),
                   imageStatus: promptOnly ? 'not_requested' : 'pending',
                   audioStatus: resolvedAudioUrl
                     ? (session.savedStoryId ? 'ready' : 'not_requested')
@@ -3359,6 +3504,11 @@ export const useStoryStore = create<StoryState>()(
           let audioUrl: string;
           let reelCaptions: StoryBeat['reelCaptions'];
           let narrationMetadata: StoryBeat['narrationMetadata'];
+          let storyTextOverlayCaptions: StoryBeat['storyTextOverlayCaptions'];
+          let storyTextOverlayAlignment: StoryBeat['storyTextOverlayAlignment'];
+          let storyTextOverlayEnabled: StoryBeat['storyTextOverlayEnabled'];
+          let storyTextOverlayMode: StoryBeat['storyTextOverlayMode'];
+          let storyTextOverlayStyle: StoryBeat['storyTextOverlayStyle'];
           const isReelNarration = isReelStoryConfig(session.storyConfig);
           const reelNarrationOptions = isReelNarration
             ? {
@@ -3370,7 +3520,7 @@ export const useStoryStore = create<StoryState>()(
               }
             : {};
 
-          if (session.savedStoryId) {
+          if (session.savedStoryId && isReelNarration) {
             // Server-side: generate + upload to Supabase in one round trip
             const result = await generateAndPersistNarration(
               node.data.storyText, session.tone, session.genre,
@@ -3385,6 +3535,23 @@ export const useStoryStore = create<StoryState>()(
             audioUrl = result.audioUrl;
             reelCaptions = result.reelCaptions;
             narrationMetadata = result.narrationMetadata;
+          } else if (session.savedStoryId) {
+            const result = await generateAndPersistStoryNarrationWithOverlay(
+              node.data.storyText, session.tone, session.genre,
+              voiceName, narrationLanguageCode, session.savedStoryId, nodeId,
+              costPhase(baseCostTelemetry, 'tts'),
+              {
+                storyTextParts: node.data.storyTextParts,
+                overlayConfig: session.storyConfig.storyTextOverlay,
+              }
+            );
+            audioUrl = result.audioUrl;
+            narrationMetadata = result.narrationMetadata;
+            storyTextOverlayCaptions = result.storyTextOverlayCaptions;
+            storyTextOverlayAlignment = result.storyTextOverlayAlignment;
+            storyTextOverlayEnabled = result.storyTextOverlayEnabled;
+            storyTextOverlayMode = result.storyTextOverlayMode;
+            storyTextOverlayStyle = result.storyTextOverlayStyle;
           } else if (isReelNarration) {
             const result = await generateReelNarrationOnly(
               node.data.storyText, session.tone, session.genre,
@@ -3400,15 +3567,22 @@ export const useStoryStore = create<StoryState>()(
             narrationMetadata = result.narrationMetadata;
           } else {
             // No cloud save yet — generate only, returns base64
-            audioUrl = await generateNarrationOnly(
+            const result = await generateStoryNarrationOnlyWithOverlay(
               node.data.storyText, session.tone, session.genre,
               voiceName, narrationLanguageCode,
               costPhase(baseCostTelemetry, 'tts'),
               {
-                taskKey: 'tts',
-                narrationStyle: getReelNarrationStyle(modelOverrides, session.storyConfig),
+                storyTextParts: node.data.storyTextParts,
+                overlayConfig: session.storyConfig.storyTextOverlay,
               }
             );
+            audioUrl = result.audioUrl;
+            narrationMetadata = result.narrationMetadata;
+            storyTextOverlayCaptions = result.storyTextOverlayCaptions;
+            storyTextOverlayAlignment = result.storyTextOverlayAlignment;
+            storyTextOverlayEnabled = result.storyTextOverlayEnabled;
+            storyTextOverlayMode = result.storyTextOverlayMode;
+            storyTextOverlayStyle = result.storyTextOverlayStyle;
           }
 
           // Update the node with audio — re-read session in case it changed
@@ -3428,6 +3602,13 @@ export const useStoryStore = create<StoryState>()(
                   narrationMetadata,
                   activeNarrationPreviewId: undefined,
                 } : {}),
+                ...(typeof storyTextOverlayEnabled === 'boolean'
+                  ? { storyTextOverlayEnabled }
+                  : {}),
+                ...(storyTextOverlayMode ? { storyTextOverlayMode } : {}),
+                ...(storyTextOverlayStyle ? { storyTextOverlayStyle } : {}),
+                ...(storyTextOverlayCaptions?.length ? { storyTextOverlayCaptions } : {}),
+                ...(storyTextOverlayAlignment ? { storyTextOverlayAlignment } : {}),
                 narrationVoiceId: voiceName,
                 audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
                 audioError: undefined,
@@ -3831,6 +4012,258 @@ export const useStoryStore = create<StoryState>()(
         });
       },
 
+      updateStoryTextOverlaySettings: async ({ enabled, mode, style }) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig)) {
+          return;
+        }
+
+        const normalizedMode = mode === 'line' ? 'line' : 'word';
+        const normalizedStyle = normalizeStoryTextOverlayStyle(style ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE);
+        const nextStoryConfig = normalizeStoryConfig({
+          ...session.storyConfig,
+          storyTextOverlay: {
+            enabled: Boolean(enabled),
+            mode: normalizedMode,
+            style: normalizedStyle,
+          },
+        });
+        const applyOverlayToBeat = (beat: StoryBeat): StoryBeat => ({
+          ...beat,
+          storyTextOverlayEnabled: Boolean(enabled),
+          storyTextOverlayMode: normalizedMode,
+          storyTextOverlayStyle: normalizedStyle,
+          storyTextOverlayCaptions: beat.storyTextOverlayCaptions?.length
+            ? beat.storyTextOverlayCaptions
+            : buildStoryTextOverlayCaptions({
+                storyText: beat.storyText,
+                storyTextParts: beat.storyTextParts,
+              }),
+        });
+        const nextMap: StoryMap = {
+          ...session.storyMap,
+          nodes: Object.fromEntries(
+            Object.entries(session.storyMap.nodes).map(([nodeId, node]) => [
+              nodeId,
+              {
+                ...node,
+                data: normalizeBeatMediaFields(applyOverlayToBeat(node.data)),
+              },
+            ])
+          ),
+        };
+        const nextSession = deriveSessionFields(
+          {
+            ...session,
+            storyConfig: nextStoryConfig,
+          },
+          nextMap
+        );
+
+        updateStoreSaveUi({
+          session: nextSession,
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+        });
+
+        if (!session.savedStoryId) {
+          return;
+        }
+
+        try {
+          await saveStoryAction(nextSession, nextMap);
+          const latestSession = get().session;
+          const savePartial: Partial<StoryState> = {
+            isSaving: false,
+            saveStatus: 'saved',
+            error: null,
+          };
+          if (latestSession) {
+            savePartial.session = deriveSessionFields(
+                  {
+                    ...latestSession,
+                    storyConfig: nextStoryConfig,
+                  },
+                  {
+                    ...latestSession.storyMap,
+                    nodes: Object.fromEntries(
+                      Object.entries(latestSession.storyMap.nodes).map(([nodeId, node]) => [
+                        nodeId,
+                        {
+                          ...node,
+                          data: normalizeBeatMediaFields(applyOverlayToBeat(node.data)),
+                        },
+                      ])
+                    ),
+                  }
+                );
+          }
+          updateStoreSaveUi(savePartial);
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to save story text overlay settings.',
+          });
+          throw error;
+        }
+      },
+
+      generateStoryTextOverlayForNode: async (nodeId, settings) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig)) {
+          throw new Error('Story text overlay generation is available for stories only.');
+        }
+        if (!session.savedStoryId) {
+          throw new Error('Save this story before generating text overlay timing.');
+        }
+        const node = session.storyMap.nodes[nodeId];
+        if (!node) {
+          throw new Error('Story beat was not found.');
+        }
+
+        updateStoreSaveUi({
+          isSaving: true,
+          saveStatus: 'saving',
+          error: null,
+        });
+
+        try {
+          const result = await generateStoryTextOverlayForBeatAction({
+            storyId: session.savedStoryId,
+            nodeId,
+            overlayConfig: {
+              enabled: settings.enabled,
+              mode: settings.mode,
+              style: normalizeStoryTextOverlayStyle(settings.style ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE),
+            },
+          });
+          const latestSession = get().session;
+          if (latestSession) {
+            const latestNode = latestSession.storyMap.nodes[nodeId];
+            if (latestNode) {
+              const nextMap: StoryMap = {
+                ...latestSession.storyMap,
+                nodes: {
+                  ...latestSession.storyMap.nodes,
+                  [nodeId]: {
+                    ...latestNode,
+                    data: normalizeBeatMediaFields({
+                      ...latestNode.data,
+                      storyTextOverlayEnabled: result.storyTextOverlayEnabled,
+                      storyTextOverlayMode: result.storyTextOverlayMode,
+                      storyTextOverlayStyle: result.storyTextOverlayStyle,
+                      storyTextOverlayCaptions: result.storyTextOverlayCaptions,
+                      storyTextOverlayAlignment: result.storyTextOverlayAlignment,
+                    }),
+                  },
+                },
+              };
+              updateStoreSaveUi({
+                session: deriveSessionFields(latestSession, nextMap),
+                isSaving: false,
+                saveStatus: 'saved',
+                error: null,
+              });
+            } else {
+              updateStoreSaveUi({
+                isSaving: false,
+                saveStatus: 'saved',
+                error: null,
+              });
+            }
+          } else {
+            updateStoreSaveUi({
+              isSaving: false,
+              saveStatus: 'saved',
+              error: null,
+            });
+          }
+          return result;
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to generate story text overlay timing.',
+          });
+          throw error;
+        }
+      },
+
+      generateStoryTextOverlayForCurrentPath: async (settings) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig)) {
+          throw new Error('Story text overlay generation is available for stories only.');
+        }
+        if (!session.savedStoryId) {
+          throw new Error('Save this story before generating text overlay timing.');
+        }
+
+        const nodeIds = getPathToNode(session.storyMap, session.storyMap.currentNodeId).map((node) => node.id);
+        updateStoreSaveUi({
+          isSaving: true,
+          saveStatus: 'saving',
+          error: null,
+        });
+
+        try {
+          const result = await generateStoryTextOverlayForStoryAction({
+            storyId: session.savedStoryId,
+            nodeIds,
+            overlayConfig: {
+              enabled: settings.enabled,
+              mode: settings.mode,
+              style: normalizeStoryTextOverlayStyle(settings.style ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE),
+            },
+          });
+          const latestSession = get().session;
+          if (latestSession) {
+            const nextNodes = { ...latestSession.storyMap.nodes };
+            for (const item of result.results) {
+              if (item.status !== 'synced' && item.status !== 'fallback') continue;
+              const node = nextNodes[item.nodeId];
+              if (!node) continue;
+              nextNodes[item.nodeId] = {
+                ...node,
+                data: normalizeBeatMediaFields({
+                  ...node.data,
+                  storyTextOverlayEnabled: item.storyTextOverlayEnabled,
+                  storyTextOverlayMode: item.storyTextOverlayMode,
+                  storyTextOverlayStyle: item.storyTextOverlayStyle,
+                  storyTextOverlayCaptions: item.storyTextOverlayCaptions,
+                  storyTextOverlayAlignment: item.storyTextOverlayAlignment,
+                }),
+              };
+            }
+            const nextMap: StoryMap = {
+              ...latestSession.storyMap,
+              nodes: nextNodes,
+            };
+            updateStoreSaveUi({
+              session: deriveSessionFields(latestSession, nextMap),
+              isSaving: false,
+              saveStatus: result.failed > 0 ? 'unsaved' : 'saved',
+              error: result.failed > 0 ? 'Some story text overlay timings could not be generated.' : null,
+            });
+          } else {
+            updateStoreSaveUi({
+              isSaving: false,
+              saveStatus: result.failed > 0 ? 'unsaved' : 'saved',
+              error: result.failed > 0 ? 'Some story text overlay timings could not be generated.' : null,
+            });
+          }
+          return result;
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to generate story text overlay timing.',
+          });
+          throw error;
+        }
+      },
+
       updateReelTransitionSettings: async (settings: ReelTransitionSettings) => {
         const { session } = get();
         if (!session || !isReelStoryConfig(session.storyConfig)) {
@@ -3934,6 +4367,8 @@ export const useStoryStore = create<StoryState>()(
               textLength: session.storyConfig.reel.textLength,
               reelSettings: modelOverrides?.reelSettings,
             });
+          } else {
+            beatForRender = applyStoryTextOverlayBeatMetadata(beatForRender, session.storyConfig);
           }
 
           let portraitReferences = session.enableReferenceImages

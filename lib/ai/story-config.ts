@@ -25,6 +25,11 @@ import {
 import { normalizeReelNarrationSettings } from '@/lib/reel/narration';
 import { normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import { DEFAULT_REEL_TRANSITION_SETTINGS, normalizeReelTransitionSettings } from '@/lib/reel/transitions';
+import { normalizeStoryTextOverlayMode } from '@/lib/story-overlay/captions';
+import {
+  DEFAULT_STORY_TEXT_OVERLAY_STYLE,
+  normalizeStoryTextOverlayStyle,
+} from '@/lib/story-overlay/styles';
 import type {
   NarrationGenderBucket,
   NarrationLanguageCode,
@@ -140,6 +145,12 @@ export const DEFAULT_REEL_CONFIG: ReelStoryConfig = {
   brandingEnabled: true,
 };
 
+export const DEFAULT_STORY_TEXT_OVERLAY_CONFIG: StoryConfig['storyTextOverlay'] = {
+  enabled: true,
+  mode: 'word',
+  style: normalizeStoryTextOverlayStyle(DEFAULT_STORY_TEXT_OVERLAY_STYLE),
+};
+
 export const DEFAULT_STORY_CONFIG: StoryConfig = {
   storyKind: 'story',
   language: 'english',
@@ -152,6 +163,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   visualSettings: DEFAULT_VISUAL_SETTINGS,
   authoring: DEFAULT_AUTHORING,
   reel: DEFAULT_REEL_CONFIG,
+  storyTextOverlay: DEFAULT_STORY_TEXT_OVERLAY_CONFIG,
   portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
 };
 
@@ -199,6 +211,7 @@ type RawStoryConfig = Partial<StoryConfig> & {
     preludeText?: string | null;
   }) | null;
   reel?: Partial<ReelStoryConfig> | null;
+  storyTextOverlay?: Partial<StoryConfig['storyTextOverlay']> | null;
   portraitReferences?: Partial<PortraitReferenceConfig> | null;
   narrationVoice?: Partial<StoryNarrationVoiceSelection> | null;
 };
@@ -252,8 +265,19 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     visualSettings,
     authoring: storyKind === 'reel' ? { mode: 'prompt' } : authoring,
     reel,
+    storyTextOverlay: normalizeStoryTextOverlayConfig(input?.storyTextOverlay),
     portraitReferences,
     ...(narrationVoice ? { narrationVoice } : {}),
+  };
+}
+
+function normalizeStoryTextOverlayConfig(
+  input?: Partial<StoryConfig['storyTextOverlay']> | null
+): StoryConfig['storyTextOverlay'] {
+  return {
+    enabled: input?.enabled !== false,
+    mode: normalizeStoryTextOverlayMode(input?.mode),
+    style: normalizeStoryTextOverlayStyle(input?.style ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE),
   };
 }
 

@@ -16,6 +16,12 @@ import type {
 import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
 import type { BeatMediaStatus } from './beat-media';
 import type { ReelPanelCaption, StoryAspectRatio, StoryboardNarrationTiming, StoryKind } from './story';
+import type {
+  StoryTextOverlayAlignment,
+  StoryTextOverlayCaption,
+  StoryTextOverlayMode,
+  StoryTextOverlayStyle,
+} from '@/lib/story-overlay/types';
 
 export type StorylineShareCoverSource =
   | 'custom_generated'
@@ -176,6 +182,11 @@ export interface DbBeat {
   is_storyboard: boolean;
   reel_captions?: ReelPanelCaption[] | null;
   storyboard_narration_timing?: StoryboardNarrationTiming | null;
+  story_text_overlay_enabled?: boolean | null;
+  story_text_overlay_mode?: StoryTextOverlayMode | null;
+  story_text_overlay_style?: StoryTextOverlayStyle | null;
+  story_text_overlay_captions?: StoryTextOverlayCaption[] | null;
+  story_text_overlay_alignment?: StoryTextOverlayAlignment | null;
   origin_kind: string | null;
   seed_plan_beat_index: number | null;
   canonical_option_id: string | null;

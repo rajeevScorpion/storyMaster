@@ -4,6 +4,13 @@ import type { ReelLengthKey, ReelTextLengthKey } from '@/lib/reel/settings';
 import type { BeatNarrationMetadata, ReelNarrationSettings } from '@/lib/reel/narration';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
+import type {
+  StoryTextOverlayAlignment,
+  StoryTextOverlayCaption,
+  StoryTextOverlayConfig,
+  StoryTextOverlayMode,
+  StoryTextOverlayStyle,
+} from '@/lib/story-overlay/types';
 
 export interface CharacterSheetGalleryEntry {
   url: string;
@@ -145,6 +152,11 @@ export interface StoryBeat {
   storyboardNarrationTiming?: StoryboardNarrationTiming;
   reelTextOverlayEnabled?: boolean;
   reelTextOverlayStyle?: ReelTextOverlayStyle;
+  storyTextOverlayEnabled?: boolean;
+  storyTextOverlayMode?: StoryTextOverlayMode;
+  storyTextOverlayStyle?: StoryTextOverlayStyle;
+  storyTextOverlayCaptions?: StoryTextOverlayCaption[];
+  storyTextOverlayAlignment?: StoryTextOverlayAlignment;
   finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;
@@ -235,6 +247,8 @@ export interface ReelStoryConfig {
   brandingEnabled: boolean;
 }
 
+export type StoryTextOverlaySettings = StoryTextOverlayConfig;
+
 export interface StoryConfig {
   storyKind: StoryKind;
   ageGroup: AgeGroup;
@@ -247,6 +261,7 @@ export interface StoryConfig {
   visualSettings: VisualSettings;
   authoring: StoryAuthoringConfig;
   reel: ReelStoryConfig;
+  storyTextOverlay: StoryTextOverlaySettings;
   portraitReferences: PortraitReferenceConfig;
   narrationVoice?: import('@/lib/ai/narration-voices').StoryNarrationVoiceSelection;
 }

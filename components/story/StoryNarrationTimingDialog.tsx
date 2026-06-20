@@ -24,6 +24,7 @@ interface StoryNarrationTimingDialogProps {
   aspectRatio: StoryAspectRatio;
   vignetteEnabled: boolean;
   vignetteAmountPercent: number;
+  storyTextOverlayWordsPerLine: number;
   onClose: () => void;
   onSave: (timing: StoryboardNarrationTiming | null) => Promise<void>;
 }
@@ -35,6 +36,7 @@ export default function StoryNarrationTimingDialog({
   aspectRatio,
   vignetteEnabled,
   vignetteAmountPercent,
+  storyTextOverlayWordsPerLine,
   onClose,
   onSave,
 }: StoryNarrationTimingDialogProps) {
@@ -198,10 +200,14 @@ export default function StoryNarrationTimingDialog({
                 vignetteEnabled={vignetteEnabled}
                 vignetteAmountPercent={vignetteAmountPercent}
                 playbackState={playbackState}
-                captions={beat.reelCaptions}
                 narrationTiming={validatedDraft ?? undefined}
-                textOverlayEnabled={beat.reelTextOverlayEnabled !== false}
-                textOverlayStyle={beat.reelTextOverlayStyle}
+                textOverlayEnabled={false}
+                storyTextOverlayCaptions={beat.storyTextOverlayCaptions}
+                storyTextOverlayEnabled={beat.storyTextOverlayEnabled !== false}
+                storyTextOverlayMode={beat.storyTextOverlayMode}
+                storyTextOverlayStyle={beat.storyTextOverlayStyle}
+                storyTextOverlayWordsPerLine={storyTextOverlayWordsPerLine}
+                storyTextOverlayTextHighlightSupported={beat.storyTextOverlayAlignment?.textHighlightSupported !== false}
               />
             </div>
 

@@ -1,10 +1,16 @@
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
 import {
-  DEFAULT_REEL_TEXT_OVERLAY_STYLE,
-  getReelCaptionTopPercent,
-  normalizeReelTextOverlayStyle,
-  reelColorWithOpacity,
-} from '@/lib/reel/styles';
+  getActiveStoryOverlayLineIndex,
+  getActiveStoryOverlayWordIndex,
+  getStoryOverlayCaptionWords,
+  groupStoryOverlayWords,
+} from '@/lib/story-overlay/captions';
+import {
+  DEFAULT_STORY_TEXT_OVERLAY_STYLE,
+  getStoryOverlayTopPercent,
+  normalizeStoryTextOverlayStyle,
+  storyOverlayColorWithOpacity,
+} from '@/lib/story-overlay/styles';
 import {
   getStoryExportSceneAtTime,
   STORY_EXPORT_FADE_MS,
@@ -21,6 +27,7 @@ interface StoryExportRenderOptions {
   watermarkPreset?: VideoExportPreset;
   vignetteEnabled?: boolean;
   vignetteAmountPercent?: number;
+  storyTextOverlayWordsPerLine?: number;
 }
 
 type WrappedWord = { text: string; index: number };
@@ -39,10 +46,10 @@ function roundedRect(
 }
 
 function resolveCanvasFont(fontFamily?: string): string {
-  if (!fontFamily || typeof document === 'undefined') return fontFamily || DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily;
+  if (!fontFamily || typeof document === 'undefined') return fontFamily || DEFAULT_STORY_TEXT_OVERLAY_STYLE.fontFamily;
   return fontFamily.replace(/var\((--[^),\s]+)(?:,[^)]+)?\)/g, (_match, variableName: string) => (
     getComputedStyle(document.documentElement).getPropertyValue(variableName).trim()
-    || DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontFamily
+    || DEFAULT_STORY_TEXT_OVERLAY_STYLE.fontFamily
   ));
 }
 
@@ -102,41 +109,21 @@ function measureWords(
   ), 0);
 }
 
-function wrapWords(
-  context: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  paddingX: number,
-  spacing: number
-) {
-  const words = text.trim().split(/\s+/).filter(Boolean).map((word, index) => ({ text: word, index }));
-  const lines: WrappedWord[][] = [];
-  let current: WrappedWord[] = [];
-  words.forEach((word) => {
-    const next = [...current, word];
-    if (current.length === 0 || measureWords(context, next, paddingX, spacing) <= maxWidth) current = next;
-    else {
-      lines.push(current);
-      current = [word];
-    }
-  });
-  if (current.length) lines.push(current);
-  return lines;
-}
-
-function getActiveWordIndex(scene: StoryExportScene, timeMs: number): number | undefined {
+function getActiveStoryWordIndex(scene: StoryExportScene, timeMs: number): number | undefined {
   const localBeatTimeMs = timeMs - scene.beatStartMs;
-  const index = scene.caption?.wordTimings?.findIndex((word) => (
-    localBeatTimeMs >= word.startMs && localBeatTimeMs < word.endMs
-  ));
-  return typeof index === 'number' && index >= 0 ? index : undefined;
+  return getActiveStoryOverlayWordIndex(scene.storyTextOverlayCaption?.wordTimings, localBeatTimeMs);
 }
 
-function drawCaption(context: CanvasRenderingContext2D, scene: StoryExportScene, timeMs: number) {
-  if (!scene.caption?.text?.trim()) return;
-  const style = normalizeReelTextOverlayStyle(scene.textOverlayStyle);
+function drawStoryTextOverlay(
+  context: CanvasRenderingContext2D,
+  scene: StoryExportScene,
+  timeMs: number,
+  wordsPerLine: number
+) {
+  if (!scene.storyTextOverlayCaption?.text?.trim()) return;
+  const style = normalizeStoryTextOverlayStyle(scene.storyTextOverlayStyle);
   const scale = context.canvas.width / 425;
-  const fontSize = Math.max(1, Math.round((style.fontSize ?? DEFAULT_REEL_TEXT_OVERLAY_STYLE.fontSize) * scale));
+  const fontSize = Math.max(1, Math.round((style.fontSize ?? DEFAULT_STORY_TEXT_OVERLAY_STYLE.fontSize) * scale));
   const paddingX = Math.round((style.wordHighlightPaddingX ?? 0) * scale);
   const paddingY = Math.round((style.wordHighlightPaddingY ?? 0) * scale);
   const spacing = Math.round((style.wordHighlightWordSpacing ?? 0) * scale);
@@ -147,7 +134,19 @@ function drawCaption(context: CanvasRenderingContext2D, scene: StoryExportScene,
   context.save();
   context.font = `${style.fontWeight} ${fontSize}px ${resolveCanvasFont(style.fontFamily)}`;
   context.textBaseline = 'middle';
-  const lines = wrapWords(context, scene.caption.text, context.canvas.width - 64 * scale, paddingX, spacing);
+  const words = getStoryOverlayCaptionWords(scene.storyTextOverlayCaption)
+    .map((word, index) => ({ text: word.word, index }));
+  const groupedLines = groupStoryOverlayWords<WrappedWord>(words, wordsPerLine);
+  const localBeatTimeMs = timeMs - scene.beatStartMs;
+  const activeLineIndex = Math.min(
+    groupedLines.length - 1,
+    getActiveStoryOverlayLineIndex(scene.storyTextOverlayCaption.wordTimings, localBeatTimeMs, wordsPerLine)
+  );
+  const lines = [groupedLines[activeLineIndex] ?? groupedLines[0] ?? []].filter((line) => line.length > 0);
+  if (lines.length === 0) {
+    context.restore();
+    return;
+  }
   const widths = lines.map((line) => measureWords(context, line, paddingX, spacing));
   const boxWidth = Math.max(...widths, 1) + boxPaddingX * 2;
   const boxHeight = lineHeight * lines.length + boxPaddingY * 2;
@@ -157,16 +156,18 @@ function drawCaption(context: CanvasRenderingContext2D, scene: StoryExportScene,
     : style.align === 'right'
       ? context.canvas.width - safe - boxWidth
       : (context.canvas.width - boxWidth) / 2;
-  const anchorY = context.canvas.height * (getReelCaptionTopPercent(style) / 100);
+  const anchorY = context.canvas.height * (getStoryOverlayTopPercent(style) / 100);
   const y = Math.max(safe, Math.min(context.canvas.height - safe - boxHeight, anchorY - boxHeight / 2));
 
   if ((style.backgroundOpacity ?? 0) > 0) {
-    context.fillStyle = reelColorWithOpacity(style.backgroundColor, style.backgroundOpacity ?? 0);
+    context.fillStyle = storyOverlayColorWithOpacity(style.backgroundColor, style.backgroundOpacity ?? 0);
     roundedRect(context, x, y, boxWidth, boxHeight, 8 * scale);
     context.fill();
   }
 
-  const activeWordIndex = getActiveWordIndex(scene, timeMs);
+  const activeWordIndex = scene.storyTextOverlayMode !== 'line' && scene.storyTextOverlayTextHighlightSupported
+    ? getActiveStoryWordIndex(scene, timeMs)
+    : undefined;
   lines.forEach((line, lineIndex) => {
     const lineWidth = widths[lineIndex];
     let cursorX = style.align === 'left'
@@ -179,13 +180,20 @@ function drawCaption(context: CanvasRenderingContext2D, scene: StoryExportScene,
       const wordWidth = context.measureText(word.text).width;
       const wordBoxWidth = wordWidth + paddingX * 2;
       if (word.index === activeWordIndex) {
-        context.fillStyle = reelColorWithOpacity(style.wordHighlightColor, style.wordHighlightOpacity);
+        context.fillStyle = storyOverlayColorWithOpacity(style.wordHighlightColor, style.wordHighlightOpacity);
         roundedRect(context, cursorX, textY - lineHeight / 2, wordBoxWidth, lineHeight, (style.wordHighlightBorderRadius ?? 0) * scale);
         context.fill();
       }
-      context.fillStyle = reelColorWithOpacity(style.color, style.textOpacity);
       context.shadowColor = style.shadowColor ?? 'transparent';
       context.shadowBlur = (style.shadowBlur ?? 0) * scale;
+      if ((style.outlineWidth ?? 0) > 0) {
+        context.lineJoin = 'round';
+        context.miterLimit = 2;
+        context.lineWidth = Math.max(0, (style.outlineWidth ?? 0) * scale);
+        context.strokeStyle = storyOverlayColorWithOpacity(style.outlineColor, 1);
+        context.strokeText(word.text, cursorX + paddingX, textY);
+      }
+      context.fillStyle = storyOverlayColorWithOpacity(style.color, style.textOpacity);
       context.fillText(word.text, cursorX + paddingX, textY);
       cursorX += wordBoxWidth + (index < line.length - 1 ? spacing : 0);
     });
@@ -244,8 +252,8 @@ export function drawStoryExportFrame(
   if (scene.isStoryboard) drawStoryboardPanel(context, image, scene.panelIndex);
   else drawContainedImage(context, image);
   if (options.vignetteEnabled) drawVignette(context, options.vignetteAmountPercent ?? 100);
-  if (options.textOverlayEnabled !== false && scene.textOverlayEnabled && scene.isStoryboard) {
-    drawCaption(context, scene, timeMs);
+  if (options.textOverlayEnabled !== false && scene.storyTextOverlayEnabled && scene.isStoryboard) {
+    drawStoryTextOverlay(context, scene, timeMs, options.storyTextOverlayWordsPerLine ?? 7);
   }
   if (options.watermark) drawWatermark(context, options.watermarkPreset);
 

@@ -50,6 +50,7 @@ export type StoryExportStage =
 export interface StoryVideoExportOptions extends VideoExportOptions {
   cycleOverride: boolean;
   cycleMs: number;
+  storyTextOverlayWordsPerLine?: number;
 }
 
 function getCanvasSize(options: StoryVideoExportOptions, preset: VideoExportPreset) {
@@ -200,6 +201,7 @@ export function useStoryVideoExport() {
         drawStoryExportFrame(context, timeline, assets, sample.timeMs, {
           watermark: options.showWatermark === true,
           watermarkPreset: preset,
+          storyTextOverlayWordsPerLine: options.storyTextOverlayWordsPerLine,
         });
         await videoSource.add(
           sample.timeMs / 1000,

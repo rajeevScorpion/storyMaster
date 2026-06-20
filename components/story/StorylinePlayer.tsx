@@ -23,6 +23,7 @@ import {
   FastForward,
   Repeat,
   BookOpen,
+  Eye,
   EyeOff,
   Share2,
   Download,
@@ -138,6 +139,7 @@ export default function StorylinePlayer({
   const [likeCount, setLikeCount] = useState(initialLikeCount);
   const [isTogglingLike, setIsTogglingLike] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [storyTextOverlayVisible, setStoryTextOverlayVisible] = useState(true);
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
@@ -151,6 +153,7 @@ export default function StorylinePlayer({
     loadingReaderScrollSpeedPxPerSecond: number;
     storyUiTextLineCount: number;
     storyUiAutoScrollEnabled: boolean;
+    storyTextOverlayWordsPerLine: number;
     storylineChoiceFlashEnabled: boolean;
     storylineChoiceFlashMs: number;
     videoDownloadEnabled: boolean;
@@ -163,6 +166,7 @@ export default function StorylinePlayer({
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
+    storyTextOverlayWordsPerLine: 7,
     storylineChoiceFlashEnabled: true,
     storylineChoiceFlashMs: 3000,
     videoDownloadEnabled: false,
@@ -393,6 +397,9 @@ export default function StorylinePlayer({
   const resolvedAudio = useResolvedStoryMediaState(audioAsset);
   const resolvedAudioUrl = audioAsset ? resolvedAudio.url : currentBeat.audioUrl;
   const isStoryboard = Boolean(currentBeat.imageUrl && isStoryboardBeat(currentBeat));
+  const hasStoryTextOverlay = Boolean(currentBeat.storyTextOverlayCaptions?.length);
+  const storyTextOverlayEnabled = storyTextOverlayVisible && currentBeat.storyTextOverlayEnabled !== false;
+  const storyTextOverlayHighlightSupported = currentBeat.storyTextOverlayAlignment?.textHighlightSupported !== false;
   const displayImageUrl = currentBeat.portraitImageUrl || resolvedImageUrl;
   const visualKey = `storyline-${currentIndex}:${currentBeat.portraitImageUrl ?? currentBeat.imageUrl ?? 'audio'}`;
   const {
@@ -704,10 +711,14 @@ export default function StorylinePlayer({
                   vignetteEnabled={cycleSettings.vignetteEnabled}
                   vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                   playbackState={playbackState}
-                  captions={currentBeat.reelCaptions}
                   narrationTiming={currentBeat.storyboardNarrationTiming}
-                  textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
-                  textOverlayStyle={currentBeat.reelTextOverlayStyle}
+                  textOverlayEnabled={false}
+                  storyTextOverlayCaptions={currentBeat.storyTextOverlayCaptions}
+                  storyTextOverlayEnabled={storyTextOverlayEnabled}
+                  storyTextOverlayMode={currentBeat.storyTextOverlayMode}
+                  storyTextOverlayStyle={currentBeat.storyTextOverlayStyle}
+                  storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+                  storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
                 />
               </div>
             ) : displayImageUrl ? (
@@ -753,10 +764,14 @@ export default function StorylinePlayer({
                       vignetteEnabled={cycleSettings.vignetteEnabled}
                       vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                       playbackState={playbackState}
-                      captions={currentBeat.reelCaptions}
                       narrationTiming={currentBeat.storyboardNarrationTiming}
-                      textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
-                      textOverlayStyle={currentBeat.reelTextOverlayStyle}
+                      textOverlayEnabled={false}
+                      storyTextOverlayCaptions={currentBeat.storyTextOverlayCaptions}
+                      storyTextOverlayEnabled={storyTextOverlayEnabled}
+                      storyTextOverlayMode={currentBeat.storyTextOverlayMode}
+                      storyTextOverlayStyle={currentBeat.storyTextOverlayStyle}
+                      storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+                      storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
                     />
                   ) : displayImageUrl ? (
                     <Image
@@ -881,6 +896,7 @@ export default function StorylinePlayer({
                       showWatermark: showVideoWatermark,
                       cycleOverride: cycleSettings.cycleOverride,
                       cycleMs: cycleSettings.cycleMs,
+                      storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
                     });
                     if (auth.status === 'allowed' && auth.reservationId) {
                       if (ok) {
@@ -896,6 +912,7 @@ export default function StorylinePlayer({
                       showWatermark: showVideoWatermark,
                       cycleOverride: cycleSettings.cycleOverride,
                       cycleMs: cycleSettings.cycleMs,
+                      storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
                     });
                   }
                 }}
@@ -1000,10 +1017,14 @@ export default function StorylinePlayer({
                 vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
                 playbackState={playbackState}
                 imageClassName="mobile-scene-shuttle"
-                captions={currentBeat.reelCaptions}
                 narrationTiming={currentBeat.storyboardNarrationTiming}
-                textOverlayEnabled={currentBeat.reelTextOverlayEnabled !== false}
-                textOverlayStyle={currentBeat.reelTextOverlayStyle}
+                textOverlayEnabled={false}
+                storyTextOverlayCaptions={currentBeat.storyTextOverlayCaptions}
+                storyTextOverlayEnabled={storyTextOverlayEnabled}
+                storyTextOverlayMode={currentBeat.storyTextOverlayMode}
+                storyTextOverlayStyle={currentBeat.storyTextOverlayStyle}
+                storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+                storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
               />
             ) : displayImageUrl ? (
               <div className="mobile-scene-shuttle absolute inset-0">
@@ -1193,6 +1214,24 @@ export default function StorylinePlayer({
                 )}
               </button>
 
+              {hasStoryTextOverlay && (
+                <button
+                  onClick={() => setStoryTextOverlayVisible((visible) => !visible)}
+                  className={`${MOBILE_CONTROL_BUTTON_CLASS} ${
+                    storyTextOverlayVisible
+                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                      : 'bg-white/5 border-white/10 text-neutral-400 hover:text-neutral-200'
+                  }`}
+                  title={storyTextOverlayVisible ? 'Hide overlay text' : 'Show overlay text'}
+                >
+                  {storyTextOverlayVisible ? (
+                    <Eye className={MOBILE_CONTROL_ICON_CLASS} />
+                  ) : (
+                    <EyeOff className={MOBILE_CONTROL_ICON_CLASS} />
+                  )}
+                </button>
+              )}
+
               {!isVerticalStoryline && (
                 <button
                   onClick={toggleFullscreen}
@@ -1336,6 +1375,20 @@ export default function StorylinePlayer({
               >
                 {isMinimized ? 'read' : 'hide'}
               </button>
+
+              {hasStoryTextOverlay && (
+                <button
+                  onClick={() => setStoryTextOverlayVisible((visible) => !visible)}
+                  className={`px-3 py-1.5 rounded-full text-[10px] font-sans uppercase tracking-wider transition-all border cursor-pointer ${
+                    storyTextOverlayVisible
+                      ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300'
+                      : 'bg-neutral-900/60 border-white/10 text-neutral-500 hover:text-neutral-300'
+                  }`}
+                  title={storyTextOverlayVisible ? 'Hide overlay text' : 'Show overlay text'}
+                >
+                  {storyTextOverlayVisible ? 'overlay' : 'text'}
+                </button>
+              )}
 
               {/* Progress dots */}
               <div className="flex gap-1 items-center">

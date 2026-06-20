@@ -532,6 +532,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
           }),
           brandingEnabled: true,
         },
+        storyTextOverlay: DEFAULT_STORY_CONFIG.storyTextOverlay,
         portraitReferences: buildPortraitReferences(),
         narrationVoice: {
           mode: 'legacy_auto',
@@ -561,8 +562,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
           }
         : {
             mode: 'prompt',
-          },
+      },
       reel: DEFAULT_STORY_CONFIG.reel,
+      storyTextOverlay: DEFAULT_STORY_CONFIG.storyTextOverlay,
       portraitReferences: buildPortraitReferences(),
       narrationVoice: voiceConfig?.enabled
         ? {

@@ -34,6 +34,7 @@ import {
   setStoryLoadingReaderOptions,
   setStoryLoadingReaderScrollSpeed,
   setStoryUiTextLineCount,
+  setStoryTextOverlayWordsPerLine,
   setStoryUiAutoScroll,
   setStorylineChoiceFlashEnabled,
   setStorylineChoiceFlashMs,
@@ -70,7 +71,9 @@ import {
 } from '@/lib/ai/narration-voices';
 import {
   MAX_STORY_UI_TEXT_LINE_COUNT,
+  MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
   MIN_STORY_UI_TEXT_LINE_COUNT,
+  MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
   type StoryboardImageSize,
 } from '@/lib/types/storyboard-settings';
 import {
@@ -311,6 +314,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [storyUiTextLineCount, setStoryUiTextLineCountState] = useState(7);
   const [storyUiTextLineCountInput, setStoryUiTextLineCountInput] = useState('7');
   const [storyUiTextLineCountSaving, setStoryUiTextLineCountSaving] = useState(false);
+  const [storyTextOverlayWordsPerLine, setStoryTextOverlayWordsPerLineState] = useState(7);
+  const [storyTextOverlayWordsPerLineInput, setStoryTextOverlayWordsPerLineInput] = useState('7');
+  const [storyTextOverlayWordsPerLineSaving, setStoryTextOverlayWordsPerLineSaving] = useState(false);
   const [storyUiAutoScrollEnabled, setStoryUiAutoScrollEnabledState] = useState(true);
   const [storyUiAutoScrollToggling, setStoryUiAutoScrollToggling] = useState(false);
   const [clientStoryPersistenceEnabled, setClientStoryPersistenceEnabledState] = useState(false);
@@ -428,6 +434,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         loadingReaderScrollSpeedPxPerSecond: readerScrollSpeed,
         storyUiTextLineCount: uiTextLineCount,
         storyUiAutoScrollEnabled: uiAutoScrollEnabled,
+        storyTextOverlayWordsPerLine: overlayWordsPerLine,
         clientStoryPersistenceEnabled: persistenceEnabled,
         storylineChoiceFlashEnabled: choiceFlashEnabled,
         storylineChoiceFlashMs: choiceFlashMs,
@@ -479,6 +486,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setStoryUiTextLineCountState(uiTextLineCount);
         setStoryUiTextLineCountInput(String(uiTextLineCount));
         setStoryUiAutoScrollEnabledState(uiAutoScrollEnabled);
+        setStoryTextOverlayWordsPerLineState(overlayWordsPerLine);
+        setStoryTextOverlayWordsPerLineInput(String(overlayWordsPerLine));
         setClientStoryPersistenceEnabledState(persistenceEnabled);
         setStorylineChoiceFlashEnabledState(choiceFlashEnabled);
         setStorylineChoiceFlashMsState(choiceFlashMs);
@@ -677,6 +686,22 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
+  async function handleStoryTextOverlayWordsPerLineSave() {
+    const words = parseInt(storyTextOverlayWordsPerLineInput, 10);
+    if (
+      !Number.isFinite(words)
+      || words < MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+      || words > MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+    ) return;
+    setStoryTextOverlayWordsPerLineSaving(true);
+    try {
+      await setStoryTextOverlayWordsPerLine(words);
+      setStoryTextOverlayWordsPerLineState(words);
+    } finally {
+      setStoryTextOverlayWordsPerLineSaving(false);
+    }
+  }
+
   async function handleStorylineChoiceFlashSave() {
     const seconds = storylineChoiceFlashInput.trim() === '' ? NaN : Number(storylineChoiceFlashInput);
     if (!Number.isFinite(seconds) || seconds < 0.5 || seconds > 30) return;
@@ -804,6 +829,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const parsedLoadingReaderAnticipationSec = parseInt(loadingReaderAnticipationInput, 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedInput, 10);
   const parsedStoryUiTextLineCount = parseInt(storyUiTextLineCountInput, 10);
+  const parsedStoryTextOverlayWordsPerLine = parseInt(storyTextOverlayWordsPerLineInput, 10);
   const parsedStorylineChoiceFlashSec = storylineChoiceFlashInput.trim() === ''
     ? NaN
     : Number(storylineChoiceFlashInput);
@@ -822,7 +848,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const overviewSummaries: Record<Exclude<GlobalSettingsSection, 'overview'>, string> = {
     storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
     reels: 'Prompt-only 9:16 reels, editable JSON definers, and manual draft cleanup',
-    reader: `${storyUiTextLineCount} text lines, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
+    reader: `${storyUiTextLineCount} text lines, ${storyTextOverlayWordsPerLine} overlay words, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
     narration: narrationVoiceSettings
       ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
       : 'Voice settings not loaded',
@@ -1150,6 +1176,52 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
               {Number.isFinite(parsedStoryUiTextLineCount) && (parsedStoryUiTextLineCount < MIN_STORY_UI_TEXT_LINE_COUNT || parsedStoryUiTextLineCount > MAX_STORY_UI_TEXT_LINE_COUNT) && (
                 <p className="mt-3 text-xs text-amber-400">
                   Use a value from {MIN_STORY_UI_TEXT_LINE_COUNT} to {MAX_STORY_UI_TEXT_LINE_COUNT}.
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <p className="text-sm font-medium text-neutral-100 mb-1">Overlay Words Per Line</p>
+              <p className="text-xs text-neutral-400 mb-3">
+                Words grouped per timed overlay line in story narration. Default: 7 words.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
+                  max={MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
+                  step={1}
+                  value={storyTextOverlayWordsPerLineInput}
+                  onChange={(e) => setStoryTextOverlayWordsPerLineInput(e.target.value)}
+                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder="7"
+                />
+                <span className="text-xs text-neutral-500">words</span>
+                <button
+                  onClick={handleStoryTextOverlayWordsPerLineSave}
+                  disabled={
+                    storyTextOverlayWordsPerLineSaving ||
+                    !Number.isFinite(parsedStoryTextOverlayWordsPerLine) ||
+                    parsedStoryTextOverlayWordsPerLine < MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE ||
+                    parsedStoryTextOverlayWordsPerLine > MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+                  }
+                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+                >
+                  {storyTextOverlayWordsPerLineSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                </button>
+                {storyTextOverlayWordsPerLine !== parsedStoryTextOverlayWordsPerLine
+                  && parsedStoryTextOverlayWordsPerLine >= MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+                  && parsedStoryTextOverlayWordsPerLine <= MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE && (
+                  <span className="text-xs text-amber-400">Unsaved</span>
+                )}
+              </div>
+              {Number.isFinite(parsedStoryTextOverlayWordsPerLine)
+                && (
+                  parsedStoryTextOverlayWordsPerLine < MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+                  || parsedStoryTextOverlayWordsPerLine > MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+                ) && (
+                <p className="mt-3 text-xs text-amber-400">
+                  Use a value from {MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE} to {MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE}.
                 </p>
               )}
             </div>

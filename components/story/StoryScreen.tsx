@@ -22,6 +22,7 @@ import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 import StoryNarrationTimingDialog from './StoryNarrationTimingDialog';
+import StoryTextOverlayDialog from './StoryTextOverlayDialog';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
@@ -1981,6 +1982,7 @@ interface StoryRuntimeSettings {
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  storyTextOverlayWordsPerLine: number;
   videoDownloadEnabled: boolean;
   videoDownloadAdminBypass: boolean;
   promptOnlyMaxImagesPerBeat: number;
@@ -2009,6 +2011,9 @@ export default function StoryScreen() {
   const updateReelPanelCaptions = useStoryStore((state) => state.updateReelPanelCaptions);
   const updateReelNarrationSettings = useStoryStore((state) => state.updateReelNarrationSettings);
   const updateReelTextOverlaySettings = useStoryStore((state) => state.updateReelTextOverlaySettings);
+  const updateStoryTextOverlaySettings = useStoryStore((state) => state.updateStoryTextOverlaySettings);
+  const generateStoryTextOverlayForNode = useStoryStore((state) => state.generateStoryTextOverlayForNode);
+  const generateStoryTextOverlayForCurrentPath = useStoryStore((state) => state.generateStoryTextOverlayForCurrentPath);
   const updateReelTransitionSettings = useStoryStore((state) => state.updateReelTransitionSettings);
   const regenerateImageForNode = useStoryStore((state) => state.regenerateImageForNode);
   const clearAudioReady = useStoryStore((state) => state.clearAudioReady);
@@ -2050,6 +2055,7 @@ export default function StoryScreen() {
     loadingReaderScrollSpeedPxPerSecond: 24,
     storyUiTextLineCount: 7,
     storyUiAutoScrollEnabled: true,
+    storyTextOverlayWordsPerLine: 7,
     videoDownloadEnabled: false,
     videoDownloadAdminBypass: false,
     promptOnlyMaxImagesPerBeat: 3,
@@ -2191,6 +2197,9 @@ export default function StoryScreen() {
       updateReelPanelCaptions={updateReelPanelCaptions}
       updateReelNarrationSettings={updateReelNarrationSettings}
       updateReelTextOverlaySettings={updateReelTextOverlaySettings}
+      updateStoryTextOverlaySettings={updateStoryTextOverlaySettings}
+      generateStoryTextOverlayForNode={generateStoryTextOverlayForNode}
+      generateStoryTextOverlayForCurrentPath={generateStoryTextOverlayForCurrentPath}
       updateReelTransitionSettings={updateReelTransitionSettings}
       regenerateImageForNode={regenerateImageForNode}
       clearAudioReady={clearAudioReady}
@@ -2243,6 +2252,9 @@ function StoryScreenInner({
   updateReelPanelCaptions,
   updateReelNarrationSettings,
   updateReelTextOverlaySettings,
+  updateStoryTextOverlaySettings,
+  generateStoryTextOverlayForNode,
+  generateStoryTextOverlayForCurrentPath,
   updateReelTransitionSettings,
   regenerateImageForNode,
   clearAudioReady,
@@ -2294,6 +2306,41 @@ function StoryScreenInner({
     options?: { preserveExistingNarration?: boolean }
   ) => Promise<{ clearedNarration: boolean }>;
   updateReelTextOverlaySettings: (settings: { enabled: boolean; style: StoryBeat['reelTextOverlayStyle'] }) => Promise<void>;
+  updateStoryTextOverlaySettings: (settings: {
+    enabled: boolean;
+    mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+    style: StoryBeat['storyTextOverlayStyle'];
+  }) => Promise<void>;
+  generateStoryTextOverlayForNode: (nodeId: string, settings: {
+    enabled: boolean;
+    mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+    style: StoryBeat['storyTextOverlayStyle'];
+  }) => Promise<{
+    nodeId: string;
+    status: 'synced' | 'fallback';
+    storyTextOverlayEnabled: boolean;
+    storyTextOverlayMode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+    storyTextOverlayStyle: NonNullable<StoryBeat['storyTextOverlayStyle']>;
+    storyTextOverlayCaptions: NonNullable<StoryBeat['storyTextOverlayCaptions']>;
+    storyTextOverlayAlignment: NonNullable<StoryBeat['storyTextOverlayAlignment']>;
+  }>;
+  generateStoryTextOverlayForCurrentPath: (settings: {
+    enabled: boolean;
+    mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
+    style: StoryBeat['storyTextOverlayStyle'];
+  }) => Promise<{
+    generated: number;
+    fallback: number;
+    skipped: number;
+    failed: number;
+    results: Array<{
+      nodeId: string;
+      status: 'synced' | 'fallback' | 'skipped' | 'failed';
+      message?: string;
+      storyTextOverlayCaptions?: StoryBeat['storyTextOverlayCaptions'];
+      storyTextOverlayAlignment?: StoryBeat['storyTextOverlayAlignment'];
+    }>;
+  }>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   clearAudioReady: () => void;
@@ -2375,6 +2422,7 @@ function StoryScreenInner({
   const [activeReaderPanel, setActiveReaderPanel] = useState<StoryReaderPanel>('story');
   const [showPublishDialog, setShowPublishDialog] = useState(false);
   const [showStoryNarrationTiming, setShowStoryNarrationTiming] = useState(false);
+  const [showStoryTextOverlay, setShowStoryTextOverlay] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
   const [isDiscardingReel, setIsDiscardingReel] = useState(false);
   const [discardReelError, setDiscardReelError] = useState<string | null>(null);
@@ -2702,6 +2750,14 @@ function StoryScreenInner({
   const savedReelOverlayEnabled = typeof normalizedCurrentBeat.reelTextOverlayEnabled === 'boolean'
     ? normalizedCurrentBeat.reelTextOverlayEnabled
     : session.storyConfig.reel.textOverlayEnabled !== false;
+  const savedStoryTextOverlayEnabled = typeof normalizedCurrentBeat.storyTextOverlayEnabled === 'boolean'
+    ? normalizedCurrentBeat.storyTextOverlayEnabled
+    : session.storyConfig.storyTextOverlay.enabled;
+  const savedStoryTextOverlayMode = normalizedCurrentBeat.storyTextOverlayMode
+    || session.storyConfig.storyTextOverlay.mode;
+  const savedStoryTextOverlayStyle = normalizedCurrentBeat.storyTextOverlayStyle
+    || session.storyConfig.storyTextOverlay.style;
+  const savedStoryTextOverlayHighlightSupported = normalizedCurrentBeat.storyTextOverlayAlignment?.textHighlightSupported !== false;
   const [reelPanelDraft, setReelPanelDraft] = useState<string[]>(savedReelPanelTexts);
   const [reelTextSaveState, setReelTextSaveState] = useState<'idle' | 'saving' | 'warning' | 'saved' | 'error'>('idle');
   const [reelTextMessage, setReelTextMessage] = useState<string | null>(null);
@@ -5636,8 +5692,14 @@ function StoryScreenInner({
                 playbackState={playbackState}
                 captions={normalizedCurrentBeat.reelCaptions}
                 narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
-                textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
+                textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : false}
+                textOverlayStyle={isReelStory ? reelOverlayDraft : undefined}
+                storyTextOverlayCaptions={!isReelStory ? normalizedCurrentBeat.storyTextOverlayCaptions : undefined}
+                storyTextOverlayEnabled={!isReelStory && savedStoryTextOverlayEnabled}
+                storyTextOverlayMode={savedStoryTextOverlayMode}
+                storyTextOverlayStyle={savedStoryTextOverlayStyle}
+                storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+                storyTextOverlayTextHighlightSupported={savedStoryTextOverlayHighlightSupported}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
               />
@@ -5674,8 +5736,14 @@ function StoryScreenInner({
                       playbackState={playbackState}
                       captions={normalizedCurrentBeat.reelCaptions}
                       narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
-                      textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                      textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
+                      textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : false}
+                      textOverlayStyle={isReelStory ? reelOverlayDraft : undefined}
+                      storyTextOverlayCaptions={!isReelStory ? normalizedCurrentBeat.storyTextOverlayCaptions : undefined}
+                      storyTextOverlayEnabled={!isReelStory && savedStoryTextOverlayEnabled}
+                      storyTextOverlayMode={savedStoryTextOverlayMode}
+                      storyTextOverlayStyle={savedStoryTextOverlayStyle}
+                      storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+                      storyTextOverlayTextHighlightSupported={savedStoryTextOverlayHighlightSupported}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                     />
@@ -5829,8 +5897,14 @@ function StoryScreenInner({
                   imageClassName="mobile-scene-shuttle"
                   captions={normalizedCurrentBeat.reelCaptions}
                   narrationTiming={normalizedCurrentBeat.storyboardNarrationTiming}
-                  textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : normalizedCurrentBeat.reelTextOverlayEnabled !== false}
-                  textOverlayStyle={isReelStory ? reelOverlayDraft : normalizedCurrentBeat.reelTextOverlayStyle}
+                  textOverlayEnabled={isReelStory ? reelOverlayEnabledDraft : false}
+                  textOverlayStyle={isReelStory ? reelOverlayDraft : undefined}
+                  storyTextOverlayCaptions={!isReelStory ? normalizedCurrentBeat.storyTextOverlayCaptions : undefined}
+                  storyTextOverlayEnabled={!isReelStory && savedStoryTextOverlayEnabled}
+                  storyTextOverlayMode={savedStoryTextOverlayMode}
+                  storyTextOverlayStyle={savedStoryTextOverlayStyle}
+                  storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+                  storyTextOverlayTextHighlightSupported={savedStoryTextOverlayHighlightSupported}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                 />
@@ -5978,20 +6052,36 @@ function StoryScreenInner({
                 </>
               )}
               {isStoryboard && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!normalizedCurrentBeat.audioUrl) return;
-                    stopAudio();
-                    setShowStoryNarrationTiming(true);
-                  }}
-                  disabled={!normalizedCurrentBeat.audioUrl}
-                  className="rounded-full bg-white/5 p-2 text-neutral-300 backdrop-blur-md transition-colors hover:bg-emerald-400/10 hover:text-emerald-300 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-white/5"
-                  title={normalizedCurrentBeat.audioUrl ? 'Story Narration Timing' : 'Generate narration first'}
-                  aria-label={normalizedCurrentBeat.audioUrl ? 'Open Story Narration Timing' : 'Generate narration first'}
-                >
-                  <Clock3 className="h-5 w-5" />
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!normalizedCurrentBeat.imageUrl) return;
+                      stopAudio();
+                      setShowStoryTextOverlay(true);
+                    }}
+                    disabled={!normalizedCurrentBeat.imageUrl}
+                    className="rounded-full bg-white/5 p-2 text-neutral-300 backdrop-blur-md transition-colors hover:bg-emerald-400/10 hover:text-emerald-300 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-white/5"
+                    title={normalizedCurrentBeat.imageUrl ? 'Story Text Overlay' : 'Create storyboard image first'}
+                    aria-label={normalizedCurrentBeat.imageUrl ? 'Open Story Text Overlay' : 'Create storyboard image first'}
+                  >
+                    <Type className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!normalizedCurrentBeat.audioUrl) return;
+                      stopAudio();
+                      setShowStoryNarrationTiming(true);
+                    }}
+                    disabled={!normalizedCurrentBeat.audioUrl}
+                    className="rounded-full bg-white/5 p-2 text-neutral-300 backdrop-blur-md transition-colors hover:bg-emerald-400/10 hover:text-emerald-300 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-white/5"
+                    title={normalizedCurrentBeat.audioUrl ? 'Story Narration Timing' : 'Generate narration first'}
+                    aria-label={normalizedCurrentBeat.audioUrl ? 'Open Story Narration Timing' : 'Generate narration first'}
+                  >
+                    <Clock3 className="h-5 w-5" />
+                  </button>
+                </>
               )}
             </div>
 
@@ -7239,8 +7329,23 @@ function StoryScreenInner({
         aspectRatio={session.storyConfig.aspectRatio}
         vignetteEnabled={cycleSettings.vignetteEnabled}
         vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+        storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
         onClose={() => setShowStoryNarrationTiming(false)}
         onSave={(timing) => updateStoryboardNarrationTiming(currentNodeId, timing)}
+      />
+      <StoryTextOverlayDialog
+        open={showStoryTextOverlay}
+        nodeId={currentNodeId}
+        beat={normalizedCurrentBeat}
+        aspectRatio={session.storyConfig.aspectRatio}
+        language={session.storyConfig.language}
+        vignetteEnabled={cycleSettings.vignetteEnabled}
+        vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+        wordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
+        onClose={() => setShowStoryTextOverlay(false)}
+        onSave={updateStoryTextOverlaySettings}
+        onGenerateBeat={(settings) => generateStoryTextOverlayForNode(currentNodeId, settings)}
+        onGenerateStory={generateStoryTextOverlayForCurrentPath}
       />
 
       <AnimatePresence>

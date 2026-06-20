@@ -7,6 +7,9 @@ export const DEFAULT_STORYBOARD_VIGNETTE_AMOUNT_PERCENT = 100;
 export const DEFAULT_STORY_UI_TEXT_LINE_COUNT = 7;
 export const MIN_STORY_UI_TEXT_LINE_COUNT = 3;
 export const MAX_STORY_UI_TEXT_LINE_COUNT = 14;
+export const DEFAULT_STORY_TEXT_OVERLAY_WORDS_PER_LINE = 7;
+export const MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE = 2;
+export const MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE = 12;
 
 export interface StoryboardImageQualitySettings {
   imageSize: StoryboardImageSize;
@@ -74,6 +77,23 @@ export function normalizeStoryUiTextLineCount(value: unknown): number {
   return Math.min(
     MAX_STORY_UI_TEXT_LINE_COUNT,
     Math.max(MIN_STORY_UI_TEXT_LINE_COUNT, Math.round(numeric))
+  );
+}
+
+export function normalizeStoryTextOverlayWordsPerLine(value: unknown): number {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? parseInt(value, 10)
+      : NaN;
+
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_STORY_TEXT_OVERLAY_WORDS_PER_LINE;
+  }
+
+  return Math.min(
+    MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
+    Math.max(MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE, Math.round(numeric))
   );
 }
 

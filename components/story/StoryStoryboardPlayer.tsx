@@ -14,6 +14,7 @@ import { getEqualSplitStoryboardPanel } from '@/lib/storyboard/timing';
 import type { StoryBeat } from '@/lib/types/story';
 
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
+import StoryTextOverlay from './StoryTextOverlay';
 import StoryboardVignette from './StoryboardVignette';
 
 interface StoryStoryboardPlayerProps {
@@ -35,6 +36,12 @@ interface StoryStoryboardPlayerProps {
   textOverlayEnabled?: boolean;
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
   textHighlightSupported?: boolean;
+  storyTextOverlayCaptions?: StoryBeat['storyTextOverlayCaptions'];
+  storyTextOverlayEnabled?: boolean;
+  storyTextOverlayMode?: StoryBeat['storyTextOverlayMode'];
+  storyTextOverlayStyle?: StoryBeat['storyTextOverlayStyle'];
+  storyTextOverlayWordsPerLine?: number;
+  storyTextOverlayTextHighlightSupported?: boolean;
 }
 
 export default function StoryStoryboardPlayer({
@@ -56,6 +63,12 @@ export default function StoryStoryboardPlayer({
   textOverlayEnabled = true,
   textOverlayStyle,
   textHighlightSupported = true,
+  storyTextOverlayCaptions,
+  storyTextOverlayEnabled = true,
+  storyTextOverlayMode = 'word',
+  storyTextOverlayStyle,
+  storyTextOverlayWordsPerLine = 7,
+  storyTextOverlayTextHighlightSupported = true,
 }: StoryStoryboardPlayerProps) {
   const [intervalPanel, setIntervalPanel] = useState(0);
   const [probedDuration, setProbedDuration] = useState<{ audioUrl: string; durationMs: number } | null>(null);
@@ -106,6 +119,9 @@ export default function StoryStoryboardPlayer({
     : undefined;
   const activeCaption = activeCaptionObj?.text;
   const activeCaptionWordTimings = textHighlightSupported ? activeCaptionObj?.wordTimings : undefined;
+  const activeStoryTextOverlayCaption = storyTextOverlayEnabled
+    ? storyTextOverlayCaptions?.find((caption) => caption.panelIndex === activePanel)
+    : undefined;
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -133,7 +149,18 @@ export default function StoryStoryboardPlayer({
         </AnimatePresence>
       </div>
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      {activeCaption && (
+      {activeStoryTextOverlayCaption ? (
+        <StoryTextOverlay
+          caption={activeStoryTextOverlayCaption}
+          enabled={storyTextOverlayEnabled}
+          mode={storyTextOverlayMode}
+          style={storyTextOverlayStyle}
+          elapsedMs={hasAudio ? audioElapsedMs : null}
+          isPlaying={playbackState === 'playing'}
+          wordsPerLine={storyTextOverlayWordsPerLine}
+          textHighlightSupported={storyTextOverlayTextHighlightSupported}
+        />
+      ) : activeCaption && (
         <ReelCaptionOverlay style={textOverlayStyle}>
           <ReelTimedCaptionText
             text={activeCaption}

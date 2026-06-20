@@ -359,6 +359,11 @@ const ADDITIVE_BEAT_COLUMNS = [
   'is_storyboard',
   'reel_captions',
   'storyboard_narration_timing',
+  'story_text_overlay_enabled',
+  'story_text_overlay_mode',
+  'story_text_overlay_style',
+  'story_text_overlay_captions',
+  'story_text_overlay_alignment',
   'origin_kind',
   'seed_plan_beat_index',
   'canonical_option_id',
@@ -548,6 +553,26 @@ function nodeToBeatRow(
     row.storyboard_narration_timing = normalizedBeat.storyboardNarrationTiming as unknown as Record<string, unknown>;
   }
 
+  if (typeof normalizedBeat.storyTextOverlayEnabled === 'boolean') {
+    row.story_text_overlay_enabled = normalizedBeat.storyTextOverlayEnabled;
+  }
+
+  if (normalizedBeat.storyTextOverlayMode) {
+    row.story_text_overlay_mode = normalizedBeat.storyTextOverlayMode;
+  }
+
+  if (normalizedBeat.storyTextOverlayStyle) {
+    row.story_text_overlay_style = normalizedBeat.storyTextOverlayStyle as unknown as Record<string, unknown>;
+  }
+
+  if (normalizedBeat.storyTextOverlayCaptions && normalizedBeat.storyTextOverlayCaptions.length > 0) {
+    row.story_text_overlay_captions = normalizedBeat.storyTextOverlayCaptions as unknown as Record<string, unknown>[];
+  }
+
+  if (normalizedBeat.storyTextOverlayAlignment) {
+    row.story_text_overlay_alignment = normalizedBeat.storyTextOverlayAlignment as unknown as Record<string, unknown>;
+  }
+
   row.image_gallery = (normalizedBeat.imageGallery ?? []).map((entry) => ({
     url: normalizeStorageUrl(entry.url, 'story-assets'),
     storage_key: entry.storageKey,
@@ -601,6 +626,15 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       ? beat.reel_captions as StoryBeat['reelCaptions']
       : undefined,
     storyboardNarrationTiming: beat.storyboard_narration_timing || undefined,
+    storyTextOverlayEnabled: typeof beat.story_text_overlay_enabled === 'boolean'
+      ? beat.story_text_overlay_enabled
+      : undefined,
+    storyTextOverlayMode: beat.story_text_overlay_mode || undefined,
+    storyTextOverlayStyle: beat.story_text_overlay_style || undefined,
+    storyTextOverlayCaptions: Array.isArray(beat.story_text_overlay_captions)
+      ? beat.story_text_overlay_captions
+      : undefined,
+    storyTextOverlayAlignment: beat.story_text_overlay_alignment || undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -950,6 +984,26 @@ export async function loadStory(storyId: string): Promise<StorySession> {
               && jsonbNode.data.storyboardNarrationTiming
               ? { storyboardNarrationTiming: jsonbNode.data.storyboardNarrationTiming }
               : {}),
+            ...(typeof storyMap.nodes[nodeId].data.storyTextOverlayEnabled !== 'boolean'
+              && typeof jsonbNode.data.storyTextOverlayEnabled === 'boolean'
+              ? { storyTextOverlayEnabled: jsonbNode.data.storyTextOverlayEnabled }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyTextOverlayMode
+              && jsonbNode.data.storyTextOverlayMode
+              ? { storyTextOverlayMode: jsonbNode.data.storyTextOverlayMode }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyTextOverlayStyle
+              && jsonbNode.data.storyTextOverlayStyle
+              ? { storyTextOverlayStyle: jsonbNode.data.storyTextOverlayStyle }
+              : {}),
+            ...((!storyMap.nodes[nodeId].data.storyTextOverlayCaptions || storyMap.nodes[nodeId].data.storyTextOverlayCaptions.length === 0)
+              && jsonbNode.data.storyTextOverlayCaptions
+              ? { storyTextOverlayCaptions: jsonbNode.data.storyTextOverlayCaptions }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyTextOverlayAlignment
+              && jsonbNode.data.storyTextOverlayAlignment
+              ? { storyTextOverlayAlignment: jsonbNode.data.storyTextOverlayAlignment }
+              : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
@@ -1148,6 +1202,11 @@ export async function updateBeatMediaState(
     characters?: Character[];
     reelCaptions?: StoryBeat['reelCaptions'] | null;
     storyboardNarrationTiming?: StoryBeat['storyboardNarrationTiming'] | null;
+    storyTextOverlayEnabled?: boolean | null;
+    storyTextOverlayMode?: StoryBeat['storyTextOverlayMode'] | null;
+    storyTextOverlayStyle?: StoryBeat['storyTextOverlayStyle'] | null;
+    storyTextOverlayCaptions?: StoryBeat['storyTextOverlayCaptions'] | null;
+    storyTextOverlayAlignment?: StoryBeat['storyTextOverlayAlignment'] | null;
   }
 ): Promise<void> {
   const supabase = await createClient();
@@ -1208,6 +1267,27 @@ export async function updateBeatMediaState(
   if ('storyboardNarrationTiming' in patch) {
     updateData.storyboard_narration_timing = patch.storyboardNarrationTiming
       ? patch.storyboardNarrationTiming as unknown as Record<string, unknown>
+      : null;
+  }
+  if ('storyTextOverlayEnabled' in patch) {
+    updateData.story_text_overlay_enabled = patch.storyTextOverlayEnabled ?? null;
+  }
+  if ('storyTextOverlayMode' in patch) {
+    updateData.story_text_overlay_mode = patch.storyTextOverlayMode ?? null;
+  }
+  if ('storyTextOverlayStyle' in patch) {
+    updateData.story_text_overlay_style = patch.storyTextOverlayStyle
+      ? patch.storyTextOverlayStyle as unknown as Record<string, unknown>
+      : null;
+  }
+  if ('storyTextOverlayCaptions' in patch) {
+    updateData.story_text_overlay_captions = patch.storyTextOverlayCaptions
+      ? patch.storyTextOverlayCaptions as unknown as Record<string, unknown>[]
+      : null;
+  }
+  if ('storyTextOverlayAlignment' in patch) {
+    updateData.story_text_overlay_alignment = patch.storyTextOverlayAlignment
+      ? patch.storyTextOverlayAlignment as unknown as Record<string, unknown>
       : null;
   }
 
@@ -1278,6 +1358,21 @@ export async function updateBeatMediaState(
     ...('reelCaptions' in patch ? { reelCaptions: patch.reelCaptions || undefined } : {}),
     ...('storyboardNarrationTiming' in patch ? {
       storyboardNarrationTiming: patch.storyboardNarrationTiming || undefined,
+    } : {}),
+    ...('storyTextOverlayEnabled' in patch ? {
+      storyTextOverlayEnabled: patch.storyTextOverlayEnabled ?? undefined,
+    } : {}),
+    ...('storyTextOverlayMode' in patch ? {
+      storyTextOverlayMode: patch.storyTextOverlayMode || undefined,
+    } : {}),
+    ...('storyTextOverlayStyle' in patch ? {
+      storyTextOverlayStyle: patch.storyTextOverlayStyle || undefined,
+    } : {}),
+    ...('storyTextOverlayCaptions' in patch ? {
+      storyTextOverlayCaptions: patch.storyTextOverlayCaptions || undefined,
+    } : {}),
+    ...('storyTextOverlayAlignment' in patch ? {
+      storyTextOverlayAlignment: patch.storyTextOverlayAlignment || undefined,
     } : {}),
   });
 
@@ -1410,6 +1505,103 @@ export async function autoPublishStoryline(
     .maybeSingle();
 
   if (existing) {
+    // Refresh the stored storyline snapshot when republishing the same path.
+    const existingBeatsMap = new Map<string, DbBeat>();
+    for (const beat of allBeats as DbBeat[]) {
+      existingBeatsMap.set(beat.node_id, beat);
+    }
+
+    const refreshedChoices: StorylineChoice[] = [];
+    for (let i = 1; i < nodePath.length; i++) {
+      const currentBeat = existingBeatsMap.get(nodePath[i]);
+      const parentBeat = existingBeatsMap.get(nodePath[i - 1]);
+      if (currentBeat?.selected_option_id && parentBeat?.options) {
+        const options = parentBeat.options as unknown as { id: string; label: string }[];
+        const option = options.find(o => o.id === currentBeat.selected_option_id);
+        if (option) {
+          refreshedChoices.push({ fromBeat: parentBeat.beat_number, optionLabel: option.label });
+        }
+      }
+    }
+
+    const refreshedPathBeats = nodePath.map(nid => existingBeatsMap.get(nid)).filter(Boolean) as DbBeat[];
+    const refreshedLegacyBeats = refreshedPathBeats.map(b => ({
+      title: b.title,
+      beatNumber: b.beat_number,
+      isEnding: b.is_ending,
+      storyText: b.story_text,
+      sceneSummary: b.scene_summary,
+      options: b.options,
+      characters: b.characters,
+      continuityNotes: b.continuity_notes,
+      imagePrompt: b.image_prompt,
+      clues: b.clues,
+      nextBeatGoal: b.next_beat_goal,
+      endingForecast: b.ending_forecast,
+      imageUrl: b.image_url,
+      imageStatus: b.image_status,
+      imageError: b.image_error || undefined,
+      audioUrl: b.audio_url,
+      audioStatus: b.audio_status,
+      audioError: b.audio_error || undefined,
+      narrationVoiceId: b.narration_voice_id || undefined,
+      narrationMetadata: b.narration_metadata as StoryBeat['narrationMetadata'] | undefined,
+      activeNarrationPreviewId: b.active_narration_preview_id || undefined,
+      isStoryboard: b.is_storyboard || undefined,
+      reelCaptions: Array.isArray(b.reel_captions) ? b.reel_captions as StoryBeat['reelCaptions'] : undefined,
+      storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
+      storyTextOverlayEnabled: typeof b.story_text_overlay_enabled === 'boolean'
+        ? b.story_text_overlay_enabled
+        : storyConfig.storyTextOverlay.enabled,
+      storyTextOverlayMode: b.story_text_overlay_mode || storyConfig.storyTextOverlay.mode,
+      storyTextOverlayStyle: b.story_text_overlay_style || storyConfig.storyTextOverlay.style,
+      storyTextOverlayCaptions: Array.isArray(b.story_text_overlay_captions)
+        ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
+        : undefined,
+      storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
+      reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,
+      reelTextOverlayStyle: storyConfig.reel.textOverlayStyle,
+      originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
+      seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
+      canonicalOptionId: b.canonical_option_id || undefined,
+    }));
+    const refreshedPublishModes = getStorylinePublishModes(storyConfig, 'standard', refreshedLegacyBeats);
+    const refreshRow = {
+      title: storyTitle,
+      beat_count: nodePath.length,
+      cover_image_url: coverImageUrl || null,
+      is_vertical_story: orientation.isVerticalStory,
+      aspect_ratio: orientation.aspectRatio,
+      story_kind: storyConfig.storyKind,
+      story_format: refreshedPublishModes.storyFormat,
+      story_visual_mode: refreshedPublishModes.storyVisualMode,
+      orientation: refreshedPublishModes.orientation,
+      node_path: nodePath,
+      beats: refreshedLegacyBeats as unknown as Record<string, unknown>[],
+      choices: refreshedChoices as unknown as Record<string, unknown>[],
+      is_public: true,
+    };
+
+    const { error: refreshError } = await supabase
+      .from('storylines')
+      .update(refreshRow)
+      .eq('id', existing.id)
+      .eq('user_id', user.id);
+
+    if (refreshError) {
+      if (isMissingAdditiveColumnError(refreshError, 'storylines')) {
+        const { error: fallbackRefreshError } = await supabase
+          .from('storylines')
+          .update(withoutAdditiveColumns(refreshRow, ADDITIVE_STORYLINE_COLUMNS))
+          .eq('id', existing.id)
+          .eq('user_id', user.id);
+        if (fallbackRefreshError) {
+          throw new Error(`Failed to refresh published storyline: ${fallbackRefreshError.message}`);
+        }
+      } else {
+        throw new Error(`Failed to refresh published storyline: ${refreshError.message}`);
+      }
+    }
     // Already published — just auto-save to user's profile
     await supabase
       .from('saved_storylines')
@@ -1475,6 +1667,15 @@ export async function autoPublishStoryline(
     isStoryboard: b.is_storyboard || undefined,
     reelCaptions: Array.isArray(b.reel_captions) ? b.reel_captions as StoryBeat['reelCaptions'] : undefined,
     storyboardNarrationTiming: b.storyboard_narration_timing || undefined,
+    storyTextOverlayEnabled: typeof b.story_text_overlay_enabled === 'boolean'
+      ? b.story_text_overlay_enabled
+      : storyConfig.storyTextOverlay.enabled,
+    storyTextOverlayMode: b.story_text_overlay_mode || storyConfig.storyTextOverlay.mode,
+    storyTextOverlayStyle: b.story_text_overlay_style || storyConfig.storyTextOverlay.style,
+    storyTextOverlayCaptions: Array.isArray(b.story_text_overlay_captions)
+      ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
+      : undefined,
+    storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
     reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,
     reelTextOverlayStyle: storyConfig.reel.textOverlayStyle,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,

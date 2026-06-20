@@ -28,11 +28,14 @@ import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import {
   DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS,
   MAX_STORY_UI_TEXT_LINE_COUNT,
+  MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
   MIN_STORY_UI_TEXT_LINE_COUNT,
+  MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE,
   normalizeStoryboardImageSize,
   normalizeStoryboardLayoutMode,
   normalizeStoryboardVignetteAmountPercent,
   normalizeStoryboardWebpQualityPercent,
+  normalizeStoryTextOverlayWordsPerLine,
   normalizeStoryUiTextLineCount,
   type StoryboardImageQualitySettings,
   type StoryboardImageSize,
@@ -454,6 +457,7 @@ export async function getGlobalSettings(): Promise<{
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  storyTextOverlayWordsPerLine: number;
   clientStoryPersistenceEnabled: boolean;
   storylineChoiceFlashEnabled: boolean;
   storylineChoiceFlashMs: number;
@@ -483,7 +487,7 @@ export async function getGlobalSettings(): Promise<{
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -497,6 +501,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlagValue('story_ui_text_line_count'),
     getFeatureFlag('story_ui_auto_scroll_enabled', true),
+    getFeatureFlagValue('story_text_overlay_words_per_line'),
     getFeatureFlag('client_story_persistence_enabled', false),
     getFeatureFlag('storyline_choice_flash_enabled', true),
     getFeatureFlagValue('storyline_choice_flash_ms'),
@@ -551,6 +556,7 @@ export async function getGlobalSettings(): Promise<{
       : 24,
     storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
     storyUiAutoScrollEnabled,
+    storyTextOverlayWordsPerLine: normalizeStoryTextOverlayWordsPerLine(storyTextOverlayWordsPerLineValue),
     clientStoryPersistenceEnabled,
     storylineChoiceFlashEnabled,
     storylineChoiceFlashMs: Number.isFinite(parsedStorylineChoiceFlashMs)
@@ -671,6 +677,18 @@ export async function setStoryUiTextLineCount(lines: number): Promise<void> {
     throw new Error(`Story text lines must be between ${MIN_STORY_UI_TEXT_LINE_COUNT} and ${MAX_STORY_UI_TEXT_LINE_COUNT}.`);
   }
   await setFeatureFlagValue('story_ui_text_line_count', String(normalizeStoryUiTextLineCount(lines)));
+}
+
+export async function setStoryTextOverlayWordsPerLine(words: number): Promise<void> {
+  await verifyAdmin();
+  if (
+    !Number.isFinite(words)
+    || words < MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+    || words > MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE
+  ) {
+    throw new Error(`Story overlay words per line must be between ${MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE} and ${MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE}.`);
+  }
+  await setFeatureFlagValue('story_text_overlay_words_per_line', String(normalizeStoryTextOverlayWordsPerLine(words)));
 }
 
 export async function setStoryUiAutoScroll(enabled: boolean): Promise<void> {
@@ -871,6 +889,7 @@ export async function getStoryboardSettings(): Promise<{
   loadingReaderScrollSpeedPxPerSecond: number;
   storyUiTextLineCount: number;
   storyUiAutoScrollEnabled: boolean;
+  storyTextOverlayWordsPerLine: number;
   storylineChoiceFlashEnabled: boolean;
   storylineChoiceFlashMs: number;
   cloudSaveTimeoutMs: number;
@@ -897,7 +916,7 @@ export async function getStoryboardSettings(): Promise<{
   characterSheetCleanupDays: number;
   imageUploadOptimizationSettings: ImageUploadOptimizationSettings;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, reelStoryPublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr, imageUploadOptimizationSettings] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, reelStoryPublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr, imageUploadOptimizationSettings] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -911,6 +930,7 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlagValue('story_loading_reader_scroll_speed_px_per_second'),
     getFeatureFlagValue('story_ui_text_line_count'),
     getFeatureFlag('story_ui_auto_scroll_enabled', true),
+    getFeatureFlagValue('story_text_overlay_words_per_line'),
     getFeatureFlag('storyline_choice_flash_enabled', true),
     getFeatureFlagValue('storyline_choice_flash_ms'),
     getFeatureFlagValue('cloud_save_timeout_ms'),
@@ -966,6 +986,7 @@ export async function getStoryboardSettings(): Promise<{
       : 24,
     storyUiTextLineCount: normalizeStoryUiTextLineCount(storyUiTextLineCountValue),
     storyUiAutoScrollEnabled,
+    storyTextOverlayWordsPerLine: normalizeStoryTextOverlayWordsPerLine(storyTextOverlayWordsPerLineValue),
     storylineChoiceFlashEnabled,
     storylineChoiceFlashMs: Number.isFinite(parsedStorylineChoiceFlashMs)
       ? Math.max(500, Math.min(30000, parsedStorylineChoiceFlashMs))
