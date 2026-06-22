@@ -37,7 +37,7 @@ Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revok
 
 function manifest(userId: string, storyId: string, lastOpenedAt = new Date().toISOString()): CachedTreeStoryManifest {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     readerKind: 'story',
     userId,
     storyId,

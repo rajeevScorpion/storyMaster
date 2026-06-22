@@ -26,6 +26,7 @@ import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
+import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -364,6 +365,7 @@ const ADDITIVE_BEAT_COLUMNS = [
   'story_text_overlay_style',
   'story_text_overlay_captions',
   'story_text_overlay_alignment',
+  'story_effects',
   'origin_kind',
   'seed_plan_beat_index',
   'canonical_option_id',
@@ -573,6 +575,10 @@ function nodeToBeatRow(
     row.story_text_overlay_alignment = normalizedBeat.storyTextOverlayAlignment as unknown as Record<string, unknown>;
   }
 
+  if (normalizedBeat.storyEffects) {
+    row.story_effects = normalizeStoryEffectConfig(normalizedBeat.storyEffects) as unknown as Record<string, unknown>;
+  }
+
   row.image_gallery = (normalizedBeat.imageGallery ?? []).map((entry) => ({
     url: normalizeStorageUrl(entry.url, 'story-assets'),
     storage_key: entry.storageKey,
@@ -635,6 +641,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       ? beat.story_text_overlay_captions
       : undefined,
     storyTextOverlayAlignment: beat.story_text_overlay_alignment || undefined,
+    storyEffects: beat.story_effects ? normalizeStoryEffectConfig(beat.story_effects) : undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -1004,6 +1011,9 @@ export async function loadStory(storyId: string): Promise<StorySession> {
               && jsonbNode.data.storyTextOverlayAlignment
               ? { storyTextOverlayAlignment: jsonbNode.data.storyTextOverlayAlignment }
               : {}),
+            ...(!storyMap.nodes[nodeId].data.storyEffects && jsonbNode.data.storyEffects
+              ? { storyEffects: normalizeStoryEffectConfig(jsonbNode.data.storyEffects) }
+              : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
             ...(jsonbNode.data.seedPlanBeatIndex ? { seedPlanBeatIndex: jsonbNode.data.seedPlanBeatIndex } : {}),
@@ -1207,6 +1217,7 @@ export async function updateBeatMediaState(
     storyTextOverlayStyle?: StoryBeat['storyTextOverlayStyle'] | null;
     storyTextOverlayCaptions?: StoryBeat['storyTextOverlayCaptions'] | null;
     storyTextOverlayAlignment?: StoryBeat['storyTextOverlayAlignment'] | null;
+    storyEffects?: StoryBeat['storyEffects'] | null;
   }
 ): Promise<void> {
   const supabase = await createClient();
@@ -1288,6 +1299,11 @@ export async function updateBeatMediaState(
   if ('storyTextOverlayAlignment' in patch) {
     updateData.story_text_overlay_alignment = patch.storyTextOverlayAlignment
       ? patch.storyTextOverlayAlignment as unknown as Record<string, unknown>
+      : null;
+  }
+  if ('storyEffects' in patch) {
+    updateData.story_effects = patch.storyEffects
+      ? normalizeStoryEffectConfig(patch.storyEffects) as unknown as Record<string, unknown>
       : null;
   }
 
@@ -1373,6 +1389,9 @@ export async function updateBeatMediaState(
     } : {}),
     ...('storyTextOverlayAlignment' in patch ? {
       storyTextOverlayAlignment: patch.storyTextOverlayAlignment || undefined,
+    } : {}),
+    ...('storyEffects' in patch ? {
+      storyEffects: patch.storyEffects ? normalizeStoryEffectConfig(patch.storyEffects) : undefined,
     } : {}),
   });
 
@@ -1559,6 +1578,7 @@ export async function autoPublishStoryline(
         ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
         : undefined,
       storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
+      storyEffects: b.story_effects ? normalizeStoryEffectConfig(b.story_effects) : undefined,
       reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,
       reelTextOverlayStyle: storyConfig.reel.textOverlayStyle,
       originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
@@ -1676,6 +1696,7 @@ export async function autoPublishStoryline(
       ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
       : undefined,
     storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
+    storyEffects: b.story_effects ? normalizeStoryEffectConfig(b.story_effects) : undefined,
     reelTextOverlayEnabled: storyConfig.reel.textOverlayEnabled,
     reelTextOverlayStyle: storyConfig.reel.textOverlayStyle,
     originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,

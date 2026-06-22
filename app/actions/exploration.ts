@@ -7,6 +7,7 @@ import type { DbBeat, DbStory } from '@/lib/types/database';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import { repairMissingReadyBeatImageUrls } from '@/app/actions/persistence';
+import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -57,6 +58,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
       ? beat.story_text_overlay_captions
       : undefined,
     storyTextOverlayAlignment: beat.story_text_overlay_alignment || undefined,
+    storyEffects: beat.story_effects ? normalizeStoryEffectConfig(beat.story_effects) : undefined,
     originKind: (beat.origin_kind as StoryBeat['originKind'] | null) || undefined,
     seedPlanBeatIndex: beat.seed_plan_beat_index || undefined,
     canonicalOptionId: beat.canonical_option_id || undefined,
@@ -143,6 +145,7 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     storyTextOverlayStyle: beat.storyTextOverlayStyle || fallback.storyTextOverlayStyle,
     storyTextOverlayCaptions: beat.storyTextOverlayCaptions || fallback.storyTextOverlayCaptions,
     storyTextOverlayAlignment: beat.storyTextOverlayAlignment || fallback.storyTextOverlayAlignment,
+    storyEffects: beat.storyEffects || fallback.storyEffects,
     reelTextOverlayEnabled: beat.reelTextOverlayEnabled ?? fallback.reelTextOverlayEnabled,
     reelTextOverlayStyle: beat.reelTextOverlayStyle || fallback.reelTextOverlayStyle,
     finalImagePromptText: beat.finalImagePromptText || fallback.finalImagePromptText,
@@ -266,6 +269,9 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
             ...(!storyMap.nodes[nodeId].data.storyTextOverlayAlignment
               && jsonbNode.data.storyTextOverlayAlignment
               ? { storyTextOverlayAlignment: jsonbNode.data.storyTextOverlayAlignment }
+              : {}),
+            ...(!storyMap.nodes[nodeId].data.storyEffects && jsonbNode.data.storyEffects
+              ? { storyEffects: normalizeStoryEffectConfig(jsonbNode.data.storyEffects) }
               : {}),
             ...(jsonbNode.data.finalImagePromptText ? { finalImagePromptText: jsonbNode.data.finalImagePromptText } : {}),
             ...(jsonbNode.data.originKind ? { originKind: jsonbNode.data.originKind } : {}),
@@ -528,6 +534,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
           ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
           : undefined,
         storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
+        storyEffects: b.story_effects ? normalizeStoryEffectConfig(b.story_effects) : undefined,
         reelTextOverlayEnabled: sourceStoryConfig.reel.textOverlayEnabled,
         reelTextOverlayStyle: sourceStoryConfig.reel.textOverlayStyle,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
@@ -694,6 +701,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
           ? b.story_text_overlay_captions as StoryBeat['storyTextOverlayCaptions']
           : undefined,
         storyTextOverlayAlignment: b.story_text_overlay_alignment || undefined,
+        storyEffects: b.story_effects ? normalizeStoryEffectConfig(b.story_effects) : undefined,
         originKind: (b.origin_kind as StoryBeat['originKind'] | null) || undefined,
         seedPlanBeatIndex: b.seed_plan_beat_index || undefined,
         canonicalOptionId: b.canonical_option_id || undefined,

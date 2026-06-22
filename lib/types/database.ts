@@ -16,6 +16,7 @@ import type {
 import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/types';
 import type { BeatMediaStatus } from './beat-media';
 import type { ReelPanelCaption, StoryAspectRatio, StoryboardNarrationTiming, StoryKind } from './story';
+import type { StoryEffectConfig } from '@/lib/story-effects/settings';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -187,6 +188,7 @@ export interface DbBeat {
   story_text_overlay_style?: StoryTextOverlayStyle | null;
   story_text_overlay_captions?: StoryTextOverlayCaption[] | null;
   story_text_overlay_alignment?: StoryTextOverlayAlignment | null;
+  story_effects?: StoryEffectConfig | null;
   origin_kind: string | null;
   seed_plan_beat_index: number | null;
   canonical_option_id: string | null;
