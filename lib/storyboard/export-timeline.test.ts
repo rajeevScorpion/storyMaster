@@ -6,6 +6,7 @@ import {
   getStoryExportSceneAtTime,
 } from './export-timeline';
 import type { StoryBeat } from '@/lib/types/story';
+import { SYSTEM_STORY_EFFECT_PRESETS, applyStoryEffectPreset } from '@/lib/story-effects/presets';
 
 function storyboardBeat(beatNumber: number): StoryBeat {
   return {
@@ -64,5 +65,13 @@ describe('story export transition timeline', () => {
     expect(timeline.transitionTimeline.transitionSettings.type).toBe('fast-cut');
     expect(timeline.transitionTimeline.transitions).toHaveLength(0);
     expect(timeline.totalDurationMs).toBe(4000);
+  });
+
+  it('carries the normalized beat effect assignment into every panel scene', () => {
+    const beat = storyboardBeat(1);
+    beat.storyEffects = applyStoryEffectPreset(SYSTEM_STORY_EFFECT_PRESETS[2]);
+    const timeline = buildStoryExportTimeline([{ beat, imageUrl: 'one.jpg', durationMs: 4000, hasAudio: true }], false, 2500);
+    expect(timeline.scenes.every((scene) => scene.storyEffects?.particles.type === 'snow')).toBe(true);
+    expect(new Set(timeline.scenes.map((scene) => scene.effectSeed)).size).toBe(4);
   });
 });

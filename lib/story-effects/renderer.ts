@@ -128,12 +128,13 @@ export function drawStoryEffectsOverlay(
   context: CanvasRenderingContext2D,
   configInput: unknown,
   timeMs: number,
-  seedText: string
+  seedText: string,
+  options: { clear?: boolean } = {}
 ) {
   const config = normalizeStoryEffectConfig(configInput);
   const width = context.canvas.width;
   const height = context.canvas.height;
-  context.clearRect(0, 0, width, height);
+  if (options.clear !== false) context.clearRect(0, 0, width, height);
   if (!config.enabled) return;
   drawAtmosphere(context, config, width, height, timeMs, seedText);
   const [red, green, blue] = hexToRgb(config.particles.color);
@@ -160,4 +161,3 @@ export function drawStoryEffectsOverlay(
   }
   context.restore();
 }
-

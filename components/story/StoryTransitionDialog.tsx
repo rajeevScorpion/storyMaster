@@ -13,10 +13,13 @@ import {
   STORY_TRANSITION_DURATION_MIN_MS,
   STORY_TRANSITION_REGISTRY,
   STORY_TRANSITION_TYPES,
+  STORY_TRANSITION_DIRECTIONS,
+  STORY_TRANSITION_EASINGS,
   normalizeStoryTransitionSettings,
   type StoryTransitionSettings,
   type StoryTransitionType,
 } from '@/lib/story-transitions/settings';
+import { getStoryTransitionFlashOpacity, getStoryTransitionLayerStyle } from '@/lib/story-transitions/render';
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
@@ -140,19 +143,7 @@ export default function StoryTransitionDialog({
   };
   const layerStyle = (incoming: boolean) => {
     if (beatBoundaryProgress === null) return undefined;
-    if (previewSettings.type === 'fade-black') {
-      return {
-        opacity: incoming
-          ? beatBoundaryProgress < 0.5 ? 0 : (beatBoundaryProgress - 0.5) * 2
-          : beatBoundaryProgress < 0.5 ? 1 - beatBoundaryProgress * 2 : 0,
-      };
-    }
-    return {
-      opacity: incoming ? beatBoundaryProgress : 1 - beatBoundaryProgress,
-      filter: previewSettings.type === 'soft-fade'
-        ? `blur(${(incoming ? 1 - beatBoundaryProgress : beatBoundaryProgress) * 8}px)`
-        : undefined,
-    };
+    return getStoryTransitionLayerStyle(previewSettings, beatBoundaryProgress, incoming ? 'to' : 'from');
   };
   const handleSave = async () => {
     setIsSaving(true);
@@ -202,6 +193,8 @@ export default function StoryTransitionDialog({
                 storyTextOverlayTextHighlightSupported={beat.storyTextOverlayAlignment?.textHighlightSupported !== false}
                 storyTransitionSettings={previewSettings}
                 activeStoryTransition={transitionPlayback.activeTransition}
+                storyEffects={beat.storyEffects}
+                effectSeed={nodeId}
               />
               </div>
               {beatBoundaryProgress !== null && nextBeat?.imageUrl && (
@@ -224,8 +217,13 @@ export default function StoryTransitionDialog({
                     storyTextOverlayWordsPerLine={storyTextOverlayWordsPerLine}
                     storyTextOverlayTextHighlightSupported={nextBeat.storyTextOverlayAlignment?.textHighlightSupported !== false}
                     storyTransitionSettings={previewSettings}
+                    storyEffects={nextBeat.storyEffects}
+                    effectSeed={`${nodeId}:next`}
                   />
                 </div>
+              )}
+              {beatBoundaryProgress !== null && getStoryTransitionFlashOpacity(previewSettings, beatBoundaryProgress) > 0 && (
+                <div className="pointer-events-none absolute inset-0 z-30 bg-white" style={{ opacity: getStoryTransitionFlashOpacity(previewSettings, beatBoundaryProgress) }} />
               )}
             </div>
 
@@ -279,6 +277,13 @@ export default function StoryTransitionDialog({
                 <span className="flex items-center justify-between gap-3"><span>Duration</span><span className="font-mono text-neutral-500">{draft.durationMs} ms</span></span>
                 <input type="range" min={STORY_TRANSITION_DURATION_MIN_MS} max={STORY_TRANSITION_DURATION_MAX_MS} step={50} value={draft.durationMs} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, durationMs: Number(event.target.value) }))} className="mt-3 h-1.5 w-full cursor-pointer accent-emerald-400" />
               </label>
+            )}
+            {draft.type !== 'fast-cut' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400">Direction<select value={draft.direction || 'left'} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, direction: event.target.value }))} className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-white">{STORY_TRANSITION_DIRECTIONS.map((direction) => <option key={direction} value={direction}>{direction[0].toUpperCase() + direction.slice(1)}</option>)}</select></label>
+                <label className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400">Easing<select value={draft.easing || 'ease-in-out'} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, easing: event.target.value }))} className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-white">{STORY_TRANSITION_EASINGS.map((easing) => <option key={easing} value={easing}>{easing}</option>)}</select></label>
+                <label className="sm:col-span-2 block rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400"><span className="flex justify-between"><span>Intensity</span><span>{draft.intensity ?? 50}%</span></span><input type="range" min={0} max={100} step={1} value={draft.intensity ?? 50} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, intensity: Number(event.target.value) }))} className="mt-3 h-1.5 w-full accent-emerald-400" /></label>
+              </div>
             )}
             {error && <p className="rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-sm text-rose-300">{error}</p>}
           </div>

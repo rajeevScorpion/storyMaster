@@ -19,6 +19,7 @@ import {
   normalizeStoryTransitionSettings,
   type StoryTransitionSettings,
 } from '@/lib/story-transitions/settings';
+import { getStoryTransitionFlashOpacity, getStoryTransitionLayerStyle } from '@/lib/story-transitions/render';
 
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import StoryTextOverlay from './StoryTextOverlay';
@@ -153,21 +154,7 @@ export default function StoryStoryboardPlayer({
   };
   const transitionLayerStyle = (layer: 'from' | 'to') => {
     if (!activeStoryTransition) return { opacity: 1 };
-    const incoming = layer === 'to';
-    if (transitionSettings.type === 'fade-black') {
-      return {
-        opacity: incoming
-          ? transitionProgress < 0.5 ? 0 : (transitionProgress - 0.5) * 2
-          : transitionProgress < 0.5 ? 1 - transitionProgress * 2 : 0,
-      };
-    }
-    if (transitionSettings.type === 'soft-fade') {
-      return {
-        opacity: incoming ? transitionProgress : 1 - transitionProgress,
-        filter: `blur(${(incoming ? 1 - transitionProgress : transitionProgress) * 8}px)`,
-      };
-    }
-    return { opacity: incoming ? transitionProgress : 1 - transitionProgress };
+    return getStoryTransitionLayerStyle(transitionSettings, transitionProgress, layer);
   };
   const renderPanel = (panelIndex: number, layer?: 'from' | 'to') => {
     const motionFrame = getStoryMotionFrame(normalizedEffects, panelProgress(panelIndex));
@@ -244,6 +231,9 @@ export default function StoryStoryboardPlayer({
           playbackState={playbackState}
           seed={effectSeed}
         />
+      )}
+      {activeStoryTransition && getStoryTransitionFlashOpacity(transitionSettings, transitionProgress) > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-[15] bg-white" style={{ opacity: getStoryTransitionFlashOpacity(transitionSettings, transitionProgress) }} />
       )}
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeStoryTransition ? (

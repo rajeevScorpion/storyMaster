@@ -19,6 +19,10 @@ import {
   type StoryExportTimeline,
 } from '@/lib/storyboard/export-timeline';
 import type { VideoExportPreset } from '@/lib/types/pricing';
+import { drawStoryEffectsOverlay, getStoryMotionFrame } from '@/lib/story-effects/renderer';
+import { storyEffectConfigEnabled } from '@/lib/story-effects/settings';
+import { applyStoryTransitionEasing } from '@/lib/story-transitions/settings';
+import { getStoryTransitionFlashOpacity } from '@/lib/story-transitions/render';
 
 export type StoryExportImageAssets = Map<string, ImageBitmap>;
 
@@ -264,15 +268,65 @@ export function drawStoryExportFrame(
   context.fillStyle = '#000000';
   context.fillRect(0, 0, context.canvas.width, context.canvas.height);
   const state = getStoryExportFrameState(timeline, timeMs);
-  const drawScene = (scene: StoryExportScene | undefined, opacity = 1, blurPx = 0) => {
+  const drawScene = (scene: StoryExportScene | undefined, render: {
+    opacity?: number;
+    blurPx?: number;
+    clip?: 'wipe' | 'ink' | 'smoke';
+    clipProgress?: number;
+    translateX?: number;
+    translateY?: number;
+  } = {}) => {
+    const opacity = render.opacity ?? 1;
+    const blurPx = render.blurPx ?? 0;
     if (!scene || opacity <= 0) return;
     const image = assets.get(scene.imageUrl);
     if (!image) return;
     context.save();
     context.globalAlpha = opacity;
     context.filter = blurPx > 0 ? `blur(${blurPx}px)` : 'none';
+    const transitionProgress = Math.max(0, Math.min(1, render.clipProgress ?? 1));
+    if (render.clip === 'wipe') {
+      const direction = timeline.transitionTimeline.transitionSettings.direction || 'left';
+      context.beginPath();
+      if (direction === 'right') context.rect(context.canvas.width * (1 - transitionProgress), 0, context.canvas.width * transitionProgress, context.canvas.height);
+      else if (direction === 'up') context.rect(0, context.canvas.height * (1 - transitionProgress), context.canvas.width, context.canvas.height * transitionProgress);
+      else if (direction === 'down') context.rect(0, 0, context.canvas.width, context.canvas.height * transitionProgress);
+      else context.rect(0, 0, context.canvas.width * transitionProgress, context.canvas.height);
+      context.clip();
+    } else if (render.clip === 'smoke') {
+      context.beginPath();
+      context.arc(context.canvas.width / 2, context.canvas.height / 2, Math.hypot(context.canvas.width, context.canvas.height) * 0.52 * transitionProgress, 0, Math.PI * 2);
+      context.clip();
+    } else if (render.clip === 'ink') {
+      const edge = context.canvas.width * Math.min(1, transitionProgress * 1.12);
+      context.beginPath();
+      context.moveTo(0, 0);
+      context.lineTo(edge, 0);
+      for (let index = 1; index <= 8; index += 1) {
+        const wobble = Math.sin(index * 8.17 + transitionProgress * 5) * context.canvas.width * 0.035;
+        context.lineTo(Math.max(0, edge + wobble), context.canvas.height * index / 8);
+      }
+      context.lineTo(0, context.canvas.height);
+      context.closePath();
+      context.clip();
+    }
+    if (render.translateX || render.translateY) context.translate(render.translateX || 0, render.translateY || 0);
+    const localProgress = Math.max(0, Math.min(1, (state.narrationTimeMs - scene.narrationStartMs) / Math.max(1, scene.narrationEndMs - scene.narrationStartMs)));
+    const motion = getStoryMotionFrame(scene.storyEffects, localProgress);
+    context.save();
+    context.translate(context.canvas.width / 2, context.canvas.height / 2);
+    context.translate(context.canvas.width * motion.translateXPercent / 100, context.canvas.height * motion.translateYPercent / 100);
+    context.scale(motion.scale, motion.scale);
+    context.translate(-context.canvas.width / 2, -context.canvas.height / 2);
     if (scene.isStoryboard) drawStoryboardPanel(context, image, scene.panelIndex);
     else drawContainedImage(context, image);
+    context.restore();
+    context.globalAlpha = opacity;
+    context.filter = 'none';
+    if (storyEffectConfigEnabled(scene.storyEffects)) {
+      const effectTimeMs = Math.max(0, timeMs - scene.startMs + scene.narrationStartMs - scene.beatStartMs);
+      drawStoryEffectsOverlay(context, scene.storyEffects, effectTimeMs, scene.effectSeed, { clear: false });
+    }
     if (options.vignetteEnabled) drawVignette(context, options.vignetteAmountPercent ?? 100);
     if (options.textOverlayEnabled !== false && scene.storyTextOverlayEnabled && scene.isStoryboard) {
       drawStoryTextOverlay(
@@ -288,17 +342,45 @@ export function drawStoryExportFrame(
   if (state.transition) {
     const fromScene = timeline.scenes[state.transition.fromIndex];
     const toScene = timeline.scenes[state.transition.toIndex];
-    const progress = state.transition.progress;
+    const settings = timeline.transitionTimeline.transitionSettings;
+    const progress = applyStoryTransitionEasing(state.transition.progress, settings.easing);
     const type = timeline.transitionTimeline.transitionSettings.type;
     if (type === 'fade-black') {
-      if (progress < 0.5) drawScene(fromScene, 1 - progress * 2);
-      else drawScene(toScene, (progress - 0.5) * 2);
-    } else if (type === 'soft-fade') {
-      drawScene(fromScene, 1 - progress, progress * 8);
-      drawScene(toScene, progress, (1 - progress) * 8);
+      if (progress < 0.5) drawScene(fromScene, { opacity: 1 - progress * 2 });
+      else drawScene(toScene, { opacity: (progress - 0.5) * 2 });
+    } else if (type === 'soft-fade' || type === 'blur-dissolve') {
+      const blur = 4 + (settings.intensity ?? 50) / 100 * 12;
+      drawScene(fromScene, { opacity: 1 - progress, blurPx: progress * blur });
+      drawScene(toScene, { opacity: progress, blurPx: (1 - progress) * blur });
+    } else if (type === 'directional-wipe') {
+      drawScene(fromScene);
+      drawScene(toScene, { clip: 'wipe', clipProgress: progress });
+    } else if (type === 'gentle-push') {
+      const distance = (8 + (settings.intensity ?? 50) / 100 * 14);
+      const direction = settings.direction || 'left';
+      const horizontal = direction === 'left' || direction === 'right';
+      const sign = direction === 'right' || direction === 'down' ? -1 : 1;
+      drawScene(fromScene, { opacity: 1 - progress * 0.35, translateX: horizontal ? -sign * progress * context.canvas.width * distance / 100 : 0, translateY: horizontal ? 0 : -sign * progress * context.canvas.height * distance / 100 });
+      drawScene(toScene, { opacity: progress, translateX: horizontal ? sign * (1 - progress) * context.canvas.width * distance / 100 : 0, translateY: horizontal ? 0 : sign * (1 - progress) * context.canvas.height * distance / 100 });
+    } else if (type === 'ink-reveal') {
+      drawScene(fromScene, { opacity: 1 - progress * 0.3 });
+      drawScene(toScene, { clip: 'ink', clipProgress: progress });
+    } else if (type === 'smoke-reveal') {
+      const blur = (1 - progress) * (8 + (settings.intensity ?? 50) / 100 * 14);
+      drawScene(fromScene, { opacity: 1 - progress * 0.65, blurPx: progress * 5 });
+      drawScene(toScene, { opacity: Math.min(1, progress * 1.35), blurPx: blur, clip: 'smoke', clipProgress: progress });
+    } else if (type === 'atmosphere-fade') {
+      const blur = 8 + (settings.intensity ?? 50) / 100 * 18;
+      drawScene(fromScene, { opacity: 1 - progress, blurPx: progress * blur });
+      drawScene(toScene, { opacity: progress, blurPx: (1 - progress) * blur });
     } else {
-      drawScene(fromScene, 1 - progress);
-      drawScene(toScene, progress);
+      drawScene(fromScene, { opacity: 1 - progress });
+      drawScene(toScene, { opacity: progress });
+    }
+    const flashOpacity = getStoryTransitionFlashOpacity(settings, state.transition.progress);
+    if (flashOpacity > 0) {
+      context.fillStyle = `rgba(255,255,255,${flashOpacity})`;
+      context.fillRect(0, 0, context.canvas.width, context.canvas.height);
     }
   } else {
     drawScene(getStoryExportSceneAtTime(timeline, timeMs));

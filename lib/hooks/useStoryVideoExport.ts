@@ -291,6 +291,12 @@ export function useStoryVideoExport() {
       activeAudioContextRef.current = null;
       const reason = describeError(error);
       console.warn('[useStoryVideoExport] Fast export failed; using compatibility export.', error);
+      const requiresSharedRenderer = !['fast-cut', 'soft-fade', 'fade-black', 'opacity-blend'].includes(options.storyTransition?.type || 'fast-cut');
+      if (requiresSharedRenderer) {
+        setFallbackReason(reason);
+        setState(idleState(`This transition requires the modern export engine. ${reason} Try the current Chrome, Edge, Firefox, or Safari release.`));
+        return false;
+      }
       setEngine('compatibility');
       setFallbackReason(reason);
       setStage('compatibility-loading');
