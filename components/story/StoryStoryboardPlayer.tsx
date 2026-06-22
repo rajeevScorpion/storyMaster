@@ -88,6 +88,7 @@ export default function StoryStoryboardPlayer({
   effectSeed = gridUrl,
 }: StoryStoryboardPlayerProps) {
   const [intervalPanel, setIntervalPanel] = useState(0);
+  const [ambientElapsedMs, setAmbientElapsedMs] = useState(0);
   const [probedDuration, setProbedDuration] = useState<{ audioUrl: string; durationMs: number } | null>(null);
   const hasAudio = Boolean(audioUrl);
   const resolvedAudioDurationMs = audioDurationMs > 0
@@ -144,13 +145,25 @@ export default function StoryStoryboardPlayer({
   const transitionProgress = activeStoryTransition?.progress ?? 0;
   const normalizedEffects = normalizeStoryEffectConfig(storyEffects);
   const effectsEnabled = storyEffectConfigEnabled(normalizedEffects);
+  const effectElapsedMs = hasAudio ? audioElapsedMs : ambientElapsedMs;
+  useEffect(() => {
+    if (hasAudio || !effectsEnabled) return;
+    let frame = 0;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      setAmbientElapsedMs(now - startedAt);
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [effectsEnabled, gridUrl, hasAudio]);
   const panelBoundaries = validNarrationTiming
     ? [0, ...validNarrationTiming.panelEndTimesMs, resolvedAudioDurationMs]
     : [0, 0.25, 0.5, 0.75, 1].map((value) => value * Math.max(resolvedAudioDurationMs, panelDurationMs * 4));
   const panelProgress = (panelIndex: number) => {
     const startMs = panelBoundaries[panelIndex] ?? 0;
     const endMs = panelBoundaries[panelIndex + 1] ?? startMs + panelDurationMs;
-    return Math.max(0, Math.min(1, (audioElapsedMs - startMs) / Math.max(1, endMs - startMs)));
+    return Math.max(0, Math.min(1, (effectElapsedMs - startMs) / Math.max(1, endMs - startMs)));
   };
   const transitionLayerStyle = (layer: 'from' | 'to') => {
     if (!activeStoryTransition) return { opacity: 1 };
@@ -227,8 +240,8 @@ export default function StoryStoryboardPlayer({
       {effectsEnabled && (
         <StoryEffectsLayer
           config={normalizedEffects}
-          elapsedMs={audioElapsedMs}
-          playbackState={playbackState}
+          elapsedMs={effectElapsedMs}
+          playbackState={hasAudio ? playbackState : 'playing'}
           seed={effectSeed}
         />
       )}

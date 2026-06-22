@@ -208,6 +208,8 @@ export default function StoryNarrationTimingDialog({
                 storyTextOverlayStyle={beat.storyTextOverlayStyle}
                 storyTextOverlayWordsPerLine={storyTextOverlayWordsPerLine}
                 storyTextOverlayTextHighlightSupported={beat.storyTextOverlayAlignment?.textHighlightSupported !== false}
+                storyEffects={beat.storyEffects}
+                effectSeed={nodeId}
               />
             </div>
 

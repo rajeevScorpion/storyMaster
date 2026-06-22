@@ -386,6 +386,8 @@ export default function StoryTextOverlayDialog({
                 storyTextOverlayStyle={normalizedStyle}
                 storyTextOverlayWordsPerLine={normalizedStyle.wordsPerLine ?? wordsPerLine}
                 storyTextOverlayTextHighlightSupported={previewBeat.storyTextOverlayAlignment?.textHighlightSupported !== false}
+                storyEffects={previewBeat.storyEffects}
+                effectSeed={nodeId}
               />
             </div>
 

@@ -18,7 +18,14 @@ export default function StoryEffectsLayer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const elapsedRef = useRef(elapsedMs);
-  elapsedRef.current = elapsedMs;
+
+  useEffect(() => {
+    elapsedRef.current = elapsedMs;
+    if (playbackState === 'playing') return;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (context) drawStoryEffectsOverlay(context, config, elapsedMs, seed);
+  }, [config, elapsedMs, playbackState, seed]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -52,4 +59,3 @@ export default function StoryEffectsLayer({
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-10 h-full w-full" aria-hidden="true" />;
 }
-
