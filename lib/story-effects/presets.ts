@@ -30,21 +30,26 @@ export const SYSTEM_STORY_EFFECT_PRESETS: StoryEffectPreset[] = [
   }),
   systemPreset('dust-and-glow', 'Dust & Glow', 'Warm floating dust with a soft storybook glow.', {
     motion: { enabled: true, panX: -1, panY: 0, zoomStart: 1.02, zoomEnd: 1.08, driftX: 2, driftY: -1, intensity: 45 },
-    particles: { enabled: true, type: 'dust', amount: 45, density: 55, opacity: 0.52, speed: 0.45, size: 1.15, direction: -82, spread: 55, color: '#ffe7a8' },
-    atmosphere: { enabled: true, type: 'glow', opacity: 0.22, speed: 0.25, direction: 15, scale: 1.25, intensity: 48 },
+    particles: { enabled: true, type: 'dust', amount: 45, density: 55, opacity: 0.52, speed: 0.45, size: 1.15, direction: -82, spread: 55, randomness: 45, color: '#ffe7a8' },
+    atmosphere: { enabled: true, type: 'glow', opacity: 0.22, speed: 0.25, direction: 15, scale: 1.25, intensity: 48, color: '#ffe5aa' },
   }),
   systemPreset('snowfall-soft', 'Snowfall Soft', 'Calm layered snow with subtle camera drift.', {
     motion: { enabled: true, panX: 1, panY: -1, zoomStart: 1.03, zoomEnd: 1.08, driftX: -1, driftY: 1, intensity: 35 },
-    particles: { enabled: true, type: 'snow', amount: 70, density: 65, opacity: 0.72, speed: 0.55, size: 1.2, direction: 88, spread: 25, color: '#ffffff' },
+    particles: { enabled: true, type: 'snow', amount: 70, density: 65, opacity: 0.72, speed: 0.55, size: 1.2, direction: 88, spread: 25, randomness: 55, color: '#ffffff' },
   }),
   systemPreset('rain-mood', 'Rain Mood', 'Directional rain with a cool, slow push-in.', {
     motion: { enabled: true, panX: 0, panY: 1, zoomStart: 1.01, zoomEnd: 1.07, driftX: 1, driftY: 1, intensity: 50 },
-    particles: { enabled: true, type: 'rain', amount: 90, density: 80, opacity: 0.48, speed: 1.7, size: 0.7, direction: 104, spread: 10, color: '#b9ddff' },
-    atmosphere: { enabled: true, type: 'mist', opacity: 0.12, speed: 0.35, direction: 5, scale: 1.35, intensity: 30 },
+    particles: { enabled: true, type: 'rain', amount: 90, density: 80, opacity: 0.48, speed: 1.7, size: 0.7, direction: 104, spread: 10, randomness: 25, color: '#b9ddff' },
+    atmosphere: { enabled: true, type: 'mist', opacity: 0.12, speed: 0.35, direction: 5, scale: 1.35, intensity: 30, color: '#cfe2ee' },
   }),
   systemPreset('dream-mist', 'Dream Mist', 'Slow drifting mist and a gentle luminous zoom.', {
     motion: { enabled: true, panX: -1, panY: 0, zoomStart: 1.02, zoomEnd: 1.1, driftX: 2, driftY: 0, intensity: 42 },
-    atmosphere: { enabled: true, type: 'mist', opacity: 0.34, speed: 0.3, direction: -8, scale: 1.7, intensity: 58 },
+    atmosphere: { enabled: true, type: 'mist', opacity: 0.34, speed: 0.3, direction: -8, scale: 1.7, intensity: 58, color: '#dbe6f0' },
+  }),
+  systemPreset('cathedral-rays', 'Cathedral Rays', 'Angled volumetric light shafts with drifting dust.', {
+    motion: { enabled: true, panX: 0, panY: 0, zoomStart: 1.02, zoomEnd: 1.09, driftX: 1, driftY: -1, intensity: 40 },
+    particles: { enabled: true, type: 'dust', amount: 35, density: 50, opacity: 0.45, speed: 0.4, size: 1, direction: -70, spread: 60, randomness: 60, color: '#ffedc4' },
+    atmosphere: { enabled: true, type: 'rays', opacity: 0.4, speed: 0.4, direction: 65, scale: 1.2, intensity: 55, color: '#fff1cf' },
   }),
 ];
 

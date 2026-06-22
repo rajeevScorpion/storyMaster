@@ -6,7 +6,7 @@ export type StoryEffectEasing = (typeof STORY_EFFECT_EASINGS)[number];
 export const STORY_PARTICLE_TYPES = ['dust', 'snow', 'rain'] as const;
 export type StoryParticleType = (typeof STORY_PARTICLE_TYPES)[number];
 
-export const STORY_ATMOSPHERE_TYPES = ['glow', 'mist'] as const;
+export const STORY_ATMOSPHERE_TYPES = ['glow', 'mist', 'rays'] as const;
 export type StoryAtmosphereType = (typeof STORY_ATMOSPHERE_TYPES)[number];
 
 export interface StoryMotionEffect {
@@ -31,6 +31,7 @@ export interface StoryParticleEffect {
   size: number;
   direction: number;
   spread: number;
+  randomness: number;
   color: string;
 }
 
@@ -42,6 +43,7 @@ export interface StoryAtmosphereEffect {
   direction: number;
   scale: number;
   intensity: number;
+  color: string;
 }
 
 export interface StoryEffectConfig {
@@ -77,6 +79,7 @@ export const DEFAULT_STORY_EFFECT_CONFIG: StoryEffectConfig = {
     size: 1,
     direction: -90,
     spread: 35,
+    randomness: 35,
     color: '#fff4cf',
   },
   atmosphere: {
@@ -87,6 +90,7 @@ export const DEFAULT_STORY_EFFECT_CONFIG: StoryEffectConfig = {
     direction: 0,
     scale: 1,
     intensity: 45,
+    color: '#ffe5aa',
   },
 };
 
@@ -147,6 +151,7 @@ export function normalizeStoryEffectConfig(value: unknown): StoryEffectConfig {
       size: clamp(particles.size, DEFAULT_STORY_EFFECT_CONFIG.particles.size, 0.25, 3),
       direction: clamp(particles.direction, DEFAULT_STORY_EFFECT_CONFIG.particles.direction, -180, 180),
       spread: clamp(particles.spread, DEFAULT_STORY_EFFECT_CONFIG.particles.spread, 0, 180),
+      randomness: clamp(particles.randomness, DEFAULT_STORY_EFFECT_CONFIG.particles.randomness, 0, 100),
       color: colorValue(particles.color, DEFAULT_STORY_EFFECT_CONFIG.particles.color),
     },
     atmosphere: {
@@ -157,6 +162,7 @@ export function normalizeStoryEffectConfig(value: unknown): StoryEffectConfig {
       direction: clamp(atmosphere.direction, DEFAULT_STORY_EFFECT_CONFIG.atmosphere.direction, -180, 180),
       scale: clamp(atmosphere.scale, DEFAULT_STORY_EFFECT_CONFIG.atmosphere.scale, 0.5, 3),
       intensity: clamp(atmosphere.intensity, DEFAULT_STORY_EFFECT_CONFIG.atmosphere.intensity, 0, 100),
+      color: colorValue(atmosphere.color, DEFAULT_STORY_EFFECT_CONFIG.atmosphere.color),
     },
   };
 }

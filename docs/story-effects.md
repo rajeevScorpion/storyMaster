@@ -5,10 +5,12 @@ Story effects are available for storyboard stories from the sparkle button besid
 ## Included effects
 
 - Cinematic pan, zoom, and drift
-- Dust, snow, and rain particles
-- Glow and mist atmosphere layers
-- Five system presets: Gentle Cinematic, Dust & Glow, Snowfall Soft, Rain Mood, and Dream Mist
+- Dust, snow, and rain particles, with **Spread** (angular scatter) and **Randomness** (per-particle turbulence and speed variance) so the field looks organic instead of a marching line
+- Glow, mist, and volumetric **Light Rays** atmosphere layers, each with a configurable color, drift **Direction**, and layered parallax depth
+- Six system presets: Gentle Cinematic, Dust & Glow, Snowfall Soft, Rain Mood, Dream Mist, and Cathedral Rays
 - Personal presets saved to the signed-in creator's account
+
+Particle positions use a full-avalanche hash, so increasing Randomness scatters and animates particles naturally rather than aligning them along a diagonal.
 
 Applying a preset copies its current settings into the beat. Later preset edits and deletion never change beats that already use it. **Apply to all** confirms before overwriting every generated node, including alternate branches.
 
