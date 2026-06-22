@@ -5,7 +5,8 @@ Story effects are available for storyboard stories from the sparkle button besid
 ## Included effects
 
 - Cinematic pan, zoom, and drift
-- Dust, snow, and rain particles, with **Spread** (angular scatter) and **Randomness** (per-particle turbulence and speed variance) so the field looks organic instead of a marching line
+- Dust and snow particles, with **Spread** (angular scatter) and **Randomness** (per-particle turbulence and speed variance) so the field looks organic instead of a marching line
+- Rain uses a dedicated model: drops always fall from the top and recycle there, **Slant** controls the wind tilt from vertical, **Fall speed** stretches the streaks for motion blur, and **Randomness** jitters speed/length/position without sideways drift
 - Glow, mist, and volumetric **Light Rays** atmosphere layers, each with a configurable color, drift **Direction**, and layered parallax depth
 - Six system presets: Gentle Cinematic, Dust & Glow, Snowfall Soft, Rain Mood, Dream Mist, and Cathedral Rays
 - Personal presets saved to the signed-in creator's account

@@ -77,6 +77,14 @@ export function buildStoryParticles(
   const elapsed = timeMs / 1000;
   const diagonal = Math.hypot(width, height);
   const turbulence = effect.randomness / 100;
+
+  // Rain is modelled separately: gravity is fixed (drops always fall from the
+  // top), `direction` is reinterpreted as a wind slant from vertical, and the
+  // streak is aligned to velocity and stretched by speed for a motion-blur look.
+  if (effect.type === 'rain') {
+    return buildRainParticles(effect, baseSeed, width, height, diagonal, elapsed, turbulence, count);
+  }
+
   const wanderAmp = turbulence * Math.min(width, height) * 0.07;
 
   return Array.from({ length: count }, (_, index) => {
@@ -105,6 +113,53 @@ export function buildStoryParticles(
       opacity: effect.opacity * (0.45 + rand(seed, 7) * 0.55),
       stretch: effect.type === 'rain' ? 5 + rand(seed, 11) * 7 : 1,
       angle,
+    };
+  });
+}
+
+// Realistic rain. Drops always travel downward and recycle at the top, so the
+// user never has to think about "direction" pointing up. `direction` is clamped
+// to a wind slant from vertical; depth varies near/far drops; randomness only
+// jitters speed, length, and spawn position (never sideways meander, which would
+// read as drifting dust rather than falling rain).
+function buildRainParticles(
+  effect: StoryEffectConfig['particles'],
+  baseSeed: number,
+  width: number,
+  height: number,
+  diagonal: number,
+  elapsed: number,
+  turbulence: number,
+  count: number
+): StoryParticleSample[] {
+  const slant = Math.max(-70, Math.min(70, effect.direction)) * Math.PI / 180;
+  const tanSlant = Math.tan(slant);
+  const velocityAngle = Math.PI / 2 - slant; // canvas: down is +y, slant tilts x
+  const pixelScale = Math.max(1, Math.min(width, height) / 420);
+  const margin = Math.abs(tanSlant) * height + 48;
+  const span = width + margin * 2;
+  const travelSpan = height + margin * 2;
+  const fallSpeed = (0.55 + effect.speed * 0.95) * diagonal;
+
+  return Array.from({ length: count }, (_, index) => {
+    const seed = baseSeed ^ Math.imul(index + 1, 0x9e3779b1);
+    const depth = 0.5 + rand(seed, 6) * 0.7;
+    const speedJitter = 1 + (rand(seed, 4) - 0.5) * turbulence * 0.9;
+    const dropSpeed = fallSpeed * depth * speedJitter;
+    const phase = rand(seed, 3);
+    const cycle = ((dropSpeed * elapsed) / travelSpan + phase) % 1;
+    const y = -margin + cycle * travelSpan;
+    const startX = -margin + rand(seed, 2) * span;
+    const x = ((startX + tanSlant * (y + margin)) % span + span) % span - margin;
+    const size = Math.max(0.5, effect.size * (0.7 + depth * 0.5) * pixelScale);
+    const streakPx = (10 + effect.speed * 14) * depth * pixelScale * (1 + (rand(seed, 11) - 0.5) * turbulence);
+    return {
+      x,
+      y,
+      size,
+      opacity: effect.opacity * (0.4 + depth * 0.6) * (0.75 + rand(seed, 7) * 0.25),
+      stretch: Math.max(2, streakPx) / size,
+      angle: velocityAngle,
     };
   });
 }

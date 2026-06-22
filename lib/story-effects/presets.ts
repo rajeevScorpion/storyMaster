@@ -39,7 +39,7 @@ export const SYSTEM_STORY_EFFECT_PRESETS: StoryEffectPreset[] = [
   }),
   systemPreset('rain-mood', 'Rain Mood', 'Directional rain with a cool, slow push-in.', {
     motion: { enabled: true, panX: 0, panY: 1, zoomStart: 1.01, zoomEnd: 1.07, driftX: 1, driftY: 1, intensity: 50 },
-    particles: { enabled: true, type: 'rain', amount: 90, density: 80, opacity: 0.48, speed: 1.7, size: 0.7, direction: 104, spread: 10, randomness: 25, color: '#b9ddff' },
+    particles: { enabled: true, type: 'rain', amount: 90, density: 80, opacity: 0.48, speed: 1.7, size: 0.7, direction: 14, spread: 10, randomness: 25, color: '#b9ddff' },
     atmosphere: { enabled: true, type: 'mist', opacity: 0.12, speed: 0.35, direction: 5, scale: 1.35, intensity: 30, color: '#cfe2ee' },
   }),
   systemPreset('dream-mist', 'Dream Mist', 'Slow drifting mist and a gentle luminous zoom.', {
