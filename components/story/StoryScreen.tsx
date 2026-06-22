@@ -6,7 +6,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Sparkles, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -6153,11 +6153,11 @@ function StoryScreenInner({
                       setShowStoryEffects(true);
                     }}
                     disabled={!normalizedCurrentBeat.imageUrl}
-                    className={`rounded-full p-2 backdrop-blur-md transition-colors disabled:cursor-not-allowed disabled:text-neutral-600 ${normalizedCurrentBeat.storyEffects?.enabled ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/5 text-neutral-300 hover:bg-emerald-400/10 hover:text-emerald-300'}`}
+                    className="rounded-full bg-white/5 p-2 text-neutral-300 backdrop-blur-md transition-colors hover:bg-emerald-400/10 hover:text-emerald-300 disabled:cursor-not-allowed disabled:text-neutral-600 disabled:hover:bg-white/5"
                     title={normalizedCurrentBeat.imageUrl ? 'Story Effects' : 'Create storyboard image first'}
                     aria-label={normalizedCurrentBeat.imageUrl ? 'Open Story Effects' : 'Create storyboard image first'}
                   >
-                    <Sparkles className="h-5 w-5" />
+                    <Clapperboard className="h-5 w-5" />
                   </button>
                   <button
                     type="button"
