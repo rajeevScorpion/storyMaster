@@ -533,6 +533,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
           brandingEnabled: true,
         },
         storyTextOverlay: DEFAULT_STORY_CONFIG.storyTextOverlay,
+        storyTransition: DEFAULT_STORY_CONFIG.storyTransition,
         portraitReferences: buildPortraitReferences(),
         narrationVoice: {
           mode: 'legacy_auto',
@@ -565,6 +566,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       },
       reel: DEFAULT_STORY_CONFIG.reel,
       storyTextOverlay: DEFAULT_STORY_CONFIG.storyTextOverlay,
+      storyTransition: DEFAULT_STORY_CONFIG.storyTransition,
       portraitReferences: buildPortraitReferences(),
       narrationVoice: voiceConfig?.enabled
         ? {

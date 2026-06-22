@@ -86,6 +86,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
           title: props.title,
           isVerticalStory: loaded.storyline.is_vertical_story,
           aspectRatio: loaded.storyline.aspect_ratio === '9:16' ? '9:16' : '16:9',
+          storyTransition: loaded.storyline.story_transition,
           beats: loaded.beats,
           choices: loaded.choices,
           authorName: props.authorName,
@@ -150,6 +151,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
       title={payload.title}
       isVerticalStory={payload.isVerticalStory}
       aspectRatio={payload.aspectRatio}
+      storyTransition={payload.storyTransition}
       beats={payload.beats}
       choices={payload.choices}
       authorName={payload.authorName}

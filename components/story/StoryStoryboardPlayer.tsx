@@ -12,6 +12,11 @@ import {
 } from '@/lib/storyboard/narration-timing';
 import { getEqualSplitStoryboardPanel } from '@/lib/storyboard/timing';
 import type { StoryBeat } from '@/lib/types/story';
+import type { ActiveStoryTransition } from '@/lib/hooks/useStoryTransitionPlayback';
+import {
+  normalizeStoryTransitionSettings,
+  type StoryTransitionSettings,
+} from '@/lib/story-transitions/settings';
 
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import StoryTextOverlay from './StoryTextOverlay';
@@ -42,6 +47,8 @@ interface StoryStoryboardPlayerProps {
   storyTextOverlayStyle?: StoryBeat['storyTextOverlayStyle'];
   storyTextOverlayWordsPerLine?: number;
   storyTextOverlayTextHighlightSupported?: boolean;
+  storyTransitionSettings?: StoryTransitionSettings;
+  activeStoryTransition?: ActiveStoryTransition | null;
 }
 
 export default function StoryStoryboardPlayer({
@@ -69,6 +76,8 @@ export default function StoryStoryboardPlayer({
   storyTextOverlayStyle,
   storyTextOverlayWordsPerLine = 7,
   storyTextOverlayTextHighlightSupported = true,
+  storyTransitionSettings,
+  activeStoryTransition = null,
 }: StoryStoryboardPlayerProps) {
   const [intervalPanel, setIntervalPanel] = useState(0);
   const [probedDuration, setProbedDuration] = useState<{ audioUrl: string; durationMs: number } | null>(null);
@@ -122,36 +131,53 @@ export default function StoryStoryboardPlayer({
   const activeStoryTextOverlayCaption = storyTextOverlayEnabled
     ? storyTextOverlayCaptions?.find((caption) => caption.panelIndex === activePanel)
     : undefined;
-
-  return (
-    <div className="absolute inset-0 overflow-hidden">
-      <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activePanel}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.6, ease: 'easeInOut' }}
-            className="absolute inset-0 overflow-hidden"
-          >
-            <div className="absolute" style={getStoryboardPanelCropStyle(activePanel)}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={gridUrl}
-                alt=""
-                className="h-full w-full object-cover"
-                onLoad={onImageLoad}
-                onError={onImageError}
-              />
-            </div>
-          </motion.div>
-        </AnimatePresence>
+  const transitionSettings = normalizeStoryTransitionSettings(storyTransitionSettings);
+  const useLegacyPanelFade = storyTransitionSettings === undefined;
+  const transitionProgress = activeStoryTransition?.progress ?? 0;
+  const transitionLayerStyle = (layer: 'from' | 'to') => {
+    if (!activeStoryTransition) return { opacity: 1 };
+    const incoming = layer === 'to';
+    if (transitionSettings.type === 'fade-black') {
+      return {
+        opacity: incoming
+          ? transitionProgress < 0.5 ? 0 : (transitionProgress - 0.5) * 2
+          : transitionProgress < 0.5 ? 1 - transitionProgress * 2 : 0,
+      };
+    }
+    if (transitionSettings.type === 'soft-fade') {
+      return {
+        opacity: incoming ? transitionProgress : 1 - transitionProgress,
+        filter: `blur(${(incoming ? 1 - transitionProgress : transitionProgress) * 8}px)`,
+      };
+    }
+    return { opacity: incoming ? transitionProgress : 1 - transitionProgress };
+  };
+  const renderPanel = (panelIndex: number, layer?: 'from' | 'to') => (
+    <div
+      className="absolute inset-0 overflow-hidden"
+      style={layer ? transitionLayerStyle(layer) : undefined}
+    >
+      <div className="absolute" style={getStoryboardPanelCropStyle(panelIndex)}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={gridUrl}
+          alt=""
+          className="h-full w-full object-cover"
+          onLoad={onImageLoad}
+          onError={onImageError}
+        />
       </div>
-      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
-      {activeStoryTextOverlayCaption ? (
+    </div>
+  );
+  const renderStoryOverlay = (panelIndex: number, layer?: 'from' | 'to') => {
+    const caption = storyTextOverlayEnabled
+      ? storyTextOverlayCaptions?.find((item) => item.panelIndex === panelIndex)
+      : undefined;
+    if (!caption) return null;
+    return (
+      <div className="pointer-events-none absolute inset-0 z-20" style={layer ? transitionLayerStyle(layer) : undefined}>
         <StoryTextOverlay
-          caption={activeStoryTextOverlayCaption}
+          caption={caption}
           enabled={storyTextOverlayEnabled}
           mode={storyTextOverlayMode}
           style={storyTextOverlayStyle}
@@ -160,6 +186,41 @@ export default function StoryStoryboardPlayer({
           wordsPerLine={storyTextOverlayWordsPerLine}
           textHighlightSupported={storyTextOverlayTextHighlightSupported}
         />
+      </div>
+    );
+  };
+
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
+        {activeStoryTransition ? (
+          <>
+            {renderPanel(activeStoryTransition.fromIndex, 'from')}
+            {renderPanel(activeStoryTransition.toIndex, 'to')}
+          </>
+        ) : useLegacyPanelFade ? (
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activePanel}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.6, ease: 'easeInOut' }}
+              className="absolute inset-0 overflow-hidden"
+            >
+              {renderPanel(activePanel)}
+            </motion.div>
+          </AnimatePresence>
+        ) : renderPanel(activePanel)}
+      </div>
+      <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
+      {activeStoryTransition ? (
+        <>
+          {renderStoryOverlay(activeStoryTransition.fromIndex, 'from')}
+          {renderStoryOverlay(activeStoryTransition.toIndex, 'to')}
+        </>
+      ) : activeStoryTextOverlayCaption ? (
+        renderStoryOverlay(activePanel)
       ) : activeCaption && (
         <ReelCaptionOverlay style={textOverlayStyle}>
           <ReelTimedCaptionText

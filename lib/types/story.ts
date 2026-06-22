@@ -4,6 +4,7 @@ import type { ReelLengthKey, ReelTextLengthKey } from '@/lib/reel/settings';
 import type { BeatNarrationMetadata, ReelNarrationSettings } from '@/lib/reel/narration';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
+import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -262,6 +263,7 @@ export interface StoryConfig {
   authoring: StoryAuthoringConfig;
   reel: ReelStoryConfig;
   storyTextOverlay: StoryTextOverlaySettings;
+  storyTransition: StoryTransitionSettings;
   portraitReferences: PortraitReferenceConfig;
   narrationVoice?: import('@/lib/ai/narration-voices').StoryNarrationVoiceSelection;
 }

@@ -13,8 +13,8 @@ import {
   storyOverlayColorWithOpacity,
 } from '@/lib/story-overlay/styles';
 import {
+  getStoryExportFrameState,
   getStoryExportSceneAtTime,
-  STORY_EXPORT_FADE_MS,
   type StoryExportScene,
   type StoryExportTimeline,
 } from '@/lib/storyboard/export-timeline';
@@ -261,31 +261,52 @@ export function drawStoryExportFrame(
   timeMs: number,
   options: StoryExportRenderOptions = {}
 ) {
-  const scene = getStoryExportSceneAtTime(timeline, timeMs);
-  if (!scene) return;
-  const image = assets.get(scene.imageUrl);
-  if (!image) return;
   context.fillStyle = '#000000';
   context.fillRect(0, 0, context.canvas.width, context.canvas.height);
-  if (scene.isStoryboard) drawStoryboardPanel(context, image, scene.panelIndex);
-  else drawContainedImage(context, image);
-  if (options.vignetteEnabled) drawVignette(context, options.vignetteAmountPercent ?? 100);
-  if (options.textOverlayEnabled !== false && scene.storyTextOverlayEnabled && scene.isStoryboard) {
-    drawStoryTextOverlay(context, scene, timeMs, options.storyTextOverlayWordsPerLine ?? 7);
-  }
-  if (options.watermark) drawWatermark(context, options.watermarkPreset);
+  const state = getStoryExportFrameState(timeline, timeMs);
+  const drawScene = (scene: StoryExportScene | undefined, opacity = 1, blurPx = 0) => {
+    if (!scene || opacity <= 0) return;
+    const image = assets.get(scene.imageUrl);
+    if (!image) return;
+    context.save();
+    context.globalAlpha = opacity;
+    context.filter = blurPx > 0 ? `blur(${blurPx}px)` : 'none';
+    if (scene.isStoryboard) drawStoryboardPanel(context, image, scene.panelIndex);
+    else drawContainedImage(context, image);
+    if (options.vignetteEnabled) drawVignette(context, options.vignetteAmountPercent ?? 100);
+    if (options.textOverlayEnabled !== false && scene.storyTextOverlayEnabled && scene.isStoryboard) {
+      drawStoryTextOverlay(
+        context,
+        scene,
+        state.narrationTimeMs,
+        options.storyTextOverlayWordsPerLine ?? 7
+      );
+    }
+    context.restore();
+  };
 
-  const sceneDurationMs = scene.endMs - scene.startMs;
-  const fadeMs = Math.min(STORY_EXPORT_FADE_MS, Math.max(0, sceneDurationMs / 2));
-  const localMs = Math.max(0, timeMs - scene.startMs);
-  const remainingMs = Math.max(0, scene.endMs - timeMs);
-  const blackAlpha = fadeMs > 0
-    ? Math.max(localMs < fadeMs ? 1 - localMs / fadeMs : 0, remainingMs < fadeMs ? 1 - remainingMs / fadeMs : 0)
-    : 0;
-  if (blackAlpha > 0) {
-    context.fillStyle = `rgba(0,0,0,${blackAlpha})`;
-    context.fillRect(0, 0, context.canvas.width, context.canvas.height);
+  if (state.transition) {
+    const fromScene = timeline.scenes[state.transition.fromIndex];
+    const toScene = timeline.scenes[state.transition.toIndex];
+    const progress = state.transition.progress;
+    const type = timeline.transitionTimeline.transitionSettings.type;
+    if (type === 'fade-black') {
+      if (progress < 0.5) drawScene(fromScene, 1 - progress * 2);
+      else drawScene(toScene, (progress - 0.5) * 2);
+    } else if (type === 'soft-fade') {
+      drawScene(fromScene, 1 - progress, progress * 8);
+      drawScene(toScene, progress, (1 - progress) * 8);
+    } else {
+      drawScene(fromScene, 1 - progress);
+      drawScene(toScene, progress);
+    }
+  } else {
+    drawScene(getStoryExportSceneAtTime(timeline, timeMs));
   }
+
+  context.filter = 'none';
+  context.globalAlpha = 1;
+  if (options.watermark) drawWatermark(context, options.watermarkPreset);
 }
 
 export async function loadStoryExportImageAssets(urls: string[]): Promise<StoryExportImageAssets> {

@@ -29,6 +29,7 @@ import {
   type VideoExportPreset,
 } from '@/lib/types/pricing';
 import type { StoryBeat } from '@/lib/types/story';
+import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { ExportPhase, VideoExportOptions, VideoExportState } from '@/lib/video-export/types';
 
 const STORY_EXPORT_FPS = 24;
@@ -51,6 +52,7 @@ export interface StoryVideoExportOptions extends VideoExportOptions {
   cycleOverride: boolean;
   cycleMs: number;
   storyTextOverlayWordsPerLine?: number;
+  storyTransition?: StoryTransitionSettings;
 }
 
 function getCanvasSize(options: StoryVideoExportOptions, preset: VideoExportPreset) {
@@ -73,6 +75,23 @@ async function decodeStoryAudio(context: AudioContext, url: string): Promise<Aud
   const response = await fetch(toMediaFetchUrl(url));
   if (!response.ok) throw new Error('Failed to load story narration audio.');
   return context.decodeAudioData(await response.arrayBuffer());
+}
+
+function sliceAudioBuffer(source: AudioBuffer, startMs: number, endMs: number): AudioBuffer {
+  const startFrame = Math.max(0, Math.min(source.length - 1, Math.round(startMs * source.sampleRate / 1000)));
+  const endFrame = Math.min(
+    source.length,
+    Math.max(startFrame + 1, Math.round(endMs * source.sampleRate / 1000))
+  );
+  const output = new AudioBuffer({
+    numberOfChannels: source.numberOfChannels,
+    length: Math.max(1, endFrame - startFrame),
+    sampleRate: source.sampleRate,
+  });
+  for (let channel = 0; channel < source.numberOfChannels; channel += 1) {
+    output.copyToChannel(source.getChannelData(channel).subarray(startFrame, endFrame), channel);
+  }
+  return output;
 }
 
 export function useStoryVideoExport() {
@@ -161,7 +180,12 @@ export function useStoryVideoExport() {
           hasAudio: Boolean(audio),
         };
       });
-      const timeline = buildStoryExportTimeline(preparedBeats, options.cycleOverride, options.cycleMs);
+      const timeline = buildStoryExportTimeline(
+        preparedBeats,
+        options.cycleOverride,
+        options.cycleMs,
+        options.storyTransition
+      );
       assets = await loadStoryExportImageAssets(preparedBeats.map((beat) => beat.imageUrl));
       if (cancelledRef.current) return false;
 
@@ -218,16 +242,29 @@ export function useStoryVideoExport() {
 
       setStage('audio');
       setState((current) => ({ ...current, progress: 82, phase: 'finalizing' }));
-      for (let index = 0; index < preparedBeats.length; index += 1) {
+      for (let index = 0; index < timeline.scenes.length; index += 1) {
         if (cancelledRef.current) return false;
-        await audioSource.add(decodedAudio[index] ?? createSilentAudioBuffer(
-          timeline.beatDurationsMs[index],
-          AUDIO_SAMPLE_RATE,
-          AUDIO_CHANNELS
-        ));
+        const scene = timeline.scenes[index];
+        const narrationDurationMs = scene.narrationEndMs - scene.narrationStartMs;
+        const beatAudio = decodedAudio[scene.beatIndex];
+        await audioSource.add(beatAudio
+          ? sliceAudioBuffer(
+              beatAudio,
+              scene.narrationStartMs - scene.beatStartMs,
+              scene.narrationEndMs - scene.beatStartMs
+            )
+          : createSilentAudioBuffer(narrationDurationMs, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS));
+        const transition = timeline.transitionTimeline.transitions.find((item) => item.fromIndex === index);
+        if (transition) {
+          await audioSource.add(createSilentAudioBuffer(
+            transition.endMs - transition.startMs,
+            AUDIO_SAMPLE_RATE,
+            AUDIO_CHANNELS
+          ));
+        }
         setState((current) => ({
           ...current,
-          progress: Math.max(current.progress, 82 + Math.round(((index + 1) / preparedBeats.length) * 12)),
+          progress: Math.max(current.progress, 82 + Math.round(((index + 1) / timeline.scenes.length) * 12)),
         }));
       }
 

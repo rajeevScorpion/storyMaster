@@ -34,6 +34,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
+import { useStoryTransitionPlayback } from '@/lib/hooks/useStoryTransitionPlayback';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { useStoryVideoExport } from '@/lib/hooks/useStoryVideoExport';
@@ -54,6 +55,11 @@ import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
+import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
+import {
+  normalizeStoryTransitionSettings,
+  type StoryTransitionSettings,
+} from '@/lib/story-transitions/settings';
 import { getFirstBeatShareExcerpt } from '@/lib/story/share-message';
 import { useSwipeNavigation } from '@/lib/hooks/useSwipeNavigation';
 import { useFullscreenLandscape } from '@/lib/hooks/useFullscreenLandscape';
@@ -89,6 +95,7 @@ interface StorylinePlayerProps {
   title: string;
   isVerticalStory?: boolean;
   aspectRatio?: '16:9' | '9:16';
+  storyTransition?: StoryTransitionSettings;
   beats: StoryBeat[];
   choices: StorylineChoice[];
   authorName: string | null;
@@ -107,6 +114,7 @@ export default function StorylinePlayer({
   title,
   isVerticalStory = false,
   aspectRatio = '16:9',
+  storyTransition,
   beats,
   choices,
   authorName,
@@ -118,6 +126,10 @@ export default function StorylinePlayer({
   persistenceUserId,
   sourceUpdatedAt = 'legacy',
 }: StorylinePlayerProps) {
+  const normalizedStoryTransition = useMemo(
+    () => normalizeStoryTransitionSettings(storyTransition),
+    [storyTransition]
+  );
   const isVerticalStoryline = isVerticalStory || aspectRatio === '9:16';
   const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(() => {
@@ -432,7 +444,9 @@ export default function StorylinePlayer({
     playbackState,
     togglePlayPause,
     play: playAudio,
+    pause: pauseAudio,
     stop: stopAudio,
+    seekTo: seekAudio,
     currentTimeMs: audioElapsedMs,
     durationMs: audioDurationMs,
     volume,
@@ -459,6 +473,23 @@ export default function StorylinePlayer({
   const storyboardAudioDurationMs = audioDurationMs > 0
     ? audioDurationMs
     : currentBeat.narrationMetadata?.durationMs ?? 0;
+  const storyPanelBoundariesMs = useMemo(
+    () => getStoryboardPanelBoundariesMs(
+      Math.max(1, storyboardAudioDurationMs),
+      currentBeat.storyboardNarrationTiming
+    ),
+    [currentBeat.storyboardNarrationTiming, storyboardAudioDurationMs]
+  );
+  const storyTransitionPlayback = useStoryTransitionPlayback({
+    enabled: isStoryboard && storyboardAudioDurationMs > 0,
+    narrationBoundariesMs: storyPanelBoundariesMs,
+    settings: normalizedStoryTransition,
+    narrationTimeMs: audioElapsedMs,
+    playbackState,
+    pause: pauseAudio,
+    play: playAudio,
+    seekNarration: seekAudio,
+  });
 
   useEffect(() => {
     if (!persistenceUserId) return;
@@ -468,6 +499,7 @@ export default function StorylinePlayer({
       title,
       isVerticalStory: isVerticalStoryline,
       aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
+      storyTransition: normalizedStoryTransition,
       beats: currentBeats,
       choices,
       authorName,
@@ -483,7 +515,7 @@ export default function StorylinePlayer({
       sourceUpdatedAt,
       currentPageIndex: currentIndex,
     });
-  }, [authorName, choices, currentBeats, currentIndex, isLoggedIn, isLiked, isOwner, isSaved, isVerticalStoryline, likeCount, persistenceUserId, sourceUpdatedAt, storyId, storylineId, title]);
+  }, [authorName, choices, currentBeats, currentIndex, isLoggedIn, isLiked, isOwner, isSaved, isVerticalStoryline, likeCount, normalizedStoryTransition, persistenceUserId, sourceUpdatedAt, storyId, storylineId, title]);
 
   const persistPage = useCallback((pageIndex: number) => {
     if (!persistenceUserId) return;
@@ -590,10 +622,15 @@ export default function StorylinePlayer({
   // Auto-play narration when beat changes and autoPlay is on
   const prevIndexRef = useRef(currentIndex);
   const pendingAutoPlayIndexRef = useRef<number | null>(null);
+  const pendingAutoPlayTimerRef = useRef<number | null>(null);
   useEffect(() => {
     if (prevIndexRef.current !== currentIndex) {
       prevIndexRef.current = currentIndex;
       pendingAutoPlayIndexRef.current = currentIndex;
+      if (pendingAutoPlayTimerRef.current !== null) {
+        window.clearTimeout(pendingAutoPlayTimerRef.current);
+        pendingAutoPlayTimerRef.current = null;
+      }
     }
     if (!autoPlay) {
       pendingAutoPlayIndexRef.current = null;
@@ -607,9 +644,22 @@ export default function StorylinePlayer({
       && playbackState === 'idle'
     ) {
       pendingAutoPlayIndexRef.current = null;
-      playAudio();
+      if (normalizedStoryTransition.durationMs <= 0) {
+        playAudio();
+      } else {
+        pendingAutoPlayTimerRef.current = window.setTimeout(() => {
+          pendingAutoPlayTimerRef.current = null;
+          playAudio();
+        }, normalizedStoryTransition.durationMs);
+      }
     }
-  }, [currentIndex, autoPlay, resolvedAudio.isResolving, resolvedAudioUrl, playbackState, playAudio, transitionChoice]);
+    return () => {
+      if (pendingAutoPlayTimerRef.current !== null) {
+        window.clearTimeout(pendingAutoPlayTimerRef.current);
+        pendingAutoPlayTimerRef.current = null;
+      }
+    };
+  }, [currentIndex, autoPlay, normalizedStoryTransition.durationMs, resolvedAudio.isResolving, resolvedAudioUrl, playbackState, playAudio, transitionChoice]);
 
   // Advance only for a genuine media-ended event. Pauses and manual navigation must not advance.
   const handledAudioEndedCountRef = useRef(0);
@@ -679,18 +729,40 @@ export default function StorylinePlayer({
     onSwipeRight: goPrev,
   });
 
+  const beatTransitionSeconds = normalizedStoryTransition.durationMs / 1000;
+  const beatTransitionIsBlack = normalizedStoryTransition.type === 'fade-black';
+  const beatTransitionIsSoft = normalizedStoryTransition.type === 'soft-fade';
+  const beatTransitionIsFast = normalizedStoryTransition.type === 'fast-cut';
+  const beatTransitionMotionSeconds = beatTransitionIsBlack
+    ? beatTransitionSeconds / 2
+    : beatTransitionSeconds;
+  const beatTransitionInitial = beatTransitionIsFast
+    ? { opacity: 1 }
+    : beatTransitionIsSoft
+      ? { opacity: 0, filter: 'blur(8px)' }
+      : { opacity: 0 };
+  const beatTransitionAnimate = beatTransitionIsSoft
+    ? { opacity: 1, filter: 'blur(0px)', scale: [1, 1.06] }
+    : { opacity: 1, scale: [1, 1.06] };
+  const beatTransitionExit = beatTransitionIsFast
+    ? { opacity: 1 }
+    : beatTransitionIsSoft
+      ? { opacity: 0, filter: 'blur(8px)' }
+      : { opacity: 0 };
+
   return (
     <div ref={containerRef} className="relative h-dvh bg-neutral-950 text-neutral-200 overflow-hidden flex flex-col" style={{ paddingTop: 'var(--safe-top)', paddingBottom: 'var(--safe-bottom)' }}>
       {/* Background Image */}
       <div className="absolute inset-0 z-0">
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode={beatTransitionIsBlack ? 'wait' : 'sync'} initial={false}>
           <motion.div
             key={visualKey}
-            initial={isStoryboard ? { opacity: 0 } : { opacity: 0, scale: 1.05 }}
-            animate={isStoryboard ? { opacity: 1, scale: [1, 1.06] } : { opacity: 1, scale: [1, 1.08] }}
-            exit={{ opacity: 0 }}
+            initial={beatTransitionInitial}
+            animate={beatTransitionAnimate}
+            exit={beatTransitionExit}
             transition={{
-              opacity: { duration: 1.5, ease: 'easeOut' },
+              opacity: { duration: beatTransitionMotionSeconds, ease: 'easeInOut' },
+              filter: { duration: beatTransitionMotionSeconds, ease: 'easeInOut' },
               scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
             }}
             className={isVerticalStoryline ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
@@ -719,6 +791,8 @@ export default function StorylinePlayer({
                   storyTextOverlayStyle={currentBeat.storyTextOverlayStyle}
                   storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
                   storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
+                  storyTransitionSettings={normalizedStoryTransition}
+                  activeStoryTransition={storyTransitionPlayback.activeTransition}
                 />
               </div>
             ) : displayImageUrl ? (
@@ -772,6 +846,8 @@ export default function StorylinePlayer({
                       storyTextOverlayStyle={currentBeat.storyTextOverlayStyle}
                       storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
                       storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
+                      storyTransitionSettings={normalizedStoryTransition}
+                      activeStoryTransition={storyTransitionPlayback.activeTransition}
                     />
                   ) : displayImageUrl ? (
                     <Image
@@ -897,6 +973,7 @@ export default function StorylinePlayer({
                       cycleOverride: cycleSettings.cycleOverride,
                       cycleMs: cycleSettings.cycleMs,
                       storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
+                      storyTransition: normalizedStoryTransition,
                     });
                     if (auth.status === 'allowed' && auth.reservationId) {
                       if (ok) {
@@ -913,6 +990,7 @@ export default function StorylinePlayer({
                       cycleOverride: cycleSettings.cycleOverride,
                       cycleMs: cycleSettings.cycleMs,
                       storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
+                      storyTransition: normalizedStoryTransition,
                     });
                   }
                 }}
@@ -1025,6 +1103,8 @@ export default function StorylinePlayer({
                 storyTextOverlayStyle={currentBeat.storyTextOverlayStyle}
                 storyTextOverlayWordsPerLine={cycleSettings.storyTextOverlayWordsPerLine}
                 storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
+                storyTransitionSettings={normalizedStoryTransition}
+                activeStoryTransition={storyTransitionPlayback.activeTransition}
               />
             ) : displayImageUrl ? (
               <div className="mobile-scene-shuttle absolute inset-0">

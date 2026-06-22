@@ -1,4 +1,5 @@
 import type { StoryBeat, StorySession } from '@/lib/types/story';
+import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 
 export const STORY_MANIFEST_SCHEMA_VERSION = 1;
 
@@ -31,6 +32,7 @@ export interface StorylineManifestPayload {
   title: string;
   isVerticalStory: boolean;
   aspectRatio: '16:9' | '9:16';
+  storyTransition?: StoryTransitionSettings;
   beats: StoryBeat[];
   choices: Array<{ fromBeat: number; optionLabel: string }>;
   authorName: string | null;

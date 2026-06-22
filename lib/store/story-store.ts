@@ -41,6 +41,10 @@ import {
   normalizeStoryTextOverlayStyle,
 } from '@/lib/story-overlay/styles';
 import { normalizeReelTransitionSettings, type ReelTransitionSettings } from '@/lib/reel/transitions';
+import {
+  normalizeStoryTransitionSettings,
+  type StoryTransitionSettings,
+} from '@/lib/story-transitions/settings';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
@@ -184,6 +188,7 @@ interface StoryState {
     mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
     style: StoryBeat['storyTextOverlayStyle'];
   }) => Promise<void>;
+  updateStoryTransitionSettings: (settings: StoryTransitionSettings) => Promise<void>;
   generateStoryTextOverlayForNode: (
     nodeId: string,
     settings: {
@@ -4105,6 +4110,41 @@ export const useStoryStore = create<StoryState>()(
             isSaving: false,
             saveStatus: 'unsaved',
             error: error instanceof Error ? error.message : 'Failed to save story text overlay settings.',
+          });
+          throw error;
+        }
+      },
+
+      updateStoryTransitionSettings: async (settings) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig)) return;
+
+        const storyTransition = normalizeStoryTransitionSettings(settings);
+        const nextStoryConfig = normalizeStoryConfig({
+          ...session.storyConfig,
+          storyTransition,
+        });
+        const nextSession = deriveSessionFields({
+          ...session,
+          storyConfig: nextStoryConfig,
+        }, session.storyMap);
+
+        updateStoreSaveUi({
+          session: nextSession,
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+        });
+        if (!session.savedStoryId) return;
+
+        try {
+          await saveStoryAction(nextSession, nextSession.storyMap);
+          updateStoreSaveUi({ isSaving: false, saveStatus: 'saved', error: null });
+        } catch (error) {
+          updateStoreSaveUi({
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to save story transitions.',
           });
           throw error;
         }

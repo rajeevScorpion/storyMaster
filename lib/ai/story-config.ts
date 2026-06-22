@@ -30,6 +30,10 @@ import {
   DEFAULT_STORY_TEXT_OVERLAY_STYLE,
   normalizeStoryTextOverlayStyle,
 } from '@/lib/story-overlay/styles';
+import {
+  DEFAULT_STORY_TRANSITION_SETTINGS,
+  normalizeStoryTransitionSettings,
+} from '@/lib/story-transitions/settings';
 import type {
   NarrationGenderBucket,
   NarrationLanguageCode,
@@ -164,6 +168,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   authoring: DEFAULT_AUTHORING,
   reel: DEFAULT_REEL_CONFIG,
   storyTextOverlay: DEFAULT_STORY_TEXT_OVERLAY_CONFIG,
+  storyTransition: DEFAULT_STORY_TRANSITION_SETTINGS,
   portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
 };
 
@@ -212,6 +217,7 @@ type RawStoryConfig = Partial<StoryConfig> & {
   }) | null;
   reel?: Partial<ReelStoryConfig> | null;
   storyTextOverlay?: Partial<StoryConfig['storyTextOverlay']> | null;
+  storyTransition?: Partial<StoryConfig['storyTransition']> | null;
   portraitReferences?: Partial<PortraitReferenceConfig> | null;
   narrationVoice?: Partial<StoryNarrationVoiceSelection> | null;
 };
@@ -266,6 +272,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     authoring: storyKind === 'reel' ? { mode: 'prompt' } : authoring,
     reel,
     storyTextOverlay: normalizeStoryTextOverlayConfig(input?.storyTextOverlay),
+    storyTransition: normalizeStoryTransitionSettings(input?.storyTransition),
     portraitReferences,
     ...(narrationVoice ? { narrationVoice } : {}),
   };

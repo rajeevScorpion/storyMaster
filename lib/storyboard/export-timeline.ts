@@ -1,10 +1,15 @@
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
+import {
+  buildStoryTransitionTimeline,
+  getStoryTransitionClockState,
+  narrationTimeToStoryVisualTime,
+  type StoryTransitionTimeline,
+} from '@/lib/story-transitions/timeline';
+import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { StoryTextOverlayCaption } from '@/lib/story-overlay/types';
 import type { StoryBeat } from '@/lib/types/story';
-
-export const STORY_EXPORT_FADE_MS = 600;
 
 export interface StoryExportBeatInput {
   beat: StoryBeat;
@@ -16,6 +21,8 @@ export interface StoryExportBeatInput {
 export interface StoryExportScene {
   beatIndex: number;
   beatStartMs: number;
+  narrationStartMs: number;
+  narrationEndMs: number;
   startMs: number;
   endMs: number;
   imageUrl: string;
@@ -31,7 +38,9 @@ export interface StoryExportScene {
 export interface StoryExportTimeline {
   scenes: StoryExportScene[];
   beatDurationsMs: number[];
+  totalNarrationDurationMs: number;
   totalDurationMs: number;
+  transitionTimeline: StoryTransitionTimeline;
 }
 
 export interface StoryExportFrameSample {
@@ -42,7 +51,8 @@ export interface StoryExportFrameSample {
 export function buildStoryExportTimeline(
   beats: StoryExportBeatInput[],
   cycleOverride: boolean,
-  cycleMs: number
+  cycleMs: number,
+  storyTransition?: StoryTransitionSettings
 ): StoryExportTimeline {
   const scenes: StoryExportScene[] = [];
   const beatDurationsMs: number[] = [];
@@ -63,8 +73,10 @@ export function buildStoryExportTimeline(
       scenes.push({
         beatIndex,
         beatStartMs,
-        startMs: beatStartMs + boundaries[panelIndex],
-        endMs: beatStartMs + boundaries[panelIndex + 1],
+        narrationStartMs: beatStartMs + boundaries[panelIndex],
+        narrationEndMs: beatStartMs + boundaries[panelIndex + 1],
+        startMs: 0,
+        endMs: 0,
         imageUrl: input.imageUrl,
         isStoryboard,
         panelIndex,
@@ -83,14 +95,32 @@ export function buildStoryExportTimeline(
     beatStartMs += resolvedDurationMs;
   });
 
-  return { scenes, beatDurationsMs, totalDurationMs: beatStartMs };
+  const transitionTimeline = buildStoryTransitionTimeline(
+    [0, ...scenes.map((scene) => scene.narrationEndMs)],
+    storyTransition
+  );
+  scenes.forEach((scene) => {
+    scene.startMs = narrationTimeToStoryVisualTime(transitionTimeline, scene.narrationStartMs);
+    scene.endMs = scene.startMs + scene.narrationEndMs - scene.narrationStartMs;
+  });
+
+  return {
+    scenes,
+    beatDurationsMs,
+    totalNarrationDurationMs: beatStartMs,
+    totalDurationMs: transitionTimeline.totalDurationMs,
+    transitionTimeline,
+  };
+}
+
+export function getStoryExportFrameState(timeline: StoryExportTimeline, timeMs: number) {
+  return getStoryTransitionClockState(timeline.transitionTimeline, timeMs);
 }
 
 export function getStoryExportSceneAtTime(timeline: StoryExportTimeline, timeMs: number) {
   if (timeline.scenes.length === 0) return undefined;
-  const clamped = Math.max(0, Math.min(timeMs, timeline.totalDurationMs));
-  return [...timeline.scenes].reverse().find((scene) => clamped >= scene.startMs)
-    ?? timeline.scenes[0];
+  const state = getStoryExportFrameState(timeline, timeMs);
+  return timeline.scenes[Math.min(state.activeIndex, timeline.scenes.length - 1)];
 }
 
 export function buildStoryExportFrameSamples(
@@ -101,15 +131,17 @@ export function buildStoryExportFrameSamples(
   const points = new Set<number>([0, timeline.totalDurationMs]);
   const add = (value: number) => points.add(Math.max(0, Math.min(timeline.totalDurationMs, Math.round(value * 1000) / 1000)));
 
+  timeline.transitionTimeline.transitions.forEach((transition) => {
+    add(transition.startMs);
+    add(transition.endMs);
+    for (let timeMs = transition.startMs; timeMs < transition.endMs; timeMs += frameMs) add(timeMs);
+  });
   timeline.scenes.forEach((scene) => {
     add(scene.startMs);
     add(scene.endMs);
-    const fadeMs = Math.min(STORY_EXPORT_FADE_MS, Math.max(0, (scene.endMs - scene.startMs) / 2));
-    for (let timeMs = scene.startMs; timeMs < scene.startMs + fadeMs; timeMs += frameMs) add(timeMs);
-    for (let timeMs = Math.max(scene.startMs, scene.endMs - fadeMs); timeMs < scene.endMs; timeMs += frameMs) add(timeMs);
     scene.storyTextOverlayCaption?.wordTimings?.forEach((word) => {
-      add(scene.beatStartMs + word.startMs);
-      add(scene.beatStartMs + word.endMs);
+      add(narrationTimeToStoryVisualTime(timeline.transitionTimeline, scene.beatStartMs + word.startMs));
+      add(narrationTimeToStoryVisualTime(timeline.transitionTimeline, scene.beatStartMs + word.endMs));
     });
   });
 

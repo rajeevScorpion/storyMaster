@@ -9,6 +9,7 @@ interface UseAudioPlayerReturn {
   playbackState: PlaybackState;
   togglePlayPause: () => void;
   play: () => void;
+  pause: () => void;
   stop: () => void;
   seekTo: (timeMs: number) => void;
   currentTimeMs: number;
@@ -205,6 +206,14 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     audio.play().then(() => setPlaybackState('playing')).catch(() => {});
   }, [playbackState]);
 
+  const pause = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    onProgressRef.current?.(audio.currentTime * 1000);
+    setPlaybackState('paused');
+  }, []);
+
   const stop = useCallback(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -224,5 +233,5 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     setCurrentTimeMs(nextTimeMs);
   }, []);
 
-  return { playbackState, togglePlayPause, play, stop, seekTo, currentTimeMs, durationMs, volume, setVolume, isMuted, toggleMute };
+  return { playbackState, togglePlayPause, play, pause, stop, seekTo, currentTimeMs, durationMs, volume, setVolume, isMuted, toggleMute };
 }

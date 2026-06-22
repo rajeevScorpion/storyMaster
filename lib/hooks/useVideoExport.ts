@@ -10,6 +10,10 @@ import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 import { STORYBOARD_PANEL_CROP_INSET_RATIO } from '@/lib/storyboard/layout';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
+import {
+  normalizeStoryTransitionSettings,
+  type StoryTransitionSettings,
+} from '@/lib/story-transitions/settings';
 import type { ExportPhase, VideoExportOptions as BaseVideoExportOptions, VideoExportState } from '@/lib/video-export/types';
 import {
   DEFAULT_REEL_TEXT_OVERLAY_STYLE,
@@ -719,6 +723,45 @@ export interface VideoExportOptions extends BaseVideoExportOptions {
   exportKind?: VideoExportKind;
   cycleOverride?: boolean;
   cycleMs?: number;
+  storyTransition?: StoryTransitionSettings;
+}
+
+function buildPausedStoryAudioFilters(
+  audioInputIndex: number,
+  narrationDurations: number[],
+  transitionSeconds: number,
+  leadingSeconds: number,
+  trailingSeconds: number
+): string[] {
+  const filters: string[] = [];
+  const sourceLabels = narrationDurations.map((_, index) => `storysrc${index}`);
+  const normalizedInput = `storyaudio${audioInputIndex}`;
+  filters.push(
+    `[${audioInputIndex}:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo[${normalizedInput}]`
+  );
+  if (sourceLabels.length > 1) {
+    filters.push(`[${normalizedInput}]asplit=${sourceLabels.length}${sourceLabels.map((label) => `[${label}]`).join('')}`);
+  }
+
+  const concatLabels: string[] = [];
+  const addSilence = (label: string, duration: number) => {
+    if (duration <= 0) return;
+    filters.push(`anullsrc=channel_layout=stereo:sample_rate=${AUDIO_SAMPLE_RATE},atrim=duration=${duration.toFixed(3)},asetpts=PTS-STARTPTS[${label}]`);
+    concatLabels.push(`[${label}]`);
+  };
+  addSilence('storysilencelead', leadingSeconds);
+  let cursor = 0;
+  narrationDurations.forEach((duration, index) => {
+    const source = sourceLabels.length > 1 ? sourceLabels[index] : normalizedInput;
+    const label = `storypart${index}`;
+    filters.push(`[${source}]atrim=start=${cursor.toFixed(3)}:end=${(cursor + duration).toFixed(3)},asetpts=PTS-STARTPTS[${label}]`);
+    concatLabels.push(`[${label}]`);
+    cursor += duration;
+    if (index < narrationDurations.length - 1) addSilence(`storysilence${index}`, transitionSeconds);
+  });
+  addSilence('storysilencetail', trailingSeconds);
+  filters.push(`${concatLabels.join('')}concat=n=${concatLabels.length}:v=0:a=1[aout]`);
+  return filters;
 }
 
 function buildAbsoluteCaptionFrameSlices(
@@ -801,6 +844,8 @@ export function useVideoExport() {
       const aspectRatio: StoryAspectRatio = options.aspectRatio === '9:16' ? '9:16' : '16:9';
       const exportKind: VideoExportKind = options.exportKind === 'reel' ? 'reel' : 'storyline';
       const isReelExport = exportKind === 'reel';
+      const storyTransition = normalizeStoryTransitionSettings(options.storyTransition);
+      const storyTransitionSeconds = isReelExport ? 0 : storyTransition.durationMs / 1000;
       const videoExportPreset = normalizeVideoExportPreset(options.videoExportPreset ?? DEFAULT_VIDEO_EXPORT_PRESET);
       const canvasSize = getExportCanvasSize(aspectRatio, videoExportPreset);
       const showWatermark = options.showWatermark === true;
@@ -964,9 +1009,10 @@ export function useVideoExport() {
             outputLabel: string,
             duration: number,
             fadeIn = true,
-            fadeOut = true
+            fadeOut = true,
+            configuredFadeSeconds = FADE_DURATION
           ) => {
-            const fade = Math.max(0, Math.min(FADE_DURATION, duration / 2 - 0.01));
+            const fade = Math.max(0, Math.min(configuredFadeSeconds, duration / 2 - 0.01));
             const fadeInFilter = fade > 0 && fadeIn ? `,fade=t=in:d=${fade.toFixed(3)}` : '';
             const fadeOutFilter = fade > 0 && fadeOut ? `,fade=t=out:st=${(duration - fade).toFixed(3)}:d=${fade.toFixed(3)}` : '';
             const fadeFilter = `${fadeInFilter}${fadeOutFilter}`;
@@ -974,9 +1020,15 @@ export function useVideoExport() {
           };
 
           const args: string[] = [];
-          const durationSeconds = segment.isStoryboard
-            ? segment.totalDuration
-            : segment.panelDuration + segment.endHoldDuration;
+            const durationSeconds = segment.isStoryboard
+              ? segment.totalDuration
+              : segment.panelDuration + segment.endHoldDuration;
+          const leadingStoryTransitionSeconds = !isReelExport && index > 0
+            ? storyTransitionSeconds / 2
+            : 0;
+          const trailingStoryTransitionSeconds = !isReelExport && index < segments.length - 1
+            ? storyTransitionSeconds / 2
+            : 0;
 
           if (segment.isStoryboard) {
             const storyboardImage = await loadImage(segment.imageUrl);
@@ -1047,18 +1099,26 @@ export function useVideoExport() {
 
               for (let sliceIndex = 0; sliceIndex < frameSlices.length; sliceIndex += 1) {
                 const frame = frameSlices[sliceIndex];
+                const leadingTransitionSeconds = !isReelExport && frame.isPanelFirst
+                  ? (panelIndex > 0 ? storyTransitionSeconds / 2 : leadingStoryTransitionSeconds)
+                  : 0;
+                const trailingTransitionSeconds = !isReelExport && frame.isPanelLast
+                  ? (panelIndex < 3 ? storyTransitionSeconds / 2 : trailingStoryTransitionSeconds)
+                  : 0;
                 const frameFile = await getStoryboardFrameFile(panelIndex, caption, frame.activeWordIndex);
                 frameFiles.push(frameFile);
-                frameDurations.push(frame.duration);
+                frameDurations.push(frame.duration + leadingTransitionSeconds + trailingTransitionSeconds);
                 frameFadeFlags.push({
-                  fadeIn: frame.isPanelFirst,
-                  fadeOut: frame.isPanelLast && !willAppendFinalHoldAfterPanel,
+                  fadeIn: isReelExport ? frame.isPanelFirst : leadingTransitionSeconds > 0,
+                  fadeOut: isReelExport
+                    ? frame.isPanelLast && !willAppendFinalHoldAfterPanel
+                    : trailingTransitionSeconds > 0,
                 });
 
                 args.push(
                   '-framerate', String(FPS),
                   '-loop', '1',
-                  '-t', frame.duration.toFixed(3),
+                  '-t', (frame.duration + leadingTransitionSeconds + trailingTransitionSeconds).toFixed(3),
                   '-i', frameFile
                 );
                 preparedFrameInputCount += 1;
@@ -1105,10 +1165,19 @@ export function useVideoExport() {
                 label,
                 frameDurations[frameIndex] ?? segment.panelDuration,
                 frameFadeFlags[frameIndex]?.fadeIn,
-                frameFadeFlags[frameIndex]?.fadeOut
+                frameFadeFlags[frameIndex]?.fadeOut,
+                isReelExport ? FADE_DURATION : storyTransitionSeconds / 2
               )),
               `${videoOutputLabels.map((label) => `[${label}]`).join('')}concat=n=${videoOutputLabels.length}:v=1:a=0[vout]`,
-              `[${audioInputIndex}:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${storyboardDurationSeconds.toFixed(3)},atrim=duration=${storyboardDurationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`,
+              ...(isReelExport || storyTransitionSeconds <= 0
+                ? [`[${audioInputIndex}:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${storyboardDurationSeconds.toFixed(3)},atrim=duration=${storyboardDurationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`]
+                : buildPausedStoryAudioFilters(
+                    audioInputIndex,
+                    segment.panelDurations,
+                    storyTransitionSeconds,
+                    leadingStoryTransitionSeconds,
+                    trailingStoryTransitionSeconds
+                  )),
             ].join(';');
 
             args.push(
@@ -1136,6 +1205,9 @@ export function useVideoExport() {
               await ffmpeg.deleteFile(frameFile);
             }
           } else {
+            const storyDurationSeconds = durationSeconds
+              + leadingStoryTransitionSeconds
+              + trailingStoryTransitionSeconds;
             const imageFile = `img_${index}.jpg`;
             const imageBytes = await renderBeatFrameBytes(
               segment.imageUrl,
@@ -1156,7 +1228,7 @@ export function useVideoExport() {
             args.push(
               '-framerate', String(FPS),
               '-loop', '1',
-              '-t', durationSeconds.toFixed(3),
+              '-t', storyDurationSeconds.toFixed(3),
               '-i', imageFile
             );
 
@@ -1171,8 +1243,23 @@ export function useVideoExport() {
             }
 
             const filterComplex = [
-              withFade('0:v', 'vout', durationSeconds),
-              `[1:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${durationSeconds.toFixed(3)},atrim=duration=${durationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`,
+              withFade(
+                '0:v',
+                'vout',
+                storyDurationSeconds,
+                isReelExport || leadingStoryTransitionSeconds > 0,
+                isReelExport || trailingStoryTransitionSeconds > 0,
+                isReelExport ? FADE_DURATION : storyTransitionSeconds / 2
+              ),
+              ...(!isReelExport && storyTransitionSeconds > 0
+                ? buildPausedStoryAudioFilters(
+                    1,
+                    [durationSeconds],
+                    storyTransitionSeconds,
+                    leadingStoryTransitionSeconds,
+                    trailingStoryTransitionSeconds
+                  )
+                : [`[1:a]aresample=${AUDIO_SAMPLE_RATE},aformat=sample_fmts=fltp:sample_rates=${AUDIO_SAMPLE_RATE}:channel_layouts=stereo,apad=whole_dur=${durationSeconds.toFixed(3)},atrim=duration=${durationSeconds.toFixed(3)},asetpts=PTS-STARTPTS[aout]`]),
             ].join(';');
 
             args.push(

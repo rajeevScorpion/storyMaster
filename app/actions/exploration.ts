@@ -440,6 +440,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     is_public: boolean;
     created_at: string;
     source_updated_at: string;
+    story_transition: ReturnType<typeof normalizeStoryConfig>['storyTransition'];
   };
   beats: StoryBeat[];
   choices: { fromBeat: number; optionLabel: string }[];
@@ -559,6 +560,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         is_public: storyline.is_public,
         created_at: storyline.created_at,
         source_updated_at: sourceStory?.updated_at || storyline.created_at,
+        story_transition: sourceStoryConfig.storyTransition,
       },
       beats: signedBeats,
       choices,
@@ -593,6 +595,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       is_public: storyline.is_public,
       created_at: storyline.created_at,
       source_updated_at: sourceStory?.updated_at || storyline.created_at,
+      story_transition: sourceStoryConfig.storyTransition,
     },
     beats: signedLegacyBeats,
     choices: (storyline.choices as any[]).map(c => c as { fromBeat: number; optionLabel: string }),
