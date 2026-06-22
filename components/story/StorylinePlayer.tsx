@@ -793,6 +793,8 @@ export default function StorylinePlayer({
                   storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
                   storyTransitionSettings={normalizedStoryTransition}
                   activeStoryTransition={storyTransitionPlayback.activeTransition}
+                  storyEffects={currentBeat.storyEffects}
+                  effectSeed={`${storylineId}:${currentIndex}`}
                 />
               </div>
             ) : displayImageUrl ? (
@@ -848,6 +850,8 @@ export default function StorylinePlayer({
                       storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
                       storyTransitionSettings={normalizedStoryTransition}
                       activeStoryTransition={storyTransitionPlayback.activeTransition}
+                      storyEffects={currentBeat.storyEffects}
+                      effectSeed={`${storylineId}:${currentIndex}`}
                     />
                   ) : displayImageUrl ? (
                     <Image
@@ -1105,6 +1109,8 @@ export default function StorylinePlayer({
                 storyTextOverlayTextHighlightSupported={storyTextOverlayHighlightSupported}
                 storyTransitionSettings={normalizedStoryTransition}
                 activeStoryTransition={storyTransitionPlayback.activeTransition}
+                storyEffects={currentBeat.storyEffects}
+                effectSeed={`${storylineId}:${currentIndex}`}
               />
             ) : displayImageUrl ? (
               <div className="mobile-scene-shuttle absolute inset-0">

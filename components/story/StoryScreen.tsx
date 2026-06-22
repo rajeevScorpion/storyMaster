@@ -6,7 +6,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Sparkles, Focus, Radius, StretchHorizontal, UnfoldHorizontal, UnfoldVertical, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
@@ -24,6 +24,7 @@ import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 import StoryNarrationTimingDialog from './StoryNarrationTimingDialog';
 import StoryTextOverlayDialog from './StoryTextOverlayDialog';
 import StoryTransitionDialog from './StoryTransitionDialog';
+import StoryEffectsDialog from './StoryEffectsDialog';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
 import { extractStoryline } from '@/lib/utils/storyline';
@@ -2016,6 +2017,8 @@ export default function StoryScreen() {
   const updateReelTextOverlaySettings = useStoryStore((state) => state.updateReelTextOverlaySettings);
   const updateStoryTextOverlaySettings = useStoryStore((state) => state.updateStoryTextOverlaySettings);
   const updateStoryTransitionSettings = useStoryStore((state) => state.updateStoryTransitionSettings);
+  const updateStoryEffects = useStoryStore((state) => state.updateStoryEffects);
+  const applyStoryEffectsToAll = useStoryStore((state) => state.applyStoryEffectsToAll);
   const generateStoryTextOverlayForNode = useStoryStore((state) => state.generateStoryTextOverlayForNode);
   const generateStoryTextOverlayForCurrentPath = useStoryStore((state) => state.generateStoryTextOverlayForCurrentPath);
   const updateReelTransitionSettings = useStoryStore((state) => state.updateReelTransitionSettings);
@@ -2203,6 +2206,8 @@ export default function StoryScreen() {
       updateReelTextOverlaySettings={updateReelTextOverlaySettings}
       updateStoryTextOverlaySettings={updateStoryTextOverlaySettings}
       updateStoryTransitionSettings={updateStoryTransitionSettings}
+      updateStoryEffects={updateStoryEffects}
+      applyStoryEffectsToAll={applyStoryEffectsToAll}
       generateStoryTextOverlayForNode={generateStoryTextOverlayForNode}
       generateStoryTextOverlayForCurrentPath={generateStoryTextOverlayForCurrentPath}
       updateReelTransitionSettings={updateReelTransitionSettings}
@@ -2259,6 +2264,8 @@ function StoryScreenInner({
   updateReelTextOverlaySettings,
   updateStoryTextOverlaySettings,
   updateStoryTransitionSettings,
+  updateStoryEffects,
+  applyStoryEffectsToAll,
   generateStoryTextOverlayForNode,
   generateStoryTextOverlayForCurrentPath,
   updateReelTransitionSettings,
@@ -2318,6 +2325,8 @@ function StoryScreenInner({
     style: StoryBeat['storyTextOverlayStyle'];
   }) => Promise<void>;
   updateStoryTransitionSettings: ReturnType<typeof useStoryStore.getState>['updateStoryTransitionSettings'];
+  updateStoryEffects: ReturnType<typeof useStoryStore.getState>['updateStoryEffects'];
+  applyStoryEffectsToAll: ReturnType<typeof useStoryStore.getState>['applyStoryEffectsToAll'];
   generateStoryTextOverlayForNode: (nodeId: string, settings: {
     enabled: boolean;
     mode: NonNullable<StoryBeat['storyTextOverlayMode']>;
@@ -2431,6 +2440,7 @@ function StoryScreenInner({
   const [showStoryNarrationTiming, setShowStoryNarrationTiming] = useState(false);
   const [showStoryTextOverlay, setShowStoryTextOverlay] = useState(false);
   const [showStoryTransitions, setShowStoryTransitions] = useState(false);
+  const [showStoryEffects, setShowStoryEffects] = useState(false);
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
   const [isDiscardingReel, setIsDiscardingReel] = useState(false);
   const [discardReelError, setDiscardReelError] = useState<string | null>(null);
@@ -5758,6 +5768,8 @@ function StoryScreenInner({
                 storyTextOverlayTextHighlightSupported={savedStoryTextOverlayHighlightSupported}
                 storyTransitionSettings={!isReelStory ? session.storyConfig.storyTransition : undefined}
                 activeStoryTransition={!isReelStory ? storyTransitionPlayback.activeTransition : null}
+                storyEffects={!isReelStory ? normalizedCurrentBeat.storyEffects : undefined}
+                effectSeed={currentNodeId}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
               />
@@ -5804,6 +5816,8 @@ function StoryScreenInner({
                       storyTextOverlayTextHighlightSupported={savedStoryTextOverlayHighlightSupported}
                       storyTransitionSettings={session.storyConfig.storyTransition}
                       activeStoryTransition={storyTransitionPlayback.activeTransition}
+                      storyEffects={normalizedCurrentBeat.storyEffects}
+                      effectSeed={currentNodeId}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                     />
@@ -5967,6 +5981,8 @@ function StoryScreenInner({
                   storyTextOverlayTextHighlightSupported={savedStoryTextOverlayHighlightSupported}
                   storyTransitionSettings={session.storyConfig.storyTransition}
                   activeStoryTransition={storyTransitionPlayback.activeTransition}
+                  storyEffects={normalizedCurrentBeat.storyEffects}
+                  effectSeed={currentNodeId}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                 />
@@ -6128,6 +6144,20 @@ function StoryScreenInner({
                     aria-label={normalizedCurrentBeat.imageUrl ? 'Open Story Text Overlay' : 'Create storyboard image first'}
                   >
                     <Type className="h-5 w-5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!normalizedCurrentBeat.imageUrl) return;
+                      stopAudio();
+                      setShowStoryEffects(true);
+                    }}
+                    disabled={!normalizedCurrentBeat.imageUrl}
+                    className={`rounded-full p-2 backdrop-blur-md transition-colors disabled:cursor-not-allowed disabled:text-neutral-600 ${normalizedCurrentBeat.storyEffects?.enabled ? 'bg-emerald-400/15 text-emerald-300' : 'bg-white/5 text-neutral-300 hover:bg-emerald-400/10 hover:text-emerald-300'}`}
+                    title={normalizedCurrentBeat.imageUrl ? 'Story Effects' : 'Create storyboard image first'}
+                    aria-label={normalizedCurrentBeat.imageUrl ? 'Open Story Effects' : 'Create storyboard image first'}
+                  >
+                    <Sparkles className="h-5 w-5" />
                   </button>
                   <button
                     type="button"
@@ -7435,6 +7465,18 @@ function StoryScreenInner({
         settings={session.storyConfig.storyTransition}
         onClose={() => setShowStoryTransitions(false)}
         onSave={updateStoryTransitionSettings}
+      />
+      <StoryEffectsDialog
+        open={showStoryEffects}
+        nodeId={currentNodeId}
+        beat={normalizedCurrentBeat}
+        aspectRatio={session.storyConfig.aspectRatio}
+        vignetteEnabled={cycleSettings.vignetteEnabled}
+        vignetteAmountPercent={cycleSettings.vignetteAmountPercent}
+        totalBeatCount={Object.keys(session.storyMap.nodes).length}
+        onClose={() => setShowStoryEffects(false)}
+        onSave={(config) => updateStoryEffects(currentNodeId, config)}
+        onApplyAll={applyStoryEffectsToAll}
       />
 
       <AnimatePresence>
