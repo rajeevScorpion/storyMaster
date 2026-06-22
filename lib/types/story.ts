@@ -5,6 +5,7 @@ import type { BeatNarrationMetadata, ReelNarrationSettings } from '@/lib/reel/na
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
+import type { StoryEffectConfig } from '@/lib/story-effects/settings';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -158,6 +159,7 @@ export interface StoryBeat {
   storyTextOverlayStyle?: StoryTextOverlayStyle;
   storyTextOverlayCaptions?: StoryTextOverlayCaption[];
   storyTextOverlayAlignment?: StoryTextOverlayAlignment;
+  storyEffects?: StoryEffectConfig;
   finalImagePromptText?: string;
   imageUrl?: string;
   persistedImageUrl?: string;

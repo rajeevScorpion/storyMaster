@@ -45,6 +45,8 @@ import {
   normalizeStoryTransitionSettings,
   type StoryTransitionSettings,
 } from '@/lib/story-transitions/settings';
+import { copyStoryEffectConfig, normalizeStoryEffectConfig, type StoryEffectConfig } from '@/lib/story-effects/settings';
+import { applyStoryEffectsToMap } from '@/lib/story-effects/story-map';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
@@ -189,6 +191,8 @@ interface StoryState {
     style: StoryBeat['storyTextOverlayStyle'];
   }) => Promise<void>;
   updateStoryTransitionSettings: (settings: StoryTransitionSettings) => Promise<void>;
+  updateStoryEffects: (nodeId: string, config: StoryEffectConfig) => Promise<void>;
+  applyStoryEffectsToAll: (config: StoryEffectConfig) => Promise<number>;
   generateStoryTextOverlayForNode: (
     nodeId: string,
     settings: {
@@ -4145,6 +4149,62 @@ export const useStoryStore = create<StoryState>()(
             isSaving: false,
             saveStatus: 'unsaved',
             error: error instanceof Error ? error.message : 'Failed to save story transitions.',
+          });
+          throw error;
+        }
+      },
+
+      updateStoryEffects: async (nodeId, config) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig) || !session.storyMap.nodes[nodeId]) return;
+        const storyEffects = copyStoryEffectConfig(normalizeStoryEffectConfig(config), config.sourcePresetId);
+        const previousSession = session;
+        const nextSession = updateSessionBeat(session, nodeId, (beat) => ({ ...beat, storyEffects }));
+        updateStoreSaveUi({
+          session: nextSession,
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+        });
+        if (!session.savedStoryId) return;
+        try {
+          await updateBeatMediaState(session.savedStoryId, nodeId, { storyEffects });
+          updateStoreSaveUi({ isSaving: false, saveStatus: 'saved', error: null });
+        } catch (error) {
+          updateStoreSaveUi({
+            session: previousSession,
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to save story effects.',
+          });
+          throw error;
+        }
+      },
+
+      applyStoryEffectsToAll: async (config) => {
+        const { session } = get();
+        if (!session || isReelStoryConfig(session.storyConfig)) return 0;
+        const previousSession = session;
+        const nextMap = applyStoryEffectsToMap(session.storyMap, normalizeStoryEffectConfig(config));
+        const nextSession = deriveSessionFields(session, nextMap);
+        const affected = Object.keys(nextMap.nodes).length;
+        updateStoreSaveUi({
+          session: nextSession,
+          isSaving: Boolean(session.savedStoryId),
+          saveStatus: session.savedStoryId ? 'saving' : 'unsaved',
+          error: null,
+        });
+        if (!session.savedStoryId) return affected;
+        try {
+          await saveStoryAction(nextSession, nextMap);
+          updateStoreSaveUi({ isSaving: false, saveStatus: 'saved', error: null });
+          return affected;
+        } catch (error) {
+          updateStoreSaveUi({
+            session: previousSession,
+            isSaving: false,
+            saveStatus: 'unsaved',
+            error: error instanceof Error ? error.message : 'Failed to apply story effects.',
           });
           throw error;
         }

@@ -10,6 +10,7 @@ import {
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { StoryTextOverlayCaption } from '@/lib/story-overlay/types';
 import type { StoryBeat } from '@/lib/types/story';
+import type { StoryEffectConfig } from '@/lib/story-effects/settings';
 
 export interface StoryExportBeatInput {
   beat: StoryBeat;
@@ -33,6 +34,8 @@ export interface StoryExportScene {
   storyTextOverlayMode?: StoryBeat['storyTextOverlayMode'];
   storyTextOverlayStyle?: StoryBeat['storyTextOverlayStyle'];
   storyTextOverlayTextHighlightSupported: boolean;
+  storyEffects?: StoryEffectConfig;
+  effectSeed: string;
 }
 
 export interface StoryExportTimeline {
@@ -87,6 +90,8 @@ export function buildStoryExportTimeline(
         storyTextOverlayMode: input.beat.storyTextOverlayMode,
         storyTextOverlayStyle: input.beat.storyTextOverlayStyle,
         storyTextOverlayTextHighlightSupported: input.beat.storyTextOverlayAlignment?.textHighlightSupported !== false,
+        storyEffects: input.beat.storyEffects,
+        effectSeed: `${beatIndex}:${panelIndex}`,
       });
     }
 

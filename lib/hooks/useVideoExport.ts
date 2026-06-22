@@ -15,6 +15,8 @@ import {
   type StoryTransitionSettings,
 } from '@/lib/story-transitions/settings';
 import type { ExportPhase, VideoExportOptions as BaseVideoExportOptions, VideoExportState } from '@/lib/video-export/types';
+import { drawStoryEffectsOverlay, getStoryMotionFrame } from '@/lib/story-effects/renderer';
+import { storyEffectConfigEnabled } from '@/lib/story-effects/settings';
 import {
   DEFAULT_REEL_TEXT_OVERLAY_STYLE,
   clampNumber,
@@ -124,6 +126,7 @@ type BeatSegment = {
   reelCaptions?: StoryBeat['reelCaptions'];
   textOverlayEnabled?: boolean;
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'];
+  storyEffects?: StoryBeat['storyEffects'];
 };
 
 type ReelCaption = NonNullable<StoryBeat['reelCaptions']>[number];
@@ -134,7 +137,25 @@ type CaptionFrameSlice = {
   activeWordIndex?: number;
   isPanelFirst: boolean;
   isPanelLast: boolean;
+  effectTimeMs?: number;
+  effectProgress?: number;
 };
+
+const COMPATIBILITY_EFFECT_FPS = 12;
+
+function buildCompatibilityEffectFrameSlices(panelDurationSeconds: number, panelStartMs: number): CaptionFrameSlice[] {
+  const frameDuration = 1 / COMPATIBILITY_EFFECT_FPS;
+  const frameCount = Math.max(1, Math.ceil(panelDurationSeconds * COMPATIBILITY_EFFECT_FPS));
+  return Array.from({ length: frameCount }, (_, index) => ({
+    duration: index === frameCount - 1
+      ? Math.max(1 / FPS, panelDurationSeconds - frameDuration * (frameCount - 1))
+      : frameDuration,
+    isPanelFirst: index === 0,
+    isPanelLast: index === frameCount - 1,
+    effectTimeMs: panelStartMs + index * frameDuration * 1000,
+    effectProgress: frameCount <= 1 ? 0 : index / (frameCount - 1),
+  }));
+}
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -702,7 +723,11 @@ async function renderStoryboardPanelBytes(
   caption?: ReelCaption,
   textOverlayStyle?: StoryBeat['reelTextOverlayStyle'],
   activeWordIndex?: number,
-  exportKind: VideoExportKind = 'storyline'
+  exportKind: VideoExportKind = 'storyline',
+  storyEffects?: StoryBeat['storyEffects'],
+  effectTimeMs = 0,
+  effectSeed = 'story-effect',
+  effectProgress = 0
 ): Promise<Uint8Array> {
   const canvas = createExportCanvas(canvasSize);
   const context = canvas.getContext('2d');
@@ -710,7 +735,17 @@ async function renderStoryboardPanelBytes(
     throw new Error('Failed to prepare storyboard export canvas.');
   }
 
+  const motion = getStoryMotionFrame(storyEffects, effectProgress);
+  context.save();
+  context.translate(canvasSize.width / 2, canvasSize.height / 2);
+  context.translate(canvasSize.width * motion.translateXPercent / 100, canvasSize.height * motion.translateYPercent / 100);
+  context.scale(motion.scale, motion.scale);
+  context.translate(-canvasSize.width / 2, -canvasSize.height / 2);
   drawStoryboardPanel(context, image, panelIndex, canvasSize);
+  context.restore();
+  if (storyEffectConfigEnabled(storyEffects)) {
+    drawStoryEffectsOverlay(context, storyEffects, effectTimeMs, effectSeed, { clear: false });
+  }
   drawReelCaptionOverlay(context, canvasSize, caption, textOverlayStyle, activeWordIndex, exportKind);
   if (showWatermark) {
     drawWatermark(context, canvasSize, videoExportPreset);
@@ -928,6 +963,7 @@ export function useVideoExport() {
             reelCaptions: beat.reelCaptions,
             textOverlayEnabled: beat.reelTextOverlayEnabled !== false,
             textOverlayStyle: beat.reelTextOverlayStyle,
+            storyEffects: beat.storyEffects,
           };
 
           preparedSegmentCount += 1;
@@ -1055,9 +1091,11 @@ export function useVideoExport() {
             const getStoryboardFrameFile = async (
               panelIndex: number,
               caption: ReelCaption | undefined,
-              activeWordIndex: number | undefined
+              activeWordIndex: number | undefined,
+              effectTimeMs = 0,
+              effectProgress = 0
             ): Promise<string> => {
-              const frameKey = `${panelIndex}:${activeWordIndex ?? 'none'}`;
+              const frameKey = `${panelIndex}:${activeWordIndex ?? 'none'}:${storyEffectConfigEnabled(segment.storyEffects) ? Math.round(effectTimeMs) : 'static'}`;
               if (isReelExport) {
                 const cachedFile = frameFileByKey.get(frameKey);
                 if (cachedFile) return cachedFile;
@@ -1074,7 +1112,11 @@ export function useVideoExport() {
                 caption,
                 segment.textOverlayStyle,
                 activeWordIndex,
-                exportKind
+                exportKind,
+                segment.storyEffects,
+                effectTimeMs,
+                `compat:${segment.index}:${panelIndex}`,
+                effectProgress
               );
               await ffmpeg.writeFile(frameFile, frameBytes);
               writtenFrameFiles.push(frameFile);
@@ -1092,7 +1134,9 @@ export function useVideoExport() {
               const caption = segment.textOverlayEnabled
                 ? segment.reelCaptions?.find((item) => item.panelIndex === panelIndex)
                 : undefined;
-              const frameSlices = isReelExport
+              const frameSlices = !isReelExport && storyEffectConfigEnabled(segment.storyEffects)
+                ? buildCompatibilityEffectFrameSlices(panelDuration, panelStartMs)
+                : isReelExport
                 ? buildCaptionFrameSlices(caption, panelDuration, true)
                 : buildAbsoluteCaptionFrameSlices(caption, panelStartMs, panelDuration);
               const willAppendFinalHoldAfterPanel = segment.endHoldDuration > 0 && panelIndex === 3;
@@ -1105,7 +1149,7 @@ export function useVideoExport() {
                 const trailingTransitionSeconds = !isReelExport && frame.isPanelLast
                   ? (panelIndex < 3 ? storyTransitionSeconds / 2 : trailingStoryTransitionSeconds)
                   : 0;
-                const frameFile = await getStoryboardFrameFile(panelIndex, caption, frame.activeWordIndex);
+                const frameFile = await getStoryboardFrameFile(panelIndex, caption, frame.activeWordIndex, frame.effectTimeMs, frame.effectProgress);
                 frameFiles.push(frameFile);
                 frameDurations.push(frame.duration + leadingTransitionSeconds + trailingTransitionSeconds);
                 frameFadeFlags.push({
@@ -1131,7 +1175,7 @@ export function useVideoExport() {
               const finalCaption = segment.textOverlayEnabled
                 ? segment.reelCaptions?.find((item) => item.panelIndex === finalPanelIndex)
                 : undefined;
-              const frameFile = await getStoryboardFrameFile(finalPanelIndex, finalCaption, undefined);
+              const frameFile = await getStoryboardFrameFile(finalPanelIndex, finalCaption, undefined, segment.totalDuration * 1000, 1);
               frameFiles.push(frameFile);
               frameDurations.push(segment.endHoldDuration);
               frameFadeFlags.push({ fadeIn: false, fadeOut: true });

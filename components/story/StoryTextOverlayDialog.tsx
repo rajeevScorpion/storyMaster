@@ -1,8 +1,26 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Eye, EyeOff, FileText, Loader2, Pause, Play, RotateCcw, Sparkles, X } from 'lucide-react';
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowDownToLine,
+  ArrowUpToLine,
+  AlignVerticalJustifyCenter,
+  Eye,
+  EyeOff,
+  FileText,
+  Loader2,
+  Pause,
+  Play,
+  RotateCcw,
+  Sparkles,
+  WholeWord,
+  WrapText,
+  X,
+} from 'lucide-react';
 
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { buildStoryTextOverlayCaptions } from '@/lib/story-overlay/captions';
@@ -18,11 +36,17 @@ import {
   normalizeStoryTextOverlayStyle,
   STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MAX,
   STORY_TEXT_OVERLAY_HIGHLIGHT_SCALE_MIN,
-  storyOverlayColorInputValue,
 } from '@/lib/story-overlay/styles';
-import type { StoryTextOverlayMode, StoryTextOverlayStyle } from '@/lib/story-overlay/types';
+import type {
+  StoryTextOverlayAlign,
+  StoryTextOverlayMode,
+  StoryTextOverlayPosition,
+  StoryTextOverlayStyle,
+} from '@/lib/story-overlay/types';
 import type { StoryAspectRatio, StoryBeat, StoryLanguage } from '@/lib/types/story';
 
+import SegmentedControl from '@/components/ui/SegmentedControl';
+import { ReelStyleColorControl } from '@/components/ui/ReelColorPicker';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 
 type StoryTextOverlaySettingsInput = {
@@ -74,28 +98,6 @@ interface StoryTextOverlayDialogProps {
   onGenerateStory?: (settings: StoryTextOverlaySettingsInput) => Promise<StoryTextOverlayStoryGenerationPreviewResult>;
 }
 
-function SegmentedButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex-1 rounded-full px-3 py-2 text-sm font-medium transition ${
-        active ? 'bg-emerald-400 text-neutral-950' : 'text-neutral-300 hover:bg-white/10'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function RangeControl({
   label,
   min,
@@ -112,11 +114,8 @@ function RangeControl({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="block text-xs font-medium text-neutral-400">
-      <span className="flex items-center justify-between gap-3">
-        <span>{label}</span>
-        <span className="font-mono text-[11px] text-neutral-500">{value}</span>
-      </span>
+    <label className="flex items-center gap-2 text-xs font-medium text-neutral-400">
+      <span className="shrink-0 whitespace-nowrap">{label}</span>
       <input
         type="range"
         min={min}
@@ -124,32 +123,9 @@ function RangeControl({
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="mt-2 h-1.5 w-full cursor-pointer accent-emerald-400"
+        className="h-2 min-w-0 flex-1 cursor-pointer accent-emerald-400"
       />
-    </label>
-  );
-}
-
-function ColorControl({
-  label,
-  value,
-  fallback,
-  onChange,
-}: {
-  label: string;
-  value?: string;
-  fallback: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-3 text-xs font-medium text-neutral-400">
-      <span>{label}</span>
-      <input
-        type="color"
-        value={storyOverlayColorInputValue(value, fallback)}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-9 w-12 cursor-pointer rounded-lg border border-white/10 bg-transparent p-1"
-      />
+      <span className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums text-neutral-500">{value}</span>
     </label>
   );
 }
@@ -218,7 +194,10 @@ export default function StoryTextOverlayDialog({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isBusy) onClose();
+      if (event.key !== 'Escape' || isBusy) return;
+      // Let an open help popover swallow Escape before closing the dialog.
+      if (document.querySelector('[data-info-popover-open]')) return;
+      onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -337,12 +316,7 @@ export default function StoryTextOverlayDialog({
 
   return createPortal(
     <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/75 p-3 backdrop-blur-md sm:p-6">
-      <button
-        type="button"
-        className="absolute inset-0"
-        aria-label="Close story text overlay"
-        onClick={isBusy ? undefined : onClose}
-      />
+      <div className="absolute inset-0" aria-hidden="true" />
       <section
         role="dialog"
         aria-modal="true"
@@ -359,16 +333,16 @@ export default function StoryTextOverlayDialog({
             type="button"
             onClick={onClose}
             disabled={isBusy}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-neutral-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full text-neutral-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
           </button>
         </header>
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(280px,0.9fr)_minmax(360px,1.1fr)]">
-          <div className="border-b border-white/10 p-5 lg:border-b-0 lg:border-r lg:p-6">
-            <div className={`relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black shadow-xl ${aspectRatio === '9:16' ? 'aspect-[9/16] max-h-[58dvh]' : 'aspect-video'}`}>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row">
+          <div className="sticky top-0 z-10 self-stretch border-b border-white/10 bg-neutral-950 p-5 lg:self-start lg:w-2/5 lg:max-w-md lg:border-b-0 lg:border-r lg:p-6">
+            <div className={`relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black shadow-xl ${aspectRatio === '9:16' ? 'aspect-[9/16] max-h-[32vh] sm:max-h-[40vh] lg:max-h-[58dvh]' : 'aspect-video'}`}>
               <StoryStoryboardPlayer
                 gridUrl={previewBeat.imageUrl!}
                 audioUrl={previewBeat.audioUrl}
@@ -386,6 +360,8 @@ export default function StoryTextOverlayDialog({
                 storyTextOverlayStyle={normalizedStyle}
                 storyTextOverlayWordsPerLine={normalizedStyle.wordsPerLine ?? wordsPerLine}
                 storyTextOverlayTextHighlightSupported={previewBeat.storyTextOverlayAlignment?.textHighlightSupported !== false}
+                storyEffects={previewBeat.storyEffects}
+                effectSeed={nodeId}
               />
             </div>
 
@@ -397,15 +373,16 @@ export default function StoryTextOverlayDialog({
                   </p>
                   {isGenerating && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-emerald-300" />}
                 </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={handleGenerateBeat}
                     disabled={isBusy || !onGenerateBeat || !generationEligibility.eligible}
                     className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-neutral-500"
                   >
-                    {generationScope === 'beat' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    Generate Text Overlay
+                    {generationScope === 'beat' ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 shrink-0" />}
+                    <span className="lg:hidden">This beat</span>
+                    <span className="hidden lg:inline">Generate Text Overlay</span>
                   </button>
                   <button
                     type="button"
@@ -413,8 +390,9 @@ export default function StoryTextOverlayDialog({
                     disabled={isBusy || !onGenerateStory}
                     className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-neutral-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:text-neutral-500"
                   >
-                    {generationScope === 'story' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />}
-                    Generate Full Story
+                    {generationScope === 'story' ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <FileText className="h-3.5 w-3.5 shrink-0" />}
+                    <span className="lg:hidden">Full story</span>
+                    <span className="hidden lg:inline">Generate Full Story</span>
                   </button>
                 </div>
               </div>
@@ -443,51 +421,52 @@ export default function StoryTextOverlayDialog({
                 step={1}
                 value={Math.min(currentTimeMs, durationMs || 0)}
                 onChange={(event) => seekTo(Number(event.target.value))}
-                className="mt-4 h-1.5 w-full cursor-pointer accent-emerald-400"
+                className="mt-4 h-2 w-full cursor-pointer accent-emerald-400"
                 aria-label="Narration position"
               />
             </div>
           </div>
 
-          <div className="space-y-5 p-5 sm:p-6">
-            <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
-              <div className="flex rounded-full bg-black/30 p-1">
-                <SegmentedButton active={mode === 'word'} onClick={() => setMode('word')}>Word</SegmentedButton>
-                <SegmentedButton active={mode === 'line'} onClick={() => setMode('line')}>Line</SegmentedButton>
-              </div>
-              <div className="mt-4 grid grid-cols-3 gap-2">
-                {(['upper', 'middle', 'lower'] as const).map((position) => (
-                  <button
-                    key={position}
-                    type="button"
-                    onClick={() => updateStyle({ position })}
-                    className={`rounded-full px-3 py-2 text-xs font-medium capitalize transition ${normalizedStyle.position === position ? 'bg-white text-neutral-950' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}`}
-                  >
-                    {position}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                {(['left', 'center', 'right'] as const).map((align) => (
-                  <button
-                    key={align}
-                    type="button"
-                    onClick={() => updateStyle({ align })}
-                    className={`rounded-full px-3 py-2 text-xs font-medium capitalize transition ${normalizedStyle.align === align ? 'bg-white text-neutral-950' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}`}
-                  >
-                    {align}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-4">
-                <RangeControl
-                  label="Words per line"
-                  min={MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
-                  max={MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
-                  value={normalizedStyle.wordsPerLine ?? wordsPerLine}
-                  onChange={(lineWords) => updateStyle({ wordsPerLine: lineWords })}
+          <div className="space-y-4 p-5 sm:p-6 lg:flex-1">
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+              <div className="flex flex-wrap gap-2 lg:block lg:space-y-3">
+                <SegmentedControl<StoryTextOverlayMode>
+                  ariaLabel="Highlight mode"
+                  value={mode}
+                  onChange={(nextMode) => setMode(nextMode)}
+                  options={[
+                    { value: 'word', label: 'Word', icon: WholeWord },
+                    { value: 'line', label: 'Line', icon: WrapText },
+                  ]}
+                />
+                <SegmentedControl<StoryTextOverlayPosition>
+                  ariaLabel="Vertical position"
+                  value={normalizedStyle.position ?? 'middle'}
+                  onChange={(position) => updateStyle({ position })}
+                  options={[
+                    { value: 'upper', label: 'Upper', icon: ArrowUpToLine },
+                    { value: 'middle', label: 'Middle', icon: AlignVerticalJustifyCenter },
+                    { value: 'lower', label: 'Lower', icon: ArrowDownToLine },
+                  ]}
+                />
+                <SegmentedControl<StoryTextOverlayAlign>
+                  ariaLabel="Text alignment"
+                  value={normalizedStyle.align ?? 'center'}
+                  onChange={(align) => updateStyle({ align })}
+                  options={[
+                    { value: 'left', label: 'Left', icon: AlignLeft },
+                    { value: 'center', label: 'Center', icon: AlignCenter },
+                    { value: 'right', label: 'Right', icon: AlignRight },
+                  ]}
                 />
               </div>
+              <RangeControl
+                label="Words per line"
+                min={MIN_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
+                max={MAX_STORY_TEXT_OVERLAY_WORDS_PER_LINE}
+                value={normalizedStyle.wordsPerLine ?? wordsPerLine}
+                onChange={(lineWords) => updateStyle({ wordsPerLine: lineWords })}
+              />
             </div>
 
             <div className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:grid-cols-2">
@@ -505,19 +484,25 @@ export default function StoryTextOverlayDialog({
               </label>
               <RangeControl label="Size" min={12} max={64} value={normalizedStyle.fontSize ?? 18} onChange={(fontSize) => updateStyle({ fontSize })} />
               <RangeControl label="Offset" min={-30} max={30} value={normalizedStyle.verticalOffset ?? 0} onChange={(verticalOffset) => updateStyle({ verticalOffset })} />
-              <ColorControl label="Text" value={normalizedStyle.color} fallback="#ffffff" onChange={(color) => updateStyle({ color })} />
+              <div className="sm:col-span-2">
+                <ReelStyleColorControl label="Text" color={normalizedStyle.color} fallback="#ffffff" onColorChange={(color) => updateStyle({ color })} />
+              </div>
               <RangeControl label="Opacity" min={0} max={1} step={0.05} value={normalizedStyle.textOpacity ?? 1} onChange={(textOpacity) => updateStyle({ textOpacity })} />
-              <ColorControl label="Outline" value={normalizedStyle.outlineColor} fallback="#000000" onChange={(outlineColor) => updateStyle({ outlineColor })} />
               <RangeControl label="Outline Width" min={0} max={10} value={normalizedStyle.outlineWidth ?? 0} onChange={(outlineWidth) => updateStyle({ outlineWidth })} />
-              <ColorControl label="Shadow" value={normalizedStyle.shadowColor} fallback="#000000" onChange={(shadowColor) => updateStyle({ shadowColor })} />
+              <ReelStyleColorControl label="Outline" color={normalizedStyle.outlineColor} fallback="#000000" onColorChange={(outlineColor) => updateStyle({ outlineColor })} />
+              <ReelStyleColorControl label="Shadow" color={normalizedStyle.shadowColor} fallback="#000000" onColorChange={(shadowColor) => updateStyle({ shadowColor })} />
               <RangeControl label="Shadow Blur" min={0} max={40} value={normalizedStyle.shadowBlur ?? 0} onChange={(shadowBlur) => updateStyle({ shadowBlur })} />
             </div>
 
             <div className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:grid-cols-2">
-              <ColorControl label="Background" value={normalizedStyle.backgroundColor} fallback="#000000" onChange={(backgroundColor) => updateStyle({ backgroundColor })} />
+              <div className="sm:col-span-2">
+                <ReelStyleColorControl label="Background" color={normalizedStyle.backgroundColor} fallback="#000000" onColorChange={(backgroundColor) => updateStyle({ backgroundColor })} />
+              </div>
               <RangeControl label="Background Opacity" min={0} max={1} step={0.05} value={normalizedStyle.backgroundOpacity ?? 0} onChange={(backgroundOpacity) => updateStyle({ backgroundOpacity })} />
               <RangeControl label="Background Blur" min={0} max={24} value={normalizedStyle.backgroundBlur ?? 0} onChange={(backgroundBlur) => updateStyle({ backgroundBlur })} />
-              <ColorControl label="Highlight" value={normalizedStyle.wordHighlightColor} fallback="#00d49b" onChange={(wordHighlightColor) => updateStyle({ wordHighlightColor })} />
+              <div className="sm:col-span-2">
+                <ReelStyleColorControl label="Highlight" color={normalizedStyle.wordHighlightColor} fallback="#00d49b" onColorChange={(wordHighlightColor) => updateStyle({ wordHighlightColor })} />
+              </div>
               <RangeControl label="Highlight Opacity" min={0} max={1} step={0.05} value={normalizedStyle.wordHighlightOpacity ?? 0} onChange={(wordHighlightOpacity) => updateStyle({ wordHighlightOpacity })} />
               <RangeControl label="Highlight X" min={0} max={18} value={normalizedStyle.wordHighlightPaddingX ?? 0} onChange={(wordHighlightPaddingX) => updateStyle({ wordHighlightPaddingX })} />
               <RangeControl label="Highlight Y" min={0} max={12} value={normalizedStyle.wordHighlightPaddingY ?? 0} onChange={(wordHighlightPaddingY) => updateStyle({ wordHighlightPaddingY })} />
@@ -537,9 +522,9 @@ export default function StoryTextOverlayDialog({
           </div>
         </div>
 
-        <footer className="flex flex-col-reverse gap-3 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-6">
-          <button type="button" onClick={onClose} disabled={isBusy} className="rounded-full px-5 py-2.5 text-sm font-medium text-neutral-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50">Cancel</button>
-          <button type="button" onClick={handleSave} disabled={isBusy} className="rounded-full bg-emerald-400 px-6 py-2.5 text-sm font-semibold text-neutral-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+        <footer className="flex flex-row items-center justify-end gap-2 border-t border-white/10 px-5 py-4 sm:px-6">
+          <button type="button" onClick={onClose} disabled={isBusy} className="flex-1 rounded-full px-5 py-2.5 text-sm font-medium text-neutral-300 transition hover:bg-white/10 hover:text-white disabled:opacity-50 sm:flex-none">Cancel</button>
+          <button type="button" onClick={handleSave} disabled={isBusy} className="flex-1 rounded-full bg-emerald-400 px-6 py-2.5 text-sm font-semibold text-neutral-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none">
             {isSaving ? 'Saving...' : 'Save'}
           </button>
         </footer>

@@ -13,14 +13,18 @@ import {
 import { getEqualSplitStoryboardPanel } from '@/lib/storyboard/timing';
 import type { StoryBeat } from '@/lib/types/story';
 import type { ActiveStoryTransition } from '@/lib/hooks/useStoryTransitionPlayback';
+import { getStoryMotionFrame } from '@/lib/story-effects/renderer';
+import { normalizeStoryEffectConfig, storyEffectConfigEnabled, type StoryEffectConfig } from '@/lib/story-effects/settings';
 import {
   normalizeStoryTransitionSettings,
   type StoryTransitionSettings,
 } from '@/lib/story-transitions/settings';
+import { getStoryTransitionFlashOpacity, getStoryTransitionLayerStyle } from '@/lib/story-transitions/render';
 
 import ReelCaptionOverlay, { ReelTimedCaptionText } from './ReelCaptionOverlay';
 import StoryTextOverlay from './StoryTextOverlay';
 import StoryboardVignette from './StoryboardVignette';
+import StoryEffectsLayer from './StoryEffectsLayer';
 
 interface StoryStoryboardPlayerProps {
   gridUrl: string;
@@ -49,6 +53,8 @@ interface StoryStoryboardPlayerProps {
   storyTextOverlayTextHighlightSupported?: boolean;
   storyTransitionSettings?: StoryTransitionSettings;
   activeStoryTransition?: ActiveStoryTransition | null;
+  storyEffects?: StoryEffectConfig;
+  effectSeed?: string;
 }
 
 export default function StoryStoryboardPlayer({
@@ -78,8 +84,11 @@ export default function StoryStoryboardPlayer({
   storyTextOverlayTextHighlightSupported = true,
   storyTransitionSettings,
   activeStoryTransition = null,
+  storyEffects,
+  effectSeed = gridUrl,
 }: StoryStoryboardPlayerProps) {
   const [intervalPanel, setIntervalPanel] = useState(0);
+  const [ambientElapsedMs, setAmbientElapsedMs] = useState(0);
   const [probedDuration, setProbedDuration] = useState<{ audioUrl: string; durationMs: number } | null>(null);
   const hasAudio = Boolean(audioUrl);
   const resolvedAudioDurationMs = audioDurationMs > 0
@@ -134,25 +143,35 @@ export default function StoryStoryboardPlayer({
   const transitionSettings = normalizeStoryTransitionSettings(storyTransitionSettings);
   const useLegacyPanelFade = storyTransitionSettings === undefined;
   const transitionProgress = activeStoryTransition?.progress ?? 0;
+  const normalizedEffects = normalizeStoryEffectConfig(storyEffects);
+  const effectsEnabled = storyEffectConfigEnabled(normalizedEffects);
+  const effectElapsedMs = hasAudio ? audioElapsedMs : ambientElapsedMs;
+  useEffect(() => {
+    if (hasAudio || !effectsEnabled) return;
+    let frame = 0;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      setAmbientElapsedMs(now - startedAt);
+      frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [effectsEnabled, gridUrl, hasAudio]);
+  const panelBoundaries = validNarrationTiming
+    ? [0, ...validNarrationTiming.panelEndTimesMs, resolvedAudioDurationMs]
+    : [0, 0.25, 0.5, 0.75, 1].map((value) => value * Math.max(resolvedAudioDurationMs, panelDurationMs * 4));
+  const panelProgress = (panelIndex: number) => {
+    const startMs = panelBoundaries[panelIndex] ?? 0;
+    const endMs = panelBoundaries[panelIndex + 1] ?? startMs + panelDurationMs;
+    return Math.max(0, Math.min(1, (effectElapsedMs - startMs) / Math.max(1, endMs - startMs)));
+  };
   const transitionLayerStyle = (layer: 'from' | 'to') => {
     if (!activeStoryTransition) return { opacity: 1 };
-    const incoming = layer === 'to';
-    if (transitionSettings.type === 'fade-black') {
-      return {
-        opacity: incoming
-          ? transitionProgress < 0.5 ? 0 : (transitionProgress - 0.5) * 2
-          : transitionProgress < 0.5 ? 1 - transitionProgress * 2 : 0,
-      };
-    }
-    if (transitionSettings.type === 'soft-fade') {
-      return {
-        opacity: incoming ? transitionProgress : 1 - transitionProgress,
-        filter: `blur(${(incoming ? 1 - transitionProgress : transitionProgress) * 8}px)`,
-      };
-    }
-    return { opacity: incoming ? transitionProgress : 1 - transitionProgress };
+    return getStoryTransitionLayerStyle(transitionSettings, transitionProgress, layer);
   };
-  const renderPanel = (panelIndex: number, layer?: 'from' | 'to') => (
+  const renderPanel = (panelIndex: number, layer?: 'from' | 'to') => {
+    const motionFrame = getStoryMotionFrame(normalizedEffects, panelProgress(panelIndex));
+    return (
     <div
       className="absolute inset-0 overflow-hidden"
       style={layer ? transitionLayerStyle(layer) : undefined}
@@ -165,10 +184,15 @@ export default function StoryStoryboardPlayer({
           className="h-full w-full object-cover"
           onLoad={onImageLoad}
           onError={onImageError}
+          style={effectsEnabled && normalizedEffects.motion.enabled ? {
+            transform: `translate(${motionFrame.translateXPercent}%, ${motionFrame.translateYPercent}%) scale(${motionFrame.scale})`,
+            transformOrigin: 'center',
+          } : undefined}
         />
       </div>
     </div>
-  );
+    );
+  };
   const renderStoryOverlay = (panelIndex: number, layer?: 'from' | 'to') => {
     const caption = storyTextOverlayEnabled
       ? storyTextOverlayCaptions?.find((item) => item.panelIndex === panelIndex)
@@ -213,6 +237,17 @@ export default function StoryStoryboardPlayer({
           </AnimatePresence>
         ) : renderPanel(activePanel)}
       </div>
+      {effectsEnabled && (
+        <StoryEffectsLayer
+          config={normalizedEffects}
+          elapsedMs={effectElapsedMs}
+          playbackState={hasAudio ? playbackState : 'playing'}
+          seed={effectSeed}
+        />
+      )}
+      {activeStoryTransition && getStoryTransitionFlashOpacity(transitionSettings, transitionProgress) > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-[15] bg-white" style={{ opacity: getStoryTransitionFlashOpacity(transitionSettings, transitionProgress) }} />
+      )}
       <StoryboardVignette enabled={vignetteEnabled} amountPercent={vignetteAmountPercent} />
       {activeStoryTransition ? (
         <>

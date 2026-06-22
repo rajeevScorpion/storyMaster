@@ -27,7 +27,7 @@ function beat(): StoryBeat {
 function renderAtTransition(type: StoryTransitionType) {
   const timeline = buildStoryExportTimeline([
     { beat: beat(), imageUrl: 'grid.jpg', durationMs: 4000, hasAudio: true },
-  ], false, 2500, { type, durationMs: type === 'fast-cut' ? 0 : 500 });
+  ], false, 2500, { type, durationMs: type === 'fast-cut' ? 0 : 500, easing: 'linear' });
   const draws: Array<{ alpha: number; filter: string }> = [];
   const mockContext = {
     canvas: { width: 1280, height: 720 },
@@ -37,6 +37,15 @@ function renderAtTransition(type: StoryTransitionType) {
     fillRect: () => undefined,
     save: () => undefined,
     restore: () => undefined,
+    translate: () => undefined,
+    scale: () => undefined,
+    beginPath: () => undefined,
+    closePath: () => undefined,
+    rect: () => undefined,
+    arc: () => undefined,
+    moveTo: () => undefined,
+    lineTo: () => undefined,
+    clip: () => undefined,
     drawImage() {
       draws.push({ alpha: mockContext.globalAlpha, filter: mockContext.filter });
     },
@@ -71,5 +80,13 @@ describe('story export transition renderer', () => {
     const draws = renderAtTransition('fade-black');
     expect(draws).toHaveLength(1);
     expect(draws[0].alpha).toBe(0.5);
+  });
+
+  it('composites every advanced transition through the shared frame renderer', () => {
+    const types: StoryTransitionType[] = [
+      'blur-dissolve', 'directional-wipe', 'gentle-push', 'soft-light-flash',
+      'atmosphere-fade', 'ink-reveal', 'smoke-reveal',
+    ];
+    for (const type of types) expect(renderAtTransition(type).length).toBeGreaterThanOrEqual(2);
   });
 });

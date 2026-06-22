@@ -1,7 +1,7 @@
 import type { StoryBeat, StorySession } from '@/lib/types/story';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 
-export const STORY_MANIFEST_SCHEMA_VERSION = 1;
+export const STORY_MANIFEST_SCHEMA_VERSION = 2;
 
 export type StoryReaderKind = 'story' | 'explore' | 'storyline';
 export type StoryMediaKind = 'image' | 'audio';
