@@ -88,7 +88,10 @@ export default function StoryNarrationTimingDialog({
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isSaving) onClose();
+      if (event.key !== 'Escape' || isSaving) return;
+      // Let an open help popover swallow Escape before closing the dialog.
+      if (document.querySelector('[data-info-popover-open]')) return;
+      onClose();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -150,12 +153,7 @@ export default function StoryNarrationTimingDialog({
 
   return createPortal(
     <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/75 p-3 backdrop-blur-md sm:p-6">
-      <button
-        type="button"
-        className="absolute inset-0"
-        aria-label="Close story narration timing"
-        onClick={isSaving ? undefined : onClose}
-      />
+      <div className="absolute inset-0" aria-hidden="true" />
       <section
         role="dialog"
         aria-modal="true"
@@ -180,16 +178,16 @@ export default function StoryNarrationTimingDialog({
             type="button"
             onClick={onClose}
             disabled={isSaving}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-neutral-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full text-neutral-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
           </button>
         </header>
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[minmax(280px,0.9fr)_minmax(360px,1.1fr)]">
-          <div className="border-b border-white/10 p-5 lg:border-b-0 lg:border-r lg:p-6">
-            <div className={`relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black shadow-xl ${aspectRatio === '9:16' ? 'aspect-[9/16] max-h-[58dvh]' : 'aspect-video'}`}>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row">
+          <div className="sticky top-0 z-10 self-stretch border-b border-white/10 bg-neutral-950 p-5 lg:self-start lg:w-2/5 lg:max-w-md lg:border-b-0 lg:border-r lg:p-6">
+            <div className={`relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-black shadow-xl ${aspectRatio === '9:16' ? 'aspect-[9/16] max-h-[32vh] sm:max-h-[40vh] lg:max-h-[58dvh]' : 'aspect-video'}`}>
               <StoryStoryboardPlayer
                 gridUrl={beat.imageUrl}
                 audioUrl={beat.audioUrl}
@@ -237,7 +235,7 @@ export default function StoryNarrationTimingDialog({
                 step={1}
                 value={Math.min(currentTimeMs, durationMs || 0)}
                 onChange={(event) => seekTo(Number(event.target.value))}
-                className="mt-4 h-1.5 w-full cursor-pointer accent-emerald-400"
+                className="mt-4 h-2 w-full cursor-pointer accent-emerald-400"
                 aria-label="Narration position"
               />
               <div className="mt-2 flex justify-between font-mono text-[11px] text-neutral-500">
@@ -247,7 +245,7 @@ export default function StoryNarrationTimingDialog({
             </div>
           </div>
 
-          <div className="p-5 sm:p-6">
+          <div className="p-5 sm:p-6 lg:flex-1">
             <div className="space-y-3">
               {[0, 1, 2, 3].map((panelIndex) => (
                 <div key={panelIndex} className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
