@@ -292,7 +292,7 @@ export default function StoryNarrationTimingDialog({
           </div>
         </div>
 
-        <footer className="flex flex-col-reverse gap-3 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <footer className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <button
             type="button"
             onClick={() => handleSave(null)}
@@ -300,10 +300,11 @@ export default function StoryNarrationTimingDialog({
             className="inline-flex items-center justify-center gap-2 rounded-full border border-white/10 px-4 py-2.5 text-sm font-medium text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
           >
             <TimerReset className="h-4 w-4" />
-            Use Automatic Timing
+            <span className="sm:hidden">Automatic Timing</span>
+            <span className="hidden sm:inline">Use Automatic Timing</span>
           </button>
-          <div className="flex gap-3">
-            <button type="button" onClick={onClose} disabled={isSaving} className="flex-1 rounded-full px-5 py-2.5 text-sm font-medium text-neutral-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50 sm:flex-none">Cancel</button>
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose} disabled={isSaving} className="flex-1 rounded-full px-5 py-2.5 text-sm font-medium text-neutral-300 transition hover:bg-white/10 hover:text-white disabled:opacity-50 sm:flex-none">Cancel</button>
             <button type="button" onClick={() => validatedDraft && handleSave(validatedDraft)} disabled={!validatedDraft || isSaving} className="flex-1 rounded-full bg-emerald-400 px-6 py-2.5 text-sm font-semibold text-neutral-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40 sm:flex-none">
               {isSaving ? 'Saving...' : 'Save Timing'}
             </button>
