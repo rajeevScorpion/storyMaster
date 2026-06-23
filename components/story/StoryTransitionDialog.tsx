@@ -23,6 +23,7 @@ import { getStoryTransitionFlashOpacity, getStoryTransitionLayerStyle } from '@/
 import type { StoryAspectRatio, StoryBeat } from '@/lib/types/story';
 
 import InfoPopover from '@/components/ui/InfoPopover';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 
 interface StoryTransitionDialogProps {
@@ -292,8 +293,8 @@ export default function StoryTransitionDialog({
             )}
             {draft.type !== 'fast-cut' && (
               <div className="grid gap-3 sm:grid-cols-2">
-                <label className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400">Direction<select value={draft.direction || 'left'} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, direction: event.target.value }))} className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-white">{STORY_TRANSITION_DIRECTIONS.map((direction) => <option key={direction} value={direction}>{direction[0].toUpperCase() + direction.slice(1)}</option>)}</select></label>
-                <label className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400">Easing<select value={draft.easing || 'ease-in-out'} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, easing: event.target.value }))} className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-white">{STORY_TRANSITION_EASINGS.map((easing) => <option key={easing} value={easing}>{easing}</option>)}</select></label>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400">Direction<div className="mt-3"><FilterDropdown value={draft.direction || 'left'} onChange={(value) => setDraft(normalizeStoryTransitionSettings({ ...draft, direction: value }))} fullWidth size="form" mode="inline" ariaLabel="Transition direction" options={STORY_TRANSITION_DIRECTIONS.map((direction) => ({ value: direction, label: direction[0].toUpperCase() + direction.slice(1) }))} /></div></div>
+                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400">Easing<div className="mt-3"><FilterDropdown value={draft.easing || 'ease-in-out'} onChange={(value) => setDraft(normalizeStoryTransitionSettings({ ...draft, easing: value }))} fullWidth size="form" mode="inline" ariaLabel="Transition easing" options={STORY_TRANSITION_EASINGS.map((easing) => ({ value: easing, label: easing }))} /></div></div>
                 <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-4 text-xs font-medium text-neutral-400 sm:col-span-2"><span className="shrink-0">Intensity</span><input type="range" min={0} max={100} step={1} value={draft.intensity ?? 50} onChange={(event) => setDraft(normalizeStoryTransitionSettings({ ...draft, intensity: Number(event.target.value) }))} className="h-2 min-w-0 flex-1 accent-emerald-400" /><span className="w-10 shrink-0 text-right">{draft.intensity ?? 50}%</span></label>
               </div>
             )}

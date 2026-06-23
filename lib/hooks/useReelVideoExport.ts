@@ -154,6 +154,10 @@ export function useReelVideoExport() {
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
+    // Reset synchronously so `isExporting` flips to false on the click itself.
+    // This closes the export modal and detaches the `beforeunload` guard
+    // immediately, preventing a stray browser "Leave site?" prompt.
+    setState(idleState());
     if (activeFfmpegRef.current) {
       activeFfmpegRef.current.terminate();
       if (activeFfmpegRef.current === reelFallbackFfmpegInstance) {
@@ -375,7 +379,10 @@ export function useReelVideoExport() {
       await waitForVideoExportFonts();
       const audioBuffers = await Promise.all(videoBeats.map((beat) => decodeAudioBuffer(audioContext, beat.audioUrl!)));
       const soundtrack = await buildReelSoundtrack(audioBuffers);
-      if (cancelledRef.current) return false;
+      if (cancelledRef.current) {
+        setState(idleState());
+        return false;
+      }
 
       const preparedBeats = videoBeats.map((beat, index) => ({
         beat,

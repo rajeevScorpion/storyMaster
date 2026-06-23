@@ -46,6 +46,7 @@ import type {
 import type { StoryAspectRatio, StoryBeat, StoryLanguage } from '@/lib/types/story';
 
 import SegmentedControl from '@/components/ui/SegmentedControl';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import { ReelStyleColorControl } from '@/components/ui/ReelColorPicker';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
 
@@ -470,18 +471,20 @@ export default function StoryTextOverlayDialog({
             </div>
 
             <div className="grid gap-4 rounded-2xl border border-white/10 bg-white/[0.035] p-4 sm:grid-cols-2">
-              <label className="block text-xs font-medium text-neutral-400 sm:col-span-2">
+              <div className="block text-xs font-medium text-neutral-400 sm:col-span-2">
                 Font
-                <select
-                  value={normalizedStyle.fontFamily}
-                  onChange={(event) => updateStyle({ fontFamily: event.target.value })}
-                  className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-400/50"
-                >
-                  {fontPresets.map((font) => (
-                    <option key={font.value} value={font.value}>{font.label}</option>
-                  ))}
-                </select>
-              </label>
+                <div className="mt-2">
+                  <FilterDropdown
+                    value={normalizedStyle.fontFamily ?? ''}
+                    onChange={(fontFamily) => updateStyle({ fontFamily })}
+                    fullWidth
+                    size="form"
+                    mode="inline"
+                    ariaLabel="Font"
+                    options={fontPresets.map((font) => ({ value: font.value, label: font.label }))}
+                  />
+                </div>
+              </div>
               <RangeControl label="Size" min={12} max={64} value={normalizedStyle.fontSize ?? 18} onChange={(fontSize) => updateStyle({ fontSize })} />
               <RangeControl label="Offset" min={-30} max={30} value={normalizedStyle.verticalOffset ?? 0} onChange={(verticalOffset) => updateStyle({ verticalOffset })} />
               <div className="sm:col-span-2">
