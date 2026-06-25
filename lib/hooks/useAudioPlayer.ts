@@ -202,9 +202,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
 
   const play = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio || playbackState === 'playing') return;
+    if (!audio || !audio.paused) return;
     audio.play().then(() => setPlaybackState('playing')).catch(() => {});
-  }, [playbackState]);
+  }, []);
 
   const pause = useCallback(() => {
     const audio = audioRef.current;

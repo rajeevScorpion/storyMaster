@@ -486,6 +486,7 @@ export default function StorylinePlayer({
     settings: normalizedStoryTransition,
     narrationTimeMs: audioElapsedMs,
     playbackState,
+    pauseNarrationDuringTransition: false,
     pause: pauseAudio,
     play: playAudio,
     seekNarration: seekAudio,
@@ -562,6 +563,22 @@ export default function StorylinePlayer({
       clearChoiceTransitionTimers();
       setTransitionChoice(nextChoice);
       setShowChoice(true);
+
+      if (autoPlay) {
+        // Keep the choice flash as a visual overlay, but do not hold the next
+        // beat's narration while autoplay is active.
+        advanceToNextBeat();
+        choiceHoldTimerRef.current = window.setTimeout(() => {
+          setShowChoice(false);
+          choiceHoldTimerRef.current = null;
+          choiceAdvanceTimerRef.current = window.setTimeout(() => {
+            setTransitionChoice(null);
+            choiceAdvanceTimerRef.current = null;
+          }, CHOICE_TRANSITION_FADE_MS);
+        }, Math.max(500, cycleSettings.storylineChoiceFlashMs));
+        return;
+      }
+
       choiceHoldTimerRef.current = window.setTimeout(() => {
         advanceToNextBeat();
         setShowChoice(false);
@@ -579,6 +596,7 @@ export default function StorylinePlayer({
   }, [
     clearChoiceTransition,
     clearChoiceTransitionTimers,
+    autoPlay,
     currentBeats.length,
     currentIndex,
     cycleSettings.storylineChoiceFlashEnabled,
@@ -622,15 +640,10 @@ export default function StorylinePlayer({
   // Auto-play narration when beat changes and autoPlay is on
   const prevIndexRef = useRef(currentIndex);
   const pendingAutoPlayIndexRef = useRef<number | null>(null);
-  const pendingAutoPlayTimerRef = useRef<number | null>(null);
   useEffect(() => {
     if (prevIndexRef.current !== currentIndex) {
       prevIndexRef.current = currentIndex;
       pendingAutoPlayIndexRef.current = currentIndex;
-      if (pendingAutoPlayTimerRef.current !== null) {
-        window.clearTimeout(pendingAutoPlayTimerRef.current);
-        pendingAutoPlayTimerRef.current = null;
-      }
     }
     if (!autoPlay) {
       pendingAutoPlayIndexRef.current = null;
@@ -639,27 +652,13 @@ export default function StorylinePlayer({
     if (
       pendingAutoPlayIndexRef.current === currentIndex
       && !resolvedAudio.isResolving
-      && !transitionChoice
       && resolvedAudioUrl
       && playbackState === 'idle'
     ) {
       pendingAutoPlayIndexRef.current = null;
-      if (normalizedStoryTransition.durationMs <= 0) {
-        playAudio();
-      } else {
-        pendingAutoPlayTimerRef.current = window.setTimeout(() => {
-          pendingAutoPlayTimerRef.current = null;
-          playAudio();
-        }, normalizedStoryTransition.durationMs);
-      }
+      playAudio();
     }
-    return () => {
-      if (pendingAutoPlayTimerRef.current !== null) {
-        window.clearTimeout(pendingAutoPlayTimerRef.current);
-        pendingAutoPlayTimerRef.current = null;
-      }
-    };
-  }, [currentIndex, autoPlay, normalizedStoryTransition.durationMs, resolvedAudio.isResolving, resolvedAudioUrl, playbackState, playAudio, transitionChoice]);
+  }, [currentIndex, autoPlay, resolvedAudio.isResolving, resolvedAudioUrl, playbackState, playAudio]);
 
   // Advance only for a genuine media-ended event. Pauses and manual navigation must not advance.
   const handledAudioEndedCountRef = useRef(0);

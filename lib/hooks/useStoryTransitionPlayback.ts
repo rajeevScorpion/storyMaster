@@ -21,6 +21,8 @@ interface UseStoryTransitionPlaybackInput {
   settings: unknown;
   narrationTimeMs: number;
   playbackState: PlaybackState;
+  /** When false, panel transitions animate over the live narration clock. */
+  pauseNarrationDuringTransition?: boolean;
   pause: () => void;
   play: () => void;
   seekNarration: (timeMs: number) => void;
@@ -51,11 +53,14 @@ export function useStoryTransitionPlayback(input: UseStoryTransitionPlaybackInpu
   const startTransition = useCallback((
     transitionWindow: StoryTransitionWindow,
     initialProgress: number,
-    resumeAfter: boolean
+    resumeAfter: boolean,
+    interruptNarration = true
   ) => {
     cancelFrame();
-    input.pause();
-    input.seekNarration(transitionWindow.narrationTimeMs);
+    if (interruptNarration) {
+      input.pause();
+      input.seekNarration(transitionWindow.narrationTimeMs);
+    }
     lastNarrationTimeRef.current = transitionWindow.narrationTimeMs;
     const durationMs = Math.max(1, transitionWindow.endMs - transitionWindow.startMs);
     const startedAt = performance.now() - Math.max(0, Math.min(1, initialProgress)) * durationMs;
@@ -71,7 +76,7 @@ export function useStoryTransitionPlayback(input: UseStoryTransitionPlaybackInpu
       frameRef.current = null;
       transitionActiveRef.current = false;
       setActiveTransition(null);
-      if (resumeAfter) input.play();
+      if (resumeAfter && interruptNarration) input.play();
     };
     frameRef.current = window.requestAnimationFrame(tick);
   }, [cancelFrame, input]);
@@ -100,8 +105,15 @@ export function useStoryTransitionPlayback(input: UseStoryTransitionPlaybackInpu
       && input.narrationTimeMs >= transition.narrationTimeMs
     ));
     lastNarrationTimeRef.current = input.narrationTimeMs;
-    if (crossed) startTransition(crossed, 0, true);
-  }, [cancelFrame, input.enabled, input.narrationTimeMs, input.playbackState, settings.durationMs, startTransition, timeline.transitions]);
+    if (crossed) {
+      startTransition(
+        crossed,
+        0,
+        true,
+        input.pauseNarrationDuringTransition !== false
+      );
+    }
+  }, [cancelFrame, input.enabled, input.narrationTimeMs, input.pauseNarrationDuringTransition, input.playbackState, settings.durationMs, startTransition, timeline.transitions]);
 
   const visualTimeMs = activeTransition
     ? activeTransition.startMs + activeTransition.progress * (activeTransition.endMs - activeTransition.startMs)
