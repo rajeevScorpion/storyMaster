@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { takePreloadedAudio } from '@/lib/media/audio-preload';
 import { toMediaFetchUrl } from '@/lib/media/client';
 
 export type PlaybackState = 'idle' | 'playing' | 'paused';
@@ -35,6 +36,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const [isMuted, setIsMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const prevNodeIdRef = useRef<string | undefined>(nodeId);
+  const playbackStateRef = useRef(playbackState);
   const volumeRef = useRef(volume);
   const isMutedRef = useRef(isMuted);
   const onEndedRef = useRef(options.onEnded);
@@ -42,8 +44,13 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const initialTimeMsRef = useRef(options.initialTimeMs ?? 0);
   const progressIntervalMsRef = useRef(options.progressIntervalMs ?? 5000);
   const lastProgressSavedAtRef = useRef(0);
+  const lastAudioSwapRef = useRef<{ timeMs: number; resume: boolean } | null>(null);
 
   // Keep volumeRef and isMutedRef in sync
+  useEffect(() => {
+    playbackStateRef.current = playbackState;
+  }, [playbackState]);
+
   useEffect(() => {
     volumeRef.current = volume;
   }, [volume]);
@@ -94,6 +101,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   // Stop and reset when node changes
   useEffect(() => {
     if (prevNodeIdRef.current !== nodeId) {
+      lastAudioSwapRef.current = null;
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
@@ -111,6 +119,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   // Create/update Audio element when audioUrl changes
   useEffect(() => {
     if (!audioUrl) {
+      lastAudioSwapRef.current = null;
       audioRef.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting playback UI when the audio URL (external resource) is cleared
       setPlaybackState('idle');
@@ -119,18 +128,41 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       return;
     }
 
-    const audio = new Audio(toMediaFetchUrl(audioUrl));
+    const sourceUrl = toMediaFetchUrl(audioUrl);
+    const swapSnapshot = lastAudioSwapRef.current;
+    lastAudioSwapRef.current = null;
+    const preloadedAudio = takePreloadedAudio(audioUrl);
+    const audio = preloadedAudio ?? new Audio();
+    audio.preload = 'auto';
+    if (!preloadedAudio) {
+      audio.src = sourceUrl;
+    }
     audio.volume = volumeRef.current;
     audio.muted = isMutedRef.current;
-    const syncMetadata = () => {
-      const nextDurationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
-      setDurationMs(nextDurationMs);
-      const initialTimeMs = Math.max(0, Math.min(initialTimeMsRef.current, nextDurationMs || initialTimeMsRef.current));
+    const initialPlaybackTimeMs = swapSnapshot?.timeMs ?? initialTimeMsRef.current;
+    const shouldResumeAfterSwap = swapSnapshot?.resume === true;
+    let resumeAttempted = false;
+
+    const applyInitialTime = (durationMs: number) => {
+      const initialTimeMs = Math.max(0, Math.min(initialPlaybackTimeMs, durationMs || initialPlaybackTimeMs));
       if (initialTimeMs > 0) {
         audio.currentTime = initialTimeMs / 1000;
         setCurrentTimeMs(initialTimeMs);
         lastProgressSavedAtRef.current = initialTimeMs;
       }
+    };
+
+    const resumePlayback = () => {
+      if (!shouldResumeAfterSwap || resumeAttempted || audioRef.current !== audio) return;
+      resumeAttempted = true;
+      audio.play().then(() => setPlaybackState('playing')).catch(() => {});
+    };
+
+    const syncMetadata = () => {
+      const nextDurationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
+      setDurationMs(nextDurationMs);
+      applyInitialTime(nextDurationMs);
+      resumePlayback();
     };
     const syncTime = () => {
       const nextTimeMs = audio.currentTime * 1000;
@@ -140,16 +172,32 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
         onProgressRef.current?.(nextTimeMs);
       }
     };
+    const handleReadyToPlay = () => {
+      resumePlayback();
+    };
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('loadedmetadata', syncMetadata);
+    audio.addEventListener('loadeddata', handleReadyToPlay);
+    audio.addEventListener('canplay', handleReadyToPlay);
     audio.addEventListener('timeupdate', syncTime);
     audioRef.current = audio;
+    if (audio.readyState >= 1) syncMetadata();
+    if (audio.readyState >= 2) handleReadyToPlay();
+    if (!preloadedAudio) audio.load();
 
     return () => {
+      if (audioRef.current === audio) {
+        lastAudioSwapRef.current = {
+          timeMs: audio.currentTime * 1000,
+          resume: playbackStateRef.current === 'playing' && !audio.paused && !audio.ended,
+        };
+      }
       if (audio.currentTime > 0) onProgressRef.current?.(audio.currentTime * 1000);
       audio.pause();
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('loadedmetadata', syncMetadata);
+      audio.removeEventListener('loadeddata', handleReadyToPlay);
+      audio.removeEventListener('canplay', handleReadyToPlay);
       audio.removeEventListener('timeupdate', syncTime);
     };
   }, [audioUrl, handleEnded]);
