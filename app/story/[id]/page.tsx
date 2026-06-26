@@ -156,7 +156,6 @@ export default function StoryPage() {
           coverIsStoryboard={openMeta?.coverIsStoryboard}
           status={openMeta?.status}
           beatCount={openMeta?.beatCount}
-          userPrompt={openMeta?.userPrompt}
           activePhaseIndex={shouldHoldForFirstVisual ? 2 : undefined}
           statusText={shouldHoldForFirstVisual
             ? openKind === 'reel'
