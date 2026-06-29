@@ -12,6 +12,7 @@ import {
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
+import { estimateElevenLabsModelCostUsd } from '@/lib/ai/provider-costs';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { StoryBeat, WordTiming } from '@/lib/types/story';
@@ -783,6 +784,39 @@ function getAlignmentDurationMs(alignment: ElevenLabsAlignment | undefined): num
   return last ? Math.round(last * 1000) : 0;
 }
 
+async function recordElevenLabsReelTtsCostEvent(input: {
+  costTelemetry: CostTelemetryContext | undefined;
+  taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+  modelId: string;
+  characterCount: number;
+  audioSeconds?: number | null;
+  latencyMs?: number | null;
+  status?: 'success' | 'failed';
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!input.costTelemetry) return;
+  const estimatedSuccessCostUsd = await estimateElevenLabsModelCostUsd({
+    modelId: input.modelId,
+    characterCount: input.characterCount,
+  }).catch(() => 0);
+  const status = input.status ?? 'success';
+  await recordModelCostEvent({
+    context: input.costTelemetry,
+    taskKey: input.taskKey ?? 'reel_tts',
+    provider: 'elevenlabs',
+    modelId: input.modelId,
+    audioSeconds: input.audioSeconds ?? null,
+    latencyMs: input.latencyMs ?? null,
+    status,
+    estimatedCostUsdOverride: status === 'success' ? estimatedSuccessCostUsd : 0,
+    metadata: {
+      charsUsed: input.characterCount,
+      estimatedSuccessCostUsd,
+      ...(input.metadata || {}),
+    },
+  });
+}
+
 function buildBeatNarrationMetadata(input: {
   payload: NarrationAudioPayload;
   audioUrl?: string | null;
@@ -1071,8 +1105,25 @@ async function buildNarrationAudioPayload(
         adminSettings: reelSettings.narration,
       }
     );
+    const elevenAttemptStartedAt = narrationNowMs();
     const fallbackToGemini = async (error: unknown): Promise<NarrationAudioPayload> => {
       console.warn('ElevenLabs reel TTS failed; falling back to Gemini TTS:', error instanceof Error ? error.message : error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await recordElevenLabsReelTtsCostEvent({
+        costTelemetry,
+        taskKey: options.taskKey,
+        modelId: elevenNarrationSettings.model,
+        characterCount: narrationText.length,
+        latencyMs: narrationNowMs() - elevenAttemptStartedAt,
+        status: 'failed',
+        metadata: {
+          errorMessage,
+          voiceId: elevenNarrationSettings.voiceId,
+          language: elevenNarrationSettings.language,
+          presetId: elevenNarrationSettings.presetId,
+          generationMode: options.generationMode ?? 'final',
+        },
+      });
       const gemini = await buildGeminiReelAudio({
         narrationText,
         tone,
@@ -1090,7 +1141,6 @@ async function buildNarrationAudioPayload(
         narrationStyle: options.narrationStyle || tone,
         taskKey: options.taskKey,
       });
-      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         buffer: gemini.buffer,
         mimeType: 'audio/wav',
@@ -1157,6 +1207,23 @@ async function buildNarrationAudioPayload(
       const wordTimestamps = flattenWordTimestamps(reelCaptions);
       const textHighlightSupported = getTextHighlightSupported('elevenlabs', wordTimestamps);
       const durationMs = getAlignmentDurationMs(eleven.alignment) || getLastCaptionEndMs(reelCaptions);
+      await recordElevenLabsReelTtsCostEvent({
+        costTelemetry,
+        taskKey: options.taskKey,
+        modelId: elevenNarrationSettings.model,
+        characterCount: narrationText.length,
+        audioSeconds: durationMs > 0 ? durationMs / 1000 : null,
+        latencyMs: narrationNowMs() - elevenAttemptStartedAt,
+        status: 'success',
+        metadata: {
+          voiceId: elevenNarrationSettings.voiceId,
+          language: elevenNarrationSettings.language,
+          presetId: elevenNarrationSettings.presetId,
+          generationMode: options.generationMode ?? 'final',
+          expressiveTagsUsed: elevenScript.expressiveTagsUsed,
+          timestampSource: textHighlightSupported ? 'elevenlabs' : 'none',
+        },
+      });
 
       return {
         buffer: eleven.audioBuffer,

@@ -13,6 +13,7 @@ interface CostBreakdownItem {
   outputTokens: number;
   imageCount: number;
   models: string[];
+  providers: string[];
 }
 
 export interface AdminCostBeatRow {
@@ -86,6 +87,7 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
       outputTokens: 0,
       imageCount: 0,
       models: [],
+      providers: [],
     };
     current.estimatedCostUsd += asCost(event.estimated_cost_usd);
     current.inputTokens += event.input_tokens || 0;
@@ -93,6 +95,10 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
     current.imageCount += event.image_count || 0;
     if (!current.models.includes(event.model_id)) {
       current.models.push(event.model_id);
+    }
+    const providerModelLabel = event.provider ? `${event.provider}:${event.model_id}` : event.model_id;
+    if (!current.providers.includes(providerModelLabel)) {
+      current.providers.push(providerModelLabel);
     }
     byTask.set(event.task_key, current);
   }

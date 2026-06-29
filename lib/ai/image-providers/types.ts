@@ -16,6 +16,8 @@ export interface ImageProviderResult {
   dataUrl: string | null;
   fallbackText: string | null;
   metadata: Record<string, unknown>;
+  providerUsage?: Record<string, unknown>;
+  inputImageCount?: number;
 }
 
 export interface ImageProviderAdapter {

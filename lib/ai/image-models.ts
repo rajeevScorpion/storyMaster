@@ -3,6 +3,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   IMAGE_PROVIDER_LABELS,
+  isStoryboardImageTask,
   type ImageModelCapabilities,
   type ImageModelOption,
   type ImageModelRegistryRecord,
@@ -29,6 +30,8 @@ interface ImageModelRegistryRow {
   is_recommended: boolean;
   allowed_plan_keys: string[] | null;
   coin_cost_per_image: number | string | null;
+  provider_cost_per_output_image_usd?: number | string | null;
+  provider_cost_per_input_image_usd?: number | string | null;
   capabilities: Record<string, unknown> | null;
   required_env_vars: string[] | null;
   sort_order: number | null;
@@ -67,6 +70,8 @@ function rowToRegistryRecord(row: ImageModelRegistryRow, currentPlanKey: PlanKey
     description: row.description ?? '',
     badge: row.badge,
     coinCostPerImage: Number(row.coin_cost_per_image ?? 0),
+    providerCostPerOutputImageUsd: Number(row.provider_cost_per_output_image_usd ?? 0),
+    providerCostPerInputImageUsd: Number(row.provider_cost_per_input_image_usd ?? 0),
     allowedPlanKeys,
     capabilities: normalizeCapabilities(row.capabilities),
     isDefault: Boolean(row.is_default),
@@ -90,6 +95,37 @@ function sortImageModels<T extends { sortOrder: number; displayName: string; pro
     || left.providerLabel.localeCompare(right.providerLabel)
     || left.displayName.localeCompare(right.displayName)
   );
+}
+
+function isReadyForCurrentPlan(record: ImageModelRegistryRecord): boolean {
+  return record.isEnabled
+    && record.isProviderConfigured
+    && record.isAvailableToCurrentPlan;
+}
+
+function hasProviderMatchedPortrait(records: ImageModelRegistryRecord[], record: ImageModelRegistryRecord): boolean {
+  if (!isStoryboardImageTask(record.taskKey)) return true;
+  return records.some((candidate) =>
+    candidate.taskKey === 'portrait_generation'
+    && candidate.providerKey === record.providerKey
+    && isReadyForCurrentPlan(candidate)
+  );
+}
+
+function toSnapshot(record: ImageModelRegistryRecord): ImageModelSnapshot {
+  return {
+    taskKey: record.taskKey,
+    providerKey: record.providerKey,
+    providerModelId: record.providerModelId,
+    modelKey: record.modelKey,
+    displayName: record.displayName,
+    coinCostPerImage: record.coinCostPerImage,
+    providerCostPerOutputImageUsd: record.providerCostPerOutputImageUsd,
+    providerCostPerInputImageUsd: record.providerCostPerInputImageUsd,
+    allowedPlanKeys: record.allowedPlanKeys,
+    capabilities: record.capabilities,
+    resolvedAt: new Date().toISOString(),
+  };
 }
 
 export async function listImageModelRegistry(currentPlanKey: PlanKey = 'free'): Promise<ImageModelRegistryRecord[]> {
@@ -120,6 +156,7 @@ export async function listUserVisibleImageModelOptions(
     && record.isEnabled
     && record.isUserVisible
     && record.isProviderConfigured
+    && hasProviderMatchedPortrait(records, record)
   );
   const available = options.filter((record) => record.isAvailableToCurrentPlan);
   return sortImageModels((available.length > 0 ? available : options).map(stripAdminFields));
@@ -133,11 +170,7 @@ export async function resolveImageModelSnapshot(input: {
 }): Promise<ImageModelSnapshot> {
   const records = await listImageModelRegistry(input.currentPlanKey ?? 'free');
   const taskRecords = records.filter((record) => record.taskKey === input.taskKey);
-  const ready = taskRecords.filter((record) =>
-    record.isEnabled
-    && record.isProviderConfigured
-    && record.isAvailableToCurrentPlan
-  );
+  const ready = taskRecords.filter(isReadyForCurrentPlan);
   const visibleReady = ready.filter((record) => record.isUserVisible);
   const internalReady = input.taskKey === 'portrait_generation' ? ready : visibleReady;
   const candidates = input.allowAdminDisabled
@@ -161,17 +194,65 @@ export async function resolveImageModelSnapshot(input: {
   }
 
   const resolved = selected ?? fallback;
-  return {
-    taskKey: resolved.taskKey,
-    providerKey: resolved.providerKey,
-    providerModelId: resolved.providerModelId,
-    modelKey: resolved.modelKey,
-    displayName: resolved.displayName,
-    coinCostPerImage: resolved.coinCostPerImage,
-    allowedPlanKeys: resolved.allowedPlanKeys,
-    capabilities: resolved.capabilities,
-    resolvedAt: new Date().toISOString(),
-  };
+  if (!input.allowAdminDisabled && !hasProviderMatchedPortrait(records, resolved)) {
+    throw new Error(`${resolved.displayName} is unavailable because no ready ${resolved.providerLabel} portrait model is configured for character continuity.`);
+  }
+
+  return toSnapshot(resolved);
+}
+
+export async function resolveLinkedPortraitImageModelSnapshot(input: {
+  selection?: ImageModelSelection | null;
+  currentPlanKey?: PlanKey;
+  allowAdminDisabled?: boolean;
+}): Promise<ImageModelSnapshot> {
+  const records = await listImageModelRegistry(input.currentPlanKey ?? 'free');
+  const selectedTaskKey = input.selection?.taskKey ?? 'image_generation';
+  const storyboardRecords = records.filter((record) => isStoryboardImageTask(record.taskKey));
+  const storyboardCandidates = input.allowAdminDisabled
+    ? storyboardRecords.filter((record) => record.isProviderConfigured)
+    : storyboardRecords.filter((record) =>
+        isReadyForCurrentPlan(record)
+        && record.isUserVisible
+        && hasProviderMatchedPortrait(records, record)
+      );
+  const selectedStoryboard = input.selection?.modelKey && isStoryboardImageTask(selectedTaskKey)
+    ? storyboardCandidates.find((record) =>
+        record.taskKey === selectedTaskKey
+        && record.modelKey === input.selection?.modelKey
+      )
+    : null;
+  const fallbackStoryboard =
+    selectedStoryboard
+    ?? storyboardCandidates.find((record) => record.taskKey === selectedTaskKey && record.isDefault)
+    ?? storyboardCandidates.find((record) => record.isDefault)
+    ?? storyboardCandidates[0];
+
+  if (!fallbackStoryboard) {
+    return resolveImageModelSnapshot({
+      taskKey: 'portrait_generation',
+      selection: input.selection,
+      currentPlanKey: input.currentPlanKey,
+      allowAdminDisabled: input.allowAdminDisabled,
+    });
+  }
+
+  const portraitRecords = records.filter((record) =>
+    record.taskKey === 'portrait_generation'
+    && record.providerKey === fallbackStoryboard.providerKey
+  );
+  const portraitCandidates = input.allowAdminDisabled
+    ? portraitRecords.filter((record) => record.isProviderConfigured)
+    : portraitRecords.filter(isReadyForCurrentPlan);
+  const portrait =
+    portraitCandidates.find((record) => record.isDefault)
+    ?? portraitCandidates[0];
+
+  if (!portrait) {
+    throw new Error(`${fallbackStoryboard.displayName} is unavailable because no ready ${fallbackStoryboard.providerLabel} portrait model is configured for character continuity.`);
+  }
+
+  return toSnapshot(portrait);
 }
 
 export async function saveImageModelRegistryRecord(
@@ -187,6 +268,8 @@ export async function saveImageModelRegistryRecord(
     isRecommended?: boolean;
     allowedPlanKeys?: PlanKey[];
     coinCostPerImage?: number;
+    providerCostPerOutputImageUsd?: number;
+    providerCostPerInputImageUsd?: number;
     capabilities?: ImageModelCapabilities;
     sortOrder?: number;
     updatedBy?: string | null;
@@ -223,6 +306,12 @@ export async function saveImageModelRegistryRecord(
   if (patch.allowedPlanKeys) update.allowed_plan_keys = normalizePlanKeys(patch.allowedPlanKeys);
   if (typeof patch.coinCostPerImage === 'number' && Number.isFinite(patch.coinCostPerImage)) {
     update.coin_cost_per_image = Math.max(0, Number(patch.coinCostPerImage.toFixed(2)));
+  }
+  if (typeof patch.providerCostPerOutputImageUsd === 'number' && Number.isFinite(patch.providerCostPerOutputImageUsd)) {
+    update.provider_cost_per_output_image_usd = Math.max(0, Number(patch.providerCostPerOutputImageUsd.toFixed(6)));
+  }
+  if (typeof patch.providerCostPerInputImageUsd === 'number' && Number.isFinite(patch.providerCostPerInputImageUsd)) {
+    update.provider_cost_per_input_image_usd = Math.max(0, Number(patch.providerCostPerInputImageUsd.toFixed(6)));
   }
   if (patch.capabilities) update.capabilities = patch.capabilities;
   if (typeof patch.sortOrder === 'number' && Number.isFinite(patch.sortOrder)) {
@@ -270,6 +359,8 @@ function getFallbackImageModelRecords(currentPlanKey: PlanKey): ImageModelRegist
       description: 'Code fallback used until the image model registry migration is applied.',
       badge: 'Default',
       coinCostPerImage: taskKey === 'portrait_generation' ? 0 : 5,
+      providerCostPerOutputImageUsd: 0.067,
+      providerCostPerInputImageUsd: 0,
       allowedPlanKeys,
       capabilities: {
         aspectRatios: taskKey === 'portrait_generation' ? ['1:1'] : ['16:9', '9:16'],

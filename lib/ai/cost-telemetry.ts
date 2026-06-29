@@ -25,13 +25,16 @@ export async function recordModelCostEvent(input: ModelCostEventInput): Promise<
     const inputTokens = Math.max(0, Math.round(finiteNumber(input.inputTokens)));
     const outputTokens = Math.max(0, Math.round(finiteNumber(input.outputTokens)));
     const imageCount = Math.max(0, Math.round(finiteNumber(input.imageCount)));
-    const estimatedCostUsd = estimateCost(
-      input.modelId,
-      inputTokens,
-      outputTokens,
-      imageCount,
-      input.imageSize ?? undefined
-    );
+    const inputImageCount = Math.max(0, Math.round(finiteNumber(input.inputImageCount)));
+    const estimatedCostUsd = typeof input.estimatedCostUsdOverride === 'number' && Number.isFinite(input.estimatedCostUsdOverride)
+      ? Math.max(0, input.estimatedCostUsdOverride)
+      : estimateCost(
+          input.modelId,
+          inputTokens,
+          outputTokens,
+          imageCount,
+          input.imageSize ?? undefined
+        );
 
     const admin = createAdminClient();
     const { error } = await admin
@@ -45,7 +48,7 @@ export async function recordModelCostEvent(input: ModelCostEventInput): Promise<
         story_session_id: input.context.storySessionId || null,
         activity_key: input.context.activityKey,
         task_key: input.taskKey,
-        provider: 'google_gemini',
+        provider: input.provider || 'google_gemini',
         model_id: input.modelId,
         status: input.status || 'success',
         input_tokens: inputTokens,
@@ -58,6 +61,8 @@ export async function recordModelCostEvent(input: ModelCostEventInput): Promise<
         metadata: {
           ...(input.context.metadata || {}),
           ...(input.context.phase ? { phase: input.context.phase } : {}),
+          ...(input.inputImageCount != null ? { inputImageCount } : {}),
+          ...(input.providerUsage ? { providerUsage: input.providerUsage } : {}),
           ...(input.metadata || {}),
         },
       });

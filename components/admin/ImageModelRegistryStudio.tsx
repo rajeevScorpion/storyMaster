@@ -3,11 +3,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ImageIcon, Loader2, RefreshCcw, Save, Sparkles } from 'lucide-react';
 import {
+  getAdminElevenLabsCostSettings,
   getAdminImageModelRegistry,
   saveAdminImageModelRegistryRecord,
+  saveAdminElevenLabsCostSettings,
   testAdminImageModel,
 } from '@/app/actions/image-models';
 import type { ImageModelRegistryRecord, ImageTaskKey } from '@/lib/ai/image-models.shared';
+import {
+  DEFAULT_ELEVENLABS_COST_SETTINGS,
+  type ElevenLabsCostSettings,
+} from '@/lib/ai/provider-costs.shared';
 import type { PlanKey } from '@/lib/types/pricing';
 
 type Draft = Pick<
@@ -22,6 +28,8 @@ type Draft = Pick<
   | 'isRecommended'
   | 'allowedPlanKeys'
   | 'coinCostPerImage'
+  | 'providerCostPerOutputImageUsd'
+  | 'providerCostPerInputImageUsd'
   | 'sortOrder'
 >;
 
@@ -45,6 +53,8 @@ function toDraft(record: ImageModelRegistryRecord): Draft {
     isRecommended: record.isRecommended,
     allowedPlanKeys: record.allowedPlanKeys,
     coinCostPerImage: record.coinCostPerImage,
+    providerCostPerOutputImageUsd: record.providerCostPerOutputImageUsd,
+    providerCostPerInputImageUsd: record.providerCostPerInputImageUsd,
     sortOrder: record.sortOrder,
   };
 }
@@ -67,6 +77,8 @@ export default function ImageModelRegistryStudio() {
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
+  const [savingElevenLabsCosts, setSavingElevenLabsCosts] = useState(false);
+  const [elevenLabsCosts, setElevenLabsCosts] = useState<ElevenLabsCostSettings>(DEFAULT_ELEVENLABS_COST_SETTINGS);
   const [testPrompt, setTestPrompt] = useState('A clean 2x2 storyboard of a lighthouse at sunrise, no text.');
   const [testImage, setTestImage] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -87,9 +99,13 @@ export default function ImageModelRegistryStudio() {
     setLoading(true);
     setError(null);
     try {
-      const next = await getAdminImageModelRegistry();
+      const [next, costs] = await Promise.all([
+        getAdminImageModelRegistry(),
+        getAdminElevenLabsCostSettings(),
+      ]);
       setRecords(next);
       setDrafts(Object.fromEntries(next.map((record) => [record.id, toDraft(record)])));
+      setElevenLabsCosts(costs);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load image models.');
     } finally {
@@ -132,6 +148,31 @@ export default function ImageModelRegistryStudio() {
     }
   };
 
+  const updateElevenLabsCost = (modelId: string, value: number) => {
+    setElevenLabsCosts((current) => ({
+      models: current.models.map((model) =>
+        model.modelId === modelId
+          ? { ...model, usdPer1kChars: Math.max(0, Number.isFinite(value) ? value : 0) }
+          : model
+      ),
+    }));
+  };
+
+  const saveElevenLabsCosts = async () => {
+    setSavingElevenLabsCosts(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const saved = await saveAdminElevenLabsCostSettings(elevenLabsCosts);
+      setElevenLabsCosts(saved);
+      setMessage('ElevenLabs TTS cost settings saved.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save ElevenLabs cost settings.');
+    } finally {
+      setSavingElevenLabsCosts(false);
+    }
+  };
+
   const runTest = async (record: ImageModelRegistryRecord) => {
     setTestingId(record.id);
     setError(null);
@@ -160,7 +201,7 @@ export default function ImageModelRegistryStudio() {
           <p className="text-xs uppercase tracking-[0.2em] text-emerald-300/80">Generation registry</p>
           <h1 className="mt-2 text-3xl font-serif text-neutral-100">Image Models</h1>
           <p className="mt-2 max-w-2xl text-sm text-neutral-400">
-            Configure provider visibility, defaults, plan access, and coin prices for story and reel image generation.
+            Configure provider visibility, defaults, plan access, coin billing, and provider USD cost telemetry.
           </p>
         </div>
         <button
@@ -205,6 +246,45 @@ export default function ImageModelRegistryStudio() {
         )}
       </div>
 
+      <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-emerald-300/80">TTS cost telemetry</p>
+            <h2 className="mt-2 text-xl font-serif text-neutral-100">ElevenLabs</h2>
+            <p className="mt-1 max-w-2xl text-sm text-neutral-400">
+              USD estimates are recorded in Admin Cost when ElevenLabs is the actual reel TTS provider.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void saveElevenLabsCosts()}
+            disabled={savingElevenLabsCosts || loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {savingElevenLabsCosts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Save TTS Costs
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {elevenLabsCosts.models.map((model) => (
+            <label key={model.modelId} className="block rounded-lg border border-white/10 bg-neutral-950/50 p-3">
+              <span className="block text-sm font-medium text-neutral-100">{model.displayName}</span>
+              <span className="mt-1 block truncate text-xs text-neutral-500">{model.modelId}</span>
+              <input
+                type="number"
+                min={0}
+                step={0.001}
+                value={model.usdPer1kChars}
+                onChange={(event) => updateElevenLabsCost(model.modelId, Number(event.target.value))}
+                className="mt-3 w-32 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
+                aria-label={`${model.displayName} USD per 1K characters`}
+              />
+              <span className="ml-2 text-xs text-neutral-500">USD / 1K chars</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
       {loading ? (
         <div className="rounded-xl border border-white/10 bg-white/5 p-8 text-center text-sm text-neutral-400">
           Loading image models...
@@ -218,12 +298,13 @@ export default function ImageModelRegistryStudio() {
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-white/10">
-              <table className="w-full min-w-[1120px] text-sm">
+              <table className="w-full min-w-[1260px] text-sm">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/5 text-left text-neutral-500">
                     <th className="px-4 py-3 font-medium">Model</th>
                     <th className="px-4 py-3 font-medium">Readiness</th>
                     <th className="px-4 py-3 font-medium">Coins</th>
+                    <th className="px-4 py-3 font-medium">Provider USD</th>
                     <th className="px-4 py-3 font-medium">Plans</th>
                     <th className="px-4 py-3 font-medium">Flags</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -272,6 +353,32 @@ export default function ImageModelRegistryStudio() {
                             className="w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
                             aria-label={`${record.displayName} coins per image`}
                           />
+                        </td>
+                        <td className="px-4 py-3">
+                          <label className="block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
+                            Output
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.001}
+                              value={draft.providerCostPerOutputImageUsd}
+                              onChange={(event) => updateDraft(record.id, { providerCostPerOutputImageUsd: Number(event.target.value) })}
+                              className="mt-1 block w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
+                              aria-label={`${record.displayName} provider USD per output image`}
+                            />
+                          </label>
+                          <label className="mt-2 block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
+                            Input ref
+                            <input
+                              type="number"
+                              min={0}
+                              step={0.001}
+                              value={draft.providerCostPerInputImageUsd}
+                              onChange={(event) => updateDraft(record.id, { providerCostPerInputImageUsd: Number(event.target.value) })}
+                              className="mt-1 block w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
+                              aria-label={`${record.displayName} provider USD per input reference image`}
+                            />
+                          </label>
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-2">

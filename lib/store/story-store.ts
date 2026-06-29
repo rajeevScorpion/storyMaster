@@ -1211,7 +1211,15 @@ async function generatePortraitsForStoryboardPlan(
         );
         character.portraitBase64 = portraitResult.imageUrl;
         task.finalPromptText = portraitResult.finalPromptText;
-        return { type: 'character' as const, dataUrl: portraitResult.imageUrl };
+        return {
+          reference: { type: 'character' as const, dataUrl: portraitResult.imageUrl },
+          metadata: {
+            characterId: character.id,
+            characterName: character.name,
+            imageModelSnapshot: portraitResult.imageModelSnapshot,
+            imageGenerationMetadata: portraitResult.imageGenerationMetadata,
+          },
+        };
       } catch (error) {
         console.error(`Portrait generation failed for storyboard task ${task.characterId}:`, error);
         return null;
@@ -1219,7 +1227,18 @@ async function generatePortraitsForStoryboardPlan(
     })
   );
 
-  return portraits.filter((portrait): portrait is NonNullable<typeof portrait> => Boolean(portrait));
+  const generatedPortraits = portraits.filter((portrait): portrait is NonNullable<typeof portrait> => Boolean(portrait));
+  if (generatedPortraits.length > 0) {
+    beat.imageGenerationMetadata = {
+      ...(beat.imageGenerationMetadata ?? {}),
+      portraitGeneration: {
+        count: generatedPortraits.length,
+        portraits: generatedPortraits.map((portrait) => portrait.metadata),
+      },
+    };
+  }
+
+  return generatedPortraits.map((portrait) => portrait.reference);
 }
 
 function assignPortraitPromptTexts(
@@ -5134,7 +5153,6 @@ export const useStoryStore = create<StoryState>()(
       setPromptOnlyBeatImage: async (nodeId: string, imageDataUrl: string, options?: { uploadBody?: StorageUploadBody; maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string }) => {
         const { session } = get();
         if (!session) return;
-        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;
@@ -5250,7 +5268,6 @@ export const useStoryStore = create<StoryState>()(
       selectPromptOnlyBeatImage: async (nodeId: string, storageKey: string) => {
         const { session } = get();
         if (!session) return;
-        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;
@@ -5284,7 +5301,6 @@ export const useStoryStore = create<StoryState>()(
       deletePromptOnlyBeatImage: async (nodeId: string) => {
         const { session } = get();
         if (!session) return;
-        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
 
         if (session.savedStoryId) {
           await updateBeatMediaState(session.savedStoryId, nodeId, {
@@ -5311,7 +5327,6 @@ export const useStoryStore = create<StoryState>()(
       permanentlyDeletePromptOnlyBeatImage: async (nodeId: string, storageKey: string) => {
         const { session } = get();
         if (!session) return;
-        if (!isPromptOnlyStoryConfig(session.storyConfig)) return;
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;

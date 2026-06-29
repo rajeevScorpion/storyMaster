@@ -6,6 +6,10 @@ import { createClient } from '@/lib/supabase/server';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { generateImageWithProvider } from '@/lib/ai/image-providers/router';
 import {
+  getElevenLabsCostSettings,
+  saveElevenLabsCostSettings,
+} from '@/lib/ai/provider-costs';
+import {
   listImageModelRegistry,
   listUserVisibleImageModelOptions,
   resolveImageModelSnapshot,
@@ -18,6 +22,7 @@ import type {
   ImageModelSelection,
   ImageTaskKey,
 } from '@/lib/ai/image-models.shared';
+import type { ElevenLabsCostSettings } from '@/lib/ai/provider-costs.shared';
 import type { PlanKey } from '@/lib/types/pricing';
 
 async function getCurrentUserId(): Promise<string | null> {
@@ -70,6 +75,8 @@ export async function saveAdminImageModelRegistryRecord(input: {
   isRecommended?: boolean;
   allowedPlanKeys?: PlanKey[];
   coinCostPerImage?: number;
+  providerCostPerOutputImageUsd?: number;
+  providerCostPerInputImageUsd?: number;
   capabilities?: ImageModelCapabilities;
   sortOrder?: number;
 }): Promise<ImageModelRegistryRecord[]> {
@@ -81,6 +88,20 @@ export async function saveAdminImageModelRegistryRecord(input: {
   });
   revalidatePath('/admin/image-models');
   return records;
+}
+
+export async function getAdminElevenLabsCostSettings(): Promise<ElevenLabsCostSettings> {
+  await verifyAdmin();
+  return getElevenLabsCostSettings();
+}
+
+export async function saveAdminElevenLabsCostSettings(
+  settings: ElevenLabsCostSettings
+): Promise<ElevenLabsCostSettings> {
+  await verifyAdmin();
+  const saved = await saveElevenLabsCostSettings(settings);
+  revalidatePath('/admin/image-models');
+  return saved;
 }
 
 export async function testAdminImageModel(input: {

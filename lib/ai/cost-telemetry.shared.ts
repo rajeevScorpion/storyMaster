@@ -31,12 +31,16 @@ export interface ModelCostEventInput {
   context: CostTelemetryContext;
   taskKey: TaskKey;
   modelId: string;
+  provider?: string;
   inputTokens?: number | null;
   outputTokens?: number | null;
   imageCount?: number;
+  inputImageCount?: number | null;
   imageSize?: GeminiImageSize | null;
   audioSeconds?: number | null;
   latencyMs?: number | null;
+  estimatedCostUsdOverride?: number | null;
+  providerUsage?: Record<string, unknown> | null;
   status?: 'success' | 'failed';
   metadata?: Record<string, unknown>;
 }

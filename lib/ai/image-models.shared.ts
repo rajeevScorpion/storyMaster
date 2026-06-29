@@ -31,6 +31,8 @@ export interface ImageModelSnapshot {
   modelKey: string;
   displayName: string;
   coinCostPerImage: number;
+  providerCostPerOutputImageUsd: number;
+  providerCostPerInputImageUsd: number;
   allowedPlanKeys: PlanKey[];
   capabilities: ImageModelCapabilities;
   resolvedAt: string;
@@ -47,6 +49,8 @@ export interface ImageModelOption {
   description: string;
   badge: string | null;
   coinCostPerImage: number;
+  providerCostPerOutputImageUsd: number;
+  providerCostPerInputImageUsd: number;
   allowedPlanKeys: PlanKey[];
   capabilities: ImageModelCapabilities;
   isDefault: boolean;
@@ -83,4 +87,31 @@ export function coinsToBeatCost(coins: number): number {
 
 export function beatCostToCoins(beatCost: number): number {
   return Number((Math.max(0, beatCost) * 10).toFixed(2));
+}
+
+export function isStoryboardImageTask(
+  taskKey: ImageTaskKey
+): taskKey is Extract<ImageTaskKey, 'image_generation' | 'reel_image_generation'> {
+  return taskKey === 'image_generation' || taskKey === 'reel_image_generation';
+}
+
+export function getImageModelMaxReferenceImages(capabilities: ImageModelCapabilities): number {
+  const value = capabilities.maxReferenceImages;
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : capabilities.supportsReferences
+    ? 3
+    : 0;
+}
+
+export function estimateImageProviderCostUsd(input: {
+  snapshot: Pick<ImageModelSnapshot, 'providerCostPerOutputImageUsd' | 'providerCostPerInputImageUsd'>;
+  outputImageCount?: number;
+  inputImageCount?: number;
+}): number {
+  const outputImageCount = Math.max(0, Math.round(input.outputImageCount ?? 1));
+  const inputImageCount = Math.max(0, Math.round(input.inputImageCount ?? 0));
+  const outputCost = Math.max(0, input.snapshot.providerCostPerOutputImageUsd) * outputImageCount;
+  const inputCost = Math.max(0, input.snapshot.providerCostPerInputImageUsd) * inputImageCount;
+  return Number((outputCost + inputCost).toFixed(6));
 }

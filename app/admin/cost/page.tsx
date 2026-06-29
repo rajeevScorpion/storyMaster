@@ -94,8 +94,8 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
             <p className="text-sm text-emerald-300">{formatInr(item.estimatedCostUsd * 93)}</p>
           </div>
           <p className="mt-1 text-xs text-neutral-500">{formatUsd(item.estimatedCostUsd)}</p>
-          <p className="mt-2 truncate text-xs text-neutral-400" title={item.models.join(', ')}>
-            {item.models.join(', ')}
+          <p className="mt-2 truncate text-xs text-neutral-400" title={(item.providers.length ? item.providers : item.models).join(', ')}>
+            {(item.providers.length ? item.providers : item.models).join(', ')}
           </p>
           <p className="mt-2 text-xs text-neutral-500">
             {item.inputTokens.toLocaleString()} in / {item.outputTokens.toLocaleString()} out

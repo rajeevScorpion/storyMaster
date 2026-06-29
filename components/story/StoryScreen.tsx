@@ -2328,14 +2328,12 @@ function StoryScreenInner({
     ? 'Upload a square JPG, PNG, or WebP sheet. It stays attached to this character for future beats and continuations, then returns you to the tools overview.'
     : isPromptOnlyStory
     ? 'Copy prompts, upload this beat image, and add refs only for characters that still need them. Successful uploads return here automatically.'
-    : 'Copy prompts and add character refs only where this beat still needs them. Successful uploads return here automatically.';
+    : 'Copy prompts, replace this beat image when needed, and add character refs only where continuity still needs them. Successful uploads return here automatically.';
   const promptToolsShellLabel = promptToolsModalState.view === 'beat-upload'
     ? 'Beat image upload tools'
     : promptToolsModalState.view === 'character-upload'
     ? 'Character sheet tools'
-    : isPromptOnlyStory
-    ? 'Prompt and image tools'
-    : 'Prompt tools';
+    : 'Prompt and image tools';
   const canOpenPromptTools = Boolean(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0);
   const isPromptToolsOverview = promptToolsModalState.view === 'overview';
   const isBeatUploadView = promptToolsModalState.view === 'beat-upload';
@@ -5717,7 +5715,7 @@ function StoryScreenInner({
                         ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
                         : 'bg-white/5 hover:bg-white/10 text-neutral-300'
                     }`}
-                    title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                    title="Prompt & image tools"
                   >
                     <Layers className="w-5 h-5" />
                   </button>
@@ -5891,7 +5889,7 @@ function StoryScreenInner({
                           ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
                           : 'bg-white/5 hover:bg-white/10 text-neutral-300'
                       }`}
-                      title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                      title="Prompt & image tools"
                     >
                       <Layers className="w-4 h-4" />
                     </button>
@@ -6347,9 +6345,7 @@ function StoryScreenInner({
                       ? activeCharacterHasSheet
                         ? 'Manage Character Sheets'
                         : 'Upload Character Sheet'
-                      : isPromptOnlyStory
-                      ? 'Prompt and Image Tools'
-                      : 'Prompt Tools'}
+                      : 'Prompt and Image Tools'}
                   </p>
                   <h3 className="mt-2 text-2xl font-serif text-neutral-100">
                     {isBeatUploadView
@@ -6358,7 +6354,7 @@ function StoryScreenInner({
                       ? activeCharacterSheetTarget?.characterName
                       : isPromptOnlyStory
                       ? 'Copy prompts and keep going'
-                      : 'Copy prompts and manage refs'}
+                      : 'Copy prompts and manage images'}
                   </h3>
                   <p className="mt-1 text-sm leading-relaxed text-neutral-400">
                     {isBeatUploadView
@@ -6367,7 +6363,7 @@ function StoryScreenInner({
                       ? 'Reference sheets persist with this character so future episodes and continuations can reuse them.'
                       : isPromptOnlyStory
                       ? `Copy the exact prompts for this beat, then upload a ${isVerticalStory ? '9:16' : '16:9'} image or add only the character refs still missing.`
-                      : 'Copy the exact prompt text for this beat and add character refs only where continuity still needs them.'}
+                      : 'Copy the exact prompt text for this beat, replace the generated image if needed, and add character refs where continuity still needs them.'}
                   </p>
                 </div>
                 <div className="relative flex items-start gap-2">
@@ -6429,17 +6425,15 @@ function StoryScreenInner({
                           {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
                         </button>
                       )}
-                      {isPromptOnlyStory && (
-                        <button
-                          type="button"
-                          onClick={openBeatUploadView}
-                          className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                          title={displayImageUrl ? 'Replace this beat image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
-                        >
-                          <Upload className="h-3.5 w-3.5" />
-                          {displayImageUrl ? 'Replace Image' : 'Upload Image'}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={openBeatUploadView}
+                        className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                        title={displayImageUrl ? 'Replace this beat image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
+                      >
+                        <Upload className="h-3.5 w-3.5" />
+                        {displayImageUrl ? 'Replace Image' : 'Upload Image'}
+                      </button>
                     </div>
 
                     {characterPromptItems.length > 0 && (
