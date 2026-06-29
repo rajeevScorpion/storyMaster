@@ -6,6 +6,7 @@ import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { StoryEffectConfig } from '@/lib/story-effects/settings';
+import type { ImageModelSelection, ImageProviderKey } from '@/lib/ai/image-models.shared';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -166,6 +167,9 @@ export interface StoryBeat {
   imageVersion?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
+  imageProviderKey?: ImageProviderKey;
+  imageModelKey?: string;
+  imageGenerationMetadata?: Record<string, unknown>;
   imageGallery?: BeatImageGalleryEntry[];
   isStoryboard?: boolean;
   portraitImageUrl?: string;
@@ -259,6 +263,7 @@ export interface StoryConfig {
   maxBeats: number;
   language: StoryLanguage;
   imageGenerationMode: 'generate' | 'prompt_only';
+  imageModelSelection?: ImageModelSelection;
   isVerticalStory: boolean;
   aspectRatio: StoryAspectRatio;
   visualSettings: VisualSettings;
@@ -308,6 +313,7 @@ export interface StorySession {
     mood: string;
   };
   storyConfig: StoryConfig;
+  visualProfile?: Record<string, unknown>;
   storyMap: StoryMap;
   beats: StoryBeat[];
   choiceHistory: string[];

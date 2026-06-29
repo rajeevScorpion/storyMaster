@@ -28,6 +28,7 @@ import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import {
   authorizeCurrentUserBillableAction,
+  authorizeCurrentUserImageModelBillableAction,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
@@ -1030,9 +1031,110 @@ function getHardReservationId(
     : null;
 }
 
+function getPromptOnlyFallbackActionKey(actionKey: string) {
+  switch (actionKey) {
+    case 'start_story_initial_beat':
+      return 'start_story_initial_beat_prompt_only' as const;
+    case 'start_reel_full_generation':
+      return 'start_reel_full_generation_prompt_only' as const;
+    case 'continue_story_new_beat':
+      return 'continue_story_new_beat_prompt_only' as const;
+    default:
+      return null;
+  }
+}
+
+async function finalizeImageAwareReservation({
+  reservationId,
+  actionKey,
+  fallbackIdempotencyKey,
+  relatedStoryId,
+  relatedNodeId,
+  storyId,
+  relatedEntityId,
+  metadata,
+  imageResult,
+}: {
+  reservationId: string;
+  actionKey: ReturnType<typeof getStartStoryActionKey> | ReturnType<typeof getContinueStoryActionKey>;
+  fallbackIdempotencyKey: string;
+  relatedStoryId?: string | null;
+  relatedNodeId?: string | null;
+  storyId?: string | null;
+  relatedEntityId?: string | null;
+  metadata: Record<string, unknown>;
+  imageResult: {
+    imageUrl?: string;
+    finalPromptText?: string;
+    imageModelSnapshot?: import('@/lib/ai/image-models.shared').ImageModelSnapshot;
+    imageGenerationMetadata?: Record<string, unknown>;
+  };
+}) {
+  const placeholder = Boolean(imageResult.imageGenerationMetadata?.placeholder);
+  const promptOnlyFallbackActionKey = placeholder ? getPromptOnlyFallbackActionKey(actionKey) : null;
+
+  if (promptOnlyFallbackActionKey) {
+    await releaseCurrentUserBillableAction({
+      reservationId,
+      reason: 'image_generation_placeholder',
+      releaseStatus: 'released',
+      metadata: {
+        ...metadata,
+        downgradedFromActionKey: actionKey,
+        imageGenerationMetadata: imageResult.imageGenerationMetadata ?? null,
+      },
+    });
+
+    const fallbackAuthorization = await authorizeCurrentUserBillableAction({
+      actionKey: promptOnlyFallbackActionKey,
+      idempotencyKey: fallbackIdempotencyKey,
+      relatedStoryId: relatedStoryId ?? null,
+      relatedNodeId: relatedNodeId ?? null,
+      metadata: {
+        ...metadata,
+        downgradedFromActionKey: actionKey,
+        billingPolicy: 'prompt_only_fallback_after_image_placeholder',
+      },
+    });
+    const fallbackReservationId = getHardReservationId(fallbackAuthorization);
+    if (fallbackReservationId) {
+      await finalizeCurrentUserBillableAction({
+        reservationId: fallbackReservationId,
+        storyId: storyId ?? null,
+        relatedEntityId: relatedEntityId ?? null,
+        metadata: {
+          ...metadata,
+          action: promptOnlyFallbackActionKey,
+          downgradedFromActionKey: actionKey,
+        },
+      });
+    }
+    return;
+  }
+
+  await finalizeCurrentUserBillableAction({
+    reservationId,
+    storyId: storyId ?? null,
+    relatedEntityId: relatedEntityId ?? null,
+    metadata: {
+      ...metadata,
+      imageModelSnapshot: imageResult.imageModelSnapshot ?? null,
+      imageGenerationMetadata: imageResult.imageGenerationMetadata ?? null,
+    },
+  });
+}
+
 function buildPricingErrorState(
   authorization: PricingBillableActionAuthorization,
   actionLabel: 'start_story' | 'continue_story'
+): { error: string; errorAction: StoryErrorAction | null } | null {
+  const actionText = actionLabel === 'start_story' ? 'start this story' : 'create a new path';
+  return buildPricingErrorStateForAction(authorization, actionText);
+}
+
+function buildPricingErrorStateForAction(
+  authorization: PricingBillableActionAuthorization,
+  actionText: string
 ): { error: string; errorAction: StoryErrorAction | null } | null {
   if (authorization.status === 'bypassed' || authorization.status === 'allowed') {
     return null;
@@ -1045,7 +1147,6 @@ function buildPricingErrorState(
     };
   }
 
-  const actionText = actionLabel === 'start_story' ? 'start this story' : 'create a new path';
   const availableCoins = authorization.availableCoins.toLocaleString();
 
   if (authorization.reason === 'checkout_unavailable') {
@@ -1073,7 +1174,8 @@ async function generatePortraitsForStoryboardPlan(
   visualStyle: string,
   portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  imageModelSelection?: StoryConfig['imageModelSelection']
 ): Promise<ReferenceImage[]> {
   if (!storyboardPlan.portraitTasks.length) {
     return [];
@@ -1104,7 +1206,8 @@ async function generatePortraitsForStoryboardPlan(
           taskPortraitReferenceConfig,
           modelOverrides,
           task.prompt,
-          costTelemetry
+          costTelemetry,
+          imageModelSelection
         );
         character.portraitBase64 = portraitResult.imageUrl;
         task.finalPromptText = portraitResult.finalPromptText;
@@ -1297,6 +1400,31 @@ function getReelVisualStylePromptOptions(modelOverrides: StoryModelOverrides | u
 
 function getImageTaskKey(storyConfig: StoryConfig): 'image_generation' | 'reel_image_generation' {
   return isReelStoryConfig(storyConfig) ? 'reel_image_generation' : 'image_generation';
+}
+
+function applyImageGenerationResultMetadata(
+  beat: StoryBeat,
+  imageResult: {
+    imageUrl?: string;
+    finalPromptText?: string;
+    imageModelSnapshot?: import('@/lib/ai/image-models.shared').ImageModelSnapshot;
+    imageGenerationMetadata?: Record<string, unknown>;
+  }
+): StoryBeat {
+  if (!imageResult.imageModelSnapshot && !imageResult.imageGenerationMetadata) {
+    return beat;
+  }
+
+  return {
+    ...beat,
+    imageProviderKey: imageResult.imageModelSnapshot?.providerKey ?? beat.imageProviderKey,
+    imageModelKey: imageResult.imageModelSnapshot?.modelKey ?? beat.imageModelKey,
+    imageGenerationMetadata: {
+      ...(beat.imageGenerationMetadata ?? {}),
+      ...(imageResult.imageGenerationMetadata ?? {}),
+      ...(imageResult.imageModelSnapshot ? { imageModelSnapshot: imageResult.imageModelSnapshot } : {}),
+    },
+  };
 }
 
 function applyReelBeatMetadata(beat: StoryBeat, storyConfig: StoryConfig): StoryBeat {
@@ -1697,9 +1825,12 @@ export const useStoryStore = create<StoryState>()(
             timingSteps,
             'wallet_authorization',
             'Authorize story start',
-            () => authorizeCurrentUserBillableAction({
+            () => authorizeCurrentUserImageModelBillableAction({
               actionKey: startStoryActionKey,
               idempotencyKey: `start_story:${initialSessionId}`,
+              storyConfig,
+              imageCount: 1,
+              taskKey: getImageTaskKey(storyConfig),
               metadata: {
                 language: storyConfig.language,
                 ageGroup: storyConfig.ageGroup,
@@ -1874,7 +2005,8 @@ export const useStoryStore = create<StoryState>()(
                   initialSession.visualStyle!,
                   storyConfig.portraitReferences,
                   modelOverrides,
-                  costPhase(baseCostTelemetry, 'portrait_generation')
+                  costPhase(baseCostTelemetry, 'portrait_generation'),
+                  storyConfig.imageModelSelection
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -2125,7 +2257,8 @@ export const useStoryStore = create<StoryState>()(
                     }),
                     storyAspectRatio,
                     getImageTaskKey(storyConfig),
-                    getReelVisualStylePromptOptions(modelOverrides, storyConfig)
+                    getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                    storyConfig.imageModelSelection
                   ),
                   {
                     referenceCount: portraitRefs.length,
@@ -2137,6 +2270,7 @@ export const useStoryStore = create<StoryState>()(
 
           beat.finalImagePromptText = imageResult.finalPromptText;
           beat.imageUrl = promptOnly ? undefined : imageResult.imageUrl;
+          beat = applyImageGenerationResultMetadata(beat, imageResult);
 
           // Also await early save (should be done by now — DB insert is fast)
           await earlySavePromise;
@@ -2155,8 +2289,12 @@ export const useStoryStore = create<StoryState>()(
               timingSteps,
               'billing_finalize',
               'Finalize story-start coin spend',
-              () => finalizeCurrentUserBillableAction({
+              () => finalizeImageAwareReservation({
                 reservationId,
+                actionKey: startStoryActionKey,
+                fallbackIdempotencyKey: `start_story_prompt_only_fallback:${initialSessionId}`,
+                relatedStoryId: earlySavedStoryId ?? null,
+                relatedNodeId: rootNodeId,
                 storyId: earlySavedStoryId ?? null,
                 relatedEntityId: rootNodeId,
                 metadata: {
@@ -2164,6 +2302,7 @@ export const useStoryStore = create<StoryState>()(
                   storySessionId: initialSessionId,
                   title: resolvedTitle,
                 },
+                imageResult,
               })
             );
             shouldReleaseReservation = false;
@@ -2359,9 +2498,12 @@ export const useStoryStore = create<StoryState>()(
         });
 
         try {
-          billingAuthorization = await authorizeCurrentUserBillableAction({
+          billingAuthorization = await authorizeCurrentUserImageModelBillableAction({
             actionKey: startActionKey,
             idempotencyKey: `start_reel:${initialSessionId}`,
+            storyConfig,
+            imageCount: beatCount,
+            taskKey: getImageTaskKey(storyConfig),
             metadata: {
               language: storyConfig.language,
               beatCount,
@@ -2501,10 +2643,12 @@ export const useStoryStore = create<StoryState>()(
                 costPhase(baseCostTelemetry, getImageTaskKey(storyConfig), { beatNumber: beat.beatNumber }),
                 storyAspectRatio,
                 getImageTaskKey(storyConfig),
-                getReelVisualStylePromptOptions(modelOverrides, storyConfig)
+                getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                storyConfig.imageModelSelection
               );
               beat.imageUrl = imageResult.imageUrl;
               beat.finalImagePromptText = imageResult.finalPromptText;
+              beat = applyImageGenerationResultMetadata(beat, imageResult);
               beat.imageStatus = 'pending';
             }
 
@@ -2547,14 +2691,25 @@ export const useStoryStore = create<StoryState>()(
           if (reservationId) {
             setLoadingStage(set, 'start_story', 'finish');
             try {
-              await finalizeCurrentUserBillableAction({
+              await finalizeImageAwareReservation({
                 reservationId,
+                actionKey: startActionKey,
+                fallbackIdempotencyKey: `start_reel_prompt_only_fallback:${initialSessionId}`,
+                relatedStoryId: savedStoryId ?? null,
+                relatedNodeId: rootNodeId,
                 storyId: savedStoryId ?? null,
                 relatedEntityId: rootNodeId,
                 metadata: {
                   action: startActionKey,
                   storySessionId: initialSessionId,
                   beatCount,
+                },
+                imageResult: {
+                  imageModelSnapshot: builtBeats.find((beat) => beat.imageGenerationMetadata?.imageModelSnapshot)
+                    ?.imageGenerationMetadata?.imageModelSnapshot as import('@/lib/ai/image-models.shared').ImageModelSnapshot | undefined,
+                  imageGenerationMetadata: builtBeats.some((beat) => beat.imageGenerationMetadata?.placeholder)
+                    ? { placeholder: true, reason: 'one_or_more_reel_images_placeholder' }
+                    : builtBeats.find((beat) => beat.imageGenerationMetadata)?.imageGenerationMetadata,
                 },
               });
               shouldReleaseReservation = false;
@@ -2664,11 +2819,14 @@ export const useStoryStore = create<StoryState>()(
             timingSteps,
             'wallet_authorization',
             'Authorize branch continuation',
-            () => authorizeCurrentUserBillableAction({
+            () => authorizeCurrentUserImageModelBillableAction({
               actionKey: continueStoryActionKey,
               idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,
               relatedNodeId: session.storyMap.currentNodeId,
+              storyConfig: session.storyConfig,
+              imageCount: 1,
+              taskKey: getImageTaskKey(session.storyConfig),
               metadata: {
                 selectedOptionId: optionId,
                 selectedOptionLabel: selectedOption.label,
@@ -2829,7 +2987,8 @@ export const useStoryStore = create<StoryState>()(
                   session.visualStyle,
                   session.storyConfig.portraitReferences,
                   modelOverrides,
-                  costPhase(baseCostTelemetry, 'portrait_generation')
+                  costPhase(baseCostTelemetry, 'portrait_generation'),
+                  session.storyConfig.imageModelSelection
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -3116,7 +3275,8 @@ export const useStoryStore = create<StoryState>()(
                   }),
                   storyAspectRatio,
                   getImageTaskKey(session.storyConfig),
-                  getReelVisualStylePromptOptions(modelOverrides, session.storyConfig)
+                  getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  session.storyConfig.imageModelSelection
                 ),
                 {
                   beatNumber: beat.beatNumber,
@@ -3125,6 +3285,7 @@ export const useStoryStore = create<StoryState>()(
               );
           beat.finalImagePromptText = imageResult.finalPromptText;
           beat.imageUrl = promptOnly ? undefined : imageResult.imageUrl;
+          beat = applyImageGenerationResultMetadata(beat, imageResult);
 
           const updatedMap = addChildNode(
             session.storyMap,
@@ -3188,8 +3349,12 @@ export const useStoryStore = create<StoryState>()(
               timingSteps,
               'billing_finalize',
               'Finalize branch coin spend',
-              () => finalizeCurrentUserBillableAction({
+              () => finalizeImageAwareReservation({
                 reservationId,
+                actionKey: continueStoryActionKey,
+                fallbackIdempotencyKey: `continue_story_prompt_only_fallback:${session.savedStoryId || session.storySessionId}:${newNodeId}`,
+                relatedStoryId: session.savedStoryId ?? null,
+                relatedNodeId: newNodeId,
                 storyId: session.savedStoryId ?? null,
                 relatedEntityId: newNodeId,
                 metadata: {
@@ -3199,6 +3364,7 @@ export const useStoryStore = create<StoryState>()(
                   parentNodeId: parentId,
                   newNodeId,
                 },
+                imageResult,
               })
             );
             shouldReleaseReservation = false;
@@ -4429,8 +4595,38 @@ export const useStoryStore = create<StoryState>()(
         };
 
         set({ isRegeneratingImage: true });
+        const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+        let reservationId: string | null = null;
+        let shouldReleaseReservation = false;
 
         try {
+          if (!promptOnly) {
+            const billingAuthorization = await authorizeCurrentUserImageModelBillableAction({
+              actionKey: 'regenerate_image',
+              idempotencyKey: `regenerate_image:${session.savedStoryId || session.storySessionId}:${nodeId}:${uuidv4()}`,
+              relatedStoryId: session.savedStoryId ?? null,
+              relatedNodeId: nodeId,
+              storyConfig: session.storyConfig,
+              imageCount: 1,
+              taskKey: getImageTaskKey(session.storyConfig),
+              metadata: {
+                nodeId,
+                beatNumber: node.data.beatNumber,
+              },
+            });
+            const pricingErrorState = buildPricingErrorStateForAction(billingAuthorization, 'regenerate this image');
+            if (pricingErrorState) {
+              set({
+                isRegeneratingImage: false,
+                error: pricingErrorState.error,
+                errorAction: pricingErrorState.errorAction,
+              });
+              return;
+            }
+            reservationId = getHardReservationId(billingAuthorization);
+            shouldReleaseReservation = Boolean(reservationId);
+          }
+
           let modelOverrides: StoryModelOverrides | undefined;
           try {
             modelOverrides = await getStoryModelOverrides();
@@ -4439,7 +4635,6 @@ export const useStoryStore = create<StoryState>()(
           }
 
           const parentNode = node.parentId ? session.storyMap.nodes[node.parentId] : undefined;
-          const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
           const storyAspectRatio = getStoryAspectRatio(session.storyConfig);
           let beatForRender: StoryBeat = {
             ...node.data,
@@ -4482,7 +4677,8 @@ export const useStoryStore = create<StoryState>()(
               session.visualStyle,
               session.storyConfig.portraitReferences,
               modelOverrides,
-              costPhase(baseCostTelemetry, 'portrait_generation')
+              costPhase(baseCostTelemetry, 'portrait_generation'),
+              session.storyConfig.imageModelSelection
             );
           }
           if (promptOnly) {
@@ -4529,9 +4725,39 @@ export const useStoryStore = create<StoryState>()(
                 }),
                 storyAspectRatio,
                 getImageTaskKey(session.storyConfig),
-                getReelVisualStylePromptOptions(modelOverrides, session.storyConfig)
+                getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                session.storyConfig.imageModelSelection
               );
           beatForRender.finalImagePromptText = imageResult.finalPromptText;
+          beatForRender = applyImageGenerationResultMetadata(beatForRender, imageResult);
+          const generatedPlaceholder = Boolean(imageResult.imageGenerationMetadata?.placeholder);
+
+          if (reservationId) {
+            if (generatedPlaceholder) {
+              await releaseCurrentUserBillableAction({
+                reservationId,
+                reason: 'regenerate_image_placeholder',
+                releaseStatus: 'released',
+                metadata: {
+                  nodeId,
+                  message: imageResult.imageGenerationMetadata?.reason ?? 'No provider image generated.',
+                },
+              });
+            } else {
+              await finalizeCurrentUserBillableAction({
+                reservationId,
+                storyId: session.savedStoryId ?? null,
+                relatedEntityId: nodeId,
+                metadata: {
+                  action: 'regenerate_image',
+                  nodeId,
+                  beatNumber: node.data.beatNumber,
+                  imageModelSnapshot: imageResult.imageModelSnapshot ?? null,
+                },
+              });
+            }
+            shouldReleaseReservation = false;
+          }
 
           // Update the node with the new image
           const latestSession = get().session;
@@ -4587,6 +4813,20 @@ export const useStoryStore = create<StoryState>()(
           }
         } catch (error) {
           console.error('Image regeneration failed:', error);
+          if (reservationId && shouldReleaseReservation) {
+            try {
+              await releaseCurrentUserBillableAction({
+                reservationId,
+                reason: 'regenerate_image_failed',
+                releaseStatus: 'failed',
+                metadata: {
+                  message: error instanceof Error ? error.message : 'Image regeneration failed',
+                },
+              });
+            } catch (releaseError) {
+              console.error('Failed to release image-regeneration reservation:', releaseError);
+            }
+          }
           set({ isRegeneratingImage: false });
         }
       },

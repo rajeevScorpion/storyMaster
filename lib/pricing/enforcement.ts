@@ -254,6 +254,7 @@ export async function authorizeBillableAction(input: {
   metadata?: Record<string, unknown>;
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
+  requestedBeatCostOverride?: number | null;
 }): Promise<PricingBillableActionAuthorization> {
   return timeEnforcementStep(
     'pricing.authorize_billable_action',
@@ -263,7 +264,10 @@ export async function authorizeBillableAction(input: {
     },
     async () => {
       const actionCost = await loadActionCost(input.actionKey);
-      const beatCost = asBeatAmount(actionCost?.beat_cost);
+      const overrideBeatCost = Number(input.requestedBeatCostOverride ?? NaN);
+      const beatCost = Number.isFinite(overrideBeatCost) && overrideBeatCost >= 0
+        ? Number(overrideBeatCost.toFixed(2))
+        : asBeatAmount(actionCost?.beat_cost);
       const coinCost = beatsToCoins(beatCost);
 
       if (!input.userId) {

@@ -3,6 +3,7 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
+import { getImageModelPickerState } from '@/app/actions/image-models';
 import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
 import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
@@ -15,6 +16,7 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
   getReelTextLengthRange,
@@ -248,6 +250,10 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
   );
+  const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
+    DEFAULT_STORY_CONFIG.imageModelSelection
+  );
+  const [imageModelPicker, setImageModelPicker] = useState<ImageModelPickerState | null>(null);
   const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(
     initialLandingData.narrationVoiceConfig
   );
@@ -260,19 +266,21 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const isReelMode = creationMode === 'reel';
   const reelMaxBeats = reelBeatCount;
   const effectiveMaxBeats = isReelMode ? reelMaxBeats : storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
-  const startStoryCoinCost = (
-    isReelMode
-      ? pricing.actionCosts[
-          imageGenerationMode === 'prompt_only'
-            ? 'start_reel_full_generation_prompt_only'
-            : 'start_reel_full_generation'
-        ] ?? (imageGenerationMode === 'prompt_only' ? 1.5 : 3)
-      : pricing.actionCosts[
-          imageGenerationMode === 'prompt_only'
-            ? 'start_story_initial_beat_prompt_only'
-            : 'start_story_initial_beat'
-        ] ?? (imageGenerationMode === 'prompt_only' ? 0.5 : 1)
-  ) * 10;
+  const imageTaskKey = imageTaskForStoryKind(isReelMode ? 'reel' : 'story');
+  const selectedImageModel = imageModelPicker?.options.find((option) => option.modelKey === imageModelSelection?.modelKey)
+    ?? imageModelPicker?.options.find((option) => option.modelKey === imageModelPicker.selectedModelKey)
+    ?? imageModelPicker?.options.find((option) => option.isDefault)
+    ?? null;
+  const promptOnlyActionCost = isReelMode
+    ? pricing.actionCosts.start_reel_full_generation_prompt_only ?? 1.5
+    : pricing.actionCosts.start_story_initial_beat_prompt_only ?? 0.5;
+  const generatedActionCostFallback = isReelMode
+    ? pricing.actionCosts.start_reel_full_generation ?? 3
+    : pricing.actionCosts.start_story_initial_beat ?? 1;
+  const modelImageCoinCost = selectedImageModel?.coinCostPerImage ?? Math.max(0, (generatedActionCostFallback - promptOnlyActionCost) * 10);
+  const startStoryCoinCost = imageGenerationMode === 'prompt_only'
+    ? promptOnlyActionCost * 10
+    : (promptOnlyActionCost * 10) + (modelImageCoinCost * (isReelMode ? reelBeatCount : 1));
   const isCreatorPlan = pricing.snapshot.creatorControls;
   const showCreatorSettings = isCreatorPlan && setupSettings.creatorCharacterSheetsEnabled;
   const selectedReelVisualStyle = reelVisualStyleCards.find((style) => style.id === reelVisualStyleId)
@@ -284,6 +292,30 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       setCreationMode('reel');
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getImageModelPickerState(imageTaskKey, imageModelSelection)
+      .then((state) => {
+        if (cancelled) return;
+        setImageModelPicker(state);
+        if (
+          (!imageModelSelection?.modelKey || imageModelSelection.taskKey !== state.taskKey)
+          && state.selectedModelKey
+        ) {
+          setImageModelSelection({
+            taskKey: state.taskKey,
+            modelKey: state.selectedModelKey,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setImageModelPicker(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageTaskKey, imageModelSelection, pricing.snapshot.planKey]);
 
   useEffect(() => {
     getStoryboardSettings()
@@ -428,6 +460,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
+            setImageModelSelection(config.imageModelSelection);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
             setUseCreatorOneKCharacterSheet(
               config.portraitReferences.mode === 'character_sheet' &&
@@ -500,8 +533,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         ageGroup,
         settingCountry: 'generic',
         maxBeats: reelBeatCount,
-        imageGenerationMode,
-        isVerticalStory: true,
+      imageGenerationMode,
+      ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
+        ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
+        : {}),
+      isVerticalStory: true,
         aspectRatio: '9:16',
         visualSettings,
         authoring: reelInputMode === 'text' && reelDistributedTexts && reelDistributedImagePrompts
@@ -549,6 +585,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
       imageGenerationMode,
+      ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
+        ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
+        : {}),
       isVerticalStory: verticalStoryEnabled,
       aspectRatio: verticalStoryEnabled ? '9:16' : '16:9',
       visualSettings,
@@ -1375,6 +1414,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
                 imageGenerationMode={imageGenerationMode}
                 onImageGenerationModeChange={setImageGenerationMode}
+                imageModelPicker={imageModelPicker}
+                imageModelSelection={imageModelSelection}
+                onImageModelSelectionChange={(value) => {
+                  setImageModelSelection(value);
+                  clearSeedPreview();
+                }}
                 verticalStoriesSettingEnabled={setupSettings.verticalStoriesSettingEnabled}
                 isVerticalStory={isVerticalStory}
                 onVerticalStoryChange={(value) => {

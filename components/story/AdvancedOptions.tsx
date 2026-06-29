@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import type { ImageModelPickerState, ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   SOURCE_FIDELITY_OPTIONS,
   STORY_DETAIL_OPTIONS,
@@ -12,7 +13,7 @@ import {
 import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
-import { Coins, Monitor, Smartphone, Volume2 } from 'lucide-react';
+import { Coins, ImageIcon, Monitor, Smartphone, Volume2 } from 'lucide-react';
 import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
@@ -107,6 +108,9 @@ interface AdvancedOptionsProps {
   storyPromptOnlyModeEnabled?: boolean;
   imageGenerationMode?: 'generate' | 'prompt_only';
   onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
+  imageModelPicker?: ImageModelPickerState | null;
+  imageModelSelection?: ImageModelSelection;
+  onImageModelSelectionChange?: (value: ImageModelSelection | undefined) => void;
   verticalStoriesSettingEnabled?: boolean;
   isVerticalStory?: boolean;
   onVerticalStoryChange?: (value: boolean) => void;
@@ -145,6 +149,9 @@ export default function AdvancedOptions({
   storyPromptOnlyModeEnabled = false,
   imageGenerationMode = 'generate',
   onImageGenerationModeChange,
+  imageModelPicker = null,
+  imageModelSelection,
+  onImageModelSelectionChange,
   verticalStoriesSettingEnabled = false,
   isVerticalStory = false,
   onVerticalStoryChange,
@@ -168,6 +175,15 @@ export default function AdvancedOptions({
   ) || voiceList[0] || '';
   const voiceDropdownOptions: FilterDropdownOption[] = voiceList.map((voice) => ({ value: voice, label: voice }));
   const storyboardImagesEnabled = imageGenerationMode !== 'prompt_only';
+  const imageModelOptions = imageModelPicker?.options ?? [];
+  const selectedImageModelKey = imageModelSelection?.modelKey || imageModelPicker?.selectedModelKey || imageModelPicker?.defaultModelKey || '';
+  const selectedImageModel = imageModelOptions.find((option) => option.modelKey === selectedImageModelKey)
+    ?? imageModelOptions.find((option) => option.isDefault)
+    ?? imageModelOptions[0];
+  const imageModelDropdownOptions: FilterDropdownOption[] = imageModelOptions.map((option) => ({
+    value: option.modelKey,
+    label: `${option.displayName}${option.badge ? ` · ${option.badge}` : ''}`,
+  }));
   const orientationLabel = isVerticalStory ? 'Portrait' : 'Landscape';
   const visualPresetDescription = VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description || 'Choose the illustration style Kissago should use for storyboards.';
   const sourceFidelityDescription = SOURCE_FIDELITY_OPTIONS.find((option) => option.value === sourceFidelity)?.description || 'Choose how closely Kissago should preserve the source material.';
@@ -384,6 +400,43 @@ export default function AdvancedOptions({
                     <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
                   </button>
                 </div>
+              </div>
+            )}
+
+            {storyboardImagesEnabled && imageModelDropdownOptions.length > 0 && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="rounded-xl bg-emerald-500/10 p-2 text-emerald-300">
+                      <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-sans text-neutral-200">Image model</h4>
+                      {selectedImageModel && (
+                        <p className="mt-1 truncate text-xs text-neutral-500">
+                          {selectedImageModel.providerLabel} · {selectedImageModel.coinCostPerImage.toLocaleString()} coins/image
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {selectedImageModel?.isRecommended && (
+                    <span className="shrink-0 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-emerald-200">
+                      Best
+                    </span>
+                  )}
+                </div>
+                <FilterDropdown
+                  value={selectedImageModelKey}
+                  options={imageModelDropdownOptions}
+                  onChange={(modelKey) => onImageModelSelectionChange?.({
+                    taskKey: imageModelPicker?.taskKey,
+                    modelKey,
+                  })}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Image model"
+                />
               </div>
             )}
 

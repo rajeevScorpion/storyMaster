@@ -372,6 +372,9 @@ const ADDITIVE_BEAT_COLUMNS = [
   'narration_voice_id',
   'image_status',
   'image_error',
+  'image_provider_key',
+  'image_model_key',
+  'image_generation_metadata',
   'image_synced_at',
   'image_gallery',
   'audio_status',
@@ -385,6 +388,10 @@ const ADDITIVE_STORY_COLUMNS = [
   'reel_retention_days',
   'reel_expires_at',
   'reel_cleanup_status',
+  'image_provider_key',
+  'image_model_key',
+  'image_model_snapshot',
+  'visual_profile',
 ] as const;
 
 const ADDITIVE_STORYLINE_COLUMNS = [
@@ -507,6 +514,9 @@ function nodeToBeatRow(
     canonical_option_id: normalizedBeat.canonicalOptionId || null,
     image_status: normalizedBeat.imageStatus,
     image_error: normalizedBeat.imageError || null,
+    image_provider_key: normalizedBeat.imageProviderKey || null,
+    image_model_key: normalizedBeat.imageModelKey || null,
+    image_generation_metadata: normalizedBeat.imageGenerationMetadata || null,
     image_synced_at: normalizedBeat.imageStatus === 'ready'
       ? (normalizedImageUrl === existingImageUrl && existingBeat?.imageSyncedAt
           ? existingBeat.imageSyncedAt
@@ -610,6 +620,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
+    imageProviderKey: beat.image_provider_key || undefined,
+    imageModelKey: beat.image_model_key || undefined,
+    imageGenerationMetadata: beat.image_generation_metadata || undefined,
     imageGallery: Array.isArray(beat.image_gallery)
       ? beat.image_gallery.map((entry) => ({
           url: entry.url,
@@ -784,6 +797,15 @@ export async function saveStory(
 
   const cleanMap = stripBase64(storyMapWithUrls, fallbackStoryMap);
   const storyOrientation = getStoryOrientation(session.storyConfig);
+  const firstImageBeat = Object.values(cleanMap.nodes)
+    .map((node) => node.data)
+    .find((beat) => beat.imageModelKey || beat.imageGenerationMetadata?.imageModelSnapshot);
+  const imageModelSnapshot = (
+    firstImageBeat?.imageGenerationMetadata?.imageModelSnapshot
+    && typeof firstImageBeat.imageGenerationMetadata.imageModelSnapshot === 'object'
+  )
+    ? firstImageBeat.imageGenerationMetadata.imageModelSnapshot as Record<string, unknown>
+    : null;
 
   const reelPersistencePatch = await buildReelStoryPersistencePatch(session.storyConfig, !session.savedStoryId);
 
@@ -796,6 +818,14 @@ export async function saveStory(
     visual_style: session.visualStyle,
     target_age: session.targetAge,
     story_config: session.storyConfig as unknown as Record<string, unknown>,
+    image_provider_key: firstImageBeat?.imageProviderKey || (imageModelSnapshot?.providerKey as string | undefined) || null,
+    image_model_key: firstImageBeat?.imageModelKey || session.storyConfig.imageModelSelection?.modelKey || null,
+    image_model_snapshot: imageModelSnapshot,
+    visual_profile: {
+      visualSettings: session.storyConfig.visualSettings,
+      aspectRatio: session.storyConfig.aspectRatio,
+      storyKind: session.storyConfig.storyKind,
+    },
     ...reelPersistencePatch,
     is_vertical_story: storyOrientation.isVerticalStory,
     aspect_ratio: storyOrientation.aspectRatio,

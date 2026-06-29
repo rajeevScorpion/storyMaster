@@ -2,7 +2,8 @@
 
 import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
-import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import { callGeminiText, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import { generateSelectedImage } from '@/app/actions/image-generation';
 import {
   buildPromptCharacterAnchors,
   buildValidationRepairNote,
@@ -40,6 +41,7 @@ import {
   DEFAULT_TEXT_MODEL_ID,
   type TaskKey,
 } from '@/lib/ai/model-config.shared';
+import type { ImageModelSelection, ImageModelSnapshot } from '@/lib/ai/image-models.shared';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   findReelDefiner,
@@ -800,11 +802,15 @@ export interface ReferenceImage {
 export interface GeneratedImageResult {
   imageUrl: string;
   finalPromptText: string;
+  imageModelSnapshot?: ImageModelSnapshot;
+  imageGenerationMetadata?: Record<string, unknown>;
 }
 
 export interface GeneratedPortraitResult {
   imageUrl: string;
   finalPromptText: string;
+  imageModelSnapshot?: ImageModelSnapshot;
+  imageGenerationMetadata?: Record<string, unknown>;
 }
 
 function buildFallbackStoryboardPlan(
@@ -1243,7 +1249,8 @@ export async function generateImage(
   costTelemetry?: CostTelemetryContext,
   aspectRatio: StoryAspectRatio = '16:9',
   imageTask: Extract<TaskKey, 'image_generation' | 'reel_image_generation'> = 'image_generation',
-  imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {}
+  imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {},
+  imageModelSelection?: ImageModelSelection | null
 ): Promise<GeneratedImageResult> {
   const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
   const finalImagePrompt = buildFinalStoryboardImagePrompt(
@@ -1266,6 +1273,10 @@ export async function generateImage(
     return {
       imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/${fallbackSize.width}/${fallbackSize.height}?blur=4`,
       finalPromptText: finalImagePrompt,
+      imageGenerationMetadata: {
+        placeholder: true,
+        reason: 'mock_prompt',
+      },
     };
   }
 
@@ -1282,26 +1293,30 @@ export async function generateImage(
         const imageModel = imageTask === 'reel_image_generation'
           ? modelOverrides?.reelImageModel || modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID
           : modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID;
+        const selection = imageModelSelection ?? {
+          taskKey: imageTask,
+          modelKey: imageModel,
+        };
         const referenceParts = await resolveReferenceImageParts(referenceImages);
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
 
         const result = await timeRuntimeStep(
-          'story_runtime.generate_image.gemini',
+          'story_runtime.generate_image.provider',
           {
             beatNumber: beatNumber ?? null,
             referencePartCount: referenceParts.length,
             hasRetryFallback: false,
             aspectRatio: resolvedAspectRatio,
           },
-          () => callGeminiImage({
+          () => generateSelectedImage({
             task: imageTask,
-            model: imageModel,
             prompt: finalImagePrompt,
             referenceParts,
             aspectRatio: resolvedAspectRatio,
             imageSize,
             telemetry: costTelemetry,
+            selection,
           })
         );
 
@@ -1319,6 +1334,14 @@ export async function generateImage(
           return {
             imageUrl,
             finalPromptText: finalImagePrompt,
+            imageModelSnapshot: result.modelSnapshot,
+            imageGenerationMetadata: {
+              ...result.metadata,
+              imageModelSnapshot: result.modelSnapshot,
+              referenceCount: referenceParts.length,
+              aspectRatio: resolvedAspectRatio,
+              imageSize,
+            },
           };
         }
 
@@ -1329,23 +1352,23 @@ export async function generateImage(
             getStoryboardLayoutHardRequirements(resolvedAspectRatio),
           ].join('\n\n');
           const retryResult = await timeRuntimeStep(
-            'story_runtime.generate_image.gemini_retry',
-            {
-              beatNumber: beatNumber ?? null,
-              referencePartCount: referenceParts.length,
-              hasRetryFallback: true,
-              aspectRatio: resolvedAspectRatio,
-            },
-            () => callGeminiImage({
-              task: imageTask,
-              model: imageModel,
-              prompt: retryPrompt,
-              referenceParts,
-              aspectRatio: resolvedAspectRatio,
-              imageSize,
-              telemetry: costTelemetry,
-            })
-          );
+              'story_runtime.generate_image.provider_retry',
+              {
+                beatNumber: beatNumber ?? null,
+                referencePartCount: referenceParts.length,
+                hasRetryFallback: true,
+                aspectRatio: resolvedAspectRatio,
+              },
+              () => generateSelectedImage({
+                task: imageTask,
+                prompt: retryPrompt,
+                referenceParts,
+                aspectRatio: resolvedAspectRatio,
+                imageSize,
+                telemetry: costTelemetry,
+                selection,
+              })
+            );
           if (retryResult.dataUrl) {
             const imageUrl = await maybeProcessStoryboardImage(
               retryResult.dataUrl,
@@ -1361,6 +1384,15 @@ export async function generateImage(
             return {
               imageUrl,
               finalPromptText: retryPrompt,
+              imageModelSnapshot: retryResult.modelSnapshot,
+              imageGenerationMetadata: {
+                ...retryResult.metadata,
+                imageModelSnapshot: retryResult.modelSnapshot,
+                referenceCount: referenceParts.length,
+                aspectRatio: resolvedAspectRatio,
+                imageSize,
+                retry: true,
+              },
             };
           }
         }
@@ -1373,6 +1405,10 @@ export async function generateImage(
     return {
       imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/${fallbackSize.width}/${fallbackSize.height}?blur=4`,
       finalPromptText: finalImagePrompt,
+      imageGenerationMetadata: {
+        placeholder: true,
+        reason: error instanceof Error ? error.message : 'image_generation_failed',
+      },
     };
   }
 }
@@ -1407,7 +1443,8 @@ export async function generateCharacterPortrait(
   portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides,
   promptOverride?: string,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  imageModelSelection?: ImageModelSelection | null
 ): Promise<GeneratedPortraitResult> {
   try {
     return await timeRuntimeStep(
@@ -1429,13 +1466,16 @@ export async function generateCharacterPortrait(
         );
 
         const portraitModel = modelOverrides?.portraitModel || DEFAULT_IMAGE_MODEL_ID;
-        const result = await callGeminiImage({
+        const result = await generateSelectedImage({
           task: 'portrait_generation',
-          model: portraitModel,
           prompt,
           aspectRatio: '1:1',
           imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
           telemetry: costTelemetry,
+          selection: imageModelSelection ?? {
+            taskKey: 'portrait_generation',
+            modelKey: portraitModel,
+          },
         });
 
         if (result.dataUrl) {
@@ -1449,6 +1489,13 @@ export async function generateCharacterPortrait(
           return {
             imageUrl,
             finalPromptText: prompt,
+            imageModelSnapshot: result.modelSnapshot,
+            imageGenerationMetadata: {
+              ...result.metadata,
+              imageModelSnapshot: result.modelSnapshot,
+              aspectRatio: '1:1',
+              imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
+            },
           };
         }
 

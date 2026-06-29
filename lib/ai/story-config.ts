@@ -1,4 +1,8 @@
 import type {
+  ImageModelSelection,
+  ImageTaskKey,
+} from '@/lib/ai/image-models.shared';
+import type {
   PortraitReferenceConfig,
   PortraitReferenceQuality,
   PortraitReferenceMode,
@@ -211,6 +215,8 @@ type RawStoryConfig = Partial<StoryConfig> & {
   is_vertical_story?: boolean | null;
   aspect_ratio?: string | null;
   visualSettings?: Partial<VisualSettings> | null;
+  imageModelSelection?: Partial<ImageModelSelection> | null;
+  image_model_selection?: Partial<ImageModelSelection> | null;
   authoring?: (Partial<StoryAuthoringConfig> & {
     mode?: string | null;
     preludeText?: string | null;
@@ -253,6 +259,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
   const narrationVoice = normalizeNarrationVoiceSelection(input?.narrationVoice);
+  const imageModelSelection = normalizeImageModelSelection(input?.imageModelSelection ?? input?.image_model_selection);
   const isVerticalStory = storyKind === 'reel' ? true : normalizeVerticalStoryFlag(input);
   const aspectRatio = isVerticalStory ? '9:16' : '16:9';
   const maxBeats = storyKind === 'reel'
@@ -266,6 +273,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats,
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
+    ...(imageModelSelection ? { imageModelSelection } : {}),
     isVerticalStory,
     aspectRatio,
     visualSettings,
@@ -276,6 +284,27 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     portraitReferences,
     ...(narrationVoice ? { narrationVoice } : {}),
   };
+}
+
+function normalizeImageModelSelection(input?: Partial<ImageModelSelection> | null): ImageModelSelection | undefined {
+  const modelKey = sanitizeText(input?.modelKey);
+  if (!modelKey) {
+    return undefined;
+  }
+
+  const taskKey = normalizeImageTaskKey(input?.taskKey);
+  return {
+    ...(taskKey ? { taskKey } : {}),
+    modelKey,
+  };
+}
+
+function normalizeImageTaskKey(value?: string | null): ImageTaskKey | undefined {
+  if (value === 'image_generation' || value === 'reel_image_generation' || value === 'portrait_generation') {
+    return value;
+  }
+
+  return undefined;
 }
 
 function normalizeStoryTextOverlayConfig(
