@@ -572,7 +572,10 @@ function clampMaxBeats(value?: number | null): number {
 }
 
 function normalizeImageGenerationMode(value?: string | null): StoryConfig['imageGenerationMode'] {
-  return value === 'prompt_only' ? 'prompt_only' : DEFAULT_STORY_CONFIG.imageGenerationMode;
+  if (value === 'generate' || value === 'prompt_only') {
+    return value;
+  }
+  return DEFAULT_STORY_CONFIG.imageGenerationMode;
 }
 
 function normalizeVerticalStoryFlag(input?: RawStoryConfig | null): boolean {
