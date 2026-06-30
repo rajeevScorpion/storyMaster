@@ -35,6 +35,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const [volume, setVolumeState] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const currentTimeMsRef = useRef(0);
   const prevNodeIdRef = useRef<string | undefined>(nodeId);
   const playbackStateRef = useRef(playbackState);
   const volumeRef = useRef(volume);
@@ -45,6 +46,15 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const progressIntervalMsRef = useRef(options.progressIntervalMs ?? 5000);
   const lastProgressSavedAtRef = useRef(0);
   const lastAudioSwapRef = useRef<{ timeMs: number; resume: boolean } | null>(null);
+
+  const updateCurrentTimeMs = useCallback((nextTimeMs: number, options: { force?: boolean } = {}) => {
+    const normalizedTimeMs = Number.isFinite(nextTimeMs) ? Math.max(0, nextTimeMs) : 0;
+    if (!options.force && Math.abs(normalizedTimeMs - currentTimeMsRef.current) < 50) {
+      return;
+    }
+    currentTimeMsRef.current = normalizedTimeMs;
+    setCurrentTimeMs(normalizedTimeMs);
+  }, []);
 
   // Keep volumeRef and isMutedRef in sync
   useEffect(() => {
@@ -74,9 +84,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       const durationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
       const nextTimeMs = Math.max(0, Math.min(initialTimeMsRef.current, durationMs || initialTimeMsRef.current));
       audio.currentTime = nextTimeMs / 1000;
-      setCurrentTimeMs(nextTimeMs);
+      updateCurrentTimeMs(nextTimeMs, { force: true });
     }
-  }, [options.initialTimeMs]);
+  }, [options.initialTimeMs, updateCurrentTimeMs]);
 
   useEffect(() => {
     progressIntervalMsRef.current = options.progressIntervalMs ?? 5000;
@@ -109,12 +119,12 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       }
       // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting playback UI when the upstream node (external system) changes
       setPlaybackState('idle');
-      setCurrentTimeMs(0);
+      updateCurrentTimeMs(0, { force: true });
       setDurationMs(0);
       lastProgressSavedAtRef.current = 0;
       prevNodeIdRef.current = nodeId;
     }
-  }, [nodeId]);
+  }, [nodeId, updateCurrentTimeMs]);
 
   // Create/update Audio element when audioUrl changes
   useEffect(() => {
@@ -123,7 +133,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       audioRef.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting playback UI when the audio URL (external resource) is cleared
       setPlaybackState('idle');
-      setCurrentTimeMs(0);
+      updateCurrentTimeMs(0, { force: true });
       setDurationMs(0);
       return;
     }
@@ -147,7 +157,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       const initialTimeMs = Math.max(0, Math.min(initialPlaybackTimeMs, durationMs || initialPlaybackTimeMs));
       if (initialTimeMs > 0) {
         audio.currentTime = initialTimeMs / 1000;
-        setCurrentTimeMs(initialTimeMs);
+        updateCurrentTimeMs(initialTimeMs, { force: true });
         lastProgressSavedAtRef.current = initialTimeMs;
       }
     };
@@ -166,7 +176,7 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     };
     const syncTime = () => {
       const nextTimeMs = audio.currentTime * 1000;
-      setCurrentTimeMs(nextTimeMs);
+      updateCurrentTimeMs(nextTimeMs);
       if (Math.abs(nextTimeMs - lastProgressSavedAtRef.current) >= progressIntervalMsRef.current) {
         lastProgressSavedAtRef.current = nextTimeMs;
         onProgressRef.current?.(nextTimeMs);
@@ -200,18 +210,22 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       audio.removeEventListener('canplay', handleReadyToPlay);
       audio.removeEventListener('timeupdate', syncTime);
     };
-  }, [audioUrl, handleEnded]);
+  }, [audioUrl, handleEnded, updateCurrentTimeMs]);
 
   useEffect(() => {
     if (playbackState !== 'playing') return;
     let frameId = 0;
     const syncFrame = () => {
-      if (audioRef.current) setCurrentTimeMs(audioRef.current.currentTime * 1000);
+      const audio = audioRef.current;
+      if (!audio || audio.paused || audio.ended || playbackStateRef.current !== 'playing') {
+        return;
+      }
+      updateCurrentTimeMs(audio.currentTime * 1000);
       frameId = window.requestAnimationFrame(syncFrame);
     };
     frameId = window.requestAnimationFrame(syncFrame);
     return () => window.cancelAnimationFrame(frameId);
-  }, [playbackState]);
+  }, [playbackState, updateCurrentTimeMs]);
 
   // Sync volume to audio element
   useEffect(() => {
@@ -268,9 +282,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     audio.pause();
     onProgressRef.current?.(audio.currentTime * 1000);
     audio.currentTime = 0;
-    setCurrentTimeMs(0);
+    updateCurrentTimeMs(0, { force: true });
     setPlaybackState('idle');
-  }, []);
+  }, [updateCurrentTimeMs]);
 
   const seekTo = useCallback((timeMs: number) => {
     const audio = audioRef.current;
@@ -278,8 +292,8 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     const durationMs = Number.isFinite(audio.duration) ? audio.duration * 1000 : 0;
     const nextTimeMs = Math.max(0, Math.min(timeMs, durationMs || timeMs));
     audio.currentTime = nextTimeMs / 1000;
-    setCurrentTimeMs(nextTimeMs);
-  }, []);
+    updateCurrentTimeMs(nextTimeMs, { force: true });
+  }, [updateCurrentTimeMs]);
 
   return { playbackState, togglePlayPause, play, pause, stop, seekTo, currentTimeMs, durationMs, volume, setVolume, isMuted, toggleMute };
 }

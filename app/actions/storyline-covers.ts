@@ -4,8 +4,18 @@ import { randomUUID } from 'crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { callGeminiImage } from '@/app/actions/gemini-proxy';
+import { generateSelectedImage } from '@/app/actions/image-generation';
+import type { CostActivityKey, CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import {
+  extractImageContinuityState,
+  normalizeImageContinuityStrategy,
+  type ImageContinuityProviderState,
+  type ImageContinuityStrategy,
+} from '@/lib/ai/image-continuity.shared';
+import type { ImageModelSelection, ImageTaskKey } from '@/lib/ai/image-models.shared';
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { DEFAULT_IMAGE_MODEL_ID } from '@/lib/ai/model-config.shared';
+import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -80,6 +90,16 @@ type DiagnosticImageProbe = {
 type FallbackBeatImage = {
   url: string;
   isStoryboard: boolean;
+};
+
+type CoverGenerationContinuityInput = {
+  requestedStrategy?: ImageContinuityStrategy | null;
+  previousState?: ImageContinuityProviderState | null;
+} | null;
+
+type CoverGenerationContext = {
+  imageModelSelection?: ImageModelSelection | null;
+  imageContinuity?: CoverGenerationContinuityInput;
 };
 
 export type PublishedStorylineCoverEditorState = {
@@ -752,10 +772,200 @@ function coverGenerationActionKey(kind: 'social' | 'youtube' | 'reel' | 'audio')
   return 'generate_social_share_cover';
 }
 
+function coverGenerationActivityKey(
+  kind: 'social' | 'youtube' | 'reel' | 'audio'
+): Extract<CostActivityKey, 'generate_social_share_cover' | 'generate_audio_story_cover' | 'generate_reel_thumbnail'> {
+  if (kind === 'audio') return 'generate_audio_story_cover';
+  if (kind === 'reel') return 'generate_reel_thumbnail';
+  return 'generate_social_share_cover';
+}
+
 function coverGenerationFlagKey(kind: 'social' | 'youtube' | 'reel' | 'audio'): string {
   if (kind === 'audio') return 'audio_story_cover_generation_enabled';
   if (kind === 'reel') return 'vertical_reel_thumbnail_generation_enabled';
   return 'visual_story_cover_generation_enabled';
+}
+
+function coverImageTaskKey(kind: 'social' | 'youtube' | 'reel' | 'audio'): Extract<ImageTaskKey, 'image_generation' | 'reel_image_generation'> {
+  return kind === 'reel' ? 'reel_image_generation' : 'image_generation';
+}
+
+function normalizeCoverImageSelection(
+  selection: ImageModelSelection | null | undefined,
+  taskKey: Extract<ImageTaskKey, 'image_generation' | 'reel_image_generation'>
+): ImageModelSelection | null {
+  return selection?.modelKey
+    ? {
+        modelKey: selection.modelKey,
+        taskKey,
+      }
+    : null;
+}
+
+function extractLatestContinuityStateFromBeats(beats: StoryBeat[] | null | undefined): ImageContinuityProviderState | null {
+  if (!Array.isArray(beats)) return null;
+  for (let index = beats.length - 1; index >= 0; index -= 1) {
+    const state = extractImageContinuityState(beats[index]?.imageGenerationMetadata);
+    if (state) return state;
+  }
+  return null;
+}
+
+function extractContinuityStateFromVisualProfile(visualProfile: Record<string, unknown> | null | undefined): ImageContinuityProviderState | null {
+  const imageContinuity = visualProfile?.imageContinuity;
+  if (!imageContinuity || typeof imageContinuity !== 'object') return null;
+  const latestState = (imageContinuity as Record<string, unknown>).latestState;
+  return extractImageContinuityState({ statefulContinuity: latestState });
+}
+
+async function resolveStoredCoverGenerationContext(input: {
+  userId: string;
+  storyId?: string | null;
+  storylineId?: string | null;
+}): Promise<CoverGenerationContext> {
+  const admin = createAdminClient();
+  let storyId = cleanString(input.storyId);
+  let storylineBeats: StoryBeat[] | null = null;
+
+  if (input.storylineId) {
+    const { data: storylineData, error: storylineError } = await admin
+      .from('storylines')
+      .select('story_id, user_id, beats')
+      .eq('id', input.storylineId)
+      .maybeSingle();
+
+    if (storylineError) {
+      throw new Error(`Failed to load storyline continuity context: ${storylineError.message}`);
+    }
+
+    const storyline = storylineData as { story_id?: string | null; user_id?: string | null; beats?: StoryBeat[] | null } | null;
+    if (storyline) {
+      if (storyline.user_id && storyline.user_id !== input.userId) {
+        throw new Error('You do not have permission to generate a cover for this storyline.');
+      }
+      storyId = storyId ?? cleanString(storyline.story_id);
+      storylineBeats = Array.isArray(storyline.beats) ? storyline.beats : null;
+    }
+  }
+
+  if (!storyId) {
+    return {};
+  }
+
+  const { data: storyData, error: storyError } = await admin
+    .from('stories')
+    .select('story_config, image_model_key, visual_profile')
+    .eq('id', storyId)
+    .eq('user_id', input.userId)
+    .maybeSingle();
+
+  if (storyError) {
+    throw new Error(`Failed to load story continuity context: ${storyError.message}`);
+  }
+
+  const story = storyData as {
+    story_config?: Record<string, unknown> | null;
+    image_model_key?: string | null;
+    visual_profile?: Record<string, unknown> | null;
+  } | null;
+  if (!story) {
+    return {};
+  }
+
+  const storyConfig = normalizeStoryConfig(story.story_config);
+  const fallbackSelection = cleanString(story.image_model_key)
+    ? { modelKey: cleanString(story.image_model_key) as string }
+    : null;
+  const previousState =
+    extractLatestContinuityStateFromBeats(storylineBeats)
+    ?? extractContinuityStateFromVisualProfile(story.visual_profile);
+
+  return {
+    imageModelSelection: storyConfig.imageModelSelection ?? fallbackSelection,
+    imageContinuity: {
+      requestedStrategy: storyConfig.imageContinuityStrategy,
+      previousState,
+    },
+  };
+}
+
+async function generateCoverImageWithStoryContext(input: {
+  prompt: string;
+  kind: 'social' | 'youtube' | 'reel' | 'audio';
+  storyId?: string | null;
+  storylineId?: string | null;
+  imageModelSelection?: ImageModelSelection | null;
+  imageContinuity?: CoverGenerationContinuityInput;
+  userId: string;
+}): Promise<string> {
+  const task = coverImageTaskKey(input.kind);
+  const aspectRatio = input.kind === 'reel' ? '9:16' : '16:9';
+  const storedContext = await resolveStoredCoverGenerationContext({
+    userId: input.userId,
+    storyId: input.storyId,
+    storylineId: input.storylineId,
+  });
+  const selectedModel = normalizeCoverImageSelection(
+    input.imageModelSelection ?? storedContext.imageModelSelection,
+    task
+  );
+  const requestedStrategy = normalizeImageContinuityStrategy(
+    input.imageContinuity?.requestedStrategy
+      ?? storedContext.imageContinuity?.requestedStrategy
+      ?? null
+  );
+  const previousState =
+    input.imageContinuity?.previousState
+    ?? storedContext.imageContinuity?.previousState
+    ?? null;
+  const telemetry: CostTelemetryContext = {
+    activityKey: coverGenerationActivityKey(input.kind),
+    storyId: input.storyId ?? null,
+    storylineId: input.storylineId ?? null,
+    phase: 'cover_generation',
+    metadata: {
+      coverKind: input.kind,
+      continuityStrategy: previousState ? requestedStrategy : null,
+    },
+  };
+
+  if (selectedModel || previousState) {
+    const routedResult = await generateSelectedImage({
+      task,
+      prompt: input.prompt,
+      aspectRatio,
+      imageSize: '1K',
+      selection: selectedModel,
+      continuity: previousState
+        ? {
+            requestedStrategy,
+            previousState,
+            allowRuntimeFallback: true,
+          }
+        : null,
+      telemetry,
+    });
+
+    if (routedResult.dataUrl) {
+      return routedResult.dataUrl;
+    }
+
+    throw new Error(routedResult.fallbackText || 'The image model did not return a cover image.');
+  }
+
+  const model = await getFeatureFlagValue('cover_generation_model') || DEFAULT_IMAGE_MODEL_ID;
+  const result = await callGeminiImage({
+    task: 'image_generation',
+    model,
+    prompt: input.prompt,
+    aspectRatio,
+    imageSize: '1K',
+  });
+  if (!result.dataUrl) {
+    throw new Error(result.fallbackText || 'The image model did not return a cover image.');
+  }
+
+  return result.dataUrl;
 }
 
 function authorizationErrorMessage(reason?: string | null): string {
@@ -770,6 +980,8 @@ export async function generateDraftStoryCoverImage(input: {
   storylineId?: string | null;
   prompt: string;
   kind: 'social' | 'youtube' | 'reel' | 'audio';
+  imageModelSelection?: ImageModelSelection | null;
+  imageContinuity?: CoverGenerationContinuityInput;
 }): Promise<{ dataUrl: string; coinCost: number; beatCost: number }> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error('Cover prompt is required.');
@@ -800,20 +1012,16 @@ export async function generateDraftStoryCoverImage(input: {
     throw new Error(authorizationErrorMessage(authorization.reason));
   }
 
-  const model = await getFeatureFlagValue('cover_generation_model') || DEFAULT_IMAGE_MODEL_ID;
-  const aspectRatio = input.kind === 'reel' ? '9:16' : '16:9';
-
   try {
-    const result = await callGeminiImage({
-      task: 'image_generation',
-      model,
+    const dataUrl = await generateCoverImageWithStoryContext({
       prompt,
-      aspectRatio,
-      imageSize: '1K',
+      kind: input.kind,
+      storyId: input.storyId ?? null,
+      storylineId: input.storylineId ?? null,
+      imageModelSelection: input.imageModelSelection ?? null,
+      imageContinuity: input.imageContinuity ?? null,
+      userId: user.id,
     });
-    if (!result.dataUrl) {
-      throw new Error(result.fallbackText || 'The image model did not return a cover image.');
-    }
 
     if (authorization.status === 'allowed' && authorization.mode === 'hard' && authorization.reservationId) {
       await finalizeBillableAction({
@@ -829,7 +1037,7 @@ export async function generateDraftStoryCoverImage(input: {
     }
 
     return {
-      dataUrl: result.dataUrl,
+      dataUrl,
       coinCost: authorization.coinCost,
       beatCost: authorization.beatCost,
     };

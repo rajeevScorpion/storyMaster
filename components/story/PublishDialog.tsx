@@ -10,6 +10,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { uploadNodeAssets, uploadCoverImage, extractStoragePath, stripBase64FromStoryMap } from '@/lib/supabase/storage';
 import { publishStoryline, saveStory, copyCoverToPublicBucket } from '@/app/actions/persistence';
+import { extractImageContinuityState } from '@/lib/ai/image-continuity.shared';
 import {
   buildStoryCoverPromptInputFromSession,
   generateStoryCoverPrompt,
@@ -99,6 +100,13 @@ export default function PublishDialog({
   const socialCoverPrompt = generateStoryCoverPrompt(promptInput, { variant: publishMode === 'audio_story' ? 'audio' : 'social' });
   const youtubeThumbnailPrompt = generateStoryCoverPrompt(promptInput, { variant: 'youtube' });
   const reelThumbnailPrompt = generateStoryCoverPrompt(promptInput, { variant: 'reel' });
+  const latestImageContinuityState = (() => {
+    for (let index = storylineData.path.length - 1; index >= 0; index -= 1) {
+      const state = extractImageContinuityState(storylineData.path[index]?.data.imageGenerationMetadata);
+      if (state) return state;
+    }
+    return null;
+  })();
 
   const handleDialogClose = () => {
     setStatus('idle');
@@ -244,6 +252,11 @@ export default function PublishDialog({
                   : isPromptOnlyStory
                     ? 'If you publish without uploading or generating a cover, Kissago will use a branded default cover.'
                     : 'If you skip this, Kissago will process the best available beat image into a dedicated share cover.'}
+                imageModelSelection={session.storyConfig.imageModelSelection ?? null}
+                imageContinuity={{
+                  requestedStrategy: session.storyConfig.imageContinuityStrategy,
+                  previousState: latestImageContinuityState,
+                }}
                 onCancel={handleDialogClose}
                 onSubmit={(submission) => void handlePublish(submission)}
               />

@@ -81,6 +81,7 @@ import { dispatchPricingRuntimeRefresh } from '@/lib/pricing/runtime-events';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import {
   extractImageContinuityState,
+  type ImageContinuityStrategy,
   type ImageContinuityProviderState,
 } from '@/lib/ai/image-continuity.shared';
 import {
@@ -376,7 +377,16 @@ function buildReferenceFromValue(
 
 function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
   return characters
-    .map((character) => buildReferenceFromValue('character', character.portraitBase64 || character.portraitUrl))
+    .map((character) => {
+      const fallbackSheet = pickFallbackGalleryEntry(character.referenceSheetGallery ?? []);
+      return buildReferenceFromValue(
+        'character',
+        character.portraitBase64
+          || character.portraitUrl
+          || character.referenceSheetUrl
+          || fallbackSheet?.url
+      );
+    })
     .filter((reference): reference is ReferenceImage => Boolean(reference));
 }
 
@@ -400,6 +410,10 @@ function mergeCharacterVisualReferences(
       ...character,
       portraitBase64: character.portraitBase64 || reference.portraitBase64,
       portraitUrl: character.portraitUrl || reference.portraitUrl,
+      referenceSheetUrl: character.referenceSheetUrl || reference.referenceSheetUrl,
+      referenceSheetStorageKey: character.referenceSheetStorageKey || reference.referenceSheetStorageKey,
+      referenceSheetUploadedAt: character.referenceSheetUploadedAt || reference.referenceSheetUploadedAt,
+      referenceSheetGallery: character.referenceSheetGallery ?? reference.referenceSheetGallery,
     };
   });
 
@@ -451,10 +465,11 @@ function mergeReferenceImages(...groups: ReferenceImage[][]): ReferenceImage[] {
 
 function imageContinuityOptions(
   storyConfig: StoryConfig,
-  previousState?: ImageContinuityProviderState | null
+  previousState?: ImageContinuityProviderState | null,
+  strategyOverride?: ImageContinuityStrategy
 ) {
   return {
-    requestedStrategy: storyConfig.imageContinuityStrategy,
+    requestedStrategy: strategyOverride ?? storyConfig.imageContinuityStrategy,
     previousState: previousState ?? null,
     allowRuntimeFallback: true,
   };
@@ -938,6 +953,42 @@ async function stagePendingBeatImagesForSession(
   }
 
   return stagedNodeIds;
+}
+
+type RecoverableGeneratedImageResult = {
+  imageUrl?: string;
+  imageGenerationMetadata?: Record<string, unknown>;
+};
+
+async function stageGeneratedBeatImageForLocalRecovery(input: {
+  storyId?: string | null;
+  userId?: string | null;
+  nodeId: string;
+  imageResult: RecoverableGeneratedImageResult;
+}): Promise<boolean> {
+  const imageUrl = input.imageResult.imageUrl;
+  if (
+    !input.storyId
+    || !input.userId
+    || !imageUrl
+    || !isDataUrl(imageUrl)
+    || input.imageResult.imageGenerationMetadata?.placeholder
+  ) {
+    return false;
+  }
+
+  try {
+    await putPendingBeatImage({
+      storyId: input.storyId,
+      userId: input.userId,
+      nodeId: input.nodeId,
+      imageDataUrl: imageUrl,
+    });
+    return true;
+  } catch (error) {
+    console.error('Failed to stage generated beat image for local recovery:', error);
+    return false;
+  }
 }
 
 async function overlayPendingBeatImages(
@@ -2361,6 +2412,18 @@ export const useStoryStore = create<StoryState>()(
             }).catch((error) => console.error('Failed to link opening beat cost events:', error));
           }
 
+          if (earlySavedStoryId && imageResult.imageUrl) {
+            const stagedForRecovery = await stageGeneratedBeatImageForLocalRecovery({
+              storyId: earlySavedStoryId,
+              userId: earlySavedByUserId,
+              nodeId: rootNodeId,
+              imageResult,
+            });
+            if (stagedForRecovery) {
+              void retryPendingBeatAssetSyncInternal(earlySavedStoryId);
+            }
+          }
+
           if (reservationId) {
             setLoadingStage(set, 'start_story', 'finish');
             await measureAsyncStep(
@@ -2470,18 +2533,6 @@ export const useStoryStore = create<StoryState>()(
             };
             saveBeatAction(earlySavedStoryId, rootNodeId, cleanRootNode)
               .catch((err) => console.error('Opening beat save failed:', err));
-          }
-          if (earlySavedStoryId && earlySavedByUserId && imageResult.imageUrl) {
-            const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
-            if (runtimeSettings.storyIncrementalAssetSyncEnabled) {
-              await putPendingBeatImage({
-                storyId: earlySavedStoryId,
-                userId: earlySavedByUserId,
-                nodeId: rootNodeId,
-                imageDataUrl: imageResult.imageUrl,
-              });
-              void retryPendingBeatAssetSyncInternal(earlySavedStoryId);
-            }
           }
           dispatchPricingRuntimeRefresh();
           logGenerationTiming({
@@ -2764,6 +2815,26 @@ export const useStoryStore = create<StoryState>()(
             savedStoryId = result.storyId;
           } catch (err) {
             console.error('Reel early save failed:', err);
+          }
+
+          if (savedStoryId) {
+            const recoveryUserId = await resolveCurrentUserId(initialSession.savedByUserId);
+            let stagedAnyReelImage = false;
+            for (let i = 0; i < builtBeats.length; i += 1) {
+              const staged = await stageGeneratedBeatImageForLocalRecovery({
+                storyId: savedStoryId,
+                userId: recoveryUserId,
+                nodeId: beatNodeIds[i],
+                imageResult: {
+                  imageUrl: builtBeats[i]?.imageUrl,
+                  imageGenerationMetadata: builtBeats[i]?.imageGenerationMetadata,
+                },
+              });
+              stagedAnyReelImage = stagedAnyReelImage || staged;
+            }
+            if (stagedAnyReelImage) {
+              void retryPendingBeatAssetSyncInternal(savedStoryId);
+            }
           }
 
           if (reservationId) {
@@ -3371,6 +3442,19 @@ export const useStoryStore = create<StoryState>()(
           beat.imageUrl = promptOnly ? undefined : imageResult.imageUrl;
           beat = applyImageGenerationResultMetadata(beat, imageResult);
 
+          if (session.savedStoryId && imageResult.imageUrl) {
+            const recoveryUserId = await resolveCurrentUserId(session.savedByUserId);
+            const stagedForRecovery = await stageGeneratedBeatImageForLocalRecovery({
+              storyId: session.savedStoryId,
+              userId: recoveryUserId,
+              nodeId: newNodeId,
+              imageResult,
+            });
+            if (stagedForRecovery) {
+              void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+            }
+          }
+
           const updatedMap = addChildNode(
             session.storyMap,
             session.storyMap.currentNodeId,
@@ -3479,19 +3563,6 @@ export const useStoryStore = create<StoryState>()(
             errorAction: null,
             ...audioExtra,
           });
-          if (session.savedStoryId && imageResult.imageUrl) {
-            const uploadUserId = (await resolveCurrentUserId(session.savedByUserId)) ?? undefined;
-            const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
-            if (uploadUserId && runtimeSettings.storyIncrementalAssetSyncEnabled) {
-              await putPendingBeatImage({
-                storyId: session.savedStoryId,
-                userId: uploadUserId,
-                nodeId: newNodeId,
-                imageDataUrl: imageResult.imageUrl,
-              });
-              void retryPendingBeatAssetSyncInternal(session.savedStoryId);
-            }
-          }
           dispatchPricingRuntimeRefresh();
           logGenerationTiming({
             scope: 'continue_story',
@@ -4784,9 +4855,11 @@ export const useStoryStore = create<StoryState>()(
 
           const referenceImages = buildStoryboardReferenceImages(
             beatForRender,
-            parentNode?.data.imageUrl,
+            parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
             portraitReferences
           );
+          const regenerationContinuityStrategy =
+            regenerationContinuityState ? undefined : 'resend_refs';
           const storyboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
           const imageResult = promptOnly
             ? {
@@ -4818,11 +4891,28 @@ export const useStoryStore = create<StoryState>()(
                 getImageTaskKey(session.storyConfig),
                 getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
                 session.storyConfig.imageModelSelection,
-                imageContinuityOptions(session.storyConfig, regenerationContinuityState)
+                imageContinuityOptions(
+                  session.storyConfig,
+                  regenerationContinuityState,
+                  regenerationContinuityStrategy
+                )
               );
           beatForRender.finalImagePromptText = imageResult.finalPromptText;
           beatForRender = applyImageGenerationResultMetadata(beatForRender, imageResult);
           const generatedPlaceholder = Boolean(imageResult.imageGenerationMetadata?.placeholder);
+
+          if (!generatedPlaceholder && session.savedStoryId && imageResult.imageUrl) {
+            const recoveryUserId = await resolveCurrentUserId(session.savedByUserId);
+            const stagedForRecovery = await stageGeneratedBeatImageForLocalRecovery({
+              storyId: session.savedStoryId,
+              userId: recoveryUserId,
+              nodeId,
+              imageResult,
+            });
+            if (stagedForRecovery) {
+              void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+            }
+          }
 
           if (reservationId) {
             if (generatedPlaceholder) {
@@ -4882,16 +4972,6 @@ export const useStoryStore = create<StoryState>()(
           const { data: { user } } = await authClient.auth.getUser();
           const saveUserId = user?.id || updatedSession.savedByUserId;
           const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
-
-          if (saveUserId && updatedSession.savedStoryId && runtimeSettings.storyIncrementalAssetSyncEnabled && imageResult.imageUrl) {
-            await putPendingBeatImage({
-              storyId: updatedSession.savedStoryId,
-              userId: saveUserId,
-              nodeId,
-              imageDataUrl: imageResult.imageUrl,
-            });
-            void retryPendingBeatAssetSyncInternal(updatedSession.savedStoryId);
-          }
 
           if (saveUserId && !updatedSession.sourceStoryOwnerId) {
             await get().saveStoryToCloud(saveUserId, {
