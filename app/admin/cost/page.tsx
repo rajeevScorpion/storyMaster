@@ -49,6 +49,7 @@ function activityLabel(key: string) {
     generate_social_share_cover: 'Share cover',
     generate_audio_story_cover: 'Audio cover',
     generate_reel_thumbnail: 'Reel thumb',
+    generate_story_text_overlay: 'Text overlay',
   };
   return labels[key] || key.replaceAll('_', ' ');
 }
@@ -66,6 +67,7 @@ function taskLabel(key: string) {
     reel_story_generation: 'Reel story',
     tts: 'TTS',
     reel_tts: 'Reel TTS',
+    story_text_overlay_alignment: 'Overlay STT',
     voice_selection: 'Voice',
   };
   return labels[key] || key.replaceAll('_', ' ');
@@ -99,8 +101,19 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
           </p>
           <p className="mt-2 text-xs text-neutral-500">
             {item.inputTokens.toLocaleString()} in / {item.outputTokens.toLocaleString()} out
+            {item.cachedTokens > 0 ? ` / ${item.cachedTokens.toLocaleString()} cached` : ''}
             {item.imageCount > 0 ? ` / ${item.imageCount} image${item.imageCount === 1 ? '' : 's'}` : ''}
+            {item.audioSeconds > 0 ? ` / ${item.audioSeconds.toFixed(1)}s audio` : ''}
           </p>
+          {(item.runtimeCostUsd > 0 || item.imageCostUsd > 0 || item.strategies.length > 0 || item.fallbacks.length > 0) && (
+            <p className="mt-2 text-xs text-neutral-500">
+              {item.runtimeCostUsd > 0 ? `runtime ${formatUsd(item.runtimeCostUsd)}` : ''}
+              {item.runtimeCostUsd > 0 && item.imageCostUsd > 0 ? ' / ' : ''}
+              {item.imageCostUsd > 0 ? `image ${formatUsd(item.imageCostUsd)}` : ''}
+              {item.strategies.length > 0 ? ` / ${item.strategies.join(', ')}` : ''}
+              {item.fallbacks.length > 0 ? ` / fallback: ${item.fallbacks.join(', ')}` : ''}
+            </p>
+          )}
         </div>
       ))}
     </div>

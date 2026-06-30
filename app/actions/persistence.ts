@@ -17,6 +17,10 @@ import {
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import {
+  extractImageContinuityState,
+  summarizeImageContinuityState,
+} from '@/lib/ai/image-continuity.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import {
   getReelRetentionDaysForPlan,
@@ -72,6 +76,11 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
             }));
           return {
             ...c,
+            portraitUrl: c.portraitUrl?.startsWith('data:')
+              ? undefined
+              : c.portraitUrl
+                ? normalizeStorageUrl(c.portraitUrl, 'story-assets')
+                : undefined,
             portraitBase64: undefined,
             referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
               ? undefined
@@ -99,6 +108,11 @@ function sanitizeSessionCharacters(session: StorySession): StorySession['charact
       }));
     return {
       ...character,
+      portraitUrl: character.portraitUrl?.startsWith('data:')
+        ? undefined
+        : character.portraitUrl
+          ? normalizeStorageUrl(character.portraitUrl, 'story-assets')
+          : undefined,
       portraitBase64: undefined,
       referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
         ? undefined
@@ -177,6 +191,7 @@ function normalizePublishedBeatAssetUrls(beat: StoryBeat): StoryBeat {
     })),
     characters: beat.characters.map((character) => ({
       ...character,
+      portraitUrl: normalizePersistedAssetUrl(character.portraitUrl),
       referenceSheetUrl: normalizePersistedAssetUrl(character.referenceSheetUrl),
       referenceSheetGallery: character.referenceSheetGallery?.map((entry) => ({
         ...entry,
@@ -806,6 +821,10 @@ export async function saveStory(
   )
     ? firstImageBeat.imageGenerationMetadata.imageModelSnapshot as Record<string, unknown>
     : null;
+  const latestContinuityState = Object.values(cleanMap.nodes)
+    .map((node) => extractImageContinuityState(node.data.imageGenerationMetadata))
+    .filter((state): state is NonNullable<typeof state> => Boolean(state))
+    .at(-1) ?? null;
 
   const reelPersistencePatch = await buildReelStoryPersistencePatch(session.storyConfig, !session.savedStoryId);
 
@@ -825,6 +844,11 @@ export async function saveStory(
       visualSettings: session.storyConfig.visualSettings,
       aspectRatio: session.storyConfig.aspectRatio,
       storyKind: session.storyConfig.storyKind,
+      imageContinuity: {
+        requestedStrategy: session.storyConfig.imageContinuityStrategy,
+        latestState: summarizeImageContinuityState(latestContinuityState),
+        updatedAt: new Date().toISOString(),
+      },
     },
     ...reelPersistencePatch,
     is_vertical_story: storyOrientation.isVerticalStory,

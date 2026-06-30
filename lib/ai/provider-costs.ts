@@ -3,6 +3,7 @@ import 'server-only';
 import { getFeatureFlagValue, setFeatureFlagValue } from '@/lib/ai/model-config';
 import {
   DEFAULT_ELEVENLABS_COST_SETTINGS,
+  estimateElevenLabsForcedAlignmentCostUsd as estimateElevenLabsForcedAlignmentCostUsdShared,
   estimateElevenLabsCostUsd,
   normalizeElevenLabsCostSettings,
   serializeElevenLabsCostSettings,
@@ -40,4 +41,19 @@ export async function estimateElevenLabsModelCostUsd(input: {
     modelId: input.modelId,
     characterCount: input.characterCount,
   });
+}
+
+export async function estimateElevenLabsForcedAlignmentCostUsd(input: {
+  audioSeconds: number;
+}): Promise<number> {
+  const settings = await getElevenLabsCostSettings();
+  return estimateElevenLabsForcedAlignmentCostUsdShared({
+    settings,
+    audioSeconds: input.audioSeconds,
+  });
+}
+
+export async function getElevenLabsForcedAlignmentUsdPerHour(): Promise<number> {
+  const settings = await getElevenLabsCostSettings();
+  return settings.forcedAlignmentUsdPerHour;
 }

@@ -16,6 +16,7 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
@@ -253,6 +254,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
     DEFAULT_STORY_CONFIG.imageModelSelection
   );
+  const [imageContinuityStrategy, setImageContinuityStrategy] = useState<ImageContinuityStrategy>(
+    DEFAULT_STORY_CONFIG.imageContinuityStrategy
+  );
   const [imageModelPicker, setImageModelPicker] = useState<ImageModelPickerState | null>(null);
   const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(
     initialLandingData.narrationVoiceConfig
@@ -461,6 +465,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
             setImageModelSelection(config.imageModelSelection);
+            setImageContinuityStrategy(config.imageContinuityStrategy || DEFAULT_STORY_CONFIG.imageContinuityStrategy);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
             setUseCreatorOneKCharacterSheet(
               config.portraitReferences.mode === 'character_sheet' &&
@@ -534,6 +539,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         settingCountry: 'generic',
         maxBeats: reelBeatCount,
       imageGenerationMode,
+      imageContinuityStrategy,
       ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
         ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
         : {}),
@@ -585,6 +591,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
       imageGenerationMode,
+      imageContinuityStrategy,
       ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
         ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
         : {}),
@@ -1418,6 +1425,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 imageModelSelection={imageModelSelection}
                 onImageModelSelectionChange={(value) => {
                   setImageModelSelection(value);
+                  clearSeedPreview();
+                }}
+                imageContinuityStrategy={imageContinuityStrategy}
+                onImageContinuityStrategyChange={(value) => {
+                  setImageContinuityStrategy(value);
                   clearSeedPreview();
                 }}
                 verticalStoriesSettingEnabled={setupSettings.verticalStoriesSettingEnabled}

@@ -80,6 +80,10 @@ import {
 import { dispatchPricingRuntimeRefresh } from '@/lib/pricing/runtime-events';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import {
+  extractImageContinuityState,
+  type ImageContinuityProviderState,
+} from '@/lib/ai/image-continuity.shared';
+import {
   putPendingBeatImage,
   getPendingBeatImage,
   listPendingBeatImagesForStory,
@@ -425,6 +429,35 @@ function buildStoryboardReferenceImages(
     references.push(sceneReference);
   }
   return references;
+}
+
+function referenceKey(reference: ReferenceImage): string {
+  return `${reference.type}:${reference.url || reference.dataUrl || ''}`;
+}
+
+function mergeReferenceImages(...groups: ReferenceImage[][]): ReferenceImage[] {
+  const seen = new Set<string>();
+  const merged: ReferenceImage[] = [];
+  for (const group of groups) {
+    for (const reference of group) {
+      const key = referenceKey(reference);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(reference);
+    }
+  }
+  return merged;
+}
+
+function imageContinuityOptions(
+  storyConfig: StoryConfig,
+  previousState?: ImageContinuityProviderState | null
+) {
+  return {
+    requestedStrategy: storyConfig.imageContinuityStrategy,
+    previousState: previousState ?? null,
+    allowRuntimeFallback: true,
+  };
 }
 
 function nowMs(): number {
@@ -1175,70 +1208,91 @@ async function generatePortraitsForStoryboardPlan(
   portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides,
   costTelemetry?: CostTelemetryContext,
-  imageModelSelection?: StoryConfig['imageModelSelection']
-): Promise<ReferenceImage[]> {
+  imageModelSelection?: StoryConfig['imageModelSelection'],
+  continuity?: ReturnType<typeof imageContinuityOptions>
+): Promise<{ references: ReferenceImage[]; latestState: ImageContinuityProviderState | null }> {
   if (!storyboardPlan.portraitTasks.length) {
-    return [];
+    return {
+      references: [],
+      latestState: continuity?.previousState ?? null,
+    };
   }
 
   const orderedTasks = sortPortraitTasksForGeneration(beat.characters, storyboardPlan.portraitTasks);
   const prioritizedSheetTaskIds = resolvePrioritizedSheetTaskIds(orderedTasks, portraitReferenceConfig);
 
-  const portraits = await Promise.all(
-    orderedTasks.map(async (task) => {
-      const character = beat.characters.find((candidate) => candidate.id === task.characterId);
-      if (!character) {
-        return null;
-      }
+  const portraits: Array<{
+    reference: ReferenceImage;
+    metadata: Record<string, unknown>;
+    state: ImageContinuityProviderState | null;
+  }> = [];
+  let latestState = continuity?.previousState ?? null;
 
-      const taskPortraitReferenceConfig =
-        portraitReferenceConfig.mode === 'character_sheet' && prioritizedSheetTaskIds.has(task.characterId)
-          ? portraitReferenceConfig
-          : {
-              mode: 'single_portrait' as const,
-              quality: '0.5K' as const,
-            };
+  for (const task of orderedTasks) {
+    const character = beat.characters.find((candidate) => candidate.id === task.characterId);
+    if (!character) {
+      continue;
+    }
 
-      try {
-        const portraitResult = await generateCharacterPortrait(
-          character,
-          visualStyle,
-          taskPortraitReferenceConfig,
-          modelOverrides,
-          task.prompt,
-          costTelemetry,
-          imageModelSelection
-        );
-        character.portraitBase64 = portraitResult.imageUrl;
-        task.finalPromptText = portraitResult.finalPromptText;
-        return {
-          reference: { type: 'character' as const, dataUrl: portraitResult.imageUrl },
-          metadata: {
-            characterId: character.id,
-            characterName: character.name,
-            imageModelSnapshot: portraitResult.imageModelSnapshot,
-            imageGenerationMetadata: portraitResult.imageGenerationMetadata,
-          },
-        };
-      } catch (error) {
-        console.error(`Portrait generation failed for storyboard task ${task.characterId}:`, error);
-        return null;
-      }
-    })
-  );
+    const taskPortraitReferenceConfig =
+      portraitReferenceConfig.mode === 'character_sheet' && prioritizedSheetTaskIds.has(task.characterId)
+        ? portraitReferenceConfig
+        : {
+            mode: 'single_portrait' as const,
+            quality: '0.5K' as const,
+          };
 
-  const generatedPortraits = portraits.filter((portrait): portrait is NonNullable<typeof portrait> => Boolean(portrait));
-  if (generatedPortraits.length > 0) {
+    try {
+      const portraitResult = await generateCharacterPortrait(
+        character,
+        visualStyle,
+        taskPortraitReferenceConfig,
+        modelOverrides,
+        task.prompt,
+        costTelemetry,
+        imageModelSelection,
+        continuity
+          ? {
+              ...continuity,
+              previousState: latestState,
+            }
+          : null
+      );
+      const nextState = extractImageContinuityState(portraitResult.imageGenerationMetadata) ?? latestState;
+      latestState = nextState;
+      character.portraitBase64 = portraitResult.imageUrl;
+      task.finalPromptText = portraitResult.finalPromptText;
+      portraits.push({
+        reference: { type: 'character' as const, dataUrl: portraitResult.imageUrl },
+        state: nextState,
+        metadata: {
+          characterId: character.id,
+          characterName: character.name,
+          imageModelSnapshot: portraitResult.imageModelSnapshot,
+          imageGenerationMetadata: portraitResult.imageGenerationMetadata,
+          statefulContinuity: nextState,
+        },
+      });
+    } catch (error) {
+      console.error(`Portrait generation failed for storyboard task ${task.characterId}:`, error);
+    }
+  }
+
+  if (portraits.length > 0) {
     beat.imageGenerationMetadata = {
       ...(beat.imageGenerationMetadata ?? {}),
       portraitGeneration: {
-        count: generatedPortraits.length,
-        portraits: generatedPortraits.map((portrait) => portrait.metadata),
+        count: portraits.length,
+        latestState,
+        portraits: portraits.map((portrait) => portrait.metadata),
       },
     };
   }
 
-  return generatedPortraits.map((portrait) => portrait.reference);
+  return {
+    references: portraits.map((portrait) => portrait.reference),
+    latestState,
+  };
 }
 
 function assignPortraitPromptTexts(
@@ -2013,7 +2067,7 @@ export const useStoryStore = create<StoryState>()(
             beat = applyStoryTextOverlayBeatMetadata(beat, storyConfig);
           }
 
-          const portraitRefs = initialSession.enableReferenceImages && !promptOnly
+          const portraitGenerationResult = initialSession.enableReferenceImages && !promptOnly
             ? await measureAsyncStep(
                 timingSteps,
                 'portrait_generation',
@@ -2025,7 +2079,8 @@ export const useStoryStore = create<StoryState>()(
                   storyConfig.portraitReferences,
                   modelOverrides,
                   costPhase(baseCostTelemetry, 'portrait_generation'),
-                  storyConfig.imageModelSelection
+                  storyConfig.imageModelSelection,
+                  imageContinuityOptions(storyConfig, null)
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -2033,6 +2088,9 @@ export const useStoryStore = create<StoryState>()(
                   portraitReferenceQuality: storyConfig.portraitReferences.quality,
                 }
               )
+            : { references: [], latestState: null };
+          const portraitRefs = initialSession.enableReferenceImages && !promptOnly
+            ? mergeReferenceImages(collectBeatPortraitReferences(beat), portraitGenerationResult.references)
             : [];
           if (promptOnly) {
             assignPortraitPromptTexts(
@@ -2277,7 +2335,8 @@ export const useStoryStore = create<StoryState>()(
                     storyAspectRatio,
                     getImageTaskKey(storyConfig),
                     getReelVisualStylePromptOptions(modelOverrides, storyConfig),
-                    storyConfig.imageModelSelection
+                    storyConfig.imageModelSelection,
+                    imageContinuityOptions(storyConfig, portraitGenerationResult.latestState)
                   ),
                   {
                     referenceCount: portraitRefs.length,
@@ -2995,7 +3054,8 @@ export const useStoryStore = create<StoryState>()(
           } else {
             beat = applyStoryTextOverlayBeatMetadata(beat, session.storyConfig);
           }
-          const portraitRefs = session.enableReferenceImages && !promptOnly
+          const parentImageContinuityState = extractImageContinuityState(currentNode.data.imageGenerationMetadata);
+          const portraitGenerationResult = session.enableReferenceImages && !promptOnly
             ? await measureAsyncStep(
                 timingSteps,
                 'portrait_generation',
@@ -3007,7 +3067,8 @@ export const useStoryStore = create<StoryState>()(
                   session.storyConfig.portraitReferences,
                   modelOverrides,
                   costPhase(baseCostTelemetry, 'portrait_generation'),
-                  session.storyConfig.imageModelSelection
+                  session.storyConfig.imageModelSelection,
+                  imageContinuityOptions(session.storyConfig, parentImageContinuityState)
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -3015,6 +3076,9 @@ export const useStoryStore = create<StoryState>()(
                   portraitReferenceQuality: session.storyConfig.portraitReferences.quality,
                 }
               )
+            : { references: [], latestState: parentImageContinuityState };
+          const portraitRefs = session.enableReferenceImages && !promptOnly
+            ? mergeReferenceImages(collectBeatPortraitReferences(beat), portraitGenerationResult.references)
             : [];
           if (promptOnly) {
             assignPortraitPromptTexts(
@@ -3295,7 +3359,8 @@ export const useStoryStore = create<StoryState>()(
                   storyAspectRatio,
                   getImageTaskKey(session.storyConfig),
                   getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
-                  session.storyConfig.imageModelSelection
+                  session.storyConfig.imageModelSelection,
+                  imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState)
                 ),
                 {
                   beatNumber: beat.beatNumber,
@@ -4688,16 +4753,23 @@ export const useStoryStore = create<StoryState>()(
           let portraitReferences = session.enableReferenceImages
             ? collectBeatPortraitReferences(beatForRender)
             : [];
+          let regenerationContinuityState = extractImageContinuityState(parentNode?.data.imageGenerationMetadata);
 
           if (!promptOnly && session.enableReferenceImages && portraitReferences.length === 0 && storyboardPlan.portraitTasks.length > 0) {
-            portraitReferences = await generatePortraitsForStoryboardPlan(
+            const portraitGenerationResult = await generatePortraitsForStoryboardPlan(
               beatForRender,
               storyboardPlan,
               session.visualStyle,
               session.storyConfig.portraitReferences,
               modelOverrides,
               costPhase(baseCostTelemetry, 'portrait_generation'),
-              session.storyConfig.imageModelSelection
+              session.storyConfig.imageModelSelection,
+              imageContinuityOptions(session.storyConfig, regenerationContinuityState)
+            );
+            regenerationContinuityState = portraitGenerationResult.latestState;
+            portraitReferences = mergeReferenceImages(
+              collectBeatPortraitReferences(beatForRender),
+              portraitGenerationResult.references
             );
           }
           if (promptOnly) {
@@ -4745,7 +4817,8 @@ export const useStoryStore = create<StoryState>()(
                 storyAspectRatio,
                 getImageTaskKey(session.storyConfig),
                 getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
-                session.storyConfig.imageModelSelection
+                session.storyConfig.imageModelSelection,
+                imageContinuityOptions(session.storyConfig, regenerationContinuityState)
               );
           beatForRender.finalImagePromptText = imageResult.finalPromptText;
           beatForRender = applyImageGenerationResultMetadata(beatForRender, imageResult);

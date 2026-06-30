@@ -13,7 +13,8 @@ export type CostActivityKey =
   | 'regenerate_narration'
   | 'generate_social_share_cover'
   | 'generate_audio_story_cover'
-  | 'generate_reel_thumbnail';
+  | 'generate_reel_thumbnail'
+  | 'generate_story_text_overlay';
 
 export interface CostTelemetryContext {
   activityKey: CostActivityKey;

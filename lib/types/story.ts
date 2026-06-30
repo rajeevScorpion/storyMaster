@@ -6,6 +6,7 @@ import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { StoryEffectConfig } from '@/lib/story-effects/settings';
+import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import type { ImageModelSelection, ImageProviderKey } from '@/lib/ai/image-models.shared';
 import type {
   StoryTextOverlayAlignment,
@@ -264,6 +265,7 @@ export interface StoryConfig {
   language: StoryLanguage;
   imageGenerationMode: 'generate' | 'prompt_only';
   imageModelSelection?: ImageModelSelection;
+  imageContinuityStrategy: ImageContinuityStrategy;
   isVerticalStory: boolean;
   aspectRatio: StoryAspectRatio;
   visualSettings: VisualSettings;

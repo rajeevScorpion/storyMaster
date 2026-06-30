@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import type { ImageModelPickerState, ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   SOURCE_FIDELITY_OPTIONS,
@@ -80,6 +81,12 @@ const SOURCE_FIDELITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = SOURCE_FIDELITY
   label: option.label,
 }));
 
+const IMAGE_CONTINUITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = [
+  { value: 'auto', label: 'Auto continuity' },
+  { value: 'provider_stateful', label: 'Stateful thread' },
+  { value: 'resend_refs', label: 'Resend refs' },
+];
+
 
 interface AdvancedOptionsProps {
   language: StoryLanguage;
@@ -111,6 +118,8 @@ interface AdvancedOptionsProps {
   imageModelPicker?: ImageModelPickerState | null;
   imageModelSelection?: ImageModelSelection;
   onImageModelSelectionChange?: (value: ImageModelSelection | undefined) => void;
+  imageContinuityStrategy?: ImageContinuityStrategy;
+  onImageContinuityStrategyChange?: (value: ImageContinuityStrategy) => void;
   verticalStoriesSettingEnabled?: boolean;
   isVerticalStory?: boolean;
   onVerticalStoryChange?: (value: boolean) => void;
@@ -152,6 +161,8 @@ export default function AdvancedOptions({
   imageModelPicker = null,
   imageModelSelection,
   onImageModelSelectionChange,
+  imageContinuityStrategy = 'auto',
+  onImageContinuityStrategyChange,
   verticalStoriesSettingEnabled = false,
   isVerticalStory = false,
   onVerticalStoryChange,
@@ -437,6 +448,17 @@ export default function AdvancedOptions({
                   mode="inline"
                   ariaLabel="Image model"
                 />
+                <div className="mt-3">
+                  <FilterDropdown
+                    value={imageContinuityStrategy}
+                    options={IMAGE_CONTINUITY_DROPDOWN_OPTIONS}
+                    onChange={(value) => onImageContinuityStrategyChange?.(value as ImageContinuityStrategy)}
+                    fullWidth
+                    size="form"
+                    mode="inline"
+                    ariaLabel="Image continuity strategy"
+                  />
+                </div>
               </div>
             )}
 

@@ -133,7 +133,7 @@ const DEFAULT_STORY_BIBLE = JSON.stringify({
   endingForecast: ['friendship', 'discovery'],
 }, null, 2);
 
-const DEFAULT_INPUTS: Record<TaskKey, Record<string, string>> = {
+const DEFAULT_INPUTS: Record<PromptTaskKey, Record<string, string>> = {
   story_generation: {
     userPrompt: 'Continue this whimsical orchard mystery and steer it toward a warm discovery ending.',
     language: 'english',
@@ -346,6 +346,10 @@ interface PlaygroundStudioProps {
   initialTask?: TaskKey;
 }
 
+const PLAYGROUND_TASK_KEYS = TASK_DEFINITIONS
+  .map((task) => task.key)
+  .filter(isPromptTaskKey);
+
 export default function PlaygroundStudio({
   title = 'Story Playground',
   description = 'Iterate on task prompts, test against different models, and publish production-ready prompt variants without a code deploy.',
@@ -353,8 +357,13 @@ export default function PlaygroundStudio({
   initialTask,
 }: PlaygroundStudioProps = {}) {
   const [configs, setConfigs] = useState<ModelConfig[]>([]);
-  const visibleTaskKeys = useMemo(() => taskKeys ?? TASK_DEFINITIONS.map((task) => task.key), [taskKeys]);
-  const [selectedTask, setSelectedTask] = useState<TaskKey>(initialTask ?? visibleTaskKeys[0] ?? 'story_generation');
+  const visibleTaskKeys = useMemo(
+    () => (taskKeys ? taskKeys.filter(isPromptTaskKey) : PLAYGROUND_TASK_KEYS),
+    [taskKeys]
+  );
+  const [selectedTask, setSelectedTask] = useState<PromptTaskKey>(
+    initialTask && isPromptTaskKey(initialTask) ? initialTask : visibleTaskKeys[0] ?? 'story_generation'
+  );
   const [selectedModel, setSelectedModel] = useState('');
   const [temperature, setTemperature] = useState(0.7);
   const [inputs, setInputs] = useState<Record<string, string>>({});
@@ -773,12 +782,13 @@ export default function PlaygroundStudio({
       ) : (
         <div className="flex gap-6">
           <div className="w-72 shrink-0 space-y-2">
-            {TASK_DEFINITIONS.filter((task) => visibleTaskKeys.includes(task.key)).map((task) => {
-              const config = configs.find((item) => item.taskKey === task.key);
-              const active = selectedTask === task.key;
-              const promptEnabled = PROMPT_TASK_KEYS.includes(task.key as PromptTaskKey);
+            {visibleTaskKeys.map((taskKey) => {
+              const task = TASK_DEFINITIONS.find((item) => item.key === taskKey)!;
+              const config = configs.find((item) => item.taskKey === taskKey);
+              const active = selectedTask === taskKey;
+              const promptEnabled = PROMPT_TASK_KEYS.includes(taskKey);
               return (
-                <button key={task.key} onClick={() => setSelectedTask(task.key)} className={`w-full rounded-xl border p-3 text-left transition-all ${active ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-white/10 bg-white/5 text-neutral-300 hover:bg-white/10'}`}>
+                <button key={taskKey} onClick={() => setSelectedTask(taskKey)} className={`w-full rounded-xl border p-3 text-left transition-all ${active ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-white/10 bg-white/5 text-neutral-300 hover:bg-white/10'}`}>
                     <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-medium">{task.label}</p>
                     <div className="flex items-center gap-2">

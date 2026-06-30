@@ -10,6 +10,10 @@ import {
   saveElevenLabsCostSettings,
 } from '@/lib/ai/provider-costs';
 import {
+  getImageContinuitySettings,
+  saveImageContinuitySettings,
+} from '@/lib/ai/image-continuity-settings';
+import {
   listImageModelRegistry,
   listUserVisibleImageModelOptions,
   resolveImageModelSnapshot,
@@ -23,6 +27,7 @@ import type {
   ImageTaskKey,
 } from '@/lib/ai/image-models.shared';
 import type { ElevenLabsCostSettings } from '@/lib/ai/provider-costs.shared';
+import type { ImageContinuitySettings } from '@/lib/ai/image-continuity-settings.shared';
 import type { PlanKey } from '@/lib/types/pricing';
 
 async function getCurrentUserId(): Promise<string | null> {
@@ -100,6 +105,20 @@ export async function saveAdminElevenLabsCostSettings(
 ): Promise<ElevenLabsCostSettings> {
   await verifyAdmin();
   const saved = await saveElevenLabsCostSettings(settings);
+  revalidatePath('/admin/image-models');
+  return saved;
+}
+
+export async function getAdminImageContinuitySettings(): Promise<ImageContinuitySettings> {
+  await verifyAdmin();
+  return getImageContinuitySettings();
+}
+
+export async function saveAdminImageContinuitySettings(
+  settings: ImageContinuitySettings
+): Promise<ImageContinuitySettings> {
+  await verifyAdmin();
+  const saved = await saveImageContinuitySettings(settings);
   revalidatePath('/admin/image-models');
   return saved;
 }

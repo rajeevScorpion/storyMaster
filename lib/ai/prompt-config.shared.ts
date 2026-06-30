@@ -1,6 +1,6 @@
 import type { TaskKey } from './model-config.shared';
 
-export type PromptTaskKey = TaskKey;
+export type PromptTaskKey = Exclude<TaskKey, 'story_text_overlay_alignment'>;
 
 export interface PromptPlaceholderDefinition {
   key: string;

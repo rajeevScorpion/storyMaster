@@ -4,12 +4,20 @@ import { useEffect, useMemo, useState } from 'react';
 import { ImageIcon, Loader2, RefreshCcw, Save, Sparkles } from 'lucide-react';
 import {
   getAdminElevenLabsCostSettings,
+  getAdminImageContinuitySettings,
   getAdminImageModelRegistry,
   saveAdminImageModelRegistryRecord,
+  saveAdminImageContinuitySettings,
   saveAdminElevenLabsCostSettings,
   testAdminImageModel,
 } from '@/app/actions/image-models';
 import type { ImageModelRegistryRecord, ImageTaskKey } from '@/lib/ai/image-models.shared';
+import {
+  DEFAULT_IMAGE_CONTINUITY_SETTINGS,
+  type ImageContinuitySettings,
+  type StatefulRuntimePricing,
+} from '@/lib/ai/image-continuity-settings.shared';
+import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import {
   DEFAULT_ELEVENLABS_COST_SETTINGS,
   type ElevenLabsCostSettings,
@@ -78,7 +86,9 @@ export default function ImageModelRegistryStudio() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [savingElevenLabsCosts, setSavingElevenLabsCosts] = useState(false);
+  const [savingContinuitySettings, setSavingContinuitySettings] = useState(false);
   const [elevenLabsCosts, setElevenLabsCosts] = useState<ElevenLabsCostSettings>(DEFAULT_ELEVENLABS_COST_SETTINGS);
+  const [continuitySettings, setContinuitySettings] = useState<ImageContinuitySettings>(DEFAULT_IMAGE_CONTINUITY_SETTINGS);
   const [testPrompt, setTestPrompt] = useState('A clean 2x2 storyboard of a lighthouse at sunrise, no text.');
   const [testImage, setTestImage] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -99,13 +109,15 @@ export default function ImageModelRegistryStudio() {
     setLoading(true);
     setError(null);
     try {
-      const [next, costs] = await Promise.all([
+      const [next, costs, continuity] = await Promise.all([
         getAdminImageModelRegistry(),
         getAdminElevenLabsCostSettings(),
+        getAdminImageContinuitySettings(),
       ]);
       setRecords(next);
       setDrafts(Object.fromEntries(next.map((record) => [record.id, toDraft(record)])));
       setElevenLabsCosts(costs);
+      setContinuitySettings(continuity);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load image models.');
     } finally {
@@ -150,11 +162,19 @@ export default function ImageModelRegistryStudio() {
 
   const updateElevenLabsCost = (modelId: string, value: number) => {
     setElevenLabsCosts((current) => ({
+      ...current,
       models: current.models.map((model) =>
         model.modelId === modelId
           ? { ...model, usdPer1kChars: Math.max(0, Number.isFinite(value) ? value : 0) }
           : model
       ),
+    }));
+  };
+
+  const updateElevenLabsForcedAlignmentCost = (value: number) => {
+    setElevenLabsCosts((current) => ({
+      ...current,
+      forcedAlignmentUsdPerHour: Math.max(0, Number.isFinite(value) ? value : 0),
     }));
   };
 
@@ -165,11 +185,39 @@ export default function ImageModelRegistryStudio() {
     try {
       const saved = await saveAdminElevenLabsCostSettings(elevenLabsCosts);
       setElevenLabsCosts(saved);
-      setMessage('ElevenLabs TTS cost settings saved.');
+      setMessage('ElevenLabs cost settings saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save ElevenLabs cost settings.');
     } finally {
       setSavingElevenLabsCosts(false);
+    }
+  };
+
+  const updateRuntimePricing = (
+    provider: 'openai' | 'gemini',
+    patch: Partial<StatefulRuntimePricing>
+  ) => {
+    setContinuitySettings((current) => ({
+      ...current,
+      [provider]: {
+        ...current[provider],
+        ...patch,
+      },
+    }));
+  };
+
+  const saveContinuitySettings = async () => {
+    setSavingContinuitySettings(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const saved = await saveAdminImageContinuitySettings(continuitySettings);
+      setContinuitySettings(saved);
+      setMessage('Image continuity settings saved.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save image continuity settings.');
+    } finally {
+      setSavingContinuitySettings(false);
     }
   };
 
@@ -249,10 +297,97 @@ export default function ImageModelRegistryStudio() {
       <section className="rounded-xl border border-white/10 bg-white/5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-emerald-300/80">Continuity strategy</p>
+            <h2 className="mt-2 text-xl font-serif text-neutral-100">Stateful Runtime</h2>
+            <p className="mt-1 max-w-2xl text-sm text-neutral-400">
+              Stateful image chains use OpenAI Responses or Gemini Interactions when available; xAI stays on reference-image resend.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void saveContinuitySettings()}
+            disabled={savingContinuitySettings || loading}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+          >
+            {savingContinuitySettings ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Save Continuity
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 lg:grid-cols-[220px_1fr_1fr]">
+          <label className="block rounded-lg border border-white/10 bg-neutral-950/50 p-3">
+            <span className="block text-sm font-medium text-neutral-100">Default strategy</span>
+            <select
+              value={continuitySettings.defaultStrategy}
+              onChange={(event) => setContinuitySettings((current) => ({
+                ...current,
+                defaultStrategy: event.target.value as ImageContinuityStrategy,
+              }))}
+              className="mt-3 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
+              aria-label="Default image continuity strategy"
+            >
+              <option value="auto">Auto</option>
+              <option value="provider_stateful">Stateful provider</option>
+              <option value="resend_refs">Resend references</option>
+            </select>
+          </label>
+          {(['openai', 'gemini'] as const).map((provider) => {
+            const settings = continuitySettings[provider];
+            return (
+              <div key={provider} className="rounded-lg border border-white/10 bg-neutral-950/50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium capitalize text-neutral-100">{provider}</span>
+                  <label className="inline-flex items-center gap-2 text-xs text-neutral-300">
+                    <input
+                      type="checkbox"
+                      checked={settings.enabled}
+                      onChange={(event) => updateRuntimePricing(provider, { enabled: event.target.checked })}
+                      className="h-3.5 w-3.5 accent-emerald-500"
+                    />
+                    Stateful
+                  </label>
+                </div>
+                <label className="mt-3 block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
+                  Runtime model
+                  <input
+                    value={settings.runtimeModelId}
+                    onChange={(event) => updateRuntimePricing(provider, { runtimeModelId: event.target.value })}
+                    className="mt-1 block w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
+                    aria-label={`${provider} stateful runtime model`}
+                  />
+                </label>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {([
+                    ['inputUsdPer1MTokens', 'Input'],
+                    ['cachedInputUsdPer1MTokens', 'Cached'],
+                    ['outputUsdPer1MTokens', 'Output'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
+                      {label}
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.001}
+                        value={settings[key]}
+                        onChange={(event) => updateRuntimePricing(provider, { [key]: Number(event.target.value) })}
+                        className="mt-1 block w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
+                        aria-label={`${provider} ${label} USD per 1M tokens`}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
             <p className="text-xs uppercase tracking-[0.2em] text-emerald-300/80">TTS cost telemetry</p>
             <h2 className="mt-2 text-xl font-serif text-neutral-100">ElevenLabs</h2>
             <p className="mt-1 max-w-2xl text-sm text-neutral-400">
-              USD estimates are recorded in Admin Cost when ElevenLabs is the actual reel TTS provider.
+              USD estimates are recorded in Admin Cost for ElevenLabs reel TTS and story overlay forced alignment.
             </p>
           </div>
           <button
@@ -262,10 +397,24 @@ export default function ImageModelRegistryStudio() {
             className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
           >
             {savingElevenLabsCosts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-            Save TTS Costs
+            Save Costs
           </button>
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <label className="block rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3">
+            <span className="block text-sm font-medium text-neutral-100">Forced Alignment</span>
+            <span className="mt-1 block truncate text-xs text-neutral-500">elevenlabs-forced-alignment</span>
+            <input
+              type="number"
+              min={0}
+              step={0.001}
+              value={elevenLabsCosts.forcedAlignmentUsdPerHour}
+              onChange={(event) => updateElevenLabsForcedAlignmentCost(Number(event.target.value))}
+              className="mt-3 w-32 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
+              aria-label="ElevenLabs forced alignment USD per hour"
+            />
+            <span className="ml-2 text-xs text-neutral-500">USD / hour</span>
+          </label>
           {elevenLabsCosts.models.map((model) => (
             <label key={model.modelId} className="block rounded-lg border border-white/10 bg-neutral-950/50 p-3">
               <span className="block text-sm font-medium text-neutral-100">{model.displayName}</span>

@@ -25,4 +25,16 @@ describe('story config normalization', () => {
 
     expect(config.imageGenerationMode).toBe(DEFAULT_STORY_CONFIG.imageGenerationMode);
   });
+
+  it('normalizes image continuity strategy', () => {
+    const config = normalizeStoryConfig({
+      imageContinuityStrategy: 'provider_stateful',
+    });
+
+    expect(config.imageContinuityStrategy).toBe('provider_stateful');
+    expect(normalizeStoryConfig({
+      imageContinuityStrategy: 'bad-value',
+    } as unknown as Parameters<typeof normalizeStoryConfig>[0]).imageContinuityStrategy)
+      .toBe(DEFAULT_STORY_CONFIG.imageContinuityStrategy);
+  });
 });

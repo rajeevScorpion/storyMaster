@@ -54,11 +54,18 @@ export const xaiImageProvider: ImageProviderAdapter = {
       fallbackText: null,
       providerUsage: result.usage,
       inputImageCount: referenceImages.length,
+      resolvedContinuityStrategy: 'resend_refs',
       metadata: {
         provider: 'xai',
         providerModelId: request.modelSnapshot.providerModelId,
         referenceMode: isReferenceEdit ? 'edit_endpoint' : 'text_to_image',
         referenceCount: referenceImages.length,
+        continuityStrategy: request.continuity?.requestedStrategy ?? null,
+        resolvedContinuityStrategy: 'resend_refs',
+        fallbackStrategy: request.continuity?.requestedStrategy === 'provider_stateful' ? 'resend_refs' : null,
+        fallbackReason: request.continuity?.requestedStrategy === 'provider_stateful'
+          ? 'xai_stateful_not_supported'
+          : null,
         providerUsage: result.usage,
       },
     };

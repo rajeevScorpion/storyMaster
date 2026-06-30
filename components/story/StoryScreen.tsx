@@ -35,6 +35,7 @@ import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timin
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset } from '@/lib/persistence';
 import { saveTreeProgress } from '@/lib/persistence/runtime';
+import { parseR2Reference } from '@/lib/media/r2-reference';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
 import {
@@ -1286,7 +1287,28 @@ type CharacterPromptCopyItem = {
   referenceSheetUrl?: string;
   referenceSheetStorageKey?: string;
   referenceSheetGallery: import('@/lib/types/story').CharacterSheetGalleryEntry[];
+  generatedReferenceUrl?: string;
 };
+
+function resolveRenderableGeneratedReferenceUrl(...candidates: Array<string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const r2Reference = parseR2Reference(candidate);
+    if (r2Reference) {
+      return `/api/media/r2/object?bucket=${encodeURIComponent(r2Reference.bucket)}&key=${encodeURIComponent(r2Reference.objectKey)}`;
+    }
+    if (
+      candidate.startsWith('data:')
+      || candidate.startsWith('blob:')
+      || candidate.startsWith('http://')
+      || candidate.startsWith('https://')
+      || candidate.startsWith('/')
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
 
 function buildCharacterPromptCopyItems(
   beat: StoryBeat,
@@ -1320,6 +1342,12 @@ function buildCharacterPromptCopyItems(
     const activeUrl = rosterEntry?.referenceSheetUrl ?? character.referenceSheetUrl;
     const activeKey = rosterEntry?.referenceSheetStorageKey ?? character.referenceSheetStorageKey;
     const gallery = rosterEntry?.referenceSheetGallery ?? character.referenceSheetGallery ?? [];
+    const generatedReferenceUrl = resolveRenderableGeneratedReferenceUrl(
+      rosterEntry?.portraitUrl,
+      character.portraitUrl,
+      rosterEntry?.portraitBase64,
+      character.portraitBase64
+    );
     items.push({
       key: `${character.id}:${items.length}`,
       label: character.name,
@@ -1329,6 +1357,7 @@ function buildCharacterPromptCopyItems(
       referenceSheetUrl: activeUrl,
       referenceSheetStorageKey: activeKey,
       referenceSheetGallery: gallery,
+      generatedReferenceUrl,
     });
   }
 
@@ -2316,8 +2345,8 @@ function StoryScreenInner({
   const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
   const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat, session);
   const promptToolsOpen = promptToolsModalState.view !== 'closed';
-  const needsAttentionCharacters = characterPromptItems.filter((item) => !item.referenceSheetUrl);
-  const readyInBeatCharacters = characterPromptItems.filter((item) => Boolean(item.referenceSheetUrl));
+  const needsAttentionCharacters = characterPromptItems.filter((item) => !item.referenceSheetUrl && !item.generatedReferenceUrl);
+  const readyInBeatCharacters = characterPromptItems.filter((item) => Boolean(item.referenceSheetUrl || item.generatedReferenceUrl));
   const activeCharacterSheetTarget = promptToolsModalState.view === 'character-upload' ? promptToolsModalState : null;
   const activeCharacterPromptItem = activeCharacterSheetTarget
     ? characterPromptItems.find((item) => item.characterId === activeCharacterSheetTarget.characterId) ?? null
@@ -2339,8 +2368,10 @@ function StoryScreenInner({
   const isBeatUploadView = promptToolsModalState.view === 'beat-upload';
   const isCharacterUploadView = promptToolsModalState.view === 'character-upload';
   const activeCharacterGallery = activeCharacterPromptItem?.referenceSheetGallery ?? [];
+  const activeCharacterGeneratedReferenceUrl = activeCharacterPromptItem?.generatedReferenceUrl;
   const activeCharacterStorageKey = activeCharacterPromptItem?.referenceSheetStorageKey;
   const activeCharacterHasSheet = Boolean(activeCharacterPromptItem?.referenceSheetUrl);
+  const activeCharacterHasReference = Boolean(activeCharacterPromptItem?.referenceSheetUrl || activeCharacterPromptItem?.generatedReferenceUrl);
   const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
   const canPublishStandardStoryline = Boolean(
     publishPath?.beats.every((beat) => {
@@ -6342,7 +6373,7 @@ function StoryScreenInner({
                     {isBeatUploadView
                       ? 'Upload Beat Image'
                       : isCharacterUploadView
-                      ? activeCharacterHasSheet
+                      ? activeCharacterHasReference
                         ? 'Manage Character Sheets'
                         : 'Upload Character Sheet'
                       : 'Prompt and Image Tools'}
@@ -6515,7 +6546,11 @@ function StoryScreenInner({
                                   <div className="min-w-0">
                                     <p className="truncate text-sm font-medium text-neutral-100">{item.label}</p>
                                     <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                                      {item.referenceSheetGallery.length} saved
+                                      {item.referenceSheetGallery.length > 0
+                                        ? `${item.referenceSheetGallery.length} saved`
+                                        : item.generatedReferenceUrl
+                                        ? 'Generated reference'
+                                        : 'No saved sheet'}
                                     </p>
                                   </div>
                                   {cycleSettings.characterSheetUploadEnabled && (
@@ -6776,8 +6811,35 @@ function StoryScreenInner({
 
                   return (
                     <>
-                      {activeCharacterGallery.length > 0 && (
+                      {activeCharacterGeneratedReferenceUrl && (
                         <div>
+                          <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                            Generated Reference
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-3">
+                            <div className="relative">
+                              <div className="relative block aspect-square w-28 overflow-hidden rounded-xl border border-emerald-400/40 bg-neutral-950/70 ring-1 ring-emerald-400/20">
+                                <Image
+                                  src={activeCharacterGeneratedReferenceUrl}
+                                  alt={`${activeCharacterSheetTarget.characterName} generated reference`}
+                                  fill
+                                  className="object-cover"
+                                  unoptimized
+                                />
+                                <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                  AI
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-[11px] text-neutral-500">
+                            Generated by the story image pipeline and used for continuity. Upload a sheet below only when you want to replace or improve this reference.
+                          </p>
+                        </div>
+                      )}
+
+                      {activeCharacterGallery.length > 0 && (
+                        <div className={activeCharacterGeneratedReferenceUrl ? 'mt-5' : undefined}>
                           <div className="flex items-center justify-between">
                             <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
                               Saved Sheets ({activeCharacterGallery.length} / {cap})

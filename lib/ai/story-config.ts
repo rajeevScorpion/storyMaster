@@ -2,6 +2,7 @@ import type {
   ImageModelSelection,
   ImageTaskKey,
 } from '@/lib/ai/image-models.shared';
+import { normalizeImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import type {
   PortraitReferenceConfig,
   PortraitReferenceQuality,
@@ -166,6 +167,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   settingCountry: 'generic',
   maxBeats: 6,
   imageGenerationMode: 'prompt_only',
+  imageContinuityStrategy: 'auto',
   isVerticalStory: false,
   aspectRatio: '16:9',
   visualSettings: DEFAULT_VISUAL_SETTINGS,
@@ -217,6 +219,8 @@ type RawStoryConfig = Partial<StoryConfig> & {
   visualSettings?: Partial<VisualSettings> | null;
   imageModelSelection?: Partial<ImageModelSelection> | null;
   image_model_selection?: Partial<ImageModelSelection> | null;
+  imageContinuityStrategy?: string | null;
+  image_continuity_strategy?: string | null;
   authoring?: (Partial<StoryAuthoringConfig> & {
     mode?: string | null;
     preludeText?: string | null;
@@ -274,6 +278,9 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     maxBeats,
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
     ...(imageModelSelection ? { imageModelSelection } : {}),
+    imageContinuityStrategy: normalizeImageContinuityStrategy(
+      input?.imageContinuityStrategy ?? input?.image_continuity_strategy
+    ),
     isVerticalStory,
     aspectRatio,
     visualSettings,

@@ -6,9 +6,11 @@ export interface ElevenLabsModelCost {
 
 export interface ElevenLabsCostSettings {
   models: ElevenLabsModelCost[];
+  forcedAlignmentUsdPerHour: number;
 }
 
 export const DEFAULT_ELEVENLABS_COST_SETTINGS: ElevenLabsCostSettings = {
+  forcedAlignmentUsdPerHour: 0.22,
   models: [
     {
       modelId: 'eleven_multilingual_v2',
@@ -64,6 +66,10 @@ export function normalizeElevenLabsCostSettings(value: unknown): ElevenLabsCostS
 
   return {
     models: models.length > 0 ? models : DEFAULT_ELEVENLABS_COST_SETTINGS.models,
+    forcedAlignmentUsdPerHour: cleanCost(
+      (raw as { forcedAlignmentUsdPerHour?: unknown }).forcedAlignmentUsdPerHour
+        ?? DEFAULT_ELEVENLABS_COST_SETTINGS.forcedAlignmentUsdPerHour
+    ),
   };
 }
 
@@ -85,4 +91,13 @@ export function estimateElevenLabsCostUsd(input: {
   const chars = Math.max(0, Math.round(input.characterCount));
   const rate = getElevenLabsUsdPer1kChars(input.settings, input.modelId);
   return Number(((chars / 1000) * rate).toFixed(6));
+}
+
+export function estimateElevenLabsForcedAlignmentCostUsd(input: {
+  settings: ElevenLabsCostSettings;
+  audioSeconds: number;
+}): number {
+  const seconds = Math.max(0, Number.isFinite(input.audioSeconds) ? input.audioSeconds : 0);
+  const rate = cleanCost(input.settings.forcedAlignmentUsdPerHour);
+  return Number(((seconds / 3600) * rate).toFixed(6));
 }

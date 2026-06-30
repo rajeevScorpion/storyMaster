@@ -36,6 +36,10 @@ import {
 } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import type {
+  ImageContinuityProviderState,
+  ImageContinuityStrategy,
+} from '@/lib/ai/image-continuity.shared';
 import {
   DEFAULT_IMAGE_MODEL_ID,
   DEFAULT_TEXT_MODEL_ID,
@@ -813,6 +817,12 @@ export interface GeneratedPortraitResult {
   imageGenerationMetadata?: Record<string, unknown>;
 }
 
+export interface ImageContinuityRuntimeOptions {
+  requestedStrategy: ImageContinuityStrategy;
+  previousState?: ImageContinuityProviderState | null;
+  allowRuntimeFallback?: boolean;
+}
+
 function buildFallbackStoryboardPlan(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null,
@@ -1250,7 +1260,8 @@ export async function generateImage(
   aspectRatio: StoryAspectRatio = '16:9',
   imageTask: Extract<TaskKey, 'image_generation' | 'reel_image_generation'> = 'image_generation',
   imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {},
-  imageModelSelection?: ImageModelSelection | null
+  imageModelSelection?: ImageModelSelection | null,
+  imageContinuity?: ImageContinuityRuntimeOptions | null
 ): Promise<GeneratedImageResult> {
   const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
   const finalImagePrompt = buildFinalStoryboardImagePrompt(
@@ -1317,6 +1328,7 @@ export async function generateImage(
             imageSize,
             telemetry: costTelemetry,
             selection,
+            continuity: imageContinuity ?? null,
           })
         );
 
@@ -1367,6 +1379,7 @@ export async function generateImage(
                 imageSize,
                 telemetry: costTelemetry,
                 selection,
+                continuity: imageContinuity ?? null,
               })
             );
           if (retryResult.dataUrl) {
@@ -1444,7 +1457,8 @@ export async function generateCharacterPortrait(
   modelOverrides?: StoryModelOverrides,
   promptOverride?: string,
   costTelemetry?: CostTelemetryContext,
-  imageModelSelection?: ImageModelSelection | null
+  imageModelSelection?: ImageModelSelection | null,
+  imageContinuity?: ImageContinuityRuntimeOptions | null
 ): Promise<GeneratedPortraitResult> {
   try {
     return await timeRuntimeStep(
@@ -1476,6 +1490,7 @@ export async function generateCharacterPortrait(
             taskKey: 'portrait_generation',
             modelKey: portraitModel,
           },
+          continuity: imageContinuity ?? null,
         });
 
         if (result.dataUrl) {

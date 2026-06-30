@@ -9,11 +9,17 @@ const DAILY_WINDOW_DAYS = 14;
 interface CostBreakdownItem {
   taskKey: string;
   estimatedCostUsd: number;
+  runtimeCostUsd: number;
+  imageCostUsd: number;
   inputTokens: number;
   outputTokens: number;
+  cachedTokens: number;
   imageCount: number;
+  audioSeconds: number;
   models: string[];
   providers: string[];
+  strategies: string[];
+  fallbacks: string[];
 }
 
 export interface AdminCostBeatRow {
@@ -83,22 +89,47 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
     const current = byTask.get(event.task_key) || {
       taskKey: event.task_key,
       estimatedCostUsd: 0,
+      runtimeCostUsd: 0,
+      imageCostUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
+      cachedTokens: 0,
       imageCount: 0,
+      audioSeconds: 0,
       models: [],
       providers: [],
+      strategies: [],
+      fallbacks: [],
     };
+    const metadata = event.metadata || {};
     current.estimatedCostUsd += asCost(event.estimated_cost_usd);
+    current.runtimeCostUsd += asCost(metadata.statefulRuntimeCostUsd);
+    current.imageCostUsd += asCost(metadata.imageProviderCostUsd);
     current.inputTokens += event.input_tokens || 0;
     current.outputTokens += event.output_tokens || 0;
+    current.cachedTokens += Number(metadata.cachedTokens) || 0;
     current.imageCount += event.image_count || 0;
+    current.audioSeconds += asCost(event.audio_seconds);
     if (!current.models.includes(event.model_id)) {
       current.models.push(event.model_id);
     }
     const providerModelLabel = event.provider ? `${event.provider}:${event.model_id}` : event.model_id;
     if (!current.providers.includes(providerModelLabel)) {
       current.providers.push(providerModelLabel);
+    }
+    const strategy = typeof metadata.continuityStrategy === 'string'
+      ? metadata.continuityStrategy
+      : null;
+    if (strategy && !current.strategies.includes(strategy)) {
+      current.strategies.push(strategy);
+    }
+    const fallback = typeof metadata.fallbackReason === 'string' && metadata.fallbackReason
+      ? metadata.fallbackReason
+      : typeof metadata.fallbackStrategy === 'string' && metadata.fallbackStrategy
+      ? metadata.fallbackStrategy
+      : null;
+    if (fallback && !current.fallbacks.includes(fallback)) {
+      current.fallbacks.push(fallback);
     }
     byTask.set(event.task_key, current);
   }
@@ -107,6 +138,8 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
     .map((item) => ({
       ...item,
       estimatedCostUsd: Number(item.estimatedCostUsd.toFixed(6)),
+      runtimeCostUsd: Number(item.runtimeCostUsd.toFixed(6)),
+      imageCostUsd: Number(item.imageCostUsd.toFixed(6)),
     }))
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
 }

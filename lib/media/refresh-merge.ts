@@ -66,6 +66,10 @@ function mergeCharacterAssetUrls(
 
     return {
       ...character,
+      portraitUrl: refreshMatchingUrl(
+        character.portraitUrl,
+        refreshed.portraitUrl
+      ),
       referenceSheetUrl: refreshMatchingUrl(
         character.referenceSheetUrl,
         refreshed.referenceSheetUrl

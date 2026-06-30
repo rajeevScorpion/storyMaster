@@ -205,6 +205,15 @@ export interface ImageCallResult {
   fallbackText: string | null;
 }
 
+export interface GeminiInteractionImageCallParams extends ImageCallParams {
+  previousInteractionId?: string | null;
+}
+
+export interface GeminiInteractionImageCallResult extends ImageCallResult {
+  interactionId: string | null;
+  providerUsage?: Record<string, unknown>;
+}
+
 export async function callGeminiImage(params: ImageCallParams): Promise<ImageCallResult> {
   const { task, model, prompt, referenceParts, aspectRatio, imageSize, telemetry } = params;
   const ai = getAI();
@@ -311,5 +320,152 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
   return {
     dataUrl: null,
     fallbackText: (response.text ?? '').trim() || null,
+  };
+}
+
+function buildGeminiInteractionInput(prompt: string, referenceParts?: InlineImagePart[]): unknown {
+  if (!referenceParts?.length) return prompt;
+
+  return [
+    { type: 'text', text: prompt },
+    ...referenceParts.map((ref) => ({
+      type: 'image',
+      data: ref.data,
+      mime_type: ref.mimeType,
+    })),
+  ];
+}
+
+function findGeminiInteractionImage(value: unknown, seen = new Set<unknown>()): { data: string; mimeType: string } | null {
+  if (!value || typeof value !== 'object') return null;
+  if (seen.has(value)) return null;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findGeminiInteractionImage(item, seen);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const inlineData = record.inlineData && typeof record.inlineData === 'object'
+    ? record.inlineData as Record<string, unknown>
+    : null;
+  if (typeof inlineData?.data === 'string') {
+    return {
+      data: inlineData.data,
+      mimeType: typeof inlineData.mimeType === 'string' ? inlineData.mimeType : 'image/png',
+    };
+  }
+
+  if (record.type === 'image' && typeof record.data === 'string') {
+    return {
+      data: record.data,
+      mimeType: typeof record.mime_type === 'string'
+        ? record.mime_type
+        : typeof record.mimeType === 'string'
+        ? record.mimeType
+        : 'image/png',
+    };
+  }
+
+  for (const nested of Object.values(record)) {
+    const found = findGeminiInteractionImage(nested, seen);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+function collectGeminiInteractionText(value: unknown, texts: string[] = [], seen = new Set<unknown>()): string {
+  if (!value || typeof value !== 'object') return texts.join('\n').trim();
+  if (seen.has(value)) return texts.join('\n').trim();
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectGeminiInteractionText(item, texts, seen);
+    }
+    return texts.join('\n').trim();
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.type === 'text' && typeof record.text === 'string') {
+    texts.push(record.text);
+  }
+  for (const nested of Object.values(record)) {
+    collectGeminiInteractionText(nested, texts, seen);
+  }
+  return texts.join('\n').trim();
+}
+
+export async function callGeminiInteractionsImage(
+  params: GeminiInteractionImageCallParams
+): Promise<GeminiInteractionImageCallResult> {
+  const { task, model, prompt, referenceParts, aspectRatio, imageSize, previousInteractionId } = params;
+  const ai = getAI();
+  const resolvedImageSize = (imageSize ?? '1K') as GeminiImageSize;
+  const systemInstruction = task === 'image_generation' || task === 'reel_image_generation'
+    ? LOCKED_PROMPT_GUARDRAILS[task]
+    : task === 'portrait_generation'
+    ? LOCKED_PROMPT_GUARDRAILS.portrait_generation
+    : undefined;
+
+  const imgFlagVal = await getFeatureFlagValue('gemini_image_timeout_ms');
+  const imgTimeoutMs = (imgFlagVal ? parseInt(imgFlagVal, 10) : 0) || GEMINI_IMAGE_TIMEOUT_MS;
+
+  const interaction = await timeGeminiStep(
+    `gemini_proxy.${task}.interactions`,
+    {
+      model,
+      timeoutMs: imgTimeoutMs,
+      hasReferences: Boolean(referenceParts?.length),
+      referenceCount: referenceParts?.length ?? 0,
+      previousInteractionId: previousInteractionId ?? null,
+      aspectRatio: aspectRatio ?? '16:9',
+      imageSize: resolvedImageSize,
+      promptChars: prompt.length,
+    },
+    () => withTimeout(
+      (ai.interactions.create as unknown as (body: Record<string, unknown>) => Promise<Record<string, unknown>>)({
+        model,
+        input: buildGeminiInteractionInput(prompt, referenceParts),
+        ...(previousInteractionId ? { previous_interaction_id: previousInteractionId } : {}),
+        ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
+        response_modalities: ['image'],
+        response_mime_type: 'image/png',
+        response_format: {
+          type: 'image',
+          aspect_ratio: aspectRatio ?? '16:9',
+          image_size: resolvedImageSize,
+        },
+        store: true,
+      }),
+      imgTimeoutMs,
+      `${task}.interactions`
+    )
+  );
+
+  const image = findGeminiInteractionImage(interaction.outputs ?? interaction);
+  if (image) {
+    return {
+      dataUrl: `data:${image.mimeType};base64,${image.data}`,
+      fallbackText: null,
+      interactionId: typeof interaction.id === 'string' ? interaction.id : null,
+      providerUsage: interaction.usage && typeof interaction.usage === 'object'
+        ? interaction.usage as Record<string, unknown>
+        : undefined,
+    };
+  }
+
+  return {
+    dataUrl: null,
+    fallbackText: collectGeminiInteractionText(interaction.outputs ?? interaction) || null,
+    interactionId: typeof interaction.id === 'string' ? interaction.id : null,
+    providerUsage: interaction.usage && typeof interaction.usage === 'object'
+      ? interaction.usage as Record<string, unknown>
+      : undefined,
   };
 }
