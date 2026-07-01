@@ -115,6 +115,9 @@ interface AdvancedOptionsProps {
   storyPromptOnlyModeEnabled?: boolean;
   imageGenerationMode?: 'generate' | 'prompt_only';
   onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
+  batchImageDeliveryEnabled?: boolean;
+  imageDeliveryMode?: 'live' | 'batch';
+  onImageDeliveryModeChange?: (value: 'live' | 'batch') => void;
   imageModelPicker?: ImageModelPickerState | null;
   imageModelSelection?: ImageModelSelection;
   onImageModelSelectionChange?: (value: ImageModelSelection | undefined) => void;
@@ -158,6 +161,9 @@ export default function AdvancedOptions({
   storyPromptOnlyModeEnabled = false,
   imageGenerationMode = 'generate',
   onImageGenerationModeChange,
+  batchImageDeliveryEnabled = false,
+  imageDeliveryMode = 'live',
+  onImageDeliveryModeChange,
   imageModelPicker = null,
   imageModelSelection,
   onImageModelSelectionChange,
@@ -410,6 +416,55 @@ export default function AdvancedOptions({
                   >
                     <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
                   </button>
+                </div>
+              </div>
+            )}
+
+            {batchImageDeliveryEnabled && storyboardImagesEnabled && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-sans text-neutral-200">Image delivery</h4>
+                      <InfoPopover title="Image delivery" ariaLabel="Show image delivery details">
+                        <p>
+                          Live generates images immediately while you read, at full price.
+                        </p>
+                        <p>
+                          Batch background sends all images to a provider batch — ready within about a day and roughly 50% cheaper. Great for finishing a whole story affordably.
+                        </p>
+                      </InfoPopover>
+                    </div>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      {imageDeliveryMode === 'batch' ? 'Batch background (~24h, ~50% cheaper)' : 'Live (immediate)'}
+                    </p>
+                  </div>
+                  <div
+                    className="grid h-10 w-28 shrink-0 grid-cols-2 rounded-full border border-white/10 bg-neutral-900/70 p-1 text-xs"
+                    role="group"
+                    aria-label="Image delivery mode"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onImageDeliveryModeChange?.('live')}
+                      className={`inline-flex items-center justify-center rounded-full transition-colors ${
+                        imageDeliveryMode !== 'batch' ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-100'
+                      }`}
+                      aria-pressed={imageDeliveryMode !== 'batch'}
+                    >
+                      Live
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onImageDeliveryModeChange?.('batch')}
+                      className={`inline-flex items-center justify-center rounded-full transition-colors ${
+                        imageDeliveryMode === 'batch' ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-100'
+                      }`}
+                      aria-pressed={imageDeliveryMode === 'batch'}
+                    >
+                      Batch
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

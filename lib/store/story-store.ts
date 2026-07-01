@@ -26,6 +26,8 @@ import {
 } from '@/app/actions/story-narration';
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
+import { submitStoryImageBatch, reconcileStoryBatch } from '@/app/actions/image-batch';
+import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
   authorizeCurrentUserImageModelBillableAction,
@@ -162,6 +164,8 @@ interface StoryState {
   errorAction: StoryErrorAction | null;
   isGeneratingAudio: boolean;
   isRegeneratingImage: boolean;
+  isSubmittingImageBatch: boolean;
+  imageBatchMessage: string | null;
   audioReadyNodeId: string | null;
   storyMode: boolean;
   isSaving: boolean;
@@ -216,6 +220,8 @@ interface StoryState {
   ) => Promise<StoryTextOverlayStoryGenerationResult>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
+  submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
+  reconcileCurrentStoryBatch: () => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
   setSaveRuntimeSettings: (settings: Partial<StorySaveRuntimeSettings>) => void;
@@ -1884,6 +1890,8 @@ export const useStoryStore = create<StoryState>()(
       errorAction: null,
       isGeneratingAudio: false,
       isRegeneratingImage: false,
+      isSubmittingImageBatch: false,
+      imageBatchMessage: null,
       audioReadyNodeId: null,
       storyMode: false,
       isSaving: false,
@@ -5752,6 +5760,62 @@ export const useStoryStore = create<StoryState>()(
 
       clearError: () => {
         set({ error: null, errorAction: null });
+      },
+
+      submitImageBatch: async (scope?: ImageBatchScope) => {
+        const { session } = get();
+        const storyId = session?.savedStoryId;
+        if (!storyId) {
+          set({
+            error: 'Save the story before generating visuals in the background.',
+            errorAction: null,
+          });
+          return;
+        }
+
+        set({ isSubmittingImageBatch: true, imageBatchMessage: null, error: null, errorAction: null });
+        try {
+          const result = await submitStoryImageBatch({ storyId, ...(scope ? { scope } : {}) });
+          set({ isSubmittingImageBatch: false, imageBatchMessage: result.message });
+
+          // Reflect pending state locally so beats show placeholders immediately.
+          if (result.status === 'submitted') {
+            const current = get().session;
+            if (current && current.savedStoryId === storyId) {
+              const nodes = { ...current.storyMap.nodes };
+              for (const [nodeId, node] of Object.entries(nodes)) {
+                const beat = node.data;
+                const hasImage = beat.imageStatus === 'ready' && beat.imageUrl;
+                const hasPrompt = Boolean(
+                  (beat.finalImagePromptText || beat.storyboardPromptText || beat.imagePrompt || '').trim()
+                );
+                if (!hasImage && hasPrompt) {
+                  nodes[nodeId] = { ...node, data: { ...beat, imageStatus: 'pending', imageError: undefined } };
+                }
+              }
+              set({ session: { ...current, storyMap: { ...current.storyMap, nodes } } });
+            }
+          }
+        } catch (error) {
+          set({
+            isSubmittingImageBatch: false,
+            imageBatchMessage: null,
+            error: error instanceof Error ? error.message : 'Failed to submit background image batch.',
+            errorAction: null,
+          });
+        }
+      },
+
+      reconcileCurrentStoryBatch: async () => {
+        const storyId = get().session?.savedStoryId;
+        if (!storyId) return;
+        try {
+          await reconcileStoryBatch(storyId);
+          // Re-hydrate so freshly materialized batch images appear in the session.
+          await get().loadStoryFromCloud(storyId);
+        } catch (error) {
+          console.error('reconcileCurrentStoryBatch failed:', error);
+        }
       },
     });
     }
