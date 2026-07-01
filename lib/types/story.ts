@@ -264,6 +264,10 @@ export interface StoryConfig {
   maxBeats: number;
   language: StoryLanguage;
   imageGenerationMode: 'generate' | 'prompt_only';
+  // When imageGenerationMode is 'generate', how images are delivered:
+  //  - 'live'  : rendered immediately at full price (default)
+  //  - 'batch' : deferred to a background provider batch (~24h, ~50% cheaper)
+  imageDeliveryMode?: 'live' | 'batch';
   imageModelSelection?: ImageModelSelection;
   imageContinuityStrategy: ImageContinuityStrategy;
   isVerticalStory: boolean;

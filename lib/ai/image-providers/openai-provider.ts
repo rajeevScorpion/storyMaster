@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { ImageProviderAdapter, ImageProviderRequest } from './types';
+import { openAiBatchAdapter } from './openai-batch';
 import { createImageContinuityState } from '@/lib/ai/image-continuity.shared';
 import { getImageModelMaxReferenceImages } from '@/lib/ai/image-models.shared';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
@@ -202,6 +203,7 @@ async function postOpenAiResponsesImage(input: {
 }
 
 export const openAiImageProvider: ImageProviderAdapter = {
+  batch: openAiBatchAdapter,
   async generateImage(request) {
     const referenceLimit = getImageModelMaxReferenceImages(request.modelSnapshot.capabilities);
     const referenceParts = (request.referenceParts ?? []).slice(0, referenceLimit);

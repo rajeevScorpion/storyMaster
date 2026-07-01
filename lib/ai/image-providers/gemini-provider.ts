@@ -2,9 +2,11 @@ import 'server-only';
 
 import { callGeminiImage, callGeminiInteractionsImage } from '@/app/actions/gemini-proxy';
 import { createImageContinuityState } from '@/lib/ai/image-continuity.shared';
+import { geminiBatchAdapter } from './gemini-batch';
 import type { ImageProviderAdapter } from './types';
 
 export const geminiImageProvider: ImageProviderAdapter = {
+  batch: geminiBatchAdapter,
   async generateImage(request) {
     if (request.continuity?.strategy === 'provider_stateful' && request.continuity.stateKind === 'gemini_interactions') {
       try {
