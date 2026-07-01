@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
 import PublishDialog from './PublishDialog';
+import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
@@ -1809,6 +1810,7 @@ export default function StoryScreen() {
     findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId) !== null;
 
   return (
+    <>
     <StoryScreenInner
       session={session}
       currentBeat={currentBeat}
@@ -1863,6 +1865,8 @@ export default function StoryScreen() {
       permanentlyDeleteCharacterReferenceSheet={permanentlyDeleteCharacterReferenceSheet}
       persistenceUserId={user?.id}
     />
+    <BatchVisualsBanner />
+    </>
   );
 }
 
