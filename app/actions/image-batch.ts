@@ -3,14 +3,21 @@
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
-import { normalizeStoryConfig } from '@/lib/ai/story-config';
+import { normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import { generateCharacterPortrait } from '@/app/actions/story-runtime';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { resolveImageModelSnapshot } from '@/lib/ai/image-models';
 import {
   estimateImageProviderCostUsd,
   imageTaskForStoryKind,
   getImageModelMaxReferenceImages,
+  coinsToBeatCost,
 } from '@/lib/ai/image-models.shared';
+import {
+  authorizeBillableAction,
+  finalizeBillableAction,
+  releaseBillableAction,
+} from '@/lib/pricing/enforcement';
 import {
   pollImageBatchWithProvider,
   submitImageBatchWithProvider,
@@ -21,16 +28,20 @@ import {
   normalizeImageBatchScope,
   normalizeImageBatchScopeSettings,
   resolveBatchProvider,
+  IMAGE_BATCH_DISCOUNT_MULTIPLIER,
   type ImageBatchScope,
   type ImageBatchScopeSettings,
 } from '@/lib/ai/image-batch.shared';
 import { compressImageDataUrlServer, mapWithConcurrency } from '@/lib/media/serverImageCompression';
 import { extractStoragePath, normalizeStorageUrl } from '@/lib/supabase/storage';
 import { getPathToNode } from '@/lib/utils/story-map';
-import type { StoryConfig, StoryMap, StoryNode } from '@/lib/types/story';
+import type { Character, StoryConfig, StoryMap, StoryNode } from '@/lib/types/story';
 
 const STORY_ASSETS_BUCKET = 'story-assets';
 const MATERIALIZE_CONCURRENCY = 4;
+// Cap live portrait pre-generation so the submit action stays within serverless limits.
+const MAX_LIVE_PORTRAITS = 4;
+const PORTRAIT_CONCURRENCY = 2;
 // Cap items processed per reconcile invocation so a large batch stays within
 // serverless function time limits; remaining items are picked up next tick.
 const MATERIALIZE_ITEMS_PER_RUN = 24;
@@ -131,6 +142,83 @@ async function downloadStorageImageAsInlinePart(
   return { mimeType: data.type || 'image/png', data: buffer.toString('base64') };
 }
 
+async function uploadCharacterPortrait(
+  admin: AdminClient,
+  userId: string,
+  storyId: string,
+  characterId: string,
+  dataUrl: string
+): Promise<string> {
+  const compressed = await compressImageDataUrlServer({ dataUrl, assetType: 'character_reference' });
+  const path = `${userId}/${storyId}/characters/${characterId}.webp`;
+  const { error } = await admin.storage
+    .from(STORY_ASSETS_BUCKET)
+    .upload(path, compressed.buffer, { contentType: 'image/webp', upsert: true });
+  if (error) throw new Error(`Portrait upload failed: ${error.message}`);
+  const { data } = admin.storage.from(STORY_ASSETS_BUCKET).getPublicUrl(path);
+  return normalizeStorageUrl(data.publicUrl, STORY_ASSETS_BUCKET);
+}
+
+/**
+ * "Live portraits now, batch beats": generate reference portraits for any
+ * characters lacking one, immediately (full price), so batched beat images can
+ * keep character continuity via resend_refs. Mutates the in-memory map and
+ * persists it. Best-effort — a failed portrait doesn't block the batch.
+ */
+async function ensureCharacterPortraits(
+  admin: AdminClient,
+  userId: string,
+  storyId: string,
+  map: StoryMap,
+  config: StoryConfig
+): Promise<void> {
+  const missing = new Map<string, Character>();
+  for (const node of Object.values(map.nodes)) {
+    for (const character of node.data.characters ?? []) {
+      if (!missing.has(character.id) && !character.referenceSheetUrl && !character.portraitUrl) {
+        missing.set(character.id, character);
+      }
+    }
+  }
+  const targets = [...missing.values()].slice(0, MAX_LIVE_PORTRAITS);
+  if (targets.length === 0) return;
+
+  const visualStyle = deriveVisualStyleSummary(config.visualSettings);
+  const generated = new Map<string, string>();
+  await mapWithConcurrency(targets, PORTRAIT_CONCURRENCY, async (character) => {
+    try {
+      const result = await generateCharacterPortrait(
+        character,
+        visualStyle,
+        config.portraitReferences,
+        undefined,
+        undefined,
+        undefined,
+        config.imageModelSelection ?? null,
+        null
+      );
+      if (result.imageUrl) {
+        generated.set(character.id, await uploadCharacterPortrait(admin, userId, storyId, character.id, result.imageUrl));
+      }
+    } catch (error) {
+      console.error(`Live portrait pre-generation failed for ${character.id}:`, error);
+    }
+  });
+  if (generated.size === 0) return;
+
+  for (const node of Object.values(map.nodes)) {
+    node.data = {
+      ...node.data,
+      characters: (node.data.characters ?? []).map((character) =>
+        generated.has(character.id)
+          ? { ...character, portraitUrl: generated.get(character.id), referenceSheetUrl: generated.get(character.id) }
+          : character
+      ),
+    };
+  }
+  await admin.from('stories').update({ story_map: map }).eq('id', storyId);
+}
+
 /** Gather up to `limit` character reference images so batched beats keep
  *  character continuity via resend_refs (batch cannot use stateful continuity). */
 async function collectReferenceParts(
@@ -214,6 +302,13 @@ export async function submitStoryImageBatch(input: {
     ? snapshot
     : await resolveImageModelSnapshot({ taskKey: task, selection: null, currentPlanKey: 'free' });
 
+  // Generate any missing character portraits live now so batched beats keep
+  // continuity (Gemini resend_refs). OpenAI /images/generations ignores refs.
+  if (provider === 'gemini') {
+    await ensureCharacterPortraits(admin, user.id, story.id, map, config).catch((error) =>
+      console.error('ensureCharacterPortraits failed:', error)
+    );
+  }
   const maxRefs = getImageModelMaxReferenceImages(batchSnapshot.capabilities);
   const referenceParts = provider === 'gemini'
     ? await collectReferenceParts(admin, map, maxRefs)
@@ -237,6 +332,34 @@ export async function submitStoryImageBatch(input: {
   );
   const estimatedCostUsd = Number((perImageUsd * items.length).toFixed(6));
 
+  // Reserve coins up-front at the discounted batch rate. Graceful: if pricing
+  // isn't configured (no `batch_image_generation` cost / hard enforcement off),
+  // this yields a null reservation and we proceed; a genuine balance shortfall
+  // blocks the submission.
+  const discountedCoins = batchSnapshot.coinCostPerImage * items.length * IMAGE_BATCH_DISCOUNT_MULTIPLIER;
+  let reservationId: string | null = null;
+  try {
+    const authorization = await authorizeBillableAction({
+      userId: user.id,
+      actionKey: 'batch_image_generation',
+      idempotencyKey: `batch_image_generation:${story.id}:${Date.now()}`,
+      relatedStoryId: story.id,
+      requestedBeatCostOverride: coinsToBeatCost(discountedCoins),
+      metadata: { scope, imageCount: items.length, provider, estimatedCostUsd },
+    });
+    if (authorization.status === 'denied') {
+      throw new Error('NOT_ENOUGH_COINS');
+    }
+    if (authorization.status === 'allowed') {
+      reservationId = authorization.reservationId ?? null;
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'NOT_ENOUGH_COINS') {
+      throw new Error('You do not have enough coins to generate these visuals.');
+    }
+    console.warn('Batch coin authorization skipped:', error instanceof Error ? error.message : error);
+  }
+
   // Create the job + item rows first so a submission failure is recoverable.
   const { data: jobRow, error: jobError } = await admin
     .from('image_batch_jobs')
@@ -249,6 +372,7 @@ export async function submitStoryImageBatch(input: {
       display_name: `story-${story.id.slice(0, 8)}-${scope}`,
       item_count: items.length,
       estimated_cost_usd: estimatedCostUsd,
+      reservation_id: reservationId,
     })
     .select('id')
     .single();
@@ -289,6 +413,13 @@ export async function submitStoryImageBatch(input: {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Batch submission failed.';
     await admin.from('image_batch_jobs').update({ status: 'failed', error: message }).eq('id', jobId);
+    if (reservationId) {
+      await releaseBillableAction({
+        userId: user.id,
+        reservationId,
+        reason: 'batch_submission_failed',
+      }).catch(() => {});
+    }
     throw new Error(message);
   }
 
@@ -311,7 +442,10 @@ interface BatchJobRow {
   provider: 'gemini' | 'openai';
   provider_batch_name: string | null;
   item_count: number;
+  reservation_id: string | null;
 }
+
+const BATCH_JOB_SELECT = 'id, user_id, story_id, provider, provider_batch_name, item_count, reservation_id';
 
 interface BatchItemRow {
   id: string;
@@ -403,6 +537,13 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
     await admin.from('image_batch_jobs')
       .update({ status: poll.state === 'expired' ? 'expired' : 'failed', error: poll.error ?? poll.state, completed_at: new Date().toISOString() })
       .eq('id', job.id);
+    if (job.reservation_id) {
+      await releaseBillableAction({
+        userId: job.user_id,
+        reservationId: job.reservation_id,
+        reason: `batch_${poll.state}`,
+      }).catch(() => {});
+    }
     return;
   }
 
@@ -461,13 +602,32 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
   const succeeded = rows.filter((r) => r.status === 'ready').length;
   const failed = rows.filter((r) => r.status === 'failed').length;
   const remaining = rows.length - succeeded - failed;
+  const isComplete = remaining === 0;
   await admin.from('image_batch_jobs').update({
     succeeded_count: succeeded,
     failed_count: failed,
-    ...(remaining === 0
+    ...(isComplete
       ? { status: failed > 0 ? 'partial' : 'succeeded', completed_at: new Date().toISOString() }
       : { status: 'running' }),
   }).eq('id', job.id);
+
+  // Settle the coin reservation once the job reaches a terminal state.
+  if (isComplete && job.reservation_id) {
+    if (succeeded > 0) {
+      await finalizeBillableAction({
+        userId: job.user_id,
+        reservationId: job.reservation_id,
+        storyId: job.story_id,
+        metadata: { succeeded, failed },
+      }).catch((error) => console.error('Batch reservation finalize failed:', error));
+    } else {
+      await releaseBillableAction({
+        userId: job.user_id,
+        reservationId: job.reservation_id,
+        reason: 'batch_no_images',
+      }).catch(() => {});
+    }
+  }
 }
 
 /** Poll & materialize a single story's in-flight batch (used on story reopen). */
@@ -475,7 +635,7 @@ export async function reconcileStoryBatch(storyId: string): Promise<void> {
   const admin = createAdminClient();
   const { data } = await admin
     .from('image_batch_jobs')
-    .select('id, user_id, story_id, provider, provider_batch_name, item_count')
+    .select(BATCH_JOB_SELECT)
     .eq('story_id', storyId)
     .in('status', ['submitted', 'running'])
     .order('created_at', { ascending: false });
@@ -491,7 +651,7 @@ export async function reconcileActiveImageBatches(limit = 10): Promise<{ process
   const admin = createAdminClient();
   const { data } = await admin
     .from('image_batch_jobs')
-    .select('id, user_id, story_id, provider, provider_batch_name, item_count')
+    .select(BATCH_JOB_SELECT)
     .in('status', ['submitted', 'running'])
     .order('created_at', { ascending: true })
     .limit(limit);

@@ -251,6 +251,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
   );
+  const [imageDeliveryMode, setImageDeliveryMode] = useState<NonNullable<StoryConfig['imageDeliveryMode']>>(
+    DEFAULT_STORY_CONFIG.imageDeliveryMode ?? 'live'
+  );
   const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
     DEFAULT_STORY_CONFIG.imageModelSelection
   );
@@ -464,6 +467,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
+            setImageDeliveryMode(config.imageDeliveryMode || DEFAULT_STORY_CONFIG.imageDeliveryMode || 'live');
             setImageModelSelection(config.imageModelSelection);
             setImageContinuityStrategy(config.imageContinuityStrategy || DEFAULT_STORY_CONFIG.imageContinuityStrategy);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
@@ -591,6 +595,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
       imageGenerationMode,
+      imageDeliveryMode: imageGenerationMode === 'generate' ? imageDeliveryMode : 'live',
       imageContinuityStrategy,
       ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
         ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
@@ -1421,6 +1426,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
                 imageGenerationMode={imageGenerationMode}
                 onImageGenerationModeChange={setImageGenerationMode}
+                batchImageDeliveryEnabled
+                imageDeliveryMode={imageDeliveryMode}
+                onImageDeliveryModeChange={(value) => {
+                  setImageDeliveryMode(value);
+                  clearSeedPreview();
+                }}
                 imageModelPicker={imageModelPicker}
                 imageModelSelection={imageModelSelection}
                 onImageModelSelectionChange={(value) => {

@@ -1426,6 +1426,22 @@ function isPromptOnlyStoryConfig(storyConfig: StoryConfig): boolean {
   return storyConfig.imageGenerationMode === 'prompt_only';
 }
 
+// Batch delivery: a "generate" story whose beat images are deferred to a
+// background provider batch (non-reel only).
+function isBatchImageDeliveryStoryConfig(storyConfig: StoryConfig): boolean {
+  return storyConfig.storyKind !== 'reel'
+    && storyConfig.imageGenerationMode === 'generate'
+    && storyConfig.imageDeliveryMode === 'batch';
+}
+
+// Whether live beat-image generation should be skipped during interactive
+// generation. True for prompt-only stories and for batch-delivery stories
+// (images are produced later by the background batch). Portraits are handled
+// separately and are generated at batch-submit time.
+function defersLiveImageGeneration(storyConfig: StoryConfig): boolean {
+  return isPromptOnlyStoryConfig(storyConfig) || isBatchImageDeliveryStoryConfig(storyConfig);
+}
+
 function getStoryAspectRatio(storyConfig: StoryConfig): StoryAspectRatio {
   return storyConfig.isVerticalStory || storyConfig.aspectRatio === '9:16' ? '9:16' : '16:9';
 }
@@ -1461,7 +1477,7 @@ function getStartStoryActionKey(storyConfig: StoryConfig) {
       : 'start_reel_full_generation' as const;
   }
 
-  return isPromptOnlyStoryConfig(storyConfig)
+  return defersLiveImageGeneration(storyConfig)
     ? 'start_story_initial_beat_prompt_only' as const
     : 'start_story_initial_beat' as const;
 }
@@ -1471,7 +1487,7 @@ function getContinueStoryActionKey(storyConfig: StoryConfig) {
     throw new Error('continueStory is not supported for reel sessions; reels are generated in one shot.');
   }
 
-  return isPromptOnlyStoryConfig(storyConfig)
+  return defersLiveImageGeneration(storyConfig)
     ? 'continue_story_new_beat_prompt_only' as const
     : 'continue_story_new_beat' as const;
 }
@@ -1916,7 +1932,7 @@ export const useStoryStore = create<StoryState>()(
           return get().startReel(prompt, storyConfig);
         }
         const seededStory = isSeededStoryConfig(storyConfig);
-        const promptOnly = isPromptOnlyStoryConfig(storyConfig);
+        const promptOnly = defersLiveImageGeneration(storyConfig);
         const storyAspectRatio = getStoryAspectRatio(storyConfig);
         const startStoryActionKey = getStartStoryActionKey(storyConfig);
         const storyPrompt = seededStory
@@ -2923,7 +2939,7 @@ export const useStoryStore = create<StoryState>()(
           isSeededStoryConfig(session.storyConfig) && isCanonicalSeedOption(currentNode.data, optionId)
             ? getSeedBeatByIndex(session.storyConfig, currentNode.data.beatNumber + 1)
             : undefined;
-        const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+        const promptOnly = defersLiveImageGeneration(session.storyConfig);
         const storyAspectRatio = getStoryAspectRatio(session.storyConfig);
         const continueStoryActionKey = getContinueStoryActionKey(session.storyConfig);
         const generationStartedAt = nowMs();
