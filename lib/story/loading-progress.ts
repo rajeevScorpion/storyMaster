@@ -73,18 +73,26 @@ const FLOW_DETAIL_OVERRIDES: Record<StoryLoadingFlow, Partial<Record<StoryLoadin
 
 export function createStoryLoadingStage(
   flow: StoryLoadingFlow,
-  currentStepKey: StoryLoadingStepKey
+  currentStepKey: StoryLoadingStepKey,
+  opts?: { deferImages?: boolean }
 ): StoryLoadingStage {
-  const steps = SHARED_STEPS.map((step) => ({
-    ...step,
-    description: FLOW_DETAIL_OVERRIDES[flow][step.key] || step.description,
-  }));
+  const steps = SHARED_STEPS
+    // When live images are deferred (batch / prompt-only), no image is rendered,
+    // so hide the "Rendering the image" step to avoid a misleading checkpoint.
+    .filter((step) => !(opts?.deferImages && step.key === 'image'))
+    .map((step) => ({
+      ...step,
+      description: FLOW_DETAIL_OVERRIDES[flow][step.key] || step.description,
+    }));
 
-  const currentStep = steps.find((step) => step.key === currentStepKey) || steps[0];
+  // If the requested step was removed (image while deferring), fall through to
+  // the finishing step so progress still advances sensibly.
+  const resolvedStepKey = opts?.deferImages && currentStepKey === 'image' ? 'finish' : currentStepKey;
+  const currentStep = steps.find((step) => step.key === resolvedStepKey) || steps[0];
 
   return {
     flow,
-    currentStepKey,
+    currentStepKey: resolvedStepKey,
     detail: currentStep.description,
     steps,
   };

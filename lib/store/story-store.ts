@@ -166,6 +166,7 @@ interface StoryState {
   isRegeneratingImage: boolean;
   isSubmittingImageBatch: boolean;
   imageBatchMessage: string | null;
+  autoBuildProgress: { active: boolean; current: number; total: number } | null;
   audioReadyNodeId: string | null;
   storyMode: boolean;
   isSaving: boolean;
@@ -1077,10 +1078,11 @@ async function uploadBeatPortraits(
 function setLoadingStage(
   setState: (partial: Partial<StoryState>) => void,
   flow: StoryLoadingFlow,
-  step: StoryLoadingStage['currentStepKey']
+  step: StoryLoadingStage['currentStepKey'],
+  opts?: { deferImages?: boolean }
 ) {
   setState({
-    loadingStage: createStoryLoadingStage(flow, step),
+    loadingStage: createStoryLoadingStage(flow, step, opts),
   });
 }
 
@@ -1909,6 +1911,7 @@ export const useStoryStore = create<StoryState>()(
       isRegeneratingImage: false,
       isSubmittingImageBatch: false,
       imageBatchMessage: null,
+      autoBuildProgress: null,
       audioReadyNodeId: null,
       storyMode: false,
       isSaving: false,
@@ -2376,7 +2379,7 @@ export const useStoryStore = create<StoryState>()(
           // them as references - makes portrait the single source of truth from the very first image.
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
-          setLoadingStage(set, 'start_story', 'image');
+          setLoadingStage(set, 'start_story', 'image', { deferImages: promptOnly });
           const [imageResult, narratorVoiceResolution] = await Promise.all([
             promptOnly
               ? Promise.resolve({
@@ -3421,7 +3424,7 @@ export const useStoryStore = create<StoryState>()(
           );
 
           // Block loading on image only
-          setLoadingStage(set, 'continue_story', 'image');
+          setLoadingStage(set, 'continue_story', 'image', { deferImages: promptOnly });
           const imageResult = promptOnly
             ? {
                 imageUrl: '',
@@ -5800,7 +5803,13 @@ export const useStoryStore = create<StoryState>()(
             const current = get().session;
             if (current && current.savedStoryId === storyId) {
               const nodes = { ...current.storyMap.nodes };
+              // For a current-path submit, only mark beats on the root→current
+              // path — other branches were not batched and must not show pending.
+              const scopedIds = scope === 'current_path'
+                ? new Set(getPathToNode(current.storyMap, current.storyMap.currentNodeId).map((node) => node.id))
+                : null;
               for (const [nodeId, node] of Object.entries(nodes)) {
+                if (scopedIds && !scopedIds.has(nodeId)) continue;
                 const beat = node.data;
                 const hasImage = beat.imageStatus === 'ready' && beat.imageUrl;
                 const hasPrompt = Boolean(
@@ -5832,10 +5841,17 @@ export const useStoryStore = create<StoryState>()(
           imageDeliveryMode: baseConfig.imageGenerationMode === 'generate' ? 'batch' : baseConfig.imageDeliveryMode,
         };
 
-        await get().startStory(prompt, automatedConfig);
-        if (get().error) return;
+        const total = automatedConfig.maxBeats ?? 6;
+        set({ autoBuildProgress: { active: true, current: 0, total } });
 
-        const maxSteps = (automatedConfig.maxBeats ?? 6) + 2;
+        await get().startStory(prompt, automatedConfig);
+        if (get().error) {
+          set({ autoBuildProgress: null });
+          return;
+        }
+        set({ autoBuildProgress: { active: true, current: 1, total } });
+
+        const maxSteps = total + 2;
         for (let step = 0; step < maxSteps; step++) {
           const session = get().session;
           if (!session) break;
@@ -5845,18 +5861,18 @@ export const useStoryStore = create<StoryState>()(
           if (options.length === 0) break;
           const pick = options[Math.floor(Math.random() * options.length)];
           await get().continueStory(pick.id);
-          if (get().error) return;
+          if (get().error) {
+            set({ autoBuildProgress: null });
+            return;
+          }
+          const nextBeat = get().session?.storyMap.nodes[get().session!.storyMap.currentNodeId]?.data.beatNumber;
+          set({ autoBuildProgress: { active: true, current: nextBeat ?? step + 2, total } });
         }
 
-        // Wait briefly for the background early-save to assign a story id, then
-        // submit the batch. If the user is signed out (no save), the Create
-        // visuals banner will offer submission once the story is saved.
-        for (let i = 0; i < 20 && !get().session?.savedStoryId; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-        if (get().session?.savedStoryId) {
-          await get().submitImageBatch('path_to_completion');
-        }
+        // The walk ends on the terminal beat. Images are NOT auto-submitted:
+        // the user reviews the story and taps "Create all visuals" on the
+        // ending beat, which submits the current root→ending path.
+        set({ autoBuildProgress: null });
       },
 
       reconcileCurrentStoryBatch: async () => {

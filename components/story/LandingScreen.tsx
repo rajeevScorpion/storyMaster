@@ -57,7 +57,7 @@ import type {
 } from '@/lib/ai/narration-voices';
 
 interface LandingScreenProps {
-  onBegin?: (prompt: string, config?: StoryConfig) => void;
+  onBegin?: (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => void;
   initialData?: LandingInitialData | null;
   initialPricing?: PricingRuntimeContext | null;
 }
@@ -470,6 +470,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
             setImageDeliveryMode(config.imageDeliveryMode || DEFAULT_STORY_CONFIG.imageDeliveryMode || 'live');
+            setAutoBuildStory(sessionStorage.getItem('kissago_pending_autobuild') === '1');
+            sessionStorage.removeItem('kissago_pending_autobuild');
             setImageModelSelection(config.imageModelSelection);
             setImageContinuityStrategy(config.imageContinuityStrategy || DEFAULT_STORY_CONFIG.imageContinuityStrategy);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
@@ -650,12 +652,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         : prompt.trim();
     if (!storyPrompt) return;
 
+    const shouldAutoBuild =
+      autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate' && imageDeliveryMode === 'batch';
+
     if (onBegin) {
-      onBegin(storyPrompt, config);
+      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild });
       return;
     }
 
-    if (autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate' && imageDeliveryMode === 'batch') {
+    if (shouldAutoBuild) {
       await generateAutomatedStory(storyPrompt, config);
       return;
     }

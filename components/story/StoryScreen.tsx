@@ -1865,7 +1865,6 @@ export default function StoryScreen() {
       permanentlyDeleteCharacterReferenceSheet={permanentlyDeleteCharacterReferenceSheet}
       persistenceUserId={user?.id}
     />
-    <BatchVisualsBanner />
     </>
   );
 }
@@ -2080,6 +2079,7 @@ function StoryScreenInner({
   const [isPromptToolsHelpOpen, setIsPromptToolsHelpOpen] = useState(false);
   const [savedRefsExpanded, setSavedRefsExpanded] = useState(false);
   const [promptToolsSuccess, setPromptToolsSuccess] = useState<string | null>(null);
+  const [batchModeNotice, setBatchModeNotice] = useState(false);
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isOptimizingPromptOnlyImage, setIsOptimizingPromptOnlyImage] = useState(false);
@@ -2212,6 +2212,9 @@ function StoryScreenInner({
     return () => { active = false; };
   }, [currentNodeId, persistenceUserId, session.explorationMode, session.savedStoryId]);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  // Batch-delivery stories defer beat images to a background batch. Live per-beat
+  // (re)generation is disabled so an accidental click can't defeat batch mode.
+  const isBatchDeliveryStory = session.storyConfig.imageDeliveryMode === 'batch';
   const reelTimelineNodes = useMemo(
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
     [isReelStory, session.storyMap]
@@ -2238,7 +2241,10 @@ function StoryScreenInner({
   const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showResolvingImageState && !showPendingImageState;
   const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && !showResolvingImageState && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
-  const canRegenerateImage = !isPromptOnlyStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
+  const canRegenerateImage = !isPromptOnlyStory && !isBatchDeliveryStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
+  // In batch mode, surface a disabled image control that explains the batch flow
+  // instead of silently generating a live image.
+  const showBatchModeImageLock = isBatchDeliveryStory && !normalizedCurrentBeat.imageUrl;
   const cancelReelPlayAll = useCallback(() => {
     pendingReelPlayAllNodeIdRef.current = null;
     reelPlayAllNodeIdsRef.current = [];
@@ -5851,6 +5857,35 @@ function StoryScreenInner({
                     )}
                   </button>
                 )}
+                {/* Batch-mode: image generation is disabled — explain the batch flow */}
+                {showBatchModeImageLock && (
+                  <div className="relative flex flex-col items-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchModeNotice(true);
+                        window.setTimeout(() => setBatchModeNotice(false), 4000);
+                      }}
+                      aria-disabled="true"
+                      className="p-2.5 backdrop-blur-md rounded-full bg-neutral-900/60 border border-white/10 text-neutral-500 cursor-not-allowed"
+                      title="Batch mode — finish all beats, then tap Create all visuals on the last beat"
+                    >
+                      <ImageOff className="w-5 h-5" />
+                    </button>
+                    <AnimatePresence>
+                      {batchModeNotice && (
+                        <motion.p
+                          initial={{ opacity: 0, x: -6 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -6 }}
+                          className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                        >
+                          You&apos;re in batch mode. Finish all beats, then tap “Create all visuals” on the last beat.
+                        </motion.p>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
                 {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton
                     active={isAutoScrolling}
@@ -5874,6 +5909,9 @@ function StoryScreenInner({
               </div>
             )}
 
+          <div className="flex w-full flex-col">
+          {/* Batch visuals CTA — sits directly above the card, matching its width (all breakpoints) */}
+          <BatchVisualsBanner />
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -6235,6 +6273,7 @@ function StoryScreenInner({
               </div>
             )}
           </motion.div>
+          </div>{/* end banner + card stack */}
           </div>{/* end card + narration button row */}
 
           </div>
