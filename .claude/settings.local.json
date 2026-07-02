@@ -53,7 +53,15 @@
       "Read(//d/AiCoding/**)",
       "Bash(tee /tmp/tsc_out.txt)",
       "Read(//tmp/**)",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -m 30 http://localhost:3000/api/batch/reconcile)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -m 60 http://localhost:3000/story/smoke-test)",
+      "Bash(grep -vE '^\\\\s*$')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -m 30 http://localhost:3000/story/smoke-test2)",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $conn.OwningProcess | Select-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop; \"stopped PID $_\" } catch {} } } else { \"no listener on 3000\" })"
     ]
   },
   "sandbox": {

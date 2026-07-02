@@ -118,6 +118,8 @@ interface AdvancedOptionsProps {
   batchImageDeliveryEnabled?: boolean;
   imageDeliveryMode?: 'live' | 'batch';
   onImageDeliveryModeChange?: (value: 'live' | 'batch') => void;
+  autoBuildStory?: boolean;
+  onAutoBuildStoryChange?: (value: boolean) => void;
   imageModelPicker?: ImageModelPickerState | null;
   imageModelSelection?: ImageModelSelection;
   onImageModelSelectionChange?: (value: ImageModelSelection | undefined) => void;
@@ -164,6 +166,8 @@ export default function AdvancedOptions({
   batchImageDeliveryEnabled = false,
   imageDeliveryMode = 'live',
   onImageDeliveryModeChange,
+  autoBuildStory = false,
+  onAutoBuildStoryChange,
   imageModelPicker = null,
   imageModelSelection,
   onImageModelSelectionChange,
@@ -466,6 +470,30 @@ export default function AdvancedOptions({
                     </button>
                   </div>
                 </div>
+                {imageDeliveryMode === 'batch' && (
+                  <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/10 pt-3">
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-sans text-neutral-200">Auto-build whole story</h4>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Kissago picks a path automatically and queues every beat&apos;s image in one batch.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onAutoBuildStoryChange?.(!autoBuildStory)}
+                      className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                        autoBuildStory
+                          ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                          : 'justify-start border-white/10 bg-neutral-800'
+                      }`}
+                      role="switch"
+                      aria-checked={autoBuildStory}
+                      aria-label="Auto-build whole story"
+                    >
+                      <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

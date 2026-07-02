@@ -209,6 +209,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
+  const generateAutomatedStory = useStoryStore((state) => state.generateAutomatedStory);
   const isLoading = useStoryStore((state) => state.isLoading);
   const pricingRuntime = usePricingRuntime();
   const pricing = pricingRuntime.isLoading && initialPricing ? initialPricing : pricingRuntime.data;
@@ -254,6 +255,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageDeliveryMode, setImageDeliveryMode] = useState<NonNullable<StoryConfig['imageDeliveryMode']>>(
     DEFAULT_STORY_CONFIG.imageDeliveryMode ?? 'live'
   );
+  const [autoBuildStory, setAutoBuildStory] = useState(false);
   const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
     DEFAULT_STORY_CONFIG.imageModelSelection
   );
@@ -650,6 +652,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
 
     if (onBegin) {
       onBegin(storyPrompt, config);
+      return;
+    }
+
+    if (autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate' && imageDeliveryMode === 'batch') {
+      await generateAutomatedStory(storyPrompt, config);
       return;
     }
 
@@ -1432,6 +1439,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   setImageDeliveryMode(value);
                   clearSeedPreview();
                 }}
+                autoBuildStory={autoBuildStory}
+                onAutoBuildStoryChange={setAutoBuildStory}
                 imageModelPicker={imageModelPicker}
                 imageModelSelection={imageModelSelection}
                 onImageModelSelectionChange={(value) => {

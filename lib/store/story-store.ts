@@ -222,6 +222,7 @@ interface StoryState {
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
   reconcileCurrentStoryBatch: () => Promise<void>;
+  generateAutomatedStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
   setSaveRuntimeSettings: (settings: Partial<StorySaveRuntimeSettings>) => void;
@@ -5819,6 +5820,42 @@ export const useStoryStore = create<StoryState>()(
             error: error instanceof Error ? error.message : 'Failed to submit background image batch.',
             errorAction: null,
           });
+        }
+      },
+
+      generateAutomatedStory: async (prompt: string, config?: StoryConfig) => {
+        // Case 02: build a complete linear story by random-walking one option per
+        // beat, deferring images to a background batch, then submit that batch.
+        const baseConfig = normalizeStoryConfig(config);
+        const automatedConfig: StoryConfig = {
+          ...baseConfig,
+          imageDeliveryMode: baseConfig.imageGenerationMode === 'generate' ? 'batch' : baseConfig.imageDeliveryMode,
+        };
+
+        await get().startStory(prompt, automatedConfig);
+        if (get().error) return;
+
+        const maxSteps = (automatedConfig.maxBeats ?? 6) + 2;
+        for (let step = 0; step < maxSteps; step++) {
+          const session = get().session;
+          if (!session) break;
+          const node = session.storyMap.nodes[session.storyMap.currentNodeId];
+          if (!node || node.data.isEnding) break;
+          const options = node.data.options ?? [];
+          if (options.length === 0) break;
+          const pick = options[Math.floor(Math.random() * options.length)];
+          await get().continueStory(pick.id);
+          if (get().error) return;
+        }
+
+        // Wait briefly for the background early-save to assign a story id, then
+        // submit the batch. If the user is signed out (no save), the Create
+        // visuals banner will offer submission once the story is saved.
+        for (let i = 0; i < 20 && !get().session?.savedStoryId; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        if (get().session?.savedStoryId) {
+          await get().submitImageBatch('path_to_completion');
         }
       },
 
