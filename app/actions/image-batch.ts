@@ -8,8 +8,11 @@ import { generateCharacterPortraitServer } from '@/app/actions/portrait-server';
 import { generateSelectedImage } from '@/app/actions/image-generation';
 import {
   extractImageContinuityState,
+  resolveImageContinuityStrategy,
   type ImageContinuityProviderState,
 } from '@/lib/ai/image-continuity.shared';
+import { getImageContinuitySettings } from '@/lib/ai/image-continuity-settings';
+import { getStatefulRuntimePricing } from '@/lib/ai/image-continuity-settings.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { resolveImageModelSnapshot } from '@/lib/ai/image-models';
 import {
@@ -877,6 +880,37 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
   const task = imageTaskForStoryKind(config.storyKind);
   const visualStyle = deriveVisualStyleSummary(config.visualSettings);
 
+  // Resolve whether the selected model can actually thread state. Providers without
+  // stateful support (e.g. groq, and future integrations) resolve to resend_refs —
+  // for those we keep continuity by generating character portraits up front and
+  // attaching them as references to every beat, just like the batch path.
+  const snapshot = await resolveImageModelSnapshot({
+    taskKey: task,
+    selection: config.imageModelSelection ?? null,
+    currentPlanKey: 'free',
+  });
+  const continuitySettings = await getImageContinuitySettings().catch(() => null);
+  const runtimePricing = continuitySettings
+    ? getStatefulRuntimePricing(continuitySettings, snapshot.providerKey)
+    : null;
+  const continuityResolution = resolveImageContinuityStrategy({
+    requestedStrategy: 'provider_stateful',
+    providerKey: snapshot.providerKey,
+    providerStatefulEnabled: runtimePricing?.enabled ?? false,
+  });
+  const usingResendRefs = continuityResolution.strategy === 'resend_refs';
+
+  // In the resend_refs fallback, ensure portraits exist (needed for continuity on a
+  // non-stateful provider) and gather them once to attach to every beat.
+  let fallbackReferenceParts: InlineImagePart[] = [];
+  if (usingResendRefs) {
+    await ensureCharacterPortraits(admin, job.user_id, job.story_id, map, config).catch((error) =>
+      console.error('Stateful fallback portrait prep failed:', error)
+    );
+    const maxRefs = getImageModelMaxReferenceImages(snapshot.capabilities);
+    fallbackReferenceParts = await collectReferenceParts(admin, map, maxRefs);
+  }
+
   const { data: pending } = await admin
     .from('image_batch_items')
     .select('id, node_id, sequence_index, aspect_ratio, provider_cost_usd, status')
@@ -911,8 +945,10 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
     }
 
     try {
-      // Episodic: portrait turns seed the thread and persist reusable refs.
-      if (job.episodic) {
+      // Episodic (stateful path only): portrait turns seed the thread and persist
+      // reusable refs. In the resend_refs fallback, portraits were already prepared
+      // up front and are attached as references instead.
+      if (!usingResendRefs && job.episodic) {
         for (const character of node.data.characters ?? []) {
           if (character.referenceSheetUrl || character.portraitUrl || generatedPortraits.has(character.id)) continue;
           const portrait = await generateCharacterPortraitServer({
@@ -950,6 +986,9 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
         aspectRatio: config.aspectRatio,
         imageSize: '1K',
         selection: config.imageModelSelection ?? null,
+        // Non-stateful providers keep continuity via these references; on a
+        // stateful provider they're ignored in favour of the thread state.
+        ...(usingResendRefs ? { referenceParts: fallbackReferenceParts } : {}),
         telemetry: {
           activityKey: 'stateful_image_generation',
           generationMode: 'stateful',
