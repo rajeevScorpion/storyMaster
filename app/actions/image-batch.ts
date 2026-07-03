@@ -708,8 +708,9 @@ function bulkVisualBaseUrl(): string {
   return raw.replace(/\/$/, '');
 }
 
-/** Fire-and-forget trigger for the stateful worker route. */
-export function kickStatefulWorker(jobId: string): void {
+/** Fire-and-forget trigger for the stateful worker route. Internal (not a server
+ *  action): in a 'use server' module only non-exported helpers may be sync. */
+function kickStatefulWorker(jobId: string): void {
   const secret = process.env.CRON_SECRET;
   void fetch(`${bulkVisualBaseUrl()}/api/batch/generate-stateful`, {
     method: 'POST',
