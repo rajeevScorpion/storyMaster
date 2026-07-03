@@ -523,6 +523,22 @@ const ASSET_SYNC_PENDING_MESSAGE = 'Beat media is syncing in the background.';
 const ASSET_SYNC_FAILED_MESSAGE = 'A beat image still needs upload. Tap to retry.';
 const ASSET_SYNC_REPAIR_MESSAGE = 'A beat image still needs repair. Tap to retry.';
 const BEAT_IMAGE_RETRY_BACKOFF_MS = [10_000, 30_000, 60_000] as const;
+
+// Transient/benign save-status notices that surface on the `error` channel but do
+// not represent a real generation failure. The automated batch walk must not treat
+// these as fatal — the store already queues and retries these saves on its own.
+const BENIGN_SAVE_STATUS_MESSAGES = new Set<string>([
+  LONG_SAVE_RETRY_MESSAGE,
+  ASSET_SYNC_PENDING_MESSAGE,
+  ASSET_SYNC_FAILED_MESSAGE,
+  ASSET_SYNC_REPAIR_MESSAGE,
+]);
+
+// Whether an `error` value should abort the automated batch walk. Only genuine
+// generation/billing failures are fatal; a queued-save notice is not.
+function isWalkFatalError(error: string | null | undefined): boolean {
+  return !!error && !BENIGN_SAVE_STATUS_MESSAGES.has(error);
+}
 const DEFAULT_STORY_SAVE_RUNTIME_SETTINGS: StorySaveRuntimeSettings = {
   storyAssetSignedUrlSwapEnabled: false,
   storyIncrementalAssetSyncEnabled: false,
@@ -5914,7 +5930,7 @@ export const useStoryStore = create<StoryState>()(
         set({ autoBuildProgress: { active: true, current: 0, total } });
 
         await get().startStory(prompt, automatedConfig);
-        if (get().error) {
+        if (isWalkFatalError(get().error)) {
           set({ autoBuildProgress: null });
           return;
         }
@@ -5930,7 +5946,9 @@ export const useStoryStore = create<StoryState>()(
           if (options.length === 0) break;
           const pick = options[Math.floor(Math.random() * options.length)];
           await get().continueStory(pick.id);
-          if (get().error) {
+          // Only a genuine generation/billing failure aborts the walk. A benign
+          // "save queued" notice must not — otherwise a slow autosave kills the run.
+          if (isWalkFatalError(get().error)) {
             set({ autoBuildProgress: null });
             return;
           }
@@ -5938,10 +5956,24 @@ export const useStoryStore = create<StoryState>()(
           set({ autoBuildProgress: { active: true, current: nextBeat ?? step + 2, total } });
         }
 
-        // The walk ends on the terminal beat. Images are NOT auto-submitted:
-        // the user reviews the story and taps "Create all visuals" on the
-        // ending beat, which submits the current root→ending path.
+        // The walk ends on the terminal beat. Per-beat text was persisted
+        // incrementally during the walk (full-session autosave is suppressed while
+        // autoBuildProgress is active to avoid overlapping saves). Run one final
+        // full save now so session-level state is consistent on the cloud.
         set({ autoBuildProgress: null });
+        const finalSession = get().session;
+        if (finalSession?.savedStoryId && !finalSession.sourceStoryOwnerId) {
+          const saveUserId = await resolveCurrentUserId(finalSession.savedByUserId);
+          if (saveUserId) {
+            await get().saveStoryToCloud(saveUserId).catch((err) => {
+              console.error('Automated story final save failed:', err);
+            });
+          }
+        }
+
+        // Images are NOT auto-submitted: the user reviews the story and taps
+        // "Create all visuals" on the ending beat, which submits the current
+        // root→ending path.
       },
 
       reconcileCurrentStoryBatch: async () => {

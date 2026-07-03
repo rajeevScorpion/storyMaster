@@ -3721,8 +3721,13 @@ function StoryScreenInner({
     return () => window.clearTimeout(timeoutId);
   }, [promptToolsSuccess]);
 
-  // Auto-save when a new beat is generated
+  // Auto-save when a new beat is generated.
+  // Suppressed during an automated batch walk: beats are persisted incrementally
+  // by saveBeatAction, and one full save runs when the walk finishes. Firing a
+  // full-session save per beat here would overlap the next beat's save and trip
+  // the benign "retry queued" notice, which used to abort the walk.
   useEffect(() => {
+    if (useStoryStore.getState().autoBuildProgress?.active) return;
     if (saveStatus === 'unsaved' && onSave && !isSaving) {
       onSave();
     }
@@ -3736,6 +3741,9 @@ function StoryScreenInner({
     const timeoutId = window.setTimeout(() => {
       const latest = useStoryStore.getState();
       if (latest.saveStatus !== 'saving') return;
+      // Never surface the "save queued" notice during an automated batch walk —
+      // it would abort the walk on the store's error channel.
+      if (latest.autoBuildProgress?.active) return;
 
       if (cycleSettings.storyIncrementalAssetSyncEnabled) {
         if (!isPromptOnlyStory) {
