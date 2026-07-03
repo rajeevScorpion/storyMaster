@@ -168,6 +168,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   maxBeats: 6,
   imageGenerationMode: 'prompt_only',
   imageDeliveryMode: 'live',
+  episodicCharacters: false,
   imageContinuityStrategy: 'auto',
   isVerticalStory: false,
   aspectRatio: '16:9',
@@ -279,6 +280,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     maxBeats,
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
     imageDeliveryMode: normalizeImageDeliveryMode(input?.imageDeliveryMode),
+    episodicCharacters: input?.episodicCharacters === true,
     ...(imageModelSelection ? { imageModelSelection } : {}),
     imageContinuityStrategy: normalizeImageContinuityStrategy(
       input?.imageContinuityStrategy ?? input?.image_continuity_strategy
@@ -588,7 +590,7 @@ function normalizeImageGenerationMode(value?: string | null): StoryConfig['image
 }
 
 function normalizeImageDeliveryMode(value?: string | null): StoryConfig['imageDeliveryMode'] {
-  return value === 'batch' ? 'batch' : 'live';
+  return value === 'batch' || value === 'stateful' ? value : 'live';
 }
 
 function normalizeVerticalStoryFlag(input?: RawStoryConfig | null): boolean {

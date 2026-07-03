@@ -116,8 +116,11 @@ interface AdvancedOptionsProps {
   imageGenerationMode?: 'generate' | 'prompt_only';
   onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
   batchImageDeliveryEnabled?: boolean;
-  imageDeliveryMode?: 'live' | 'batch';
-  onImageDeliveryModeChange?: (value: 'live' | 'batch') => void;
+  imageDeliveryMode?: 'live' | 'batch' | 'stateful';
+  onImageDeliveryModeChange?: (value: 'live' | 'batch' | 'stateful') => void;
+  episodicCharacters?: boolean;
+  onEpisodicCharactersChange?: (value: boolean) => void;
+  statefulContinuityAvailable?: boolean;
   autoBuildStory?: boolean;
   onAutoBuildStoryChange?: (value: boolean) => void;
   imageModelPicker?: ImageModelPickerState | null;
@@ -166,6 +169,9 @@ export default function AdvancedOptions({
   batchImageDeliveryEnabled = false,
   imageDeliveryMode = 'live',
   onImageDeliveryModeChange,
+  episodicCharacters = false,
+  onEpisodicCharactersChange,
+  statefulContinuityAvailable = true,
   autoBuildStory = false,
   onAutoBuildStoryChange,
   imageModelPicker = null,
@@ -435,47 +441,98 @@ export default function AdvancedOptions({
                           Live generates images immediately while you read, at full price.
                         </p>
                         <p>
-                          Batch background sends all images to a provider batch — ready within about a day and roughly 50% cheaper. Great for finishing a whole story affordably.
+                          Fast renders all images in one go after the story, keeping characters
+                          consistent automatically. Regular price, ready in minutes.
+                        </p>
+                        <p>
+                          Cost-saver sends all images to a provider batch — ready within about a
+                          day and roughly 50% cheaper. Great for finishing a whole story affordably.
                         </p>
                       </InfoPopover>
                     </div>
                     <p className="mt-1 text-xs text-neutral-500">
-                      {imageDeliveryMode === 'batch' ? 'Batch background (~24h, ~50% cheaper)' : 'Live (immediate)'}
+                      {imageDeliveryMode === 'stateful'
+                        ? 'Fast (regular price, ready in minutes)'
+                        : imageDeliveryMode === 'batch'
+                        ? 'Cost-saver (~24h, ~50% cheaper)'
+                        : 'Live (immediate)'}
                     </p>
                   </div>
                   <div
-                    className="grid h-10 w-28 shrink-0 grid-cols-2 rounded-full border border-white/10 bg-neutral-900/70 p-1 text-xs"
+                    className="grid h-10 w-52 shrink-0 grid-cols-3 rounded-full border border-white/10 bg-neutral-900/70 p-1 text-xs"
                     role="group"
                     aria-label="Image delivery mode"
                   >
-                    <button
-                      type="button"
-                      onClick={() => onImageDeliveryModeChange?.('live')}
-                      className={`inline-flex items-center justify-center rounded-full transition-colors ${
-                        imageDeliveryMode !== 'batch' ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-100'
-                      }`}
-                      aria-pressed={imageDeliveryMode !== 'batch'}
-                    >
-                      Live
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onImageDeliveryModeChange?.('batch')}
-                      className={`inline-flex items-center justify-center rounded-full transition-colors ${
-                        imageDeliveryMode === 'batch' ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-100'
-                      }`}
-                      aria-pressed={imageDeliveryMode === 'batch'}
-                    >
-                      Batch
-                    </button>
+                    {([
+                      { key: 'live', label: 'Live' },
+                      { key: 'stateful', label: 'Fast' },
+                      { key: 'batch', label: 'Saver' },
+                    ] as const).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => onImageDeliveryModeChange?.(key)}
+                        className={`inline-flex items-center justify-center rounded-full transition-colors ${
+                          imageDeliveryMode === key ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-100'
+                        }`}
+                        aria-pressed={imageDeliveryMode === key}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                {imageDeliveryMode === 'batch' && (
+
+                {imageDeliveryMode === 'stateful' && !statefulContinuityAvailable && (
+                  <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    The selected image model doesn&apos;t support stateful threads. Fast delivery
+                    will still run, falling back to reference-image continuity.
+                  </p>
+                )}
+
+                {imageDeliveryMode === 'stateful' && (
+                  <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/10 pt-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-sans text-neutral-200">Episodic characters</h4>
+                        <InfoPopover title="Episodic characters" ariaLabel="Show episodic details">
+                          <p>
+                            Generates and saves a portrait for each named character so they can be
+                            reused consistently across future stories. Adds a small extra cost.
+                          </p>
+                          <p>
+                            Off keeps characters consistent within this story via the stateful thread,
+                            but doesn&apos;t save reusable character references.
+                          </p>
+                        </InfoPopover>
+                      </div>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Save reusable character portraits for cross-story continuity.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onEpisodicCharactersChange?.(!episodicCharacters)}
+                      className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                        episodicCharacters
+                          ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                          : 'justify-start border-white/10 bg-neutral-800'
+                      }`}
+                      role="switch"
+                      aria-checked={episodicCharacters}
+                      aria-label="Episodic characters"
+                    >
+                      <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                    </button>
+                  </div>
+                )}
+
+                {(imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful') && (
                   <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/10 pt-3">
                     <div className="min-w-0">
                       <h4 className="text-sm font-sans text-neutral-200">Auto-build whole story</h4>
                       <p className="mt-1 text-xs text-neutral-500">
-                        Kissago picks a path automatically and queues every beat&apos;s image in one batch.
+                        Kissago picks a path automatically and prepares every beat, ready for visuals.
                       </p>
                     </div>
                     <button

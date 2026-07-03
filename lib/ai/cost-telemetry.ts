@@ -47,6 +47,7 @@ export async function recordModelCostEvent(input: ModelCostEventInput): Promise<
         node_id: input.context.nodeId || null,
         story_session_id: input.context.storySessionId || null,
         activity_key: input.context.activityKey,
+        generation_mode: input.context.generationMode || 'regular',
         task_key: input.taskKey,
         provider: input.provider || 'google_gemini',
         model_id: input.modelId,

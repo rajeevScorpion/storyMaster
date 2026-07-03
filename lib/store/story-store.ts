@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  buildFinalPortraitPrompt,
   buildFinalStoryboardImagePrompt,
   buildReelPanelCaptions,
   composeStoryboardPlan,
@@ -15,6 +14,7 @@ import {
   type StoryModelOverrides,
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
+import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import {
   generateAndPersistStoryNarrationWithOverlay,
@@ -26,7 +26,7 @@ import {
 } from '@/app/actions/story-narration';
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
-import { submitStoryImageBatch, reconcileStoryBatch } from '@/app/actions/image-batch';
+import { submitStoryImageBatch, submitStoryStatefulVisuals, reconcileStoryBatch } from '@/app/actions/image-batch';
 import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
@@ -225,6 +225,7 @@ interface StoryState {
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
+  submitStatefulVisuals: (scope?: ImageBatchScope) => Promise<void>;
   generateNarrationBatch: () => Promise<void>;
   reconcileCurrentStoryBatch: () => Promise<void>;
   generateAutomatedStory: (prompt: string, config?: StoryConfig) => Promise<void>;
@@ -1449,12 +1450,13 @@ function isPromptOnlyStoryConfig(storyConfig: StoryConfig): boolean {
   return storyConfig.imageGenerationMode === 'prompt_only';
 }
 
-// Batch delivery: a "generate" story whose beat images are deferred to a
-// background provider batch (non-reel only).
+// Deferred delivery: a "generate" story whose beat images are produced later by a
+// background job rather than live during the walk — either the cost-saver provider
+// batch ('batch') or the fast stateful sequential job ('stateful'). Non-reel only.
 function isBatchImageDeliveryStoryConfig(storyConfig: StoryConfig): boolean {
   return storyConfig.storyKind !== 'reel'
     && storyConfig.imageGenerationMode === 'generate'
-    && storyConfig.imageDeliveryMode === 'batch';
+    && (storyConfig.imageDeliveryMode === 'batch' || storyConfig.imageDeliveryMode === 'stateful');
 }
 
 // Whether live beat-image generation should be skipped during interactive
@@ -5870,6 +5872,55 @@ export const useStoryStore = create<StoryState>()(
         }
       },
 
+      submitStatefulVisuals: async (scope?: ImageBatchScope) => {
+        const { session } = get();
+        const storyId = session?.savedStoryId;
+        if (!storyId) {
+          set({
+            error: 'Save the story before generating visuals in the background.',
+            errorAction: null,
+          });
+          return;
+        }
+
+        set({ isSubmittingImageBatch: true, imageBatchMessage: null, error: null, errorAction: null });
+        try {
+          const episodic = session?.storyConfig?.episodicCharacters === true;
+          const result = await submitStoryStatefulVisuals({ storyId, episodic, ...(scope ? { scope } : {}) });
+          set({ isSubmittingImageBatch: false, imageBatchMessage: result.message });
+
+          // Reflect pending state locally so beats show placeholders immediately.
+          if (result.status === 'submitted') {
+            const current = get().session;
+            if (current && current.savedStoryId === storyId) {
+              const nodes = { ...current.storyMap.nodes };
+              const scopedIds = scope === 'current_path'
+                ? new Set(getPathToNode(current.storyMap, current.storyMap.currentNodeId).map((node) => node.id))
+                : null;
+              for (const [nodeId, node] of Object.entries(nodes)) {
+                if (scopedIds && !scopedIds.has(nodeId)) continue;
+                const beat = node.data;
+                const hasImage = beat.imageStatus === 'ready' && beat.imageUrl;
+                const hasPrompt = Boolean(
+                  (beat.finalImagePromptText || beat.storyboardPromptText || beat.imagePrompt || '').trim()
+                );
+                if (!hasImage && hasPrompt) {
+                  nodes[nodeId] = { ...node, data: { ...beat, imageStatus: 'pending', imageError: undefined } };
+                }
+              }
+              set({ session: { ...current, storyMap: { ...current.storyMap, nodes } } });
+            }
+          }
+        } catch (error) {
+          set({
+            isSubmittingImageBatch: false,
+            imageBatchMessage: null,
+            error: error instanceof Error ? error.message : 'Failed to submit stateful visuals.',
+            errorAction: null,
+          });
+        }
+      },
+
       generateNarrationBatch: async () => {
         const { session } = get();
         const storyId = session?.savedStoryId;
@@ -5919,11 +5970,16 @@ export const useStoryStore = create<StoryState>()(
 
       generateAutomatedStory: async (prompt: string, config?: StoryConfig) => {
         // Case 02: build a complete linear story by random-walking one option per
-        // beat, deferring images to a background batch, then submit that batch.
+        // beat, deferring images to a background job (stateful fast path by default,
+        // or the cost-saver batch API), then let the user submit the visuals.
         const baseConfig = normalizeStoryConfig(config);
         const automatedConfig: StoryConfig = {
           ...baseConfig,
-          imageDeliveryMode: baseConfig.imageGenerationMode === 'generate' ? 'batch' : baseConfig.imageDeliveryMode,
+          imageDeliveryMode: baseConfig.imageGenerationMode === 'generate'
+            ? (baseConfig.imageDeliveryMode === 'batch' || baseConfig.imageDeliveryMode === 'stateful'
+                ? baseConfig.imageDeliveryMode
+                : 'stateful')
+            : baseConfig.imageDeliveryMode,
         };
 
         const total = automatedConfig.maxBeats ?? 6;

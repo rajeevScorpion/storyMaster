@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ImageIcon, Loader2, Lock, RefreshCw, Volume2, Check } from 'lucide-react';
 import { useStoryStore } from '@/lib/store/story-store';
@@ -32,7 +32,9 @@ function beatHasPrompt(beat: StoryBeat): boolean {
 export default function BatchVisualsBanner() {
   const session = useStoryStore((state) => state.session);
   const submitImageBatch = useStoryStore((state) => state.submitImageBatch);
+  const submitStatefulVisuals = useStoryStore((state) => state.submitStatefulVisuals);
   const reconcileCurrentStoryBatch = useStoryStore((state) => state.reconcileCurrentStoryBatch);
+  const loadStoryFromCloud = useStoryStore((state) => state.loadStoryFromCloud);
   const isSubmitting = useStoryStore((state) => state.isSubmittingImageBatch);
   const message = useStoryStore((state) => state.imageBatchMessage);
   const generateNarrationBatch = useStoryStore((state) => state.generateNarrationBatch);
@@ -79,23 +81,38 @@ export default function BatchVisualsBanner() {
 
   const isReel = session?.storyConfig.storyKind === 'reel';
   const savedStoryId = session?.savedStoryId ?? null;
+  const deliveryMode = session?.storyConfig.imageDeliveryMode;
+  const isStatefulDelivery = deliveryMode === 'stateful';
   const defersImages = Boolean(
     session &&
-    (session.storyConfig.imageDeliveryMode === 'batch' ||
+    (deliveryMode === 'batch' ||
+      deliveryMode === 'stateful' ||
       session.storyConfig.imageGenerationMode === 'prompt_only')
   );
-  // Narration only defers on batch-delivery "generate" stories (not prompt-only).
+  // Narration defers on any deferred-delivery "generate" story (not prompt-only).
   const isBatchMode = Boolean(
     session &&
     !isReel &&
     Boolean(savedStoryId) &&
     session.storyConfig.imageGenerationMode === 'generate' &&
-    session.storyConfig.imageDeliveryMode === 'batch'
+    (deliveryMode === 'batch' || deliveryMode === 'stateful')
   );
 
   // --- Visuals section ---
   const canShowVisuals = Boolean(session) && !isReel && Boolean(savedStoryId) && defersImages;
   const showInFlight = canShowVisuals && stats.pending > 0;
+
+  // Fast (stateful) delivery streams beats in from a server worker. Poll the cloud
+  // so images appear without the manual "Check now". Reload only — never reconcile,
+  // which would kick another generation pass on top of the running worker.
+  useEffect(() => {
+    if (!isStatefulDelivery || !savedStoryId || stats.pending <= 0) return;
+    const id = window.setInterval(() => {
+      void loadStoryFromCloud(savedStoryId);
+    }, 6000);
+    return () => window.clearInterval(id);
+  }, [isStatefulDelivery, savedStoryId, stats.pending, loadStoryFromCloud]);
+
   const showCreate = canShowVisuals && stats.pending === 0 && stats.pathNeeding > 0;
   const showVisuals = showCreate || showInFlight;
   const createEnabled = stats.isTerminal && !isSubmitting;
@@ -128,19 +145,31 @@ export default function BatchVisualsBanner() {
                     <ImageIcon className="h-4 w-4" aria-hidden="true" />
                   </span>
                   <div className="min-w-0 text-left">
-                    <p className="text-sm text-neutral-100">Visuals are generating in the background</p>
+                    <p className="text-sm text-neutral-100">
+                      {isStatefulDelivery ? 'Visuals are generating now' : 'Visuals are generating in the background'}
+                    </p>
                     <p className="mt-0.5 text-xs text-neutral-400">
-                      {stats.ready} of {stats.total} ready · check back within a day.
+                      {isStatefulDelivery
+                        ? `${stats.ready} of ${stats.total} ready · this finishes in a few minutes.`
+                        : `${stats.ready} of ${stats.total} ready · check back within a day.`}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void reconcileCurrentStoryBatch()}
-                    className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-800/80 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-                    Check now
-                  </button>
+                  {!isStatefulDelivery && (
+                    <button
+                      type="button"
+                      onClick={() => void reconcileCurrentStoryBatch()}
+                      className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-800/80 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                      Check now
+                    </button>
+                  )}
+                  {isStatefulDelivery && (
+                    <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-800/80 px-3 py-2 text-xs text-neutral-300">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      Generating…
+                    </span>
+                  )}
                 </>
               ) : (
                 <>
@@ -150,13 +179,15 @@ export default function BatchVisualsBanner() {
                       {message
                         ? message
                         : createEnabled
-                        ? `Generate images for ${stats.pathNeeding} beat${stats.pathNeeding === 1 ? '' : 's'} on this path in the background — ready within a day, ~50% cheaper. You can leave and come back.`
-                        : 'Reach the end of the story to create all visuals in one batch.'}
+                        ? isStatefulDelivery
+                          ? `Generate images for ${stats.pathNeeding} beat${stats.pathNeeding === 1 ? '' : 's'} on this path — consistent characters, ready in a few minutes.`
+                          : `Generate images for ${stats.pathNeeding} beat${stats.pathNeeding === 1 ? '' : 's'} on this path in the background — ready within a day, ~50% cheaper. You can leave and come back.`
+                        : 'Reach the end of the story to create all visuals in one go.'}
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => void submitImageBatch('current_path')}
+                    onClick={() => void (isStatefulDelivery ? submitStatefulVisuals('current_path') : submitImageBatch('current_path'))}
                     disabled={!createEnabled}
                     title={createEnabled ? undefined : 'Finish the story — the button activates on the ending beat.'}
                     className={`ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors ${

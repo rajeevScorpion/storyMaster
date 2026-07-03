@@ -25,6 +25,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
+import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import {
   PORTRAIT_MAX_WIDTH,
   PORTRAIT_MAX_HEIGHT,
@@ -34,7 +35,7 @@ import {
   STORYBOARD_VERTICAL_MAX_WIDTH,
   STORYBOARD_VERTICAL_MAX_HEIGHT,
 } from '@/lib/constants/media';
-import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
+import type { Character, PortraitReferenceConfig } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type {
   ImageContinuityProviderState,
@@ -434,11 +435,6 @@ export async function materializeSeededBeat(
   }
 
   return normalizeStoryBeatTextParts(beat);
-}
-
-interface CharacterReferenceGenerationOptions {
-  mode: PortraitReferenceMode;
-  quality: PortraitReferenceConfig['quality'];
 }
 
 export async function generateStoryBeat(
@@ -1617,45 +1613,6 @@ async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string
 
   const blob = await response.blob();
   return blobToDataUrl(blob);
-}
-
-function buildPortraitReferenceLayoutDescription(
-  portraitReferenceConfig: CharacterReferenceGenerationOptions
-): string {
-  if (portraitReferenceConfig.mode === 'single_portrait') {
-    return 'one clean full-body reference portrait with a clear face, either front-facing or 3/4 view';
-  }
-
-  if (portraitReferenceConfig.quality === '1K') {
-    return 'a single square character sheet showing the same character in four views: close-up face, front full body, 3/4 full body, and back full body';
-  }
-
-  return 'a single square character sheet showing the same character in three views: close-up face, front full body, and 3/4 full body';
-}
-
-export function buildFinalPortraitPrompt(
-  character: Character,
-  visualStyle: string,
-  portraitReferenceConfig: PortraitReferenceConfig,
-  modelOverrides?: StoryModelOverrides,
-  promptOverride?: string
-): string {
-  const normalizedPortraitReferenceConfig = normalizePortraitReferenceConfig(portraitReferenceConfig);
-  const referenceLayout = buildPortraitReferenceLayoutDescription(normalizedPortraitReferenceConfig);
-  const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
-  const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
-    ? portraitTemplateCandidate
-    : getDefaultPromptBody('portrait_generation');
-
-  return resolvePromptTemplate(portraitTemplate, {
-    characterName: character.name,
-    characterAppearance: promptOverride || character.appearanceSummary,
-    characterType: character.type,
-    visualStyle,
-    portraitMode: normalizedPortraitReferenceConfig.mode === 'character_sheet' ? 'character sheet' : 'single portrait',
-    referenceQuality: normalizedPortraitReferenceConfig.quality,
-    sheetLayout: referenceLayout,
-  });
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

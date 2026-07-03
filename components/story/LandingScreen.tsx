@@ -16,7 +16,7 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
-import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
@@ -255,6 +255,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageDeliveryMode, setImageDeliveryMode] = useState<NonNullable<StoryConfig['imageDeliveryMode']>>(
     DEFAULT_STORY_CONFIG.imageDeliveryMode ?? 'live'
   );
+  const [episodicCharacters, setEpisodicCharacters] = useState<boolean>(
+    DEFAULT_STORY_CONFIG.episodicCharacters ?? false
+  );
   const [autoBuildStory, setAutoBuildStory] = useState(false);
   const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
     DEFAULT_STORY_CONFIG.imageModelSelection
@@ -280,6 +283,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     ?? imageModelPicker?.options.find((option) => option.modelKey === imageModelPicker.selectedModelKey)
     ?? imageModelPicker?.options.find((option) => option.isDefault)
     ?? null;
+  const statefulContinuityAvailable = selectedImageModel
+    ? imageProviderSupportsStatefulContinuity(selectedImageModel.providerKey)
+    : true;
   const promptOnlyActionCost = isReelMode
     ? pricing.actionCosts.start_reel_full_generation_prompt_only ?? 1.5
     : pricing.actionCosts.start_story_initial_beat_prompt_only ?? 0.5;
@@ -470,6 +476,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
             setImageDeliveryMode(config.imageDeliveryMode || DEFAULT_STORY_CONFIG.imageDeliveryMode || 'live');
+            setEpisodicCharacters(config.episodicCharacters === true);
             setAutoBuildStory(sessionStorage.getItem('kissago_pending_autobuild') === '1');
             sessionStorage.removeItem('kissago_pending_autobuild');
             setImageModelSelection(config.imageModelSelection);
@@ -600,6 +607,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       maxBeats: effectiveMaxBeats,
       imageGenerationMode,
       imageDeliveryMode: imageGenerationMode === 'generate' ? imageDeliveryMode : 'live',
+      episodicCharacters: imageGenerationMode === 'generate' && imageDeliveryMode === 'stateful' && episodicCharacters,
       imageContinuityStrategy,
       ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
         ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
@@ -653,7 +661,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     if (!storyPrompt) return;
 
     const shouldAutoBuild =
-      autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate' && imageDeliveryMode === 'batch';
+      autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
+      && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
     if (onBegin) {
       onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild });
@@ -1444,6 +1453,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   setImageDeliveryMode(value);
                   clearSeedPreview();
                 }}
+                episodicCharacters={episodicCharacters}
+                onEpisodicCharactersChange={setEpisodicCharacters}
+                statefulContinuityAvailable={statefulContinuityAvailable}
                 autoBuildStory={autoBuildStory}
                 onAutoBuildStoryChange={setAutoBuildStory}
                 imageModelPicker={imageModelPicker}

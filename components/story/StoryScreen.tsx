@@ -2213,9 +2213,11 @@ function StoryScreenInner({
     return () => { active = false; };
   }, [currentNodeId, persistenceUserId, session.explorationMode, session.savedStoryId]);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
-  // Batch-delivery stories defer beat images to a background batch. Live per-beat
-  // (re)generation is disabled so an accidental click can't defeat batch mode.
-  const isBatchDeliveryStory = session.storyConfig.imageDeliveryMode === 'batch';
+  // Deferred-delivery stories (cost-saver batch or fast stateful) produce beat
+  // images via a background job. Live per-beat (re)generation is disabled so an
+  // accidental click can't defeat deferred mode.
+  const isBatchDeliveryStory = session.storyConfig.imageDeliveryMode === 'batch'
+    || session.storyConfig.imageDeliveryMode === 'stateful';
   const reelTimelineNodes = useMemo(
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
     [isReelStory, session.storyMap]

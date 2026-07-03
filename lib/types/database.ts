@@ -236,6 +236,7 @@ export interface DbAiCostEvent {
   node_id: string | null;
   story_session_id: string | null;
   activity_key: string;
+  generation_mode: string;
   task_key: string;
   provider: string;
   model_id: string;
