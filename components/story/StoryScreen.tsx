@@ -2080,6 +2080,7 @@ function StoryScreenInner({
   const [savedRefsExpanded, setSavedRefsExpanded] = useState(false);
   const [promptToolsSuccess, setPromptToolsSuccess] = useState<string | null>(null);
   const [batchModeNotice, setBatchModeNotice] = useState(false);
+  const [batchModeNarrationNotice, setBatchModeNarrationNotice] = useState(false);
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isOptimizingPromptOnlyImage, setIsOptimizingPromptOnlyImage] = useState(false);
@@ -2245,6 +2246,9 @@ function StoryScreenInner({
   // In batch mode, surface a disabled image control that explains the batch flow
   // instead of silently generating a live image.
   const showBatchModeImageLock = isBatchDeliveryStory && !normalizedCurrentBeat.imageUrl;
+  // In batch mode, narration is bulk-generated on the last beat. Disable the
+  // per-beat speaker control so an accidental click can't generate a live one.
+  const showBatchModeNarrationLock = isBatchDeliveryStory && !normalizedCurrentBeat.audioUrl;
   const cancelReelPlayAll = useCallback(() => {
     pendingReelPlayAllNodeIdRef.current = null;
     reelPlayAllNodeIdsRef.current = [];
@@ -5878,7 +5882,7 @@ function StoryScreenInner({
                           initial={{ opacity: 0, x: -6 }}
                           animate={{ opacity: 1, x: 0 }}
                           exit={{ opacity: 0, x: -6 }}
-                          className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                          className="absolute left-full ml-2 top-1/2 z-50 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
                         >
                           You&apos;re in batch mode. Finish all beats, then tap “Create all visuals” on the last beat.
                         </motion.p>
@@ -5893,19 +5897,38 @@ function StoryScreenInner({
                     disabled={scrollState.atBottom}
                   />
                 )}
-                <NarrationButton
-                  isGeneratingAudio={isGeneratingAudio}
-                  isAudioReady={isAudioReady}
-                  playbackState={playbackState}
-                  hasAudio={!!normalizedCurrentBeat.audioUrl}
-                  onTogglePlayPause={togglePlayPause}
-                  onGenerateNarration={handleGenerateNarration}
-                  onClearGlow={clearAudioReady}
-                  storyMode={storyMode}
-                  onToggleStoryMode={toggleStoryMode}
-                  disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
-                  disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
-                />
+                <div className="relative flex flex-col items-center">
+                  <NarrationButton
+                    isGeneratingAudio={isGeneratingAudio}
+                    isAudioReady={isAudioReady}
+                    playbackState={playbackState}
+                    hasAudio={!!normalizedCurrentBeat.audioUrl}
+                    onTogglePlayPause={togglePlayPause}
+                    onGenerateNarration={handleGenerateNarration}
+                    onClearGlow={clearAudioReady}
+                    storyMode={storyMode}
+                    onToggleStoryMode={toggleStoryMode}
+                    disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
+                    disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
+                    batchLocked={showBatchModeNarrationLock}
+                    onBatchLockedClick={() => {
+                      setBatchModeNarrationNotice(true);
+                      window.setTimeout(() => setBatchModeNarrationNotice(false), 4000);
+                    }}
+                  />
+                  <AnimatePresence>
+                    {batchModeNarrationNotice && (
+                      <motion.p
+                        initial={{ opacity: 0, x: -6 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -6 }}
+                        className="absolute left-full ml-2 top-1/2 z-50 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                      >
+                        You&apos;re in batch mode. Finish all beats, then tap “Generate all narration” on the last beat.
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             )}
 

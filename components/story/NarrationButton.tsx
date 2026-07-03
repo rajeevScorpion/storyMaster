@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Volume2, Loader2 } from 'lucide-react';
+import { Volume2, VolumeX, Loader2 } from 'lucide-react';
 import type { PlaybackState } from '@/lib/hooks/useAudioPlayer';
 
 interface NarrationButtonProps {
@@ -16,6 +16,10 @@ interface NarrationButtonProps {
   onToggleStoryMode: () => void;
   disabled?: boolean;
   disabledReason?: string;
+  /** Batch mode: narration is bulk-generated on the last beat, so the per-beat
+   * speaker button is greyed out and clicking surfaces an explanatory notice. */
+  batchLocked?: boolean;
+  onBatchLockedClick?: () => void;
 }
 
 function WaveformBars() {
@@ -82,6 +86,8 @@ export default function NarrationButton({
   onToggleStoryMode,
   disabled = false,
   disabledReason,
+  batchLocked = false,
+  onBatchLockedClick,
 }: NarrationButtonProps) {
   const [showGlow, setShowGlow] = useState(false);
 
@@ -98,6 +104,10 @@ export default function NarrationButton({
   }, [isAudioReady, onClearGlow]);
 
   const handleClick = () => {
+    if (batchLocked) {
+      onBatchLockedClick?.();
+      return;
+    }
     if (disabled) return;
     if (isGeneratingAudio && !hasAudio) return;
     if (showGlow) {
@@ -114,7 +124,8 @@ export default function NarrationButton({
   const isPlaying = playbackState === 'playing';
 
   let title = 'Generate narration';
-  if (disabled && disabledReason) title = disabledReason;
+  if (batchLocked) title = 'Batch mode — finish all beats, then tap Generate all narration on the last beat';
+  else if (disabled && disabledReason) title = disabledReason;
   else if (isGeneratingAudio && !hasAudio) title = 'Preparing narration...';
   else if (isPlaying) title = 'Pause narration (P)';
   else if (hasAudio) title = 'Play narration (P)';
@@ -124,9 +135,12 @@ export default function NarrationButton({
     <div className="flex flex-col items-center gap-2">
       <button
         onClick={handleClick}
-        disabled={disabled || (isGeneratingAudio && !hasAudio)}
+        disabled={!batchLocked && (disabled || (isGeneratingAudio && !hasAudio))}
+        aria-disabled={batchLocked || undefined}
         className={`p-2.5 backdrop-blur-md rounded-full transition-all duration-300 ${
-          disabled
+          batchLocked
+            ? 'bg-neutral-900/60 border border-white/10 text-neutral-500 cursor-not-allowed opacity-50'
+            : disabled
             ? 'bg-neutral-900/60 border border-white/5 cursor-not-allowed opacity-50'
             : isGeneratingAudio && !hasAudio
             ? 'bg-neutral-900/60 border border-white/5 cursor-wait'
@@ -140,7 +154,9 @@ export default function NarrationButton({
         }`}
         title={title}
       >
-        {isGeneratingAudio && !hasAudio ? (
+        {batchLocked ? (
+          <VolumeX className="w-5 h-5 text-neutral-500" />
+        ) : isGeneratingAudio && !hasAudio ? (
           <Loader2 className="w-5 h-5 text-neutral-400 animate-spin" />
         ) : isPlaying ? (
           <WaveformBars />

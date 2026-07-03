@@ -166,6 +166,9 @@ interface StoryState {
   isRegeneratingImage: boolean;
   isSubmittingImageBatch: boolean;
   imageBatchMessage: string | null;
+  isGeneratingNarrationBatch: boolean;
+  narrationBatchProgress: { current: number; total: number } | null;
+  narrationBatchMessage: string | null;
   autoBuildProgress: { active: boolean; current: number; total: number } | null;
   audioReadyNodeId: string | null;
   storyMode: boolean;
@@ -222,6 +225,7 @@ interface StoryState {
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
   submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
+  generateNarrationBatch: () => Promise<void>;
   reconcileCurrentStoryBatch: () => Promise<void>;
   generateAutomatedStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   clearAudioReady: () => void;
@@ -1445,6 +1449,15 @@ function defersLiveImageGeneration(storyConfig: StoryConfig): boolean {
   return isPromptOnlyStoryConfig(storyConfig) || isBatchImageDeliveryStoryConfig(storyConfig);
 }
 
+// Whether live per-beat narration should be skipped during interactive
+// generation. True only for batch-delivery stories — narration is bulk-generated
+// later via the terminal-beat "Generate all narration" action. This keeps the
+// auto-build walk fast (beat text + image prompt only) and avoids narrating beats
+// the user may abandon.
+function defersLiveNarration(storyConfig: StoryConfig): boolean {
+  return isBatchImageDeliveryStoryConfig(storyConfig);
+}
+
 function getStoryAspectRatio(storyConfig: StoryConfig): StoryAspectRatio {
   return storyConfig.isVerticalStory || storyConfig.aspectRatio === '9:16' ? '9:16' : '16:9';
 }
@@ -1911,6 +1924,9 @@ export const useStoryStore = create<StoryState>()(
       isRegeneratingImage: false,
       isSubmittingImageBatch: false,
       imageBatchMessage: null,
+      isGeneratingNarrationBatch: false,
+      narrationBatchProgress: null,
+      narrationBatchMessage: null,
       autoBuildProgress: null,
       audioReadyNodeId: null,
       storyMode: false,
@@ -2262,7 +2278,8 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
           // Reels skip auto-narration — user triggers it on-demand via the speaker icon.
-          if (storyPrompt.toLowerCase() !== 'mock' && !isReelStoryConfig(storyConfig)) {
+          // Batch-delivery stories defer narration to the terminal-beat batch action.
+          if (storyPrompt.toLowerCase() !== 'mock' && !isReelStoryConfig(storyConfig) && !defersLiveNarration(storyConfig)) {
             Promise.all([lockedVoicePromise, earlySavePromise]).then(([voiceResolution, storyId]) => {
               set({ isGeneratingAudio: true });
               const narrationStartedAt = nowMs();
@@ -2487,7 +2504,9 @@ export const useStoryStore = create<StoryState>()(
                 imageStatus: promptOnly ? 'not_requested' : 'pending',
                 audioStatus: resolvedAudioUrl
                   ? (earlySavedStoryId ? 'ready' : 'not_requested')
-                  : storyPrompt.toLowerCase() !== 'mock' && earlySavedStoryId
+                  : !defersLiveNarration(storyConfig)
+                    && storyPrompt.toLowerCase() !== 'mock'
+                    && earlySavedStoryId
                   ? 'pending'
                   : 'not_requested',
               }),
@@ -3228,7 +3247,8 @@ export const useStoryStore = create<StoryState>()(
             } : state);
           }
           let narrationPromise: Promise<void> | null = null;
-          if (session.userPrompt.toLowerCase() !== 'mock') {
+          // Batch-delivery stories defer narration to the terminal-beat batch action.
+          if (session.userPrompt.toLowerCase() !== 'mock' && !defersLiveNarration(session.storyConfig)) {
             set({ isGeneratingAudio: true });
             const narrationStartedAt = nowMs();
 
@@ -3531,7 +3551,9 @@ export const useStoryStore = create<StoryState>()(
                   imageStatus: promptOnly ? 'not_requested' : 'pending',
                   audioStatus: resolvedAudioUrl
                     ? (session.savedStoryId ? 'ready' : 'not_requested')
-                    : session.userPrompt.toLowerCase() !== 'mock' && session.savedStoryId
+                    : !defersLiveNarration(session.storyConfig)
+                      && session.userPrompt.toLowerCase() !== 'mock'
+                      && session.savedStoryId
                     ? 'pending'
                     : 'not_requested',
                 }),
@@ -5830,6 +5852,53 @@ export const useStoryStore = create<StoryState>()(
             errorAction: null,
           });
         }
+      },
+
+      generateNarrationBatch: async () => {
+        const { session } = get();
+        const storyId = session?.savedStoryId;
+        if (!session || !storyId) {
+          set({ narrationBatchMessage: 'Save the story before generating narration.' });
+          return;
+        }
+
+        // Narrate the current root→current-node path. Beats that already have
+        // audio (shared across branches, or previously narrated) are skipped by
+        // generateNarrationForNode itself.
+        const path = getPathToNode(session.storyMap, session.storyMap.currentNodeId);
+        const targets = path.filter((node) => !node.data.audioUrl);
+        if (targets.length === 0) {
+          set({ narrationBatchMessage: 'All beats on this path already have narration.' });
+          return;
+        }
+
+        set({
+          isGeneratingNarrationBatch: true,
+          narrationBatchMessage: null,
+          narrationBatchProgress: { current: 0, total: targets.length },
+          error: null,
+          errorAction: null,
+        });
+
+        let failures = 0;
+        for (let i = 0; i < targets.length; i++) {
+          try {
+            // Sequential: avoids TTS rate limits and keeps progress meaningful.
+            await get().generateNarrationForNode(targets[i].id);
+          } catch (error) {
+            failures += 1;
+            console.error('Narration batch: beat failed:', error);
+          }
+          set({ narrationBatchProgress: { current: i + 1, total: targets.length } });
+        }
+
+        set({
+          isGeneratingNarrationBatch: false,
+          narrationBatchProgress: null,
+          narrationBatchMessage: failures === 0
+            ? 'Narration ready. You can now leave and come back for the visuals.'
+            : `Narration finished with ${failures} beat${failures === 1 ? '' : 's'} failed — reopen the story and retry.`,
+        });
       },
 
       generateAutomatedStory: async (prompt: string, config?: StoryConfig) => {
