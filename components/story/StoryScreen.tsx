@@ -3748,7 +3748,10 @@ function StoryScreenInner({
       if (latest.autoBuildProgress?.active) return;
 
       if (cycleSettings.storyIncrementalAssetSyncEnabled) {
-        if (!isPromptOnlyStory) {
+        // Deferred-delivery (batch/stateful) stories generate their images on the
+        // server, not via client-side sync — so the "beat media is syncing" notice
+        // (and its header warning triangle) doesn't apply and would only confuse.
+        if (!isPromptOnlyStory && !isBatchDeliveryStory) {
           useStoryStore.setState({
             saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
           });
@@ -3769,6 +3772,7 @@ function StoryScreenInner({
     saveStatus,
     onSave,
     isPromptOnlyStory,
+    isBatchDeliveryStory,
     cycleSettings.cloudSaveTimeoutMs,
     cycleSettings.storyIncrementalAssetSyncEnabled,
     cycleSettings.storyAssetSyncWarningTimeoutMs,
@@ -5511,7 +5515,7 @@ function StoryScreenInner({
             />
           </motion.div>
         </AnimatePresence>
-        {!displayImageUrl && (showPendingImageState || showFailedImageState) && (
+        {!displayImageUrl && (showPendingImageState || showFailedImageState) && !(isBatchDeliveryStory && showPendingImageState) && (
           <div className="absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
             <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
               <div className="mb-3 flex justify-center">

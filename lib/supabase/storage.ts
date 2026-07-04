@@ -1,5 +1,6 @@
 import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import type { StoryMap, StoryBeat } from '@/lib/types/story';
 import { getBeatPersistedAudioUrl, getBeatPersistedImageUrl } from '@/lib/types/beat-media';
 import { normalizeR2UrlLikeReference } from '@/lib/media/r2-reference';
@@ -29,12 +30,12 @@ export interface StorageUploadOptions {
  * Convert a base64 data URL to a Blob with the correct content type.
  */
 export function base64ToBlob(base64DataUrl: string): { blob: Blob; contentType: string; ext: string } {
-  const match = base64DataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
+  const parsed = splitBase64DataUrl(base64DataUrl);
+  if (!parsed) {
     throw new Error('Invalid base64 data URL');
   }
-  const contentType = match[1];
-  const base64 = match[2];
+  const contentType = parsed.mimeType;
+  const base64 = parsed.base64;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {

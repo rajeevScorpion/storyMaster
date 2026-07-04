@@ -34,7 +34,7 @@ export default function BatchVisualsBanner() {
   const submitImageBatch = useStoryStore((state) => state.submitImageBatch);
   const submitStatefulVisuals = useStoryStore((state) => state.submitStatefulVisuals);
   const reconcileCurrentStoryBatch = useStoryStore((state) => state.reconcileCurrentStoryBatch);
-  const loadStoryFromCloud = useStoryStore((state) => state.loadStoryFromCloud);
+  const refreshBatchImages = useStoryStore((state) => state.refreshBatchImages);
   const isSubmitting = useStoryStore((state) => state.isSubmittingImageBatch);
   const message = useStoryStore((state) => state.imageBatchMessage);
   const generateNarrationBatch = useStoryStore((state) => state.generateNarrationBatch);
@@ -103,15 +103,17 @@ export default function BatchVisualsBanner() {
   const showInFlight = canShowVisuals && stats.pending > 0;
 
   // Fast (stateful) delivery streams beats in from a server worker. Poll the cloud
-  // so images appear without the manual "Check now". Reload only — never reconcile,
-  // which would kick another generation pass on top of the running worker.
+  // so images appear without the manual "Check now". Use refreshBatchImages (a
+  // field-level merge that never flips isLoading or resets the current beat) —
+  // never loadStoryFromCloud (full reload → preloader flash + navigation reset)
+  // and never reconcile (which would kick another generation pass on the worker).
   useEffect(() => {
     if (!isStatefulDelivery || !savedStoryId || stats.pending <= 0) return;
     const id = window.setInterval(() => {
-      void loadStoryFromCloud(savedStoryId);
+      void refreshBatchImages(savedStoryId);
     }, 6000);
     return () => window.clearInterval(id);
-  }, [isStatefulDelivery, savedStoryId, stats.pending, loadStoryFromCloud]);
+  }, [isStatefulDelivery, savedStoryId, stats.pending, refreshBatchImages]);
 
   const showCreate = canShowVisuals && stats.pending === 0 && stats.pathNeeding > 0;
   const showVisuals = showCreate || showInFlight;

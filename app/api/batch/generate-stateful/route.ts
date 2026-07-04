@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, after } from 'next/server';
 import { runStatefulImageJob } from '@/app/actions/image-batch';
 
 // Sequential stateful image generation is chatty (many chained provider calls);
@@ -18,18 +18,26 @@ export async function POST(request: Request): Promise<Response> {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  let jobId: string | null = null;
-  try {
-    const body = await request.json().catch(() => ({}));
-    jobId = typeof body?.jobId === 'string' ? body.jobId : null;
-    if (!jobId) {
-      return NextResponse.json({ ok: false, error: 'Missing jobId.' }, { status: 400 });
-    }
-    await runStatefulImageJob(jobId);
-    return NextResponse.json({ ok: true, jobId });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Stateful job failed.';
-    console.error('Stateful worker route failed:', message);
-    return NextResponse.json({ ok: false, jobId, error: message }, { status: 500 });
+
+  const body = await request.json().catch(() => ({}));
+  const jobId = typeof body?.jobId === 'string' ? body.jobId : null;
+  if (!jobId) {
+    return NextResponse.json({ ok: false, error: 'Missing jobId.' }, { status: 400 });
   }
+
+  // Run the job AFTER the response is flushed. The generation loop can take
+  // minutes; awaiting it here would hold the connection open until it finished,
+  // which trips the caller's fetch headers timeout (UND_ERR_HEADERS_TIMEOUT) and
+  // makes the "kick" look failed. `after()` keeps the work alive on the standalone
+  // Node/Cloud Run process past the 202 while headers go out immediately.
+  after(async () => {
+    try {
+      await runStatefulImageJob(jobId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Stateful job failed.';
+      console.error('Stateful worker job failed:', message);
+    }
+  });
+
+  return NextResponse.json({ ok: true, jobId, accepted: true }, { status: 202 });
 }

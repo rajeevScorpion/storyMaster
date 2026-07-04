@@ -7,6 +7,7 @@ import {
   type ImageUploadAssetType,
   type ImageUploadOptimizationSettings,
 } from '@/lib/media/imageUploadOptimization';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 
 export interface ServerCompressionResult {
   buffer: Buffer;
@@ -19,9 +20,9 @@ export interface ServerCompressionResult {
 }
 
 function base64ToBuffer(dataUrl: string): { buffer: Buffer; mimeType: string } {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) throw new Error('Invalid base64 data URL for server compression.');
-  return { buffer: Buffer.from(match[2], 'base64'), mimeType: match[1] };
+  const parsed = splitBase64DataUrl(dataUrl);
+  if (!parsed) throw new Error('Invalid base64 data URL for server compression.');
+  return { buffer: Buffer.from(parsed.base64, 'base64'), mimeType: parsed.mimeType };
 }
 
 function qualityForAsset(assetType: ImageUploadAssetType, settings: ImageUploadOptimizationSettings): number {

@@ -235,6 +235,7 @@ interface StoryState {
   saveStoryToCloud: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   saveStoryToCloudImmediate: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
+  refreshBatchImages: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<boolean>;
   retryPendingBeatAssetSync: () => Promise<void>;
@@ -5277,6 +5278,55 @@ export const useStoryStore = create<StoryState>()(
             loadingReader: null,
             error: cached ? null : error.message || 'Failed to load story',
           });
+        }
+      },
+
+      // Lightweight poll for background (stateful/batch) image jobs: pull the
+      // latest beat image fields from the cloud and merge ONLY those into the
+      // in-memory map. Unlike loadStoryFromCloud this never flips isLoading (no
+      // full-screen preloader flash) and never resets currentNodeId (so it can't
+      // fight the reader's navigation). All beats already exist locally for these
+      // stories — only their images stream in — so a field-level merge is safe.
+      refreshBatchImages: async (storyId: string) => {
+        const current = get().session;
+        if (!current) return;
+        const preservedNodeId = current.storyMap.currentNodeId;
+        try {
+          const fresh = await loadStoryAction(storyId);
+          const mergedNodes = { ...current.storyMap.nodes };
+          let changed = false;
+          for (const [id, freshNode] of Object.entries(fresh.storyMap.nodes)) {
+            const existing = mergedNodes[id];
+            if (!existing) continue;
+            const freshData = freshNode.data;
+            const existingData = existing.data;
+            const imageArrived =
+              freshData.imageStatus !== existingData.imageStatus ||
+              freshData.imageUrl !== existingData.imageUrl ||
+              freshData.imageError !== existingData.imageError;
+            if (!imageArrived) continue;
+            changed = true;
+            mergedNodes[id] = {
+              ...existing,
+              data: {
+                ...existingData,
+                imageUrl: freshData.imageUrl ?? existingData.imageUrl,
+                imageStatus: freshData.imageStatus ?? existingData.imageStatus,
+                imageError: freshData.imageError,
+                imageGenerationMetadata:
+                  freshData.imageGenerationMetadata ?? existingData.imageGenerationMetadata,
+              },
+            };
+          }
+          if (!changed) return;
+          const mergedMap: StoryMap = {
+            ...current.storyMap,
+            nodes: mergedNodes,
+            currentNodeId: preservedNodeId,
+          };
+          set({ session: deriveSessionFields({ ...current, storyMap: mergedMap }, mergedMap) });
+        } catch {
+          // Silent — the poll retries on its next tick.
         }
       },
 

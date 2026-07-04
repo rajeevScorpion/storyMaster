@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
 import { updateBeatMediaState } from '@/app/actions/persistence';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
@@ -120,11 +121,11 @@ function normalizeOverlayConfig(config: Partial<StoryTextOverlayConfig> | null |
 }
 
 function parseDataAudioUrl(dataUrl: string): { buffer: Buffer; mimeType: string } | null {
-  const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
-  if (!match) return null;
+  const parsed = splitBase64DataUrl(dataUrl);
+  if (!parsed) return null;
   return {
-    mimeType: match[1] || 'audio/wav',
-    buffer: Buffer.from(match[2], 'base64'),
+    mimeType: parsed.mimeType || 'audio/wav',
+    buffer: Buffer.from(parsed.base64, 'base64'),
   };
 }
 

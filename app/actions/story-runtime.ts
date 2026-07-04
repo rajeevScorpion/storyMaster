@@ -2,6 +2,7 @@
 
 import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { callGeminiText, type InlineImagePart } from '@/app/actions/gemini-proxy';
 import { generateSelectedImage } from '@/app/actions/image-generation';
 import {
@@ -1436,9 +1437,9 @@ async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): P
       const parts: InlineImagePart[] = [];
       for (const dataUrl of resolvedDataUrls) {
         if (!dataUrl) continue;
-        const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-        if (match) {
-          parts.push({ mimeType: match[1], data: match[2] });
+        const parsed = splitBase64DataUrl(dataUrl);
+        if (parsed) {
+          parts.push({ mimeType: parsed.mimeType, data: parsed.base64 });
         }
       }
       return parts;

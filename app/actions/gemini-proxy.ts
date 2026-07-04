@@ -336,14 +336,23 @@ function buildGeminiInteractionInput(prompt: string, referenceParts?: InlineImag
   ];
 }
 
-function findGeminiInteractionImage(value: unknown, seen = new Set<unknown>()): { data: string; mimeType: string } | null {
+// Depth cap for the interaction-response walkers below. The SDK returns rich
+// objects whose accessors can synthesize fresh sub-objects on each read, which
+// defeats the identity-based `seen` guard and lets a naive walk recurse without
+// bound ("Maximum call stack size exceeded"). A hard depth limit keeps the walk
+// bounded regardless of the response shape — worst case we simply don't find an
+// image and fall back to text.
+const GEMINI_INTERACTION_WALK_MAX_DEPTH = 12;
+
+function findGeminiInteractionImage(value: unknown, seen = new Set<unknown>(), depth = 0): { data: string; mimeType: string } | null {
   if (!value || typeof value !== 'object') return null;
+  if (depth > GEMINI_INTERACTION_WALK_MAX_DEPTH) return null;
   if (seen.has(value)) return null;
   seen.add(value);
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      const found = findGeminiInteractionImage(item, seen);
+      const found = findGeminiInteractionImage(item, seen, depth + 1);
       if (found) return found;
     }
     return null;
@@ -372,21 +381,22 @@ function findGeminiInteractionImage(value: unknown, seen = new Set<unknown>()): 
   }
 
   for (const nested of Object.values(record)) {
-    const found = findGeminiInteractionImage(nested, seen);
+    const found = findGeminiInteractionImage(nested, seen, depth + 1);
     if (found) return found;
   }
 
   return null;
 }
 
-function collectGeminiInteractionText(value: unknown, texts: string[] = [], seen = new Set<unknown>()): string {
+function collectGeminiInteractionText(value: unknown, texts: string[] = [], seen = new Set<unknown>(), depth = 0): string {
   if (!value || typeof value !== 'object') return texts.join('\n').trim();
+  if (depth > GEMINI_INTERACTION_WALK_MAX_DEPTH) return texts.join('\n').trim();
   if (seen.has(value)) return texts.join('\n').trim();
   seen.add(value);
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      collectGeminiInteractionText(item, texts, seen);
+      collectGeminiInteractionText(item, texts, seen, depth + 1);
     }
     return texts.join('\n').trim();
   }
@@ -396,7 +406,7 @@ function collectGeminiInteractionText(value: unknown, texts: string[] = [], seen
     texts.push(record.text);
   }
   for (const nested of Object.values(record)) {
-    collectGeminiInteractionText(nested, texts, seen);
+    collectGeminiInteractionText(nested, texts, seen, depth + 1);
   }
   return texts.join('\n').trim();
 }
@@ -448,7 +458,20 @@ export async function callGeminiInteractionsImage(
     )
   );
 
-  const image = findGeminiInteractionImage(interaction.outputs ?? interaction);
+  // Prefer the response's declared output payload; only if that yields nothing do
+  // we fall back to walking the whole interaction object. Both walks are bounded
+  // by GEMINI_INTERACTION_WALK_MAX_DEPTH, so neither can blow the stack even when
+  // the SDK object's accessors synthesize fresh sub-objects on access.
+  const interactionOutput =
+    interaction.outputs
+    ?? (interaction as Record<string, unknown>).output
+    ?? (interaction as Record<string, unknown>).content
+    ?? (interaction as Record<string, unknown>).response
+    ?? null;
+
+  const image =
+    findGeminiInteractionImage(interactionOutput)
+    ?? findGeminiInteractionImage(interaction);
   if (image) {
     return {
       dataUrl: `data:${image.mimeType};base64,${image.data}`,
@@ -462,7 +485,7 @@ export async function callGeminiInteractionsImage(
 
   return {
     dataUrl: null,
-    fallbackText: collectGeminiInteractionText(interaction.outputs ?? interaction) || null,
+    fallbackText: collectGeminiInteractionText(interactionOutput ?? interaction) || null,
     interactionId: typeof interaction.id === 'string' ? interaction.id : null,
     providerUsage: interaction.usage && typeof interaction.usage === 'object'
       ? interaction.usage as Record<string, unknown>

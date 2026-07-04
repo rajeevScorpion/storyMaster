@@ -712,6 +712,9 @@ function bulkVisualBaseUrl(): string {
  *  action): in a 'use server' module only non-exported helpers may be sync. */
 function kickStatefulWorker(jobId: string): void {
   const secret = process.env.CRON_SECRET;
+  // The worker route accepts the job and returns 202 immediately (it runs the
+  // generation loop via `after()`), so this fetch resolves fast. Bound it anyway
+  // with an abort timeout so a slow/unreachable route can never wedge the caller.
   void fetch(`${bulkVisualBaseUrl()}/api/batch/generate-stateful`, {
     method: 'POST',
     headers: {
@@ -719,6 +722,8 @@ function kickStatefulWorker(jobId: string): void {
       ...(secret ? { authorization: `Bearer ${secret}` } : {}),
     },
     body: JSON.stringify({ jobId }),
+    signal: AbortSignal.timeout(15_000),
+    keepalive: true,
   }).catch((error) => console.error('Failed to kick stateful worker:', error));
 }
 
@@ -901,6 +906,15 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
   });
   const usingResendRefs = continuityResolution.strategy === 'resend_refs';
 
+  // [diag] Which path is this job actually taking? Names provider + resolved
+  // strategy so a per-beat failure can be attributed to the stateful-responses
+  // path vs the resend_refs/edit path.
+  console.log(
+    `[stateful:diag] job=${job.id} provider=${snapshot.providerKey} model=${snapshot.providerModelId} ` +
+    `requested=provider_stateful resolved=${continuityResolution.strategy} ` +
+    `statefulEnabled=${runtimePricing?.enabled ?? false} episodic=${job.episodic}`
+  );
+
   // In the resend_refs fallback, ensure portraits exist (needed for continuity on a
   // non-stateful provider) and gather them once to attach to every beat.
   let fallbackReferenceParts: InlineImagePart[] = [];
@@ -911,6 +925,18 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
     const maxRefs = getImageModelMaxReferenceImages(snapshot.capabilities);
     fallbackReferenceParts = await collectReferenceParts(admin, map, maxRefs);
   }
+
+  // Reclaim items left 'processing' by a worker that crashed or timed out mid-beat
+  // (e.g. the request was reclaimed by the runtime). Without this they'd sit
+  // 'processing' forever and the rollup's processingLeft>0 branch would never
+  // finalize the job — a permanent spinner. `updated_at` is auto-touched on write.
+  const staleCutoff = new Date(Date.now() - 5 * 60_000).toISOString();
+  await admin
+    .from('image_batch_items')
+    .update({ status: 'pending' })
+    .eq('job_id', job.id)
+    .eq('status', 'processing')
+    .lt('updated_at', staleCutoff);
 
   const { data: pending } = await admin
     .from('image_batch_items')
@@ -1036,7 +1062,15 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
       await admin.from('image_batch_jobs').update({ last_state: previousState }).eq('id', job.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Stateful beat failed.';
-      console.error(`Stateful beat ${item.node_id} failed:`, message);
+      // [diag] Log the FULL stack (not just the message) so we can see the actual
+      // recursion frame for "Maximum call stack size exceeded". Also record which
+      // continuity path this beat took (stateful-responses vs resend_refs) and
+      // whether it was mid character-portrait or the beat turn.
+      console.error(
+        `[stateful:diag] beat ${item.node_id} failed on path=${usingResendRefs ? 'resend_refs' : 'provider_stateful'} ` +
+        `provider=${snapshot.providerKey}:\n`,
+        error instanceof Error ? error.stack ?? error.message : error
+      );
       await admin.from('image_batch_items').update({ status: 'failed', error: message }).eq('id', item.id);
       await admin.from('beats').update({ image_status: 'failed', image_error: message })
         .eq('story_id', job.story_id).eq('node_id', item.node_id);
