@@ -698,8 +698,12 @@ export async function reconcileActiveImageBatches(limit = 10): Promise<{ process
 // ---------------------------------------------------------------------------
 
 // Stop a worker invocation before the serverless request budget; remaining items
-// are picked up by a self re-kick and, as a backstop, the reconcile cron.
-const STATEFUL_TIME_BUDGET_MS = 240_000;
+// are picked up by a self re-kick and, as a backstop, the reconcile cron. Kept
+// BELOW the platform's function-duration cap so the worker finishes its current
+// beat and re-kicks before it gets killed. Default 20s suits Vercel Hobby (~60s
+// cap → roughly one beat per invocation, always making progress); raise via
+// WORKER_TIME_BUDGET_MS on Pro / Cloud Run (e.g. 240000) to do more per run.
+const STATEFUL_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.WORKER_TIME_BUDGET_MS) || 20_000);
 
 function bulkVisualBaseUrl(): string {
   const raw = process.env.APP_URL

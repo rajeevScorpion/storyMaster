@@ -23,8 +23,12 @@ import type { StoryConfig, StoryMap, StoryNode, StoryTextParts } from '@/lib/typ
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 // Stop a worker invocation before the serverless request budget; remaining beats
-// are picked up by a self re-kick and, as a backstop, the reconcile cron.
-const NARRATION_TIME_BUDGET_MS = 240_000;
+// are picked up by a self re-kick and, as a backstop, the reconcile cron. Kept
+// BELOW the platform's function-duration cap so the worker finishes its current
+// beat and re-kicks before it gets killed. Default 20s suits Vercel Hobby (~60s
+// cap → roughly one beat per invocation, always making progress); raise via
+// WORKER_TIME_BUDGET_MS on Pro / Cloud Run (e.g. 240000) to do more per run.
+const NARRATION_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.WORKER_TIME_BUDGET_MS) || 20_000);
 
 interface NarrationJobRow {
   id: string;

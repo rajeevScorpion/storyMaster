@@ -316,7 +316,14 @@ async function listNarrationVoiceSampleStatuses(
 }
 
 export async function getNarrationVoiceSelectionConfig(
-  storyLanguage: string = 'english'
+  storyLanguage: string = 'english',
+  // `skipPlanResolution` avoids the per-user plan lookup (which reads cookies) so
+  // this can run inside a shared `unstable_cache` scope — e.g. the anonymous
+  // landing-page data cache. The plan-specific accent gating is then re-resolved
+  // per user at runtime by LandingScreen. Resolving a per-user plan inside a
+  // cross-user cache would be both an unstable_cache violation and semantically
+  // wrong (one user's plan leaking into everyone's cached payload).
+  options: { skipPlanResolution?: boolean } = {}
 ): Promise<NarrationVoiceClientConfig> {
   const settings = await getNarrationVoiceSettings();
   const languageResolution = resolveStoryNarrationLanguage(storyLanguage);
@@ -328,11 +335,13 @@ export async function getNarrationVoiceSelectionConfig(
   let defaultAccent = settings.defaultAccent;
   if (settings.accentSelectionEnabled && isEnglishNarrationLanguage(storyLanguage)) {
     let planKey: string | null = null;
-    try {
-      const pricing = await getPricingRuntimeContext();
-      planKey = pricing.snapshot.planKey ?? null;
-    } catch (error) {
-      console.warn('[narration] Failed to load plan for accent options:', error);
+    if (!options.skipPlanResolution) {
+      try {
+        const pricing = await getPricingRuntimeContext();
+        planKey = pricing.snapshot.planKey ?? null;
+      } catch (error) {
+        console.warn('[narration] Failed to load plan for accent options:', error);
+      }
     }
     const accentSelection = await getNarrationAccentSelectionForPlan(planKey);
     accentEnabled = accentSelection.enabled && accentSelection.accentOptions.length > 0;

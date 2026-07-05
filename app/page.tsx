@@ -15,7 +15,9 @@ const getCachedLandingInitialData = unstable_cache(
     const [storyboardSettings, reelSetup, narrationVoiceConfig] = await Promise.all([
       getStoryboardSettings().catch(() => null),
       getReelStorySetupSettings().catch(() => FALLBACK_REEL_SETUP),
-      getNarrationVoiceSelectionConfig('english').catch(() => null),
+      // Cached, cross-user landing payload — skip the per-user (cookie-reading)
+      // plan lookup; LandingScreen re-resolves accent gating per user at runtime.
+      getNarrationVoiceSelectionConfig('english', { skipPlanResolution: true }).catch(() => null),
     ]);
 
     return normalizeLandingInitialData({
