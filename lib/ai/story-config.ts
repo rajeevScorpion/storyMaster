@@ -404,8 +404,12 @@ function normalizeNarrationVoiceSelection(
   }
 
   const mode = normalizeNarrationVoiceMode(input.mode);
+  const accent = sanitizeText(input.accent).toLowerCase();
+
   if (mode === 'legacy_auto') {
-    return { mode };
+    // Accent is independent of the voice-selection mode — preserve it even when the
+    // narrator voice itself is auto-selected.
+    return { mode, ...(accent ? { accent } : {}) };
   }
 
   const voiceId = sanitizeText(input.voiceId);
@@ -417,6 +421,7 @@ function normalizeNarrationVoiceSelection(
     genderBucket,
     ...(voiceId ? { voiceId } : {}),
     ...(languageCode ? { languageCode } : {}),
+    ...(accent ? { accent } : {}),
   };
 }
 

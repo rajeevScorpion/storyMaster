@@ -37,13 +37,14 @@ interface NarrationJobRow {
   voice_mode: string | null;
   voice_gender_bucket: string | null;
   language_code: string | null;
+  accent: string | null;
   item_count: number;
   succeeded_count: number;
   failed_count: number;
 }
 
 const NARRATION_JOB_SELECT =
-  'id, user_id, story_id, scope, status, node_ids, voice_id, voice_mode, voice_gender_bucket, language_code, item_count, succeeded_count, failed_count';
+  'id, user_id, story_id, scope, status, node_ids, voice_id, voice_mode, voice_gender_bucket, language_code, accent, item_count, succeeded_count, failed_count';
 
 interface NarrationStoryRow {
   id: string;
@@ -141,6 +142,7 @@ export async function submitStoryNarrationBatch(input: {
     requestedMode: config.narrationVoice?.mode ?? null,
     requestedVoiceId: config.narrationVoice?.voiceId ?? null,
     requestedGenderBucket: config.narrationVoice?.genderBucket ?? null,
+    requestedAccent: config.narrationVoice?.accent ?? null,
     language: config.language,
     genre,
     tone,
@@ -160,6 +162,7 @@ export async function submitStoryNarrationBatch(input: {
       voice_mode: voice.mode,
       voice_gender_bucket: voice.genderBucket,
       language_code: voice.languageCode,
+      accent: voice.accent,
       item_count: nodeIds.length,
       submitted_at: new Date().toISOString(),
     })
@@ -260,6 +263,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
         nodeId,
         costTelemetry,
         {
+          accent: job.accent,
           storyTextParts: node.data.storyTextParts as StoryTextParts | undefined,
           overlayConfig: config.storyTextOverlay,
           serverAuth: { userId: job.user_id },

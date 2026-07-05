@@ -1,4 +1,5 @@
 import type { StoryLanguage } from '@/lib/types/story';
+import type { NarrationAccentOption, NarrationAccentTierMap } from '@/lib/ai/narration-accents';
 
 export type NarrationGenderBucket = 'male' | 'female';
 export type NarrationVoiceMode = 'legacy_auto' | 'user_selected';
@@ -30,6 +31,10 @@ export interface NarrationVoiceSettings {
   defaultFemaleVoice: string;
   sampleTextByLanguage: Record<NarrationLanguageCode, string>;
   supportedLanguages: NarrationVoiceLanguage[];
+  accentSelectionEnabled: boolean;
+  accentOptions: NarrationAccentOption[];
+  defaultAccent: string;
+  accentTierMap: NarrationAccentTierMap;
 }
 
 export interface NarrationVoiceSettingsSaveResult {
@@ -47,6 +52,11 @@ export interface NarrationVoiceClientConfig {
   requestedStoryLanguage: StoryLanguage;
   fallbackToEnglishSample: boolean;
   samples: NarrationVoiceSampleClientStatus[];
+  // Accent options the current user's plan may use. Empty/absent when accent
+  // selection is disabled or the story language is not English.
+  accentEnabled: boolean;
+  accentOptions: NarrationAccentOption[];
+  defaultAccent: string;
 }
 
 export interface StoryNarrationVoiceSelection {
@@ -54,6 +64,7 @@ export interface StoryNarrationVoiceSelection {
   genderBucket?: NarrationGenderBucket;
   voiceId?: string;
   languageCode?: NarrationLanguageCode;
+  accent?: string;
 }
 
 export const DEFAULT_MALE_NARRATION_VOICES = [

@@ -549,14 +549,14 @@ Previous Storyboard Context:
 Generate the reel storyboard plan now.`;
 
 export const TTS_PROMPT_DEFAULT = `You are a master storyteller narrating a {{genre}} tale with a {{tone}} tone in {{language}}.
-
+{{accent}}
 Read this passage aloud with natural pacing, dramatic pauses, and emotional expression that matches the scene.
 
 Passage:
 {{storyText}}`;
 
 export const REEL_TTS_PROMPT_DEFAULT = `You are narrating a short visual reel in {{language}}.
-
+{{accent}}
 Narration style:
 {{narrationStyle}}
 
@@ -827,6 +827,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'tone', label: 'Tone', description: 'Desired narration tone.', required: true },
       { key: 'genre', label: 'Genre', description: 'Story genre context.', required: true },
       { key: 'language', label: 'Language', description: 'Narration language.', required: true },
+      { key: 'accent', label: 'Accent', description: 'Optional narrator accent instruction (blank when no accent is selected).', required: false },
     ],
     defaultPrompt: TTS_PROMPT_DEFAULT,
   },
@@ -840,6 +841,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'genre', label: 'Genre', description: 'Story genre context.', required: false },
       { key: 'language', label: 'Language', description: 'Narration language.', required: true },
       { key: 'narrationStyle', label: 'Narration Style', description: 'Admin-defined narration style direction.', required: true },
+      { key: 'accent', label: 'Accent', description: 'Optional narrator accent instruction (blank when no accent is selected).', required: false },
     ],
     defaultPrompt: REEL_TTS_PROMPT_DEFAULT,
   },

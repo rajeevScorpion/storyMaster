@@ -386,6 +386,10 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [narrationVoiceSaving, setNarrationVoiceSaving] = useState(false);
   const [narrationVoiceGenerating, setNarrationVoiceGenerating] = useState(false);
   const [narrationVoiceWarnings, setNarrationVoiceWarnings] = useState<string[]>([]);
+  const [narrationAccentEnabled, setNarrationAccentEnabled] = useState(false);
+  const [narrationAccentListInput, setNarrationAccentListInput] = useState('');
+  const [narrationDefaultAccent, setNarrationDefaultAccent] = useState('');
+  const [narrationAccentTierMapInput, setNarrationAccentTierMapInput] = useState('');
   const [imageUploadSettings, setImageUploadSettings] = useState<ImageUploadOptimizationSettings>(
     DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS
   );
@@ -532,6 +536,10 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setNarrationDefaultFemaleVoice(nextNarrationVoiceSettings.defaultFemaleVoice);
         setNarrationSampleEnglish(nextNarrationVoiceSettings.sampleTextByLanguage['en-IN']);
         setNarrationSampleHindi(nextNarrationVoiceSettings.sampleTextByLanguage['hi-IN']);
+        setNarrationAccentEnabled(nextNarrationVoiceSettings.accentSelectionEnabled);
+        setNarrationAccentListInput(JSON.stringify(nextNarrationVoiceSettings.accentOptions, null, 2));
+        setNarrationDefaultAccent(nextNarrationVoiceSettings.defaultAccent);
+        setNarrationAccentTierMapInput(JSON.stringify(nextNarrationVoiceSettings.accentTierMap, null, 2));
         setNarrationVoiceSampleStatuses(nextNarrationVoiceSampleStatuses);
         setLoading(false);
       })
@@ -585,6 +593,26 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     const maleVoiceList = parseNarrationVoiceInput(narrationMaleVoiceInput);
     const femaleVoiceList = parseNarrationVoiceInput(narrationFemaleVoiceInput);
 
+    // Accent list / tier map are edited as JSON; parse leniently — the server
+    // normalizes and returns warnings if anything was dropped.
+    const parseErrors: string[] = [];
+    let accentOptions = narrationVoiceSettings?.accentOptions ?? [];
+    try {
+      const parsed = JSON.parse(narrationAccentListInput || '[]');
+      if (Array.isArray(parsed)) accentOptions = parsed;
+      else parseErrors.push('Accent list must be a JSON array; kept the previous value.');
+    } catch {
+      parseErrors.push('Accent list is not valid JSON; kept the previous value.');
+    }
+    let accentTierMap = narrationVoiceSettings?.accentTierMap ?? {};
+    try {
+      const parsed = JSON.parse(narrationAccentTierMapInput || '{}');
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) accentTierMap = parsed;
+      else parseErrors.push('Accent tier map must be a JSON object; kept the previous value.');
+    } catch {
+      parseErrors.push('Accent tier map is not valid JSON; kept the previous value.');
+    }
+
     setNarrationVoiceSaving(true);
     setNarrationVoiceWarnings([]);
     try {
@@ -598,6 +626,10 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
           'en-IN': narrationSampleEnglish,
           'hi-IN': narrationSampleHindi,
         },
+        accentSelectionEnabled: narrationAccentEnabled,
+        accentOptions,
+        defaultAccent: narrationDefaultAccent,
+        accentTierMap,
       });
       setNarrationVoiceSettingsState(result.settings);
       setNarrationMaleVoiceInput(voicesToMultilineText(result.settings.maleVoiceList));
@@ -606,8 +638,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       setNarrationDefaultFemaleVoice(result.settings.defaultFemaleVoice);
       setNarrationSampleEnglish(result.settings.sampleTextByLanguage['en-IN']);
       setNarrationSampleHindi(result.settings.sampleTextByLanguage['hi-IN']);
+      setNarrationAccentEnabled(result.settings.accentSelectionEnabled);
+      setNarrationAccentListInput(JSON.stringify(result.settings.accentOptions, null, 2));
+      setNarrationDefaultAccent(result.settings.defaultAccent);
+      setNarrationAccentTierMapInput(JSON.stringify(result.settings.accentTierMap, null, 2));
       setNarrationVoiceSampleStatuses(await getNarrationVoiceSampleStatusesForAdmin());
-      setNarrationVoiceWarnings(result.warnings);
+      setNarrationVoiceWarnings([...parseErrors, ...result.warnings]);
     } finally {
       setNarrationVoiceSaving(false);
     }
@@ -1404,6 +1440,70 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                     onChange={(event) => setNarrationSampleHindi(event.target.value)}
                     rows={4}
                     className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-neutral-100">Narrator accent selection</p>
+                    <p className="mt-1 text-xs text-neutral-400">
+                      Lets users pick a narrator accent (English only). Accent is applied via a prompt
+                      instruction to the TTS voice and gated per plan by the tier map below.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setNarrationAccentEnabled((value) => !value)}
+                    className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                      narrationAccentEnabled
+                        ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                        : 'justify-start border-white/10 bg-neutral-800'
+                    }`}
+                    role="switch"
+                    aria-checked={narrationAccentEnabled}
+                    aria-label="Enable narrator accent selection"
+                  >
+                    <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                  </button>
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Default accent id</p>
+                  <input
+                    value={narrationDefaultAccent}
+                    onChange={(event) => setNarrationDefaultAccent(event.target.value)}
+                    placeholder="us"
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Accent list (JSON)</p>
+                  <p className="mb-2 text-xs text-neutral-500">
+                    Array of {'{ "id", "label", "instruction" }'}. The instruction is the sentence sent to the TTS model.
+                  </p>
+                  <textarea
+                    value={narrationAccentListInput}
+                    onChange={(event) => setNarrationAccentListInput(event.target.value)}
+                    rows={8}
+                    spellCheck={false}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-xs text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Per-plan accent map (JSON)</p>
+                  <p className="mb-2 text-xs text-neutral-500">
+                    Object of {'{ "planKey": ["accentId", ...] }'}. Plans not listed get the default accent only.
+                  </p>
+                  <textarea
+                    value={narrationAccentTierMapInput}
+                    onChange={(event) => setNarrationAccentTierMapInput(event.target.value)}
+                    rows={6}
+                    spellCheck={false}
+                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-xs text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   />
                 </div>
               </div>

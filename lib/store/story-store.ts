@@ -1131,6 +1131,7 @@ async function resolveNarratorVoice(session: StorySession, costTelemetry?: CostT
     requestedMode: session.narrationVoiceMode ?? storyVoiceConfig?.mode ?? null,
     requestedVoiceId: session.narratorVoice ?? storyVoiceConfig?.voiceId ?? null,
     requestedGenderBucket: session.narrationVoiceGenderBucket ?? storyVoiceConfig?.genderBucket ?? null,
+    requestedAccent: storyVoiceConfig?.accent ?? null,
     language: session.storyConfig.language,
     genre: session.genre,
     tone: session.tone,
@@ -2243,6 +2244,7 @@ export const useStoryStore = create<StoryState>()(
               requestedMode: initialSession.narrationVoiceMode ?? storyConfig.narrationVoice?.mode ?? null,
               requestedVoiceId: initialSession.narratorVoice ?? storyConfig.narrationVoice?.voiceId ?? null,
               requestedGenderBucket: initialSession.narrationVoiceGenderBucket ?? storyConfig.narrationVoice?.genderBucket ?? null,
+              requestedAccent: storyConfig.narrationVoice?.accent ?? null,
               language: lang,
               genre: initialSession.genre!,
               tone: initialSession.tone!,
@@ -2310,6 +2312,7 @@ export const useStoryStore = create<StoryState>()(
                   voiceResolution.voiceId, voiceResolution.languageCode, storyId, rootNodeId,
                   costPhase({ ...baseCostTelemetry, storyId }, 'tts'),
                   {
+                    accent: voiceResolution.accent,
                     storyTextParts: beat.storyTextParts,
                     overlayConfig: storyConfig.storyTextOverlay,
                   }
@@ -2319,6 +2322,7 @@ export const useStoryStore = create<StoryState>()(
                   voiceResolution.voiceId, voiceResolution.languageCode,
                   costPhase(baseCostTelemetry, 'tts'),
                   {
+                    accent: voiceResolution.accent,
                     storyTextParts: beat.storyTextParts,
                     overlayConfig: storyConfig.storyTextOverlay,
                   }
@@ -3250,6 +3254,7 @@ export const useStoryStore = create<StoryState>()(
           );
           const voiceForBeat = voiceResolution.voiceId;
           const narrationLanguageCode = voiceResolution.languageCode;
+          const narrationAccent = voiceResolution.accent;
           if (
             session.narratorVoice !== voiceForBeat
             || session.narrationVoiceMode !== voiceResolution.mode
@@ -3414,6 +3419,7 @@ export const useStoryStore = create<StoryState>()(
                 session.savedStoryId, newNodeId,
                 costPhase(baseCostTelemetry, 'tts'),
                 {
+                  accent: narrationAccent,
                   storyTextParts: beat.storyTextParts,
                   overlayConfig: session.storyConfig.storyTextOverlay,
                 }
@@ -3443,6 +3449,7 @@ export const useStoryStore = create<StoryState>()(
                 voiceForBeat, narrationLanguageCode,
                 costPhase(baseCostTelemetry, 'tts'),
                 {
+                  accent: narrationAccent,
                   storyTextParts: beat.storyTextParts,
                   overlayConfig: session.storyConfig.storyTextOverlay,
                 }
@@ -3881,6 +3888,7 @@ export const useStoryStore = create<StoryState>()(
           const voiceResolution = await resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'));
           const voiceName = voiceResolution.voiceId;
           const narrationLanguageCode = voiceResolution.languageCode;
+          const narrationAccent = voiceResolution.accent;
           const modelOverrides = isReelStoryConfig(session.storyConfig)
             ? await getStoryModelOverrides().catch(() => undefined)
             : undefined;
@@ -3941,6 +3949,7 @@ export const useStoryStore = create<StoryState>()(
               voiceName, narrationLanguageCode, session.savedStoryId, nodeId,
               costPhase(baseCostTelemetry, 'tts'),
               {
+                accent: narrationAccent,
                 storyTextParts: node.data.storyTextParts,
                 overlayConfig: session.storyConfig.storyTextOverlay,
               }
@@ -3972,6 +3981,7 @@ export const useStoryStore = create<StoryState>()(
               voiceName, narrationLanguageCode,
               costPhase(baseCostTelemetry, 'tts'),
               {
+                accent: narrationAccent,
                 storyTextParts: node.data.storyTextParts,
                 overlayConfig: session.storyConfig.storyTextOverlay,
               }

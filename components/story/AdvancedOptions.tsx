@@ -135,8 +135,9 @@ interface AdvancedOptionsProps {
   narrationVoiceSelection?: {
     genderBucket: NarrationGenderBucket;
     voiceId: string;
+    accent: string;
   };
-  onNarrationVoiceSelectionChange?: (value: { genderBucket: NarrationGenderBucket; voiceId: string }) => void;
+  onNarrationVoiceSelectionChange?: (value: { genderBucket: NarrationGenderBucket; voiceId: string; accent: string }) => void;
 }
 
 export default function AdvancedOptions({
@@ -201,6 +202,20 @@ export default function AdvancedOptions({
       : narrationVoiceConfig?.defaultFemaleVoice
   ) || voiceList[0] || '';
   const voiceDropdownOptions: FilterDropdownOption[] = voiceList.map((voice) => ({ value: voice, label: voice }));
+  const voiceAccent = narrationVoiceSelection?.accent || '';
+  const accentEnabled = Boolean(narrationVoiceConfig?.accentEnabled && (narrationVoiceConfig?.accentOptions?.length ?? 0) > 0);
+  const accentOptions = narrationVoiceConfig?.accentOptions ?? [];
+  const selectedAccent = accentEnabled
+    ? (accentOptions.some((option) => option.id === voiceAccent)
+        ? voiceAccent
+        : (narrationVoiceConfig?.defaultAccent && accentOptions.some((o) => o.id === narrationVoiceConfig.defaultAccent)
+            ? narrationVoiceConfig!.defaultAccent
+            : accentOptions[0]?.id || ''))
+    : '';
+  const accentDropdownOptions: FilterDropdownOption[] = accentOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+  }));
   const storyboardImagesEnabled = imageGenerationMode !== 'prompt_only';
   const imageModelOptions = imageModelPicker?.options ?? [];
   const selectedImageModelKey = imageModelSelection?.modelKey || imageModelPicker?.selectedModelKey || imageModelPicker?.defaultModelKey || '';
@@ -233,11 +248,15 @@ export default function AdvancedOptions({
       ? narrationVoiceConfig.defaultMaleVoice
       : narrationVoiceConfig.defaultFemaleVoice;
     const nextVoice = nextVoiceList.includes(defaultVoice) ? defaultVoice : nextVoiceList[0] || '';
-    onNarrationVoiceSelectionChange({ genderBucket, voiceId: nextVoice });
+    onNarrationVoiceSelectionChange({ genderBucket, voiceId: nextVoice, accent: selectedAccent });
   };
 
   const setNarrationVoice = (voiceId: string) => {
-    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId });
+    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId, accent: selectedAccent });
+  };
+
+  const setNarrationAccent = (accent: string) => {
+    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId: selectedVoice, accent });
   };
 
   useEffect(() => {
@@ -757,6 +776,54 @@ export default function AdvancedOptions({
                     </button>
                   </div>
                 )}
+
+                {accentEnabled && accentDropdownOptions.length > 0 && (
+                  <div className="space-y-2 border-t border-white/10 pt-3">
+                    <div className="flex items-center gap-2">
+                      <h5 className="text-xs font-sans uppercase tracking-[0.14em] text-neutral-400">Accent</h5>
+                      <InfoPopover title="Narration accent" ariaLabel="Show narration accent details">
+                        <p>The accent tells the narrator how to pronounce the story — for example American, British, or Indian English.</p>
+                        <p>It changes the delivery of the selected voice. The voice sample above previews the voice, not the exact accent.</p>
+                      </InfoPopover>
+                    </div>
+                    <FilterDropdown
+                      value={selectedAccent}
+                      options={accentDropdownOptions}
+                      onChange={setNarrationAccent}
+                      fullWidth
+                      size="form"
+                      mode="inline"
+                      ariaLabel="Choose narration accent"
+                    />
+                    <p className="text-xs leading-relaxed text-neutral-500">
+                      Applies to the whole story. The sample preview reflects the voice, not the accent.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {accentEnabled && accentDropdownOptions.length > 0 && !narrationVoiceConfig?.enabled && (
+              <div className="space-y-2 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-sans text-neutral-200">Narration Accent</h4>
+                  <InfoPopover title="Narration accent" ariaLabel="Show narration accent details">
+                    <p>The accent tells the narrator how to pronounce the story — for example American, British, or Indian English.</p>
+                    <p>It changes the delivery of the narrator voice for the whole story.</p>
+                  </InfoPopover>
+                </div>
+                <FilterDropdown
+                  value={selectedAccent}
+                  options={accentDropdownOptions}
+                  onChange={setNarrationAccent}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Choose narration accent"
+                />
+                <p className="text-xs leading-relaxed text-neutral-500">
+                  Applies to the whole story narration.
+                </p>
               </div>
             )}
 

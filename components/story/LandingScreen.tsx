@@ -272,6 +272,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [narrationVoiceSelection, setNarrationVoiceSelection] = useState<{
     genderBucket: NarrationGenderBucket;
     voiceId: string;
+    accent: string;
   }>(() => getDefaultNarrationVoiceSelection(initialLandingData.narrationVoiceConfig));
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
@@ -420,16 +421,26 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       .then((config) => {
         if (cancelled) return;
         setNarrationVoiceConfig(config);
-        if (!config.enabled) return;
         setNarrationVoiceSelection((current) => {
+          // Keep the accent valid for the (possibly language-changed) config.
+          const accentIds = config.accentEnabled ? config.accentOptions.map((option) => option.id) : [];
+          const nextAccent = config.accentEnabled
+            ? (current.accent && accentIds.includes(current.accent)
+                ? current.accent
+                : (accentIds.includes(config.defaultAccent) ? config.defaultAccent : accentIds[0] || ''))
+            : '';
+          if (!config.enabled) {
+            return { ...current, accent: nextAccent };
+          }
           const list = current.genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
           const configuredDefault = current.genderBucket === 'male' ? config.defaultMaleVoice : config.defaultFemaleVoice;
           if (current.voiceId && list.includes(current.voiceId)) {
-            return current;
+            return { ...current, accent: nextAccent };
           }
           return {
             genderBucket: current.genderBucket,
             voiceId: list.includes(configuredDefault) ? configuredDefault : list[0] || '',
+            accent: nextAccent,
           };
         });
       })
@@ -487,10 +498,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
               config.portraitReferences.quality === '1K'
             );
             if (config.narrationVoice?.mode === 'user_selected') {
-              setNarrationVoiceSelection({
-                genderBucket: config.narrationVoice.genderBucket || 'female',
-                voiceId: config.narrationVoice.voiceId || '',
-              });
+              setNarrationVoiceSelection((current) => ({
+                genderBucket: config.narrationVoice!.genderBucket || 'female',
+                voiceId: config.narrationVoice!.voiceId || '',
+                accent: config.narrationVoice!.accent || current.accent,
+              }));
             }
           } catch { /* ignore parse errors */ }
           sessionStorage.removeItem('kissago_pending_config');
@@ -641,10 +653,19 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 : voiceConfig.defaultFemaleVoice
             ),
             languageCode: voiceConfig.languageCode,
+            ...(voiceConfig.accentEnabled && narrationVoiceSelection.accent
+              ? { accent: narrationVoiceSelection.accent }
+              : {}),
           }
-        : {
-            mode: 'legacy_auto',
-          },
+        : voiceConfig?.accentEnabled && narrationVoiceSelection.accent
+          ? {
+              // Legacy auto voice, but the user still picked an accent.
+              mode: 'legacy_auto',
+              accent: narrationVoiceSelection.accent,
+            }
+          : {
+              mode: 'legacy_auto',
+            },
     };
   };
 

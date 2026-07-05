@@ -65,9 +65,10 @@ export function normalizeLandingInitialData(input?: Partial<LandingInitialData> 
 export function getDefaultNarrationVoiceSelection(
   config: NarrationVoiceClientConfig | null | undefined,
   genderBucket: NarrationGenderBucket = 'female'
-): { genderBucket: NarrationGenderBucket; voiceId: string } {
+): { genderBucket: NarrationGenderBucket; voiceId: string; accent: string } {
+  const accent = config?.accentEnabled ? (config.defaultAccent || config.accentOptions[0]?.id || '') : '';
   if (!config?.enabled) {
-    return { genderBucket, voiceId: '' };
+    return { genderBucket, voiceId: '', accent };
   }
 
   const voiceList = genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
@@ -75,5 +76,6 @@ export function getDefaultNarrationVoiceSelection(
   return {
     genderBucket,
     voiceId: voiceList.includes(configuredDefault) ? configuredDefault : voiceList[0] || '',
+    accent,
   };
 }

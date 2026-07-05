@@ -576,6 +576,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
   costTelemetry?: CostTelemetryContext,
   options: {
     narrationStyle?: string;
+    accent?: string | null;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
     // Background worker path: persist on behalf of `userId` via the service-role
@@ -596,6 +597,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      accent: options.accent,
       ...(options.serverAuth ? { serverAuth: options.serverAuth } : {}),
     }
   );
@@ -645,6 +647,7 @@ export async function generateStoryNarrationOnlyWithOverlay(
   costTelemetry?: CostTelemetryContext,
   options: {
     narrationStyle?: string;
+    accent?: string | null;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
   } = {}
@@ -660,6 +663,7 @@ export async function generateStoryNarrationOnlyWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      accent: options.accent,
     }
   );
   const overlay = await buildStoryOverlayTiming({

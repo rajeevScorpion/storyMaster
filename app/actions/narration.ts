@@ -34,7 +34,13 @@ import {
   type ReelNarrationSettings,
   type WordTimestamp,
 } from '@/lib/reel/narration';
-import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
+import {
+  getNarrationVoiceSettings,
+  getNarrationAccentInstruction,
+  getNarrationAccentSelectionForPlan,
+} from '@/lib/ai/narration-voice-settings';
+import { getAllowedAccentIdsForPlan, isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
+import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaState } from '@/app/actions/persistence';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
@@ -316,6 +322,24 @@ export async function getNarrationVoiceSelectionConfig(
   const languageResolution = resolveStoryNarrationLanguage(storyLanguage);
   const samples = await listNarrationVoiceSampleStatuses(settings);
 
+  // Accents are English-only and gated by the current user's plan.
+  let accentEnabled = false;
+  let accentOptions: NarrationVoiceClientConfig['accentOptions'] = [];
+  let defaultAccent = settings.defaultAccent;
+  if (settings.accentSelectionEnabled && isEnglishNarrationLanguage(storyLanguage)) {
+    let planKey: string | null = null;
+    try {
+      const pricing = await getPricingRuntimeContext();
+      planKey = pricing.snapshot.planKey ?? null;
+    } catch (error) {
+      console.warn('[narration] Failed to load plan for accent options:', error);
+    }
+    const accentSelection = await getNarrationAccentSelectionForPlan(planKey);
+    accentEnabled = accentSelection.enabled && accentSelection.accentOptions.length > 0;
+    accentOptions = accentSelection.accentOptions;
+    defaultAccent = accentSelection.defaultAccent;
+  }
+
   return {
     enabled: settings.userLedVoiceSelectionEnabled,
     maleVoiceList: settings.maleVoiceList,
@@ -326,6 +350,9 @@ export async function getNarrationVoiceSelectionConfig(
     requestedStoryLanguage: storyLanguage === 'hindi' ? 'hindi' : 'english',
     fallbackToEnglishSample: languageResolution.fallbackToEnglishSample,
     samples: samples.filter((sample) => sample.languageCode === languageResolution.languageCode),
+    accentEnabled,
+    accentOptions,
+    defaultAccent,
   };
 }
 
@@ -514,6 +541,9 @@ async function callGeminiTTS(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    // Accent id (e.g. 'us', 'uk') locked on the story. Resolved to a natural-language
+    // prompt instruction here — the only lever Gemini TTS exposes for accent.
+    accent?: string | null;
   } = {}
 ): Promise<GeminiTTSResult> {
   return timeNarrationStep(
@@ -527,6 +557,11 @@ async function callGeminiTTS(
       const ai = new GoogleGenAI({ apiKey: getApiKey() });
       const taskKey = options.taskKey ?? 'tts';
       const ttsConfig = await getModelConfig(taskKey);
+      // Accent steering only applies to English narration; for other languages the
+      // built-in accents don't apply, so we leave the {{accent}} slot blank.
+      const accentInstruction = options.accent && isEnglishNarrationLanguage(language)
+        ? (await getNarrationAccentInstruction(options.accent)) ?? ''
+        : '';
       const ttsPrompt = resolvePromptTemplate(
         await getPublishedPrompt(taskKey),
         {
@@ -535,6 +570,7 @@ async function callGeminiTTS(
           genre,
           language,
           narrationStyle: options.narrationStyle || tone,
+          accent: accentInstruction,
         }
       );
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
@@ -940,6 +976,7 @@ async function buildGeminiReelAudio(input: {
   panelPauseMs: number;
   narrationStyle?: string;
   taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+  accent?: string | null;
 }): Promise<{
   buffer: Buffer;
   reelCaptions?: ReelCaptionTiming;
@@ -991,6 +1028,7 @@ async function buildGeminiReelAudio(input: {
         {
           taskKey: input.taskKey,
           narrationStyle: panelScript.deliveryInstruction || input.narrationStyle || input.tone,
+          accent: input.accent,
         }
       );
       const pcm = Buffer.from(result.pcmBase64, 'base64');
@@ -1036,6 +1074,7 @@ async function buildGeminiReelAudio(input: {
     {
       taskKey: input.taskKey,
       narrationStyle: baseScript.deliveryInstruction || input.narrationStyle,
+      accent: input.accent,
     }
   );
   const durationMs = pcmBase64DurationMs(result.pcmBase64);
@@ -1060,6 +1099,7 @@ async function buildNarrationAudioPayload(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    accent?: string | null;
     reelCaptions?: ReelCaptionTiming;
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
@@ -1140,6 +1180,7 @@ async function buildNarrationAudioPayload(
         panelPauseMs,
         narrationStyle: options.narrationStyle || tone,
         taskKey: options.taskKey,
+        accent: options.accent,
       });
       return {
         buffer: gemini.buffer,
@@ -1272,6 +1313,7 @@ async function buildNarrationAudioPayload(
         panelPauseMs,
         narrationStyle: options.narrationStyle,
         taskKey: options.taskKey,
+        accent: options.accent,
       })
     : null;
   const nonReelGemini = !isReel
@@ -1285,6 +1327,7 @@ async function buildNarrationAudioPayload(
         {
           taskKey: options.taskKey,
           narrationStyle: options.narrationStyle,
+          accent: options.accent,
         }
       )
     : null;
@@ -1371,6 +1414,7 @@ export async function generateAndPersistNarration(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    accent?: string | null;
     reelCaptions?: ReelCaptionTiming;
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
@@ -1591,6 +1635,7 @@ export async function generateNarrationOnly(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    accent?: string | null;
   } = {}
 ): Promise<string> {
   return timeNarrationStep(
@@ -1752,6 +1797,7 @@ export async function resolveNarrationVoiceServer(input: {
   requestedMode?: NarrationVoiceMode | null;
   requestedVoiceId?: string | null;
   requestedGenderBucket?: NarrationGenderBucket | null;
+  requestedAccent?: string | null;
   language?: string | null;
   genre: string;
   tone: string;
@@ -1762,11 +1808,17 @@ export async function resolveNarrationVoiceServer(input: {
   mode: NarrationVoiceMode;
   genderBucket: NarrationGenderBucket | null;
   languageCode: NarrationLanguageCode;
+  accent: string | null;
   usedLegacySelector: boolean;
   warnings: string[];
 }> {
   const settings = await getNarrationVoiceSettings();
   const languageResolution = resolveStoryNarrationLanguage(input.language);
+  const accent = await resolveNarrationAccentServer({
+    requestedAccent: input.requestedAccent,
+    language: input.language,
+    settings,
+  });
   let storyRecord: {
     voiceId: string | null;
     mode: NarrationVoiceMode | null;
@@ -1846,6 +1898,7 @@ export async function resolveNarrationVoiceServer(input: {
     mode: decision.mode,
     voiceId,
     languageCode: languageResolution.languageCode,
+    accent,
     usedLegacySelector,
     warnings: decision.warnings,
   });
@@ -1855,9 +1908,46 @@ export async function resolveNarrationVoiceServer(input: {
     mode: decision.mode,
     genderBucket: decision.genderBucket,
     languageCode: languageResolution.languageCode,
+    accent,
     usedLegacySelector,
     warnings: decision.warnings,
   };
+}
+
+/**
+ * Resolve + tier-gate the narrator accent for a story. Returns an accent id only
+ * when accent selection is enabled and the story language is English; otherwise
+ * null (blank {{accent}} slot). The requested accent is honored only if the user's
+ * current plan is allowed to use it — server-side defense-in-depth over the UI gate.
+ */
+async function resolveNarrationAccentServer(input: {
+  requestedAccent?: string | null;
+  language?: string | null;
+  settings: NarrationVoiceSettings;
+}): Promise<string | null> {
+  const { settings } = input;
+  if (!settings.accentSelectionEnabled) return null;
+  if (!isEnglishNarrationLanguage(input.language)) return null;
+
+  const requested = input.requestedAccent?.trim().toLowerCase() || null;
+
+  let planKey: string | null = null;
+  try {
+    const pricing = await getPricingRuntimeContext();
+    planKey = pricing.snapshot.planKey ?? null;
+  } catch (error) {
+    console.warn('[narration.accent_resolver] Failed to load plan for accent gating:', error);
+  }
+
+  const allowed = getAllowedAccentIdsForPlan(
+    settings.accentOptions,
+    settings.accentTierMap,
+    planKey,
+    settings.defaultAccent
+  );
+  if (allowed.length === 0) return null;
+  if (requested && allowed.includes(requested)) return requested;
+  return allowed.includes(settings.defaultAccent) ? settings.defaultAccent : allowed[0];
 }
 
 /**

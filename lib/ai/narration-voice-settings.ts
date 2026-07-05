@@ -14,6 +14,20 @@ import {
   type NarrationVoiceSettings,
   type NarrationVoiceSettingsSaveResult,
 } from '@/lib/ai/narration-voices';
+import {
+  DEFAULT_NARRATION_ACCENTS,
+  NARRATION_ACCENT_FLAG_KEYS,
+  getAllowedAccentsForPlan,
+  normalizeNarrationAccentList,
+  parseNarrationAccentListValue,
+  parseNarrationAccentTierMapValue,
+  resolveAccentInstruction,
+  resolveDefaultAccentId,
+  serializeNarrationAccentList,
+  serializeNarrationAccentTierMap,
+  type NarrationAccentOption,
+  type NarrationAccentTierMap,
+} from '@/lib/ai/narration-accents';
 
 export interface NarrationVoiceSettingsInput {
   userLedVoiceSelectionEnabled: boolean;
@@ -22,6 +36,10 @@ export interface NarrationVoiceSettingsInput {
   defaultMaleVoice: string;
   defaultFemaleVoice: string;
   sampleTextByLanguage: Partial<Record<NarrationLanguageCode, string>>;
+  accentSelectionEnabled: boolean;
+  accentOptions: NarrationAccentOption[];
+  defaultAccent: string;
+  accentTierMap: NarrationAccentTierMap;
 }
 
 function normalizeDefaultVoice(defaultVoice: string | null | undefined, list: string[], fallback: string): {
@@ -53,6 +71,10 @@ export async function getNarrationVoiceSettings(): Promise<NarrationVoiceSetting
     defaultFemaleVoiceValue,
     englishSampleText,
     hindiSampleText,
+    accentSelectionEnabled,
+    accentListValue,
+    defaultAccentValue,
+    accentTierMapValue,
   ] = await Promise.all([
     getFeatureFlag(NARRATION_VOICE_FLAG_KEYS.userLedEnabled, false),
     getFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.maleVoiceList),
@@ -61,12 +83,20 @@ export async function getNarrationVoiceSettings(): Promise<NarrationVoiceSetting
     getFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.defaultFemaleVoice),
     getFeatureFlagValue('narration_sample_text_en_in'),
     getFeatureFlagValue('narration_sample_text_hi_in'),
+    getFeatureFlag(NARRATION_ACCENT_FLAG_KEYS.enabled, false),
+    getFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.accentList),
+    getFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.defaultAccent),
+    getFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.tierMap),
   ]);
 
   const maleVoiceList = parseNarrationVoiceListValue(maleVoiceListValue, DEFAULT_MALE_NARRATION_VOICES);
   const femaleVoiceList = parseNarrationVoiceListValue(femaleVoiceListValue, DEFAULT_FEMALE_NARRATION_VOICES);
   const defaultMaleVoice = normalizeDefaultVoice(defaultMaleVoiceValue, maleVoiceList, DEFAULT_MALE_NARRATION_VOICES[0]).voice;
   const defaultFemaleVoice = normalizeDefaultVoice(defaultFemaleVoiceValue, femaleVoiceList, DEFAULT_FEMALE_NARRATION_VOICES[0]).voice;
+
+  const accentOptions = parseNarrationAccentListValue(accentListValue);
+  const defaultAccent = resolveDefaultAccentId(accentOptions, defaultAccentValue);
+  const accentTierMap = parseNarrationAccentTierMapValue(accentTierMapValue);
 
   return {
     userLedVoiceSelectionEnabled,
@@ -79,7 +109,48 @@ export async function getNarrationVoiceSettings(): Promise<NarrationVoiceSetting
       'hi-IN': hindiSampleText?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT['hi-IN'],
     },
     supportedLanguages: SUPPORTED_NARRATION_VOICE_LANGUAGES,
+    accentSelectionEnabled,
+    accentOptions,
+    defaultAccent,
+    accentTierMap,
   };
+}
+
+/**
+ * Resolve the natural-language TTS instruction for a stored accent id, or null if
+ * the id is absent/unknown. Honored at generation time regardless of the picker's
+ * enabled flag so already-locked stories keep their accent.
+ */
+export async function getNarrationAccentInstruction(
+  accentId: string | null | undefined
+): Promise<string | null> {
+  const id = accentId?.trim().toLowerCase();
+  if (!id) return null;
+  const settings = await getNarrationVoiceSettings();
+  return resolveAccentInstruction(id, settings.accentOptions);
+}
+
+/**
+ * Resolve the accent options a given plan may use, plus the effective default.
+ * Returns an empty option list when accent selection is disabled.
+ */
+export async function getNarrationAccentSelectionForPlan(
+  planKey: string | null | undefined
+): Promise<{ enabled: boolean; accentOptions: NarrationAccentOption[]; defaultAccent: string }> {
+  const settings = await getNarrationVoiceSettings();
+  if (!settings.accentSelectionEnabled) {
+    return { enabled: false, accentOptions: [], defaultAccent: settings.defaultAccent };
+  }
+  const accentOptions = getAllowedAccentsForPlan(
+    settings.accentOptions,
+    settings.accentTierMap,
+    planKey,
+    settings.defaultAccent
+  );
+  const defaultAccent = accentOptions.some((accent) => accent.id === settings.defaultAccent)
+    ? settings.defaultAccent
+    : accentOptions[0]?.id ?? settings.defaultAccent;
+  return { enabled: true, accentOptions, defaultAccent };
 }
 
 export async function saveNarrationVoiceSettings(
@@ -109,6 +180,26 @@ export async function saveNarrationVoiceSettings(
     'hi-IN': input.sampleTextByLanguage['hi-IN']?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT['hi-IN'],
   };
 
+  let accentOptions = normalizeNarrationAccentList(input.accentOptions);
+  if (accentOptions.length === 0) {
+    accentOptions = [...DEFAULT_NARRATION_ACCENTS];
+    warnings.push('Accent list was empty and has been reset to the default curated list.');
+  }
+  const defaultAccent = resolveDefaultAccentId(accentOptions, input.defaultAccent);
+  if (input.defaultAccent?.trim() && defaultAccent !== input.defaultAccent.trim().toLowerCase()) {
+    warnings.push(`Default accent "${input.defaultAccent}" is not in the accent list and was reset to "${defaultAccent}".`);
+  }
+
+  // Keep the tier map referencing only accents that still exist.
+  const availableAccentIds = new Set(accentOptions.map((accent) => accent.id));
+  const accentTierMap: NarrationAccentTierMap = {};
+  for (const [planKey, ids] of Object.entries(input.accentTierMap ?? {})) {
+    const filtered = Array.from(
+      new Set((ids ?? []).map((id) => String(id).trim().toLowerCase()).filter((id) => availableAccentIds.has(id)))
+    );
+    if (filtered.length > 0) accentTierMap[planKey.trim().toLowerCase()] = filtered;
+  }
+
   await Promise.all([
     setFeatureFlag(NARRATION_VOICE_FLAG_KEYS.userLedEnabled, input.userLedVoiceSelectionEnabled),
     setFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.maleVoiceList, serializeNarrationVoiceList(maleVoiceList)),
@@ -117,6 +208,10 @@ export async function saveNarrationVoiceSettings(
     setFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.defaultFemaleVoice, defaultFemale.voice),
     setFeatureFlagValue('narration_sample_text_en_in', sampleTextByLanguage['en-IN']),
     setFeatureFlagValue('narration_sample_text_hi_in', sampleTextByLanguage['hi-IN']),
+    setFeatureFlag(NARRATION_ACCENT_FLAG_KEYS.enabled, input.accentSelectionEnabled),
+    setFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.accentList, serializeNarrationAccentList(accentOptions)),
+    setFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.defaultAccent, defaultAccent),
+    setFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.tierMap, serializeNarrationAccentTierMap(accentTierMap)),
   ]);
 
   return {
@@ -128,6 +223,10 @@ export async function saveNarrationVoiceSettings(
       defaultFemaleVoice: defaultFemale.voice,
       sampleTextByLanguage,
       supportedLanguages: SUPPORTED_NARRATION_VOICE_LANGUAGES,
+      accentSelectionEnabled: input.accentSelectionEnabled,
+      accentOptions,
+      defaultAccent,
+      accentTierMap,
     },
     warnings,
   };
