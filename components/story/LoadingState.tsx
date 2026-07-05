@@ -453,7 +453,7 @@ export default function LoadingState({
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
                     {autoBuildProgress?.active && (
                       <span className="ml-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-200">
-                        Beat {Math.min(autoBuildProgress.current, autoBuildProgress.total)} of {autoBuildProgress.total}
+                        Beat {Math.min(Math.max(autoBuildProgress.current, 1), autoBuildProgress.total)} of {autoBuildProgress.total}
                       </span>
                     )}
                   </div>

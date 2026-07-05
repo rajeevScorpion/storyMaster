@@ -578,6 +578,9 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     narrationStyle?: string;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
+    // Background worker path: persist on behalf of `userId` via the service-role
+    // client. Absent for the interactive path (unchanged behaviour).
+    serverAuth?: { userId: string };
   } = {}
 ): Promise<StoryOverlayNarrationResult> {
   const overlayConfig = normalizeOverlayConfig(options.overlayConfig);
@@ -593,6 +596,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      ...(options.serverAuth ? { serverAuth: options.serverAuth } : {}),
     }
   );
 
@@ -613,7 +617,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
       storyTextOverlayStyle: overlayConfig.style,
       storyTextOverlayCaptions: overlay.captions,
       storyTextOverlayAlignment: overlay.alignment,
-    });
+    }, options.serverAuth);
   } catch (error) {
     console.warn(
       '[story-narration] Failed to persist story text overlay metadata:',

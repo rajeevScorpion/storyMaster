@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { reconcileActiveImageBatches } from '@/app/actions/image-batch';
+import { reconcileActiveNarrationJobs } from '@/app/actions/narration-batch';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -18,8 +19,14 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const result = await reconcileActiveImageBatches();
-    return NextResponse.json({ ok: true, ...result });
+    const [images, narration] = await Promise.all([
+      reconcileActiveImageBatches(),
+      reconcileActiveNarrationJobs().catch((error) => {
+        console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
+        return { processed: 0 };
+      }),
+    ]);
+    return NextResponse.json({ ok: true, ...images, narrationProcessed: narration.processed });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';
     console.error('Image batch reconcile route failed:', message);

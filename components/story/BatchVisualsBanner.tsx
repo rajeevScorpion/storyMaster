@@ -39,12 +39,15 @@ export default function BatchVisualsBanner() {
   const message = useStoryStore((state) => state.imageBatchMessage);
   const generateNarrationBatch = useStoryStore((state) => state.generateNarrationBatch);
   const isGeneratingNarrationBatch = useStoryStore((state) => state.isGeneratingNarrationBatch);
-  const narrationBatchProgress = useStoryStore((state) => state.narrationBatchProgress);
   const narrationBatchMessage = useStoryStore((state) => state.narrationBatchMessage);
 
   const stats = useMemo(() => {
     if (!session) {
-      return { total: 0, ready: 0, pending: 0, pathNeeding: 0, narrationPathNeeding: 0, isTerminal: false };
+      return {
+        total: 0, ready: 0, pending: 0, pathNeeding: 0,
+        narrationTotal: 0, narrationReady: 0, narrationPending: 0, narrationPathNeeding: 0,
+        isTerminal: false,
+      };
     }
     let total = 0;
     let ready = 0;
@@ -60,15 +63,23 @@ export default function BatchVisualsBanner() {
     // Beats needing images / narration on the current root→current-node path.
     const path = getPathToNode(session.storyMap, session.storyMap.currentNodeId);
     let pathNeeding = 0;
+    // Narration is tracked per narratable beat (one with story text) so the
+    // "X of N" counter and CTA line up with what the server job actually does.
+    let narrationTotal = 0;
+    let narrationReady = 0;
+    let narrationPending = 0;
     let narrationPathNeeding = 0;
     for (const node of path) {
       const beat = node.data;
       if (beatHasPrompt(beat) && !beatHasReadyImage(beat) && beat.imageStatus !== 'pending') {
         pathNeeding += 1;
       }
-      if (!beat.audioUrl) {
-        narrationPathNeeding += 1;
-      }
+      const narratable = Boolean(beat.storyText && beat.storyText.trim());
+      if (!narratable) continue;
+      narrationTotal += 1;
+      if (beat.audioUrl) narrationReady += 1;
+      else if (beat.audioStatus === 'pending') narrationPending += 1;
+      else narrationPathNeeding += 1;
     }
 
     const currentNode = session.storyMap.nodes[session.storyMap.currentNodeId];
@@ -76,7 +87,11 @@ export default function BatchVisualsBanner() {
       currentNode && (currentNode.data.isEnding === true || (currentNode.data.options?.length ?? 0) === 0)
     );
 
-    return { total, ready, pending, pathNeeding, narrationPathNeeding, isTerminal };
+    return {
+      total, ready, pending, pathNeeding,
+      narrationTotal, narrationReady, narrationPending, narrationPathNeeding,
+      isTerminal,
+    };
   }, [session]);
 
   const isReel = session?.storyConfig.storyKind === 'reel';
@@ -102,25 +117,30 @@ export default function BatchVisualsBanner() {
   const canShowVisuals = Boolean(session) && !isReel && Boolean(savedStoryId) && defersImages;
   const showInFlight = canShowVisuals && stats.pending > 0;
 
-  // Fast (stateful) delivery streams beats in from a server worker. Poll the cloud
-  // so images appear without the manual "Check now". Use refreshBatchImages (a
-  // field-level merge that never flips isLoading or resets the current beat) —
-  // never loadStoryFromCloud (full reload → preloader flash + navigation reset)
-  // and never reconcile (which would kick another generation pass on the worker).
+  // Server workers stream beats in for both fast (stateful) images and background
+  // narration. Poll the cloud so assets appear without a manual refresh. Use
+  // refreshBatchImages (a field-level merge that never flips isLoading or resets
+  // the current beat) — never loadStoryFromCloud (full reload → preloader flash +
+  // navigation reset) and never reconcile (which would kick another worker pass).
+  const shouldPoll =
+    Boolean(savedStoryId) &&
+    ((isStatefulDelivery && stats.pending > 0) || stats.narrationPending > 0);
   useEffect(() => {
-    if (!isStatefulDelivery || !savedStoryId || stats.pending <= 0) return;
+    if (!shouldPoll || !savedStoryId) return;
     const id = window.setInterval(() => {
       void refreshBatchImages(savedStoryId);
     }, 6000);
     return () => window.clearInterval(id);
-  }, [isStatefulDelivery, savedStoryId, stats.pending, refreshBatchImages]);
+  }, [shouldPoll, savedStoryId, refreshBatchImages]);
 
   const showCreate = canShowVisuals && stats.pending === 0 && stats.pathNeeding > 0;
   const showVisuals = showCreate || showInFlight;
   const createEnabled = stats.isTerminal && !isSubmitting;
 
   // --- Narration section ---
-  const narrationInProgress = Boolean(narrationBatchProgress) || isGeneratingNarrationBatch;
+  // Narration is a SERVER background job (like fast visuals): once submitted the
+  // user can leave. In-flight = beats still pending audio, or a submit in flight.
+  const narrationInProgress = stats.narrationPending > 0 || isGeneratingNarrationBatch;
   const showNarration = isBatchMode &&
     (narrationInProgress || stats.narrationPathNeeding > 0 || Boolean(narrationBatchMessage));
   const narrationEnabled = stats.isTerminal && !isGeneratingNarrationBatch;
@@ -152,7 +172,7 @@ export default function BatchVisualsBanner() {
                     </p>
                     <p className="mt-0.5 text-xs text-neutral-400">
                       {isStatefulDelivery
-                        ? `${stats.ready} of ${stats.total} ready · this finishes in a few minutes.`
+                        ? `Beat ${Math.min(stats.ready + 1, stats.total)} of ${stats.total} · runs on our servers — you can close this tab and come back.`
                         : `${stats.ready} of ${stats.total} ready · check back within a day.`}
                     </p>
                   </div>
@@ -182,7 +202,7 @@ export default function BatchVisualsBanner() {
                         ? message
                         : createEnabled
                         ? isStatefulDelivery
-                          ? `Generate images for ${stats.pathNeeding} beat${stats.pathNeeding === 1 ? '' : 's'} on this path — consistent characters, ready in a few minutes.`
+                          ? `Generate images for ${stats.pathNeeding} beat${stats.pathNeeding === 1 ? '' : 's'} — consistent characters. Runs on our servers (~8 min/beat), so you can leave and come back.`
                           : `Generate images for ${stats.pathNeeding} beat${stats.pathNeeding === 1 ? '' : 's'} on this path in the background — ready within a day, ~50% cheaper. You can leave and come back.`
                         : 'Reach the end of the story to create all visuals in one go.'}
                     </p>
@@ -225,11 +245,11 @@ export default function BatchVisualsBanner() {
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                 </span>
                 <div className="min-w-0 text-left">
-                  <p className="text-sm text-neutral-100">Generating narration…</p>
+                  <p className="text-sm text-neutral-100">Generating narration on our servers</p>
                   <p className="mt-0.5 text-xs text-neutral-400">
-                    {narrationBatchProgress
-                      ? `Beat ${Math.min(narrationBatchProgress.current + 1, narrationBatchProgress.total)} of ${narrationBatchProgress.total} — keep this page open until it finishes.`
-                      : 'Keep this page open until narration finishes.'}
+                    {stats.narrationTotal > 0
+                      ? `Beat ${Math.min(stats.narrationReady + 1, stats.narrationTotal)} of ${stats.narrationTotal} · you can close this tab and come back.`
+                      : 'Submitting… you can close this tab and come back.'}
                   </p>
                 </div>
               </>
@@ -239,7 +259,7 @@ export default function BatchVisualsBanner() {
                   <p className="text-sm text-neutral-100">Generate all narration for this story</p>
                   <p className="mt-0.5 text-xs text-neutral-400">
                     {narrationEnabled
-                      ? `Narrate ${stats.narrationPathNeeding} beat${stats.narrationPathNeeding === 1 ? '' : 's'} on this path now — this runs here, so keep the page open until it's done.`
+                      ? `Narrate ${stats.narrationPathNeeding} beat${stats.narrationPathNeeding === 1 ? '' : 's'} on this path — runs on our servers, so you can leave and come back.`
                       : 'Reach the end of the story to generate all narration in one go.'}
                   </p>
                 </div>

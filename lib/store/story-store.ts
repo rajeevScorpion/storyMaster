@@ -27,6 +27,7 @@ import {
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import { submitStoryImageBatch, submitStoryStatefulVisuals, reconcileStoryBatch } from '@/app/actions/image-batch';
+import { submitStoryNarrationBatch, reconcileStoryNarration } from '@/app/actions/narration-batch';
 import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
@@ -5304,17 +5305,44 @@ export const useStoryStore = create<StoryState>()(
               freshData.imageStatus !== existingData.imageStatus ||
               freshData.imageUrl !== existingData.imageUrl ||
               freshData.imageError !== existingData.imageError;
-            if (!imageArrived) continue;
+            // The same poll streams in background narration audio (server job).
+            const audioArrived =
+              freshData.audioStatus !== existingData.audioStatus ||
+              freshData.audioUrl !== existingData.audioUrl ||
+              freshData.audioError !== existingData.audioError;
+            if (!imageArrived && !audioArrived) continue;
             changed = true;
             mergedNodes[id] = {
               ...existing,
               data: {
                 ...existingData,
-                imageUrl: freshData.imageUrl ?? existingData.imageUrl,
-                imageStatus: freshData.imageStatus ?? existingData.imageStatus,
-                imageError: freshData.imageError,
-                imageGenerationMetadata:
-                  freshData.imageGenerationMetadata ?? existingData.imageGenerationMetadata,
+                ...(imageArrived
+                  ? {
+                      imageUrl: freshData.imageUrl ?? existingData.imageUrl,
+                      imageStatus: freshData.imageStatus ?? existingData.imageStatus,
+                      imageError: freshData.imageError,
+                      imageGenerationMetadata:
+                        freshData.imageGenerationMetadata ?? existingData.imageGenerationMetadata,
+                    }
+                  : {}),
+                ...(audioArrived
+                  ? {
+                      audioUrl: freshData.audioUrl ?? existingData.audioUrl,
+                      audioStatus: freshData.audioStatus ?? existingData.audioStatus,
+                      audioError: freshData.audioError,
+                      narrationMetadata: freshData.narrationMetadata ?? existingData.narrationMetadata,
+                      storyTextOverlayEnabled:
+                        freshData.storyTextOverlayEnabled ?? existingData.storyTextOverlayEnabled,
+                      storyTextOverlayMode:
+                        freshData.storyTextOverlayMode ?? existingData.storyTextOverlayMode,
+                      storyTextOverlayStyle:
+                        freshData.storyTextOverlayStyle ?? existingData.storyTextOverlayStyle,
+                      storyTextOverlayCaptions:
+                        freshData.storyTextOverlayCaptions ?? existingData.storyTextOverlayCaptions,
+                      storyTextOverlayAlignment:
+                        freshData.storyTextOverlayAlignment ?? existingData.storyTextOverlayAlignment,
+                    }
+                  : {}),
               },
             };
           }
@@ -5979,11 +6007,13 @@ export const useStoryStore = create<StoryState>()(
           return;
         }
 
-        // Narrate the current root→current-node path. Beats that already have
-        // audio (shared across branches, or previously narrated) are skipped by
-        // generateNarrationForNode itself.
+        // Narrate the current root→current-node path on a SERVER background job.
+        // Unlike the old client loop (which died if the tab closed), this survives
+        // the user leaving; audio streams onto beats as each is produced and the
+        // banner's poll (refreshBatchImages) picks it up. Beats that already have
+        // audio are skipped server-side.
         const path = getPathToNode(session.storyMap, session.storyMap.currentNodeId);
-        const targets = path.filter((node) => !node.data.audioUrl);
+        const targets = path.filter((node) => !node.data.audioUrl && Boolean(node.data.storyText?.trim()));
         if (targets.length === 0) {
           set({ narrationBatchMessage: 'All beats on this path already have narration.' });
           return;
@@ -5992,30 +6022,43 @@ export const useStoryStore = create<StoryState>()(
         set({
           isGeneratingNarrationBatch: true,
           narrationBatchMessage: null,
-          narrationBatchProgress: { current: 0, total: targets.length },
+          narrationBatchProgress: null,
           error: null,
           errorAction: null,
         });
 
-        let failures = 0;
-        for (let i = 0; i < targets.length; i++) {
-          try {
-            // Sequential: avoids TTS rate limits and keeps progress meaningful.
-            await get().generateNarrationForNode(targets[i].id);
-          } catch (error) {
-            failures += 1;
-            console.error('Narration batch: beat failed:', error);
-          }
-          set({ narrationBatchProgress: { current: i + 1, total: targets.length } });
-        }
+        try {
+          const result = await submitStoryNarrationBatch({ storyId });
 
-        set({
-          isGeneratingNarrationBatch: false,
-          narrationBatchProgress: null,
-          narrationBatchMessage: failures === 0
-            ? 'Narration ready. You can now leave and come back for the visuals.'
-            : `Narration finished with ${failures} beat${failures === 1 ? '' : 's'} failed — reopen the story and retry.`,
-        });
+          // Reflect pending state locally so the banner flips to "generating" and
+          // starts polling immediately.
+          if (result.status === 'submitted') {
+            const current = get().session;
+            if (current && current.savedStoryId === storyId) {
+              const ids = new Set(targets.map((node) => node.id));
+              const nodes = { ...current.storyMap.nodes };
+              for (const [id, node] of Object.entries(nodes)) {
+                if (!ids.has(id)) continue;
+                nodes[id] = { ...node, data: { ...node.data, audioStatus: 'pending', audioError: undefined } };
+              }
+              set({ session: { ...current, storyMap: { ...current.storyMap, nodes } } });
+            }
+          }
+
+          set({
+            isGeneratingNarrationBatch: false,
+            narrationBatchProgress: null,
+            narrationBatchMessage: result.message,
+          });
+        } catch (error) {
+          set({
+            isGeneratingNarrationBatch: false,
+            narrationBatchProgress: null,
+            narrationBatchMessage: null,
+            error: error instanceof Error ? error.message : 'Failed to submit narration.',
+            errorAction: null,
+          });
+        }
       },
 
       generateAutomatedStory: async (prompt: string, config?: StoryConfig) => {
@@ -6086,8 +6129,14 @@ export const useStoryStore = create<StoryState>()(
         const storyId = get().session?.savedStoryId;
         if (!storyId) return;
         try {
-          await reconcileStoryBatch(storyId);
-          // Re-hydrate so freshly materialized batch images appear in the session.
+          // Resume any interrupted image and narration jobs in parallel.
+          await Promise.all([
+            reconcileStoryBatch(storyId),
+            reconcileStoryNarration(storyId).catch((error) =>
+              console.error('reconcileStoryNarration failed:', error)
+            ),
+          ]);
+          // Re-hydrate so freshly materialized batch images/audio appear in the session.
           await get().loadStoryFromCloud(storyId);
         } catch (error) {
           console.error('reconcileCurrentStoryBatch failed:', error);

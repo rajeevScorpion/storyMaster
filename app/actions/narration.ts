@@ -1376,6 +1376,9 @@ export async function generateAndPersistNarration(
     narrationSettings?: ReelNarrationSettings;
     generationMode?: NarrationGenerationMode;
     panelPauseMs?: number;
+    // When present, upload + persist on behalf of `userId` via the service-role
+    // client (background worker path). Absent for the interactive path.
+    serverAuth?: { userId: string };
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata?: BeatNarrationMetadata }> {
   return timeNarrationStep(
@@ -1389,11 +1392,17 @@ export async function generateAndPersistNarration(
     async () => {
       const audioPayload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, options);
 
-      const supabase = await createClient();
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError || !user) throw new Error('Not authenticated');
+      const supabase = options.serverAuth ? createAdminClient() : await createClient();
+      let userId: string;
+      if (options.serverAuth) {
+        userId = options.serverAuth.userId;
+      } else {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) throw new Error('Not authenticated');
+        userId = user.id;
+      }
 
-      const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.${audioPayload.extension}`;
+      const storagePath = `${userId}/${savedStoryId}/${nodeId}/audio.${audioPayload.extension}`;
       const r2ObjectKey = `stories/${savedStoryId}/beats/${nodeId}/audio.${audioPayload.extension}`;
       const storageConfig = await getEffectiveMediaStorageConfig();
       let persistedAudioUrl: string | null = null;
@@ -1420,7 +1429,7 @@ export async function generateAndPersistNarration(
               await recordMediaAsset({
                 storyId: savedStoryId,
                 nodeId,
-                userId: user.id,
+                userId,
                 assetType: 'narration_audio',
                 storageProvider: 'r2',
                 bucket: r2.bucket,
@@ -1473,7 +1482,7 @@ export async function generateAndPersistNarration(
           await recordMediaAsset({
             storyId: savedStoryId,
             nodeId,
-            userId: user.id,
+            userId,
             assetType: 'narration_audio',
             storageProvider: 'supabase',
             bucket: 'story-assets',
@@ -1508,7 +1517,7 @@ export async function generateAndPersistNarration(
               }),
               activeNarrationPreviewId: null,
               ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
-            });
+            }, options.serverAuth);
             narrationMetadata = buildBeatNarrationMetadata({
               payload: audioPayload,
               audioUrl: persistedAudioUrl,
@@ -1549,7 +1558,7 @@ export async function generateAndPersistNarration(
       await recordNarrationGenerationLog({
         storyId: savedStoryId,
         nodeId,
-        userId: user.id,
+        userId,
         mode: options.generationMode ?? 'final',
         payload: audioPayload,
         storagePath: persistedAudioUrl,

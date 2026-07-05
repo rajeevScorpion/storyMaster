@@ -1272,11 +1272,22 @@ export async function updateBeatMediaState(
     storyTextOverlayCaptions?: StoryBeat['storyTextOverlayCaptions'] | null;
     storyTextOverlayAlignment?: StoryBeat['storyTextOverlayAlignment'] | null;
     storyEffects?: StoryBeat['storyEffects'] | null;
-  }
+  },
+  // When present, run against the service-role client on behalf of `userId`
+  // instead of the caller's auth session. This lets a background worker (which
+  // has no user cookie) persist beat media. The interactive path passes nothing
+  // and is byte-for-byte unchanged.
+  serverAuth?: { userId: string }
 ): Promise<void> {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error('Not authenticated');
+  const supabase = serverAuth ? createAdminClient() : await createClient();
+  let userId: string;
+  if (serverAuth) {
+    userId = serverAuth.userId;
+  } else {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) throw new Error('Not authenticated');
+    userId = user.id;
+  }
 
   const updateData: Record<string, unknown> = {};
   if ('imageUrl' in patch) {
@@ -1363,12 +1374,15 @@ export async function updateBeatMediaState(
 
   if (Object.keys(updateData).length === 0) return;
 
-  const { data: updatedBeatRows, error } = await supabase
+  let beatUpdateQuery = supabase
     .from('beats')
     .update(updateData)
     .eq('story_id', storyId)
-    .eq('node_id', nodeId)
-    .eq('generated_by', user.id)
+    .eq('node_id', nodeId);
+  // The worker (admin client) scopes by story + node only; the interactive path
+  // keeps the RLS-aligned generated_by guard.
+  if (!serverAuth) beatUpdateQuery = beatUpdateQuery.eq('generated_by', userId);
+  const { data: updatedBeatRows, error } = await beatUpdateQuery
     .select('id')
     .limit(1);
 
@@ -1379,12 +1393,12 @@ export async function updateBeatMediaState(
     throw new Error(`Failed to update beat media state: ${BEAT_ROW_NOT_FOUND_MESSAGE}`);
   }
 
-  const { data: story, error: storyError } = await supabase
+  let storyQuery = supabase
     .from('stories')
     .select('story_map')
-    .eq('id', storyId)
-    .eq('user_id', user.id)
-    .single();
+    .eq('id', storyId);
+  if (!serverAuth) storyQuery = storyQuery.eq('user_id', userId);
+  const { data: story, error: storyError } = await storyQuery.single();
 
   if (storyError || !story) {
     throw new Error(`Failed to load story map for media patch: ${storyError?.message || 'Story not found'}`);
@@ -1460,14 +1474,15 @@ export async function updateBeatMediaState(
     },
   };
 
-  const { error: storyUpdateError } = await supabase
+  let storyUpdateQuery = supabase
     .from('stories')
     .update({
       story_map: stripBase64(patchedMap) as unknown as Record<string, unknown>,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', storyId)
-    .eq('user_id', user.id);
+    .eq('id', storyId);
+  if (!serverAuth) storyUpdateQuery = storyUpdateQuery.eq('user_id', userId);
+  const { error: storyUpdateError } = await storyUpdateQuery;
 
   if (storyUpdateError) {
     throw new Error(`Failed to patch story map media state: ${storyUpdateError.message}`);
