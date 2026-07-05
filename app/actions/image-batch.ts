@@ -712,14 +712,20 @@ function bulkVisualBaseUrl(): string {
   return raw.replace(/\/$/, '');
 }
 
-/** Fire-and-forget trigger for the stateful worker route. Internal (not a server
- *  action): in a 'use server' module only non-exported helpers may be sync. */
-function kickStatefulWorker(jobId: string): void {
+/** Trigger the stateful worker route. Internal (not a server action): in a
+ *  'use server' module only non-exported helpers may be sync/return non-promises.
+ *
+ *  MUST be awaited by callers. Re-kicks fire from inside the worker route's
+ *  `after()` block, and on Vercel serverless the function instance freezes the
+ *  moment that callback resolves — an un-awaited fetch whose handshake hasn't
+ *  completed is dropped, silently killing the self-chain. Awaiting keeps the
+ *  instance alive until the route returns its (immediate) 202. */
+async function kickStatefulWorker(jobId: string): Promise<void> {
   const secret = process.env.CRON_SECRET;
   // The worker route accepts the job and returns 202 immediately (it runs the
-  // generation loop via `after()`), so this fetch resolves fast. Bound it anyway
+  // generation loop via `after()`), so this await resolves fast. Bound it anyway
   // with an abort timeout so a slow/unreachable route can never wedge the caller.
-  void fetch(`${bulkVisualBaseUrl()}/api/batch/generate-stateful`, {
+  await fetch(`${bulkVisualBaseUrl()}/api/batch/generate-stateful`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -851,7 +857,7 @@ export async function submitStoryStatefulVisuals(input: {
   if (itemsError) throw new Error(`Failed to create stateful items: ${itemsError.message}`);
 
   await setBeatsPending(admin, story.id, targetNodes.map((node) => node.id));
-  kickStatefulWorker(jobId);
+  await kickStatefulWorker(jobId);
 
   return {
     jobId,
@@ -956,7 +962,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
   for (const item of items) {
     if (Date.now() - startedAt > STATEFUL_TIME_BUDGET_MS) {
       // Ran out of budget; hand off to a fresh invocation.
-      kickStatefulWorker(job.id);
+      await kickStatefulWorker(job.id);
       return;
     }
     // Claim the item (pending -> processing) so a concurrent worker/cron pass
@@ -1090,7 +1096,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
   const processingLeft = rows.filter((r) => r.status === 'processing').length;
   if (pendingLeft > 0) {
     // Real claimable work remains (budget exhausted mid-run); hand off to a fresh pass.
-    kickStatefulWorker(job.id);
+    await kickStatefulWorker(job.id);
     return;
   }
   if (processingLeft > 0) {

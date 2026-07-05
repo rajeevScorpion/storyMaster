@@ -80,14 +80,21 @@ function narrationBaseUrl(): string {
   return raw.replace(/\/$/, '');
 }
 
-/** Fire-and-forget trigger for the narration worker route. Internal (not a
- *  server action): in a 'use server' module only non-exported helpers may be sync. */
-function kickNarrationWorker(jobId: string): void {
+/** Trigger the narration worker route. Internal (not a server action): in a
+ *  'use server' module only non-exported helpers may be sync/return non-promises.
+ *
+ *  MUST be awaited by callers. Re-kicks fire from inside the worker route's
+ *  `after()` block, and on Vercel serverless the function instance freezes the
+ *  moment that callback resolves — an un-awaited fetch whose handshake hasn't
+ *  completed is dropped, silently killing the self-chain. Awaiting keeps the
+ *  instance alive until the route returns its (immediate) 202, guaranteeing the
+ *  next invocation is actually accepted before this one is allowed to freeze. */
+async function kickNarrationWorker(jobId: string): Promise<void> {
   const secret = process.env.CRON_SECRET;
   // The worker route accepts the job and returns 202 immediately (it runs the
-  // generation loop via `after()`), so this fetch resolves fast. Bound it anyway
+  // generation loop via `after()`), so this await resolves fast. Bound it anyway
   // so a slow/unreachable route can never wedge the caller.
-  void fetch(`${narrationBaseUrl()}/api/batch/generate-narration`, {
+  await fetch(`${narrationBaseUrl()}/api/batch/generate-narration`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -182,7 +189,7 @@ export async function submitStoryNarrationBatch(input: {
     .eq('story_id', story.id)
     .in('node_id', nodeIds);
 
-  kickNarrationWorker(jobId);
+  await kickNarrationWorker(jobId);
 
   return {
     jobId,
@@ -299,7 +306,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
     await admin.from('narration_batch_jobs')
       .update({ status: 'running', succeeded_count: succeeded, failed_count: failed })
       .eq('id', job.id);
-    kickNarrationWorker(job.id);
+    await kickNarrationWorker(job.id);
     return;
   }
 
@@ -313,7 +320,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
   }).eq('id', job.id);
 
   // Anything still pending (not interrupted, but a transient miss) — re-kick once.
-  if (!isComplete) kickNarrationWorker(job.id);
+  if (!isComplete) await kickNarrationWorker(job.id);
 }
 
 /** Entry point invoked by the worker route (POST /api/batch/generate-narration). */
