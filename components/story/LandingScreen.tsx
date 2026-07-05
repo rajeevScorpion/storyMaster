@@ -16,7 +16,7 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
-import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
@@ -57,7 +57,7 @@ import type {
 } from '@/lib/ai/narration-voices';
 
 interface LandingScreenProps {
-  onBegin?: (prompt: string, config?: StoryConfig) => void;
+  onBegin?: (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => void;
   initialData?: LandingInitialData | null;
   initialPricing?: PricingRuntimeContext | null;
 }
@@ -209,6 +209,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
+  const generateAutomatedStory = useStoryStore((state) => state.generateAutomatedStory);
   const isLoading = useStoryStore((state) => state.isLoading);
   const pricingRuntime = usePricingRuntime();
   const pricing = pricingRuntime.isLoading && initialPricing ? initialPricing : pricingRuntime.data;
@@ -251,6 +252,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
   );
+  const [imageDeliveryMode, setImageDeliveryMode] = useState<NonNullable<StoryConfig['imageDeliveryMode']>>(
+    DEFAULT_STORY_CONFIG.imageDeliveryMode ?? 'live'
+  );
+  const [episodicCharacters, setEpisodicCharacters] = useState<boolean>(
+    DEFAULT_STORY_CONFIG.episodicCharacters ?? false
+  );
+  const [autoBuildStory, setAutoBuildStory] = useState(false);
   const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
     DEFAULT_STORY_CONFIG.imageModelSelection
   );
@@ -275,6 +283,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     ?? imageModelPicker?.options.find((option) => option.modelKey === imageModelPicker.selectedModelKey)
     ?? imageModelPicker?.options.find((option) => option.isDefault)
     ?? null;
+  const statefulContinuityAvailable = selectedImageModel
+    ? imageProviderSupportsStatefulContinuity(selectedImageModel.providerKey)
+    : true;
   const promptOnlyActionCost = isReelMode
     ? pricing.actionCosts.start_reel_full_generation_prompt_only ?? 1.5
     : pricing.actionCosts.start_story_initial_beat_prompt_only ?? 0.5;
@@ -464,6 +475,10 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
+            setImageDeliveryMode(config.imageDeliveryMode || DEFAULT_STORY_CONFIG.imageDeliveryMode || 'live');
+            setEpisodicCharacters(config.episodicCharacters === true);
+            setAutoBuildStory(sessionStorage.getItem('kissago_pending_autobuild') === '1');
+            sessionStorage.removeItem('kissago_pending_autobuild');
             setImageModelSelection(config.imageModelSelection);
             setImageContinuityStrategy(config.imageContinuityStrategy || DEFAULT_STORY_CONFIG.imageContinuityStrategy);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
@@ -591,6 +606,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
       imageGenerationMode,
+      imageDeliveryMode: imageGenerationMode === 'generate' ? imageDeliveryMode : 'live',
+      episodicCharacters: imageGenerationMode === 'generate' && imageDeliveryMode === 'stateful' && episodicCharacters,
       imageContinuityStrategy,
       ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
         ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
@@ -643,8 +660,17 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         : prompt.trim();
     if (!storyPrompt) return;
 
+    const shouldAutoBuild =
+      autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
+      && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
+
     if (onBegin) {
-      onBegin(storyPrompt, config);
+      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild });
+      return;
+    }
+
+    if (shouldAutoBuild) {
+      await generateAutomatedStory(storyPrompt, config);
       return;
     }
 
@@ -1421,6 +1447,17 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
                 imageGenerationMode={imageGenerationMode}
                 onImageGenerationModeChange={setImageGenerationMode}
+                batchImageDeliveryEnabled
+                imageDeliveryMode={imageDeliveryMode}
+                onImageDeliveryModeChange={(value) => {
+                  setImageDeliveryMode(value);
+                  clearSeedPreview();
+                }}
+                episodicCharacters={episodicCharacters}
+                onEpisodicCharactersChange={setEpisodicCharacters}
+                statefulContinuityAvailable={statefulContinuityAvailable}
+                autoBuildStory={autoBuildStory}
+                onAutoBuildStoryChange={setAutoBuildStory}
                 imageModelPicker={imageModelPicker}
                 imageModelSelection={imageModelSelection}
                 onImageModelSelectionChange={(value) => {

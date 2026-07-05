@@ -50,8 +50,18 @@ function activityLabel(key: string) {
     generate_audio_story_cover: 'Audio cover',
     generate_reel_thumbnail: 'Reel thumb',
     generate_story_text_overlay: 'Text overlay',
+    batch_image_generation: 'Batch image',
   };
   return labels[key] || key.replaceAll('_', ' ');
+}
+
+function generationModeLabel(mode: string) {
+  const labels: Record<string, string> = {
+    regular: 'Regular',
+    batch: 'Batch',
+    stateful: 'Stateful',
+  };
+  return labels[mode] || mode;
 }
 
 function taskLabel(key: string) {
@@ -95,6 +105,24 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
             <p className="text-xs font-medium uppercase tracking-[0.14em] text-neutral-500">{taskLabel(item.taskKey)}</p>
             <p className="text-sm text-emerald-300">{formatInr(item.estimatedCostUsd * 93)}</p>
           </div>
+          {item.generationModes.some((mode) => mode !== 'regular') && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {item.generationModes.map((mode) => (
+                <span
+                  key={mode}
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                    mode === 'batch'
+                      ? 'bg-indigo-500/15 text-indigo-300'
+                      : mode === 'stateful'
+                      ? 'bg-purple-500/15 text-purple-300'
+                      : 'bg-white/5 text-neutral-400'
+                  }`}
+                >
+                  {generationModeLabel(mode)}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="mt-1 text-xs text-neutral-500">{formatUsd(item.estimatedCostUsd)}</p>
           <p className="mt-2 truncate text-xs text-neutral-400" title={(item.providers.length ? item.providers : item.models).join(', ')}>
             {(item.providers.length ? item.providers : item.models).join(', ')}

@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { generateReelNarrationOnly } from '@/app/actions/narration';
 import {
@@ -676,9 +677,9 @@ export async function saveReelNarrationVoicePreviewAction(input: {
   const supabase = await createClient();
 
   // Parse the data URL: data:<mime>;base64,<data>
-  const match = input.audioDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) throw new Error('Invalid audio data URL');
-  const [, mimeType, base64Data] = match;
+  const parsed = splitBase64DataUrl(input.audioDataUrl);
+  if (!parsed) throw new Error('Invalid audio data URL');
+  const { mimeType, base64: base64Data } = parsed;
   const audioBuffer = Buffer.from(base64Data, 'base64');
 
   // Enforce max 4: delete oldest if at capacity

@@ -20,6 +20,7 @@ interface CostBreakdownItem {
   providers: string[];
   strategies: string[];
   fallbacks: string[];
+  generationModes: string[];
 }
 
 export interface AdminCostBeatRow {
@@ -100,6 +101,7 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
       providers: [],
       strategies: [],
       fallbacks: [],
+      generationModes: [],
     };
     const metadata = event.metadata || {};
     current.estimatedCostUsd += asCost(event.estimated_cost_usd);
@@ -130,6 +132,12 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
       : null;
     if (fallback && !current.fallbacks.includes(fallback)) {
       current.fallbacks.push(fallback);
+    }
+    const generationMode = typeof event.generation_mode === 'string' && event.generation_mode
+      ? event.generation_mode
+      : 'regular';
+    if (!current.generationModes.includes(generationMode)) {
+      current.generationModes.push(generationMode);
     }
     byTask.set(event.task_key, current);
   }

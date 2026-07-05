@@ -51,6 +51,7 @@ export const PRICING_ACTION_KEYS = [
   'generate_social_share_cover',
   'generate_audio_story_cover',
   'generate_reel_thumbnail',
+  'batch_image_generation',
   'export_video_future',
 ] as const;
 export type PricingActionKey = (typeof PRICING_ACTION_KEYS)[number];

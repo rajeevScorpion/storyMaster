@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  buildFinalPortraitPrompt,
   buildFinalStoryboardImagePrompt,
   buildReelPanelCaptions,
   composeStoryboardPlan,
@@ -15,6 +14,7 @@ import {
   type StoryModelOverrides,
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
+import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import {
   generateAndPersistStoryNarrationWithOverlay,
@@ -26,6 +26,9 @@ import {
 } from '@/app/actions/story-narration';
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
+import { submitStoryImageBatch, submitStoryStatefulVisuals, reconcileStoryBatch } from '@/app/actions/image-batch';
+import { submitStoryNarrationBatch, reconcileStoryNarration } from '@/app/actions/narration-batch';
+import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
   authorizeCurrentUserImageModelBillableAction,
@@ -162,6 +165,12 @@ interface StoryState {
   errorAction: StoryErrorAction | null;
   isGeneratingAudio: boolean;
   isRegeneratingImage: boolean;
+  isSubmittingImageBatch: boolean;
+  imageBatchMessage: string | null;
+  isGeneratingNarrationBatch: boolean;
+  narrationBatchProgress: { current: number; total: number } | null;
+  narrationBatchMessage: string | null;
+  autoBuildProgress: { active: boolean; current: number; total: number } | null;
   audioReadyNodeId: string | null;
   storyMode: boolean;
   isSaving: boolean;
@@ -216,12 +225,18 @@ interface StoryState {
   ) => Promise<StoryTextOverlayStoryGenerationResult>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
   regenerateImageForNode: (nodeId: string) => Promise<void>;
+  submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
+  submitStatefulVisuals: (scope?: ImageBatchScope) => Promise<void>;
+  generateNarrationBatch: () => Promise<void>;
+  reconcileCurrentStoryBatch: () => Promise<void>;
+  generateAutomatedStory: (prompt: string, config?: StoryConfig) => Promise<void>;
   clearAudioReady: () => void;
   toggleStoryMode: () => void;
   setSaveRuntimeSettings: (settings: Partial<StorySaveRuntimeSettings>) => void;
   saveStoryToCloud: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   saveStoryToCloudImmediate: (userId: string, options?: SaveStoryToCloudOptions) => Promise<void>;
   loadStoryFromCloud: (storyId: string) => Promise<void>;
+  refreshBatchImages: (storyId: string) => Promise<void>;
   exploreStoryTree: (storyId: string) => Promise<void>;
   refreshSignedUrls: () => Promise<boolean>;
   retryPendingBeatAssetSync: () => Promise<void>;
@@ -511,6 +526,22 @@ const ASSET_SYNC_PENDING_MESSAGE = 'Beat media is syncing in the background.';
 const ASSET_SYNC_FAILED_MESSAGE = 'A beat image still needs upload. Tap to retry.';
 const ASSET_SYNC_REPAIR_MESSAGE = 'A beat image still needs repair. Tap to retry.';
 const BEAT_IMAGE_RETRY_BACKOFF_MS = [10_000, 30_000, 60_000] as const;
+
+// Transient/benign save-status notices that surface on the `error` channel but do
+// not represent a real generation failure. The automated batch walk must not treat
+// these as fatal — the store already queues and retries these saves on its own.
+const BENIGN_SAVE_STATUS_MESSAGES = new Set<string>([
+  LONG_SAVE_RETRY_MESSAGE,
+  ASSET_SYNC_PENDING_MESSAGE,
+  ASSET_SYNC_FAILED_MESSAGE,
+  ASSET_SYNC_REPAIR_MESSAGE,
+]);
+
+// Whether an `error` value should abort the automated batch walk. Only genuine
+// generation/billing failures are fatal; a queued-save notice is not.
+function isWalkFatalError(error: string | null | undefined): boolean {
+  return !!error && !BENIGN_SAVE_STATUS_MESSAGES.has(error);
+}
 const DEFAULT_STORY_SAVE_RUNTIME_SETTINGS: StorySaveRuntimeSettings = {
   storyAssetSignedUrlSwapEnabled: false,
   storyIncrementalAssetSyncEnabled: false,
@@ -1070,10 +1101,11 @@ async function uploadBeatPortraits(
 function setLoadingStage(
   setState: (partial: Partial<StoryState>) => void,
   flow: StoryLoadingFlow,
-  step: StoryLoadingStage['currentStepKey']
+  step: StoryLoadingStage['currentStepKey'],
+  opts?: { deferImages?: boolean }
 ) {
   setState({
-    loadingStage: createStoryLoadingStage(flow, step),
+    loadingStage: createStoryLoadingStage(flow, step, opts),
   });
 }
 
@@ -1420,6 +1452,32 @@ function isPromptOnlyStoryConfig(storyConfig: StoryConfig): boolean {
   return storyConfig.imageGenerationMode === 'prompt_only';
 }
 
+// Deferred delivery: a "generate" story whose beat images are produced later by a
+// background job rather than live during the walk — either the cost-saver provider
+// batch ('batch') or the fast stateful sequential job ('stateful'). Non-reel only.
+function isBatchImageDeliveryStoryConfig(storyConfig: StoryConfig): boolean {
+  return storyConfig.storyKind !== 'reel'
+    && storyConfig.imageGenerationMode === 'generate'
+    && (storyConfig.imageDeliveryMode === 'batch' || storyConfig.imageDeliveryMode === 'stateful');
+}
+
+// Whether live beat-image generation should be skipped during interactive
+// generation. True for prompt-only stories and for batch-delivery stories
+// (images are produced later by the background batch). Portraits are handled
+// separately and are generated at batch-submit time.
+function defersLiveImageGeneration(storyConfig: StoryConfig): boolean {
+  return isPromptOnlyStoryConfig(storyConfig) || isBatchImageDeliveryStoryConfig(storyConfig);
+}
+
+// Whether live per-beat narration should be skipped during interactive
+// generation. True only for batch-delivery stories — narration is bulk-generated
+// later via the terminal-beat "Generate all narration" action. This keeps the
+// auto-build walk fast (beat text + image prompt only) and avoids narrating beats
+// the user may abandon.
+function defersLiveNarration(storyConfig: StoryConfig): boolean {
+  return isBatchImageDeliveryStoryConfig(storyConfig);
+}
+
 function getStoryAspectRatio(storyConfig: StoryConfig): StoryAspectRatio {
   return storyConfig.isVerticalStory || storyConfig.aspectRatio === '9:16' ? '9:16' : '16:9';
 }
@@ -1455,7 +1513,7 @@ function getStartStoryActionKey(storyConfig: StoryConfig) {
       : 'start_reel_full_generation' as const;
   }
 
-  return isPromptOnlyStoryConfig(storyConfig)
+  return defersLiveImageGeneration(storyConfig)
     ? 'start_story_initial_beat_prompt_only' as const
     : 'start_story_initial_beat' as const;
 }
@@ -1465,7 +1523,7 @@ function getContinueStoryActionKey(storyConfig: StoryConfig) {
     throw new Error('continueStory is not supported for reel sessions; reels are generated in one shot.');
   }
 
-  return isPromptOnlyStoryConfig(storyConfig)
+  return defersLiveImageGeneration(storyConfig)
     ? 'continue_story_new_beat_prompt_only' as const
     : 'continue_story_new_beat' as const;
 }
@@ -1884,6 +1942,12 @@ export const useStoryStore = create<StoryState>()(
       errorAction: null,
       isGeneratingAudio: false,
       isRegeneratingImage: false,
+      isSubmittingImageBatch: false,
+      imageBatchMessage: null,
+      isGeneratingNarrationBatch: false,
+      narrationBatchProgress: null,
+      narrationBatchMessage: null,
+      autoBuildProgress: null,
       audioReadyNodeId: null,
       storyMode: false,
       isSaving: false,
@@ -1908,7 +1972,7 @@ export const useStoryStore = create<StoryState>()(
           return get().startReel(prompt, storyConfig);
         }
         const seededStory = isSeededStoryConfig(storyConfig);
-        const promptOnly = isPromptOnlyStoryConfig(storyConfig);
+        const promptOnly = defersLiveImageGeneration(storyConfig);
         const storyAspectRatio = getStoryAspectRatio(storyConfig);
         const startStoryActionKey = getStartStoryActionKey(storyConfig);
         const storyPrompt = seededStory
@@ -2234,7 +2298,8 @@ export const useStoryStore = create<StoryState>()(
 
           // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
           // Reels skip auto-narration — user triggers it on-demand via the speaker icon.
-          if (storyPrompt.toLowerCase() !== 'mock' && !isReelStoryConfig(storyConfig)) {
+          // Batch-delivery stories defer narration to the terminal-beat batch action.
+          if (storyPrompt.toLowerCase() !== 'mock' && !isReelStoryConfig(storyConfig) && !defersLiveNarration(storyConfig)) {
             Promise.all([lockedVoicePromise, earlySavePromise]).then(([voiceResolution, storyId]) => {
               set({ isGeneratingAudio: true });
               const narrationStartedAt = nowMs();
@@ -2351,7 +2416,7 @@ export const useStoryStore = create<StoryState>()(
           // them as references - makes portrait the single source of truth from the very first image.
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
-          setLoadingStage(set, 'start_story', 'image');
+          setLoadingStage(set, 'start_story', 'image', { deferImages: promptOnly });
           const [imageResult, narratorVoiceResolution] = await Promise.all([
             promptOnly
               ? Promise.resolve({
@@ -2459,7 +2524,9 @@ export const useStoryStore = create<StoryState>()(
                 imageStatus: promptOnly ? 'not_requested' : 'pending',
                 audioStatus: resolvedAudioUrl
                   ? (earlySavedStoryId ? 'ready' : 'not_requested')
-                  : storyPrompt.toLowerCase() !== 'mock' && earlySavedStoryId
+                  : !defersLiveNarration(storyConfig)
+                    && storyPrompt.toLowerCase() !== 'mock'
+                    && earlySavedStoryId
                   ? 'pending'
                   : 'not_requested',
               }),
@@ -2915,7 +2982,7 @@ export const useStoryStore = create<StoryState>()(
           isSeededStoryConfig(session.storyConfig) && isCanonicalSeedOption(currentNode.data, optionId)
             ? getSeedBeatByIndex(session.storyConfig, currentNode.data.beatNumber + 1)
             : undefined;
-        const promptOnly = isPromptOnlyStoryConfig(session.storyConfig);
+        const promptOnly = defersLiveImageGeneration(session.storyConfig);
         const storyAspectRatio = getStoryAspectRatio(session.storyConfig);
         const continueStoryActionKey = getContinueStoryActionKey(session.storyConfig);
         const generationStartedAt = nowMs();
@@ -3200,7 +3267,8 @@ export const useStoryStore = create<StoryState>()(
             } : state);
           }
           let narrationPromise: Promise<void> | null = null;
-          if (session.userPrompt.toLowerCase() !== 'mock') {
+          // Batch-delivery stories defer narration to the terminal-beat batch action.
+          if (session.userPrompt.toLowerCase() !== 'mock' && !defersLiveNarration(session.storyConfig)) {
             set({ isGeneratingAudio: true });
             const narrationStartedAt = nowMs();
 
@@ -3396,7 +3464,7 @@ export const useStoryStore = create<StoryState>()(
           );
 
           // Block loading on image only
-          setLoadingStage(set, 'continue_story', 'image');
+          setLoadingStage(set, 'continue_story', 'image', { deferImages: promptOnly });
           const imageResult = promptOnly
             ? {
                 imageUrl: '',
@@ -3503,7 +3571,9 @@ export const useStoryStore = create<StoryState>()(
                   imageStatus: promptOnly ? 'not_requested' : 'pending',
                   audioStatus: resolvedAudioUrl
                     ? (session.savedStoryId ? 'ready' : 'not_requested')
-                    : session.userPrompt.toLowerCase() !== 'mock' && session.savedStoryId
+                    : !defersLiveNarration(session.storyConfig)
+                      && session.userPrompt.toLowerCase() !== 'mock'
+                      && session.savedStoryId
                     ? 'pending'
                     : 'not_requested',
                 }),
@@ -5212,6 +5282,82 @@ export const useStoryStore = create<StoryState>()(
         }
       },
 
+      // Lightweight poll for background (stateful/batch) image jobs: pull the
+      // latest beat image fields from the cloud and merge ONLY those into the
+      // in-memory map. Unlike loadStoryFromCloud this never flips isLoading (no
+      // full-screen preloader flash) and never resets currentNodeId (so it can't
+      // fight the reader's navigation). All beats already exist locally for these
+      // stories — only their images stream in — so a field-level merge is safe.
+      refreshBatchImages: async (storyId: string) => {
+        const current = get().session;
+        if (!current) return;
+        const preservedNodeId = current.storyMap.currentNodeId;
+        try {
+          const fresh = await loadStoryAction(storyId);
+          const mergedNodes = { ...current.storyMap.nodes };
+          let changed = false;
+          for (const [id, freshNode] of Object.entries(fresh.storyMap.nodes)) {
+            const existing = mergedNodes[id];
+            if (!existing) continue;
+            const freshData = freshNode.data;
+            const existingData = existing.data;
+            const imageArrived =
+              freshData.imageStatus !== existingData.imageStatus ||
+              freshData.imageUrl !== existingData.imageUrl ||
+              freshData.imageError !== existingData.imageError;
+            // The same poll streams in background narration audio (server job).
+            const audioArrived =
+              freshData.audioStatus !== existingData.audioStatus ||
+              freshData.audioUrl !== existingData.audioUrl ||
+              freshData.audioError !== existingData.audioError;
+            if (!imageArrived && !audioArrived) continue;
+            changed = true;
+            mergedNodes[id] = {
+              ...existing,
+              data: {
+                ...existingData,
+                ...(imageArrived
+                  ? {
+                      imageUrl: freshData.imageUrl ?? existingData.imageUrl,
+                      imageStatus: freshData.imageStatus ?? existingData.imageStatus,
+                      imageError: freshData.imageError,
+                      imageGenerationMetadata:
+                        freshData.imageGenerationMetadata ?? existingData.imageGenerationMetadata,
+                    }
+                  : {}),
+                ...(audioArrived
+                  ? {
+                      audioUrl: freshData.audioUrl ?? existingData.audioUrl,
+                      audioStatus: freshData.audioStatus ?? existingData.audioStatus,
+                      audioError: freshData.audioError,
+                      narrationMetadata: freshData.narrationMetadata ?? existingData.narrationMetadata,
+                      storyTextOverlayEnabled:
+                        freshData.storyTextOverlayEnabled ?? existingData.storyTextOverlayEnabled,
+                      storyTextOverlayMode:
+                        freshData.storyTextOverlayMode ?? existingData.storyTextOverlayMode,
+                      storyTextOverlayStyle:
+                        freshData.storyTextOverlayStyle ?? existingData.storyTextOverlayStyle,
+                      storyTextOverlayCaptions:
+                        freshData.storyTextOverlayCaptions ?? existingData.storyTextOverlayCaptions,
+                      storyTextOverlayAlignment:
+                        freshData.storyTextOverlayAlignment ?? existingData.storyTextOverlayAlignment,
+                    }
+                  : {}),
+              },
+            };
+          }
+          if (!changed) return;
+          const mergedMap: StoryMap = {
+            ...current.storyMap,
+            nodes: mergedNodes,
+            currentNodeId: preservedNodeId,
+          };
+          set({ session: deriveSessionFields({ ...current, storyMap: mergedMap }, mergedMap) });
+        } catch {
+          // Silent — the poll retries on its next tick.
+        }
+      },
+
       exploreStoryTree: async (storyId: string) => {
         set({ isLoading: true, error: null, loadingClues: [], loadingStage: null, loadingReader: null, lastPublishResult: null });
 
@@ -5752,6 +5898,249 @@ export const useStoryStore = create<StoryState>()(
 
       clearError: () => {
         set({ error: null, errorAction: null });
+      },
+
+      submitImageBatch: async (scope?: ImageBatchScope) => {
+        const { session } = get();
+        const storyId = session?.savedStoryId;
+        if (!storyId) {
+          set({
+            error: 'Save the story before generating visuals in the background.',
+            errorAction: null,
+          });
+          return;
+        }
+
+        set({ isSubmittingImageBatch: true, imageBatchMessage: null, error: null, errorAction: null });
+        try {
+          const result = await submitStoryImageBatch({ storyId, ...(scope ? { scope } : {}) });
+          set({ isSubmittingImageBatch: false, imageBatchMessage: result.message });
+
+          // Reflect pending state locally so beats show placeholders immediately.
+          if (result.status === 'submitted') {
+            const current = get().session;
+            if (current && current.savedStoryId === storyId) {
+              const nodes = { ...current.storyMap.nodes };
+              // For a current-path submit, only mark beats on the root→current
+              // path — other branches were not batched and must not show pending.
+              const scopedIds = scope === 'current_path'
+                ? new Set(getPathToNode(current.storyMap, current.storyMap.currentNodeId).map((node) => node.id))
+                : null;
+              for (const [nodeId, node] of Object.entries(nodes)) {
+                if (scopedIds && !scopedIds.has(nodeId)) continue;
+                const beat = node.data;
+                const hasImage = beat.imageStatus === 'ready' && beat.imageUrl;
+                const hasPrompt = Boolean(
+                  (beat.finalImagePromptText || beat.storyboardPromptText || beat.imagePrompt || '').trim()
+                );
+                if (!hasImage && hasPrompt) {
+                  nodes[nodeId] = { ...node, data: { ...beat, imageStatus: 'pending', imageError: undefined } };
+                }
+              }
+              set({ session: { ...current, storyMap: { ...current.storyMap, nodes } } });
+            }
+          }
+        } catch (error) {
+          set({
+            isSubmittingImageBatch: false,
+            imageBatchMessage: null,
+            error: error instanceof Error ? error.message : 'Failed to submit background image batch.',
+            errorAction: null,
+          });
+        }
+      },
+
+      submitStatefulVisuals: async (scope?: ImageBatchScope) => {
+        const { session } = get();
+        const storyId = session?.savedStoryId;
+        if (!storyId) {
+          set({
+            error: 'Save the story before generating visuals in the background.',
+            errorAction: null,
+          });
+          return;
+        }
+
+        set({ isSubmittingImageBatch: true, imageBatchMessage: null, error: null, errorAction: null });
+        try {
+          const episodic = session?.storyConfig?.episodicCharacters === true;
+          const result = await submitStoryStatefulVisuals({ storyId, episodic, ...(scope ? { scope } : {}) });
+          set({ isSubmittingImageBatch: false, imageBatchMessage: result.message });
+
+          // Reflect pending state locally so beats show placeholders immediately.
+          if (result.status === 'submitted') {
+            const current = get().session;
+            if (current && current.savedStoryId === storyId) {
+              const nodes = { ...current.storyMap.nodes };
+              const scopedIds = scope === 'current_path'
+                ? new Set(getPathToNode(current.storyMap, current.storyMap.currentNodeId).map((node) => node.id))
+                : null;
+              for (const [nodeId, node] of Object.entries(nodes)) {
+                if (scopedIds && !scopedIds.has(nodeId)) continue;
+                const beat = node.data;
+                const hasImage = beat.imageStatus === 'ready' && beat.imageUrl;
+                const hasPrompt = Boolean(
+                  (beat.finalImagePromptText || beat.storyboardPromptText || beat.imagePrompt || '').trim()
+                );
+                if (!hasImage && hasPrompt) {
+                  nodes[nodeId] = { ...node, data: { ...beat, imageStatus: 'pending', imageError: undefined } };
+                }
+              }
+              set({ session: { ...current, storyMap: { ...current.storyMap, nodes } } });
+            }
+          }
+        } catch (error) {
+          set({
+            isSubmittingImageBatch: false,
+            imageBatchMessage: null,
+            error: error instanceof Error ? error.message : 'Failed to submit stateful visuals.',
+            errorAction: null,
+          });
+        }
+      },
+
+      generateNarrationBatch: async () => {
+        const { session } = get();
+        const storyId = session?.savedStoryId;
+        if (!session || !storyId) {
+          set({ narrationBatchMessage: 'Save the story before generating narration.' });
+          return;
+        }
+
+        // Narrate the current root→current-node path on a SERVER background job.
+        // Unlike the old client loop (which died if the tab closed), this survives
+        // the user leaving; audio streams onto beats as each is produced and the
+        // banner's poll (refreshBatchImages) picks it up. Beats that already have
+        // audio are skipped server-side.
+        const path = getPathToNode(session.storyMap, session.storyMap.currentNodeId);
+        const targets = path.filter((node) => !node.data.audioUrl && Boolean(node.data.storyText?.trim()));
+        if (targets.length === 0) {
+          set({ narrationBatchMessage: 'All beats on this path already have narration.' });
+          return;
+        }
+
+        set({
+          isGeneratingNarrationBatch: true,
+          narrationBatchMessage: null,
+          narrationBatchProgress: null,
+          error: null,
+          errorAction: null,
+        });
+
+        try {
+          const result = await submitStoryNarrationBatch({ storyId });
+
+          // Reflect pending state locally so the banner flips to "generating" and
+          // starts polling immediately.
+          if (result.status === 'submitted') {
+            const current = get().session;
+            if (current && current.savedStoryId === storyId) {
+              const ids = new Set(targets.map((node) => node.id));
+              const nodes = { ...current.storyMap.nodes };
+              for (const [id, node] of Object.entries(nodes)) {
+                if (!ids.has(id)) continue;
+                nodes[id] = { ...node, data: { ...node.data, audioStatus: 'pending', audioError: undefined } };
+              }
+              set({ session: { ...current, storyMap: { ...current.storyMap, nodes } } });
+            }
+          }
+
+          set({
+            isGeneratingNarrationBatch: false,
+            narrationBatchProgress: null,
+            narrationBatchMessage: result.message,
+          });
+        } catch (error) {
+          set({
+            isGeneratingNarrationBatch: false,
+            narrationBatchProgress: null,
+            narrationBatchMessage: null,
+            error: error instanceof Error ? error.message : 'Failed to submit narration.',
+            errorAction: null,
+          });
+        }
+      },
+
+      generateAutomatedStory: async (prompt: string, config?: StoryConfig) => {
+        // Case 02: build a complete linear story by random-walking one option per
+        // beat, deferring images to a background job (stateful fast path by default,
+        // or the cost-saver batch API), then let the user submit the visuals.
+        const baseConfig = normalizeStoryConfig(config);
+        const automatedConfig: StoryConfig = {
+          ...baseConfig,
+          imageDeliveryMode: baseConfig.imageGenerationMode === 'generate'
+            ? (baseConfig.imageDeliveryMode === 'batch' || baseConfig.imageDeliveryMode === 'stateful'
+                ? baseConfig.imageDeliveryMode
+                : 'stateful')
+            : baseConfig.imageDeliveryMode,
+        };
+
+        const total = automatedConfig.maxBeats ?? 6;
+        set({ autoBuildProgress: { active: true, current: 0, total } });
+
+        await get().startStory(prompt, automatedConfig);
+        if (isWalkFatalError(get().error)) {
+          set({ autoBuildProgress: null });
+          return;
+        }
+        set({ autoBuildProgress: { active: true, current: 1, total } });
+
+        const maxSteps = total + 2;
+        for (let step = 0; step < maxSteps; step++) {
+          const session = get().session;
+          if (!session) break;
+          const node = session.storyMap.nodes[session.storyMap.currentNodeId];
+          if (!node || node.data.isEnding) break;
+          const options = node.data.options ?? [];
+          if (options.length === 0) break;
+          const pick = options[Math.floor(Math.random() * options.length)];
+          await get().continueStory(pick.id);
+          // Only a genuine generation/billing failure aborts the walk. A benign
+          // "save queued" notice must not — otherwise a slow autosave kills the run.
+          if (isWalkFatalError(get().error)) {
+            set({ autoBuildProgress: null });
+            return;
+          }
+          const nextBeat = get().session?.storyMap.nodes[get().session!.storyMap.currentNodeId]?.data.beatNumber;
+          set({ autoBuildProgress: { active: true, current: nextBeat ?? step + 2, total } });
+        }
+
+        // The walk ends on the terminal beat. Per-beat text was persisted
+        // incrementally during the walk (full-session autosave is suppressed while
+        // autoBuildProgress is active to avoid overlapping saves). Run one final
+        // full save now so session-level state is consistent on the cloud.
+        set({ autoBuildProgress: null });
+        const finalSession = get().session;
+        if (finalSession?.savedStoryId && !finalSession.sourceStoryOwnerId) {
+          const saveUserId = await resolveCurrentUserId(finalSession.savedByUserId);
+          if (saveUserId) {
+            await get().saveStoryToCloud(saveUserId).catch((err) => {
+              console.error('Automated story final save failed:', err);
+            });
+          }
+        }
+
+        // Images are NOT auto-submitted: the user reviews the story and taps
+        // "Create all visuals" on the ending beat, which submits the current
+        // root→ending path.
+      },
+
+      reconcileCurrentStoryBatch: async () => {
+        const storyId = get().session?.savedStoryId;
+        if (!storyId) return;
+        try {
+          // Resume any interrupted image and narration jobs in parallel.
+          await Promise.all([
+            reconcileStoryBatch(storyId),
+            reconcileStoryNarration(storyId).catch((error) =>
+              console.error('reconcileStoryNarration failed:', error)
+            ),
+          ]);
+          // Re-hydrate so freshly materialized batch images/audio appear in the session.
+          await get().loadStoryFromCloud(storyId);
+        } catch (error) {
+          console.error('reconcileCurrentStoryBatch failed:', error);
+        }
       },
     });
     }

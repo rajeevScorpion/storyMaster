@@ -387,6 +387,7 @@ export default function LoadingState({
   const loadingClues = useStoryStore((state) => state.loadingClues);
   const loadingStage = useStoryStore((state) => state.loadingStage);
   const loadingReader = useStoryStore((state) => state.loadingReader);
+  const autoBuildProgress = useStoryStore((state) => state.autoBuildProgress);
   const [loadingUiSettings, setLoadingUiSettings] = useState(
     loadingUiSettingsCache ?? defaultLoadingUiSettings
   );
@@ -445,9 +446,16 @@ export default function LoadingState({
                 <div>
                   <div className="flex items-center gap-2">
                     <p className="text-[11px] font-sans uppercase tracking-[0.35em] text-neutral-400">
-                      {loadingStage.flow === 'start_story' ? 'Starting your story' : 'Continuing your story'}
+                      {autoBuildProgress?.active
+                        ? 'Auto-building your story'
+                        : loadingStage.flow === 'start_story' ? 'Starting your story' : 'Continuing your story'}
                     </p>
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-400" />
+                    {autoBuildProgress?.active && (
+                      <span className="ml-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-200">
+                        Beat {Math.min(Math.max(autoBuildProgress.current, 1), autoBuildProgress.total)} of {autoBuildProgress.total}
+                      </span>
+                    )}
                   </div>
                   <h2 className="mt-3 text-2xl font-serif text-neutral-50 md:text-[2rem]">
                     {currentStep?.label || 'Working'}
@@ -517,7 +525,10 @@ export default function LoadingState({
                   </div>
 
                   {showNodeLabels && (
-                    <div className="grid grid-cols-5 gap-2">
+                    <div
+                      className="grid gap-2"
+                      style={{ gridTemplateColumns: `repeat(${loadingStage.steps.length}, minmax(0, 1fr))` }}
+                    >
                       {loadingStage.steps.map((step, index) => {
                         const isActive = activeStepIndex === index;
                         const isComplete = activeStepIndex > index;

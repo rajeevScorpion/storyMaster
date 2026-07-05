@@ -11,6 +11,7 @@ import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
 import PublishDialog from './PublishDialog';
+import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
@@ -1809,6 +1810,7 @@ export default function StoryScreen() {
     findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId) !== null;
 
   return (
+    <>
     <StoryScreenInner
       session={session}
       currentBeat={currentBeat}
@@ -1863,6 +1865,7 @@ export default function StoryScreen() {
       permanentlyDeleteCharacterReferenceSheet={permanentlyDeleteCharacterReferenceSheet}
       persistenceUserId={user?.id}
     />
+    </>
   );
 }
 
@@ -2076,6 +2079,8 @@ function StoryScreenInner({
   const [isPromptToolsHelpOpen, setIsPromptToolsHelpOpen] = useState(false);
   const [savedRefsExpanded, setSavedRefsExpanded] = useState(false);
   const [promptToolsSuccess, setPromptToolsSuccess] = useState<string | null>(null);
+  const [batchModeNotice, setBatchModeNotice] = useState(false);
+  const [batchModeNarrationNotice, setBatchModeNarrationNotice] = useState(false);
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isOptimizingPromptOnlyImage, setIsOptimizingPromptOnlyImage] = useState(false);
@@ -2208,6 +2213,11 @@ function StoryScreenInner({
     return () => { active = false; };
   }, [currentNodeId, persistenceUserId, session.explorationMode, session.savedStoryId]);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  // Deferred-delivery stories (cost-saver batch or fast stateful) produce beat
+  // images via a background job. Live per-beat (re)generation is disabled so an
+  // accidental click can't defeat deferred mode.
+  const isBatchDeliveryStory = session.storyConfig.imageDeliveryMode === 'batch'
+    || session.storyConfig.imageDeliveryMode === 'stateful';
   const reelTimelineNodes = useMemo(
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
     [isReelStory, session.storyMap]
@@ -2234,7 +2244,13 @@ function StoryScreenInner({
   const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showResolvingImageState && !showPendingImageState;
   const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && !showResolvingImageState && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
-  const canRegenerateImage = !isPromptOnlyStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
+  const canRegenerateImage = !isPromptOnlyStory && !isBatchDeliveryStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
+  // In batch mode, surface a disabled image control that explains the batch flow
+  // instead of silently generating a live image.
+  const showBatchModeImageLock = isBatchDeliveryStory && !normalizedCurrentBeat.imageUrl;
+  // In batch mode, narration is bulk-generated on the last beat. Disable the
+  // per-beat speaker control so an accidental click can't generate a live one.
+  const showBatchModeNarrationLock = isBatchDeliveryStory && !normalizedCurrentBeat.audioUrl;
   const cancelReelPlayAll = useCallback(() => {
     pendingReelPlayAllNodeIdRef.current = null;
     reelPlayAllNodeIdsRef.current = [];
@@ -3707,8 +3723,13 @@ function StoryScreenInner({
     return () => window.clearTimeout(timeoutId);
   }, [promptToolsSuccess]);
 
-  // Auto-save when a new beat is generated
+  // Auto-save when a new beat is generated.
+  // Suppressed during an automated batch walk: beats are persisted incrementally
+  // by saveBeatAction, and one full save runs when the walk finishes. Firing a
+  // full-session save per beat here would overlap the next beat's save and trip
+  // the benign "retry queued" notice, which used to abort the walk.
   useEffect(() => {
+    if (useStoryStore.getState().autoBuildProgress?.active) return;
     if (saveStatus === 'unsaved' && onSave && !isSaving) {
       onSave();
     }
@@ -3722,9 +3743,15 @@ function StoryScreenInner({
     const timeoutId = window.setTimeout(() => {
       const latest = useStoryStore.getState();
       if (latest.saveStatus !== 'saving') return;
+      // Never surface the "save queued" notice during an automated batch walk —
+      // it would abort the walk on the store's error channel.
+      if (latest.autoBuildProgress?.active) return;
 
       if (cycleSettings.storyIncrementalAssetSyncEnabled) {
-        if (!isPromptOnlyStory) {
+        // Deferred-delivery (batch/stateful) stories generate their images on the
+        // server, not via client-side sync — so the "beat media is syncing" notice
+        // (and its header warning triangle) doesn't apply and would only confuse.
+        if (!isPromptOnlyStory && !isBatchDeliveryStory) {
           useStoryStore.setState({
             saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
           });
@@ -3745,6 +3772,7 @@ function StoryScreenInner({
     saveStatus,
     onSave,
     isPromptOnlyStory,
+    isBatchDeliveryStory,
     cycleSettings.cloudSaveTimeoutMs,
     cycleSettings.storyIncrementalAssetSyncEnabled,
     cycleSettings.storyAssetSyncWarningTimeoutMs,
@@ -5487,7 +5515,7 @@ function StoryScreenInner({
             />
           </motion.div>
         </AnimatePresence>
-        {!displayImageUrl && (showPendingImageState || showFailedImageState) && (
+        {!displayImageUrl && (showPendingImageState || showFailedImageState) && !(isBatchDeliveryStory && showPendingImageState) && (
           <div className="absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
             <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
               <div className="mb-3 flex justify-center">
@@ -5847,6 +5875,35 @@ function StoryScreenInner({
                     )}
                   </button>
                 )}
+                {/* Batch-mode: image generation is disabled — explain the batch flow */}
+                {showBatchModeImageLock && (
+                  <div className="relative flex flex-col items-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchModeNotice(true);
+                        window.setTimeout(() => setBatchModeNotice(false), 4000);
+                      }}
+                      aria-disabled="true"
+                      className="p-2.5 backdrop-blur-md rounded-full bg-neutral-900/60 border border-white/10 text-neutral-500 cursor-not-allowed"
+                      title="Batch mode — finish all beats, then tap Create all visuals on the last beat"
+                    >
+                      <ImageOff className="w-5 h-5" />
+                    </button>
+                    <AnimatePresence>
+                      {batchModeNotice && (
+                        <motion.p
+                          initial={{ opacity: 0, x: -6 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -6 }}
+                          className="absolute left-full ml-2 top-1/2 z-50 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                        >
+                          You&apos;re in batch mode. Finish all beats, then tap “Create all visuals” on the last beat.
+                        </motion.p>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
                 {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton
                     active={isAutoScrolling}
@@ -5854,22 +5911,44 @@ function StoryScreenInner({
                     disabled={scrollState.atBottom}
                   />
                 )}
-                <NarrationButton
-                  isGeneratingAudio={isGeneratingAudio}
-                  isAudioReady={isAudioReady}
-                  playbackState={playbackState}
-                  hasAudio={!!normalizedCurrentBeat.audioUrl}
-                  onTogglePlayPause={togglePlayPause}
-                  onGenerateNarration={handleGenerateNarration}
-                  onClearGlow={clearAudioReady}
-                  storyMode={storyMode}
-                  onToggleStoryMode={toggleStoryMode}
-                  disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
-                  disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
-                />
+                <div className="relative flex flex-col items-center">
+                  <NarrationButton
+                    isGeneratingAudio={isGeneratingAudio}
+                    isAudioReady={isAudioReady}
+                    playbackState={playbackState}
+                    hasAudio={!!normalizedCurrentBeat.audioUrl}
+                    onTogglePlayPause={togglePlayPause}
+                    onGenerateNarration={handleGenerateNarration}
+                    onClearGlow={clearAudioReady}
+                    storyMode={storyMode}
+                    onToggleStoryMode={toggleStoryMode}
+                    disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
+                    disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
+                    batchLocked={showBatchModeNarrationLock}
+                    onBatchLockedClick={() => {
+                      setBatchModeNarrationNotice(true);
+                      window.setTimeout(() => setBatchModeNarrationNotice(false), 4000);
+                    }}
+                  />
+                  <AnimatePresence>
+                    {batchModeNarrationNotice && (
+                      <motion.p
+                        initial={{ opacity: 0, x: -6 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -6 }}
+                        className="absolute left-full ml-2 top-1/2 z-50 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                      >
+                        You&apos;re in batch mode. Finish all beats, then tap “Generate all narration” on the last beat.
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             )}
 
+          <div className="flex w-full flex-col">
+          {/* Batch visuals CTA — sits directly above the card, matching its width (all breakpoints) */}
+          <BatchVisualsBanner />
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -6231,6 +6310,7 @@ function StoryScreenInner({
               </div>
             )}
           </motion.div>
+          </div>{/* end banner + card stack */}
           </div>{/* end card + narration button row */}
 
           </div>

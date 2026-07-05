@@ -2,6 +2,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
 import { updateBeatMediaState } from '@/app/actions/persistence';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
@@ -120,11 +121,11 @@ function normalizeOverlayConfig(config: Partial<StoryTextOverlayConfig> | null |
 }
 
 function parseDataAudioUrl(dataUrl: string): { buffer: Buffer; mimeType: string } | null {
-  const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
-  if (!match) return null;
+  const parsed = splitBase64DataUrl(dataUrl);
+  if (!parsed) return null;
   return {
-    mimeType: match[1] || 'audio/wav',
-    buffer: Buffer.from(match[2], 'base64'),
+    mimeType: parsed.mimeType || 'audio/wav',
+    buffer: Buffer.from(parsed.base64, 'base64'),
   };
 }
 
@@ -577,6 +578,9 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     narrationStyle?: string;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
+    // Background worker path: persist on behalf of `userId` via the service-role
+    // client. Absent for the interactive path (unchanged behaviour).
+    serverAuth?: { userId: string };
   } = {}
 ): Promise<StoryOverlayNarrationResult> {
   const overlayConfig = normalizeOverlayConfig(options.overlayConfig);
@@ -592,6 +596,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      ...(options.serverAuth ? { serverAuth: options.serverAuth } : {}),
     }
   );
 
@@ -612,7 +617,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
       storyTextOverlayStyle: overlayConfig.style,
       storyTextOverlayCaptions: overlay.captions,
       storyTextOverlayAlignment: overlay.alignment,
-    });
+    }, options.serverAuth);
   } catch (error) {
     console.warn(
       '[story-narration] Failed to persist story text overlay metadata:',

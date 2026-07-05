@@ -264,6 +264,19 @@ export interface StoryConfig {
   maxBeats: number;
   language: StoryLanguage;
   imageGenerationMode: 'generate' | 'prompt_only';
+  // When imageGenerationMode is 'generate', how images are delivered:
+  //  - 'live'     : rendered immediately at full price (default)
+  //  - 'batch'    : deferred to a background provider batch API (~24h, ~50% cheaper),
+  //                 continuity via resend_refs (character portraits generated up front)
+  //  - 'stateful' : deferred to a fast server-side sequential job at regular price,
+  //                 continuity via a provider-stateful thread (Gemini interactions /
+  //                 OpenAI responses); no ref re-sending
+  imageDeliveryMode?: 'live' | 'batch' | 'stateful';
+  // Only meaningful for the 'stateful' delivery path: when true, generate and persist
+  // character portraits (as the thread's seed turn and as reusable cross-story refs);
+  // when false, rely purely on the stateful thread and skip portraits. The 'batch' path
+  // always generates refs regardless (they are its only continuity channel).
+  episodicCharacters?: boolean;
   imageModelSelection?: ImageModelSelection;
   imageContinuityStrategy: ImageContinuityStrategy;
   isVerticalStory: boolean;

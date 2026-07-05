@@ -147,7 +147,7 @@ export default function ExplorePage() {
         <StoryScreen />
       )}
 
-      {(authLoading || isLoading || shouldHoldForFirstVisual) && <LoadingState backdropMode="scene" />}
+      {(authLoading || isLoading || shouldShowExploreLoader) && <LoadingState backdropMode="scene" />}
     </div>
   );
 }
