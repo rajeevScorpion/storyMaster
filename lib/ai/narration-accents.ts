@@ -13,6 +13,9 @@ import type { StoryLanguage } from '@/lib/types/story';
  * server-only imports) so both the client config and the server pipeline can use it.
  */
 
+/** Grouping for the admin accent catalog ("bucket"). */
+export type NarrationAccentCategory = 'international' | 'national';
+
 export interface NarrationAccentOption {
   /** Stable identifier persisted on the story (story_config.narrationVoice.accent). */
   id: string;
@@ -20,6 +23,8 @@ export interface NarrationAccentOption {
   label: string;
   /** Natural-language instruction injected into the TTS prompt's {{accent}} slot. */
   instruction: string;
+  /** Catalog grouping. Optional on stored options; always set on catalog entries. */
+  category?: NarrationAccentCategory;
 }
 
 /** planKey -> allowed accent ids. Plans not listed fall back to the default accent only. */
@@ -27,38 +32,76 @@ export type NarrationAccentTierMap = Record<string, string[]>;
 
 export const DEFAULT_NARRATION_ACCENT_ID = 'us';
 
-export const DEFAULT_NARRATION_ACCENTS: NarrationAccentOption[] = [
-  {
-    id: 'us',
-    label: 'American (US)',
-    instruction: 'Speak the entire narration in a natural American English accent (General American). Do not use any other regional accent.',
-  },
-  {
-    id: 'uk',
-    label: 'British (UK)',
-    instruction: 'Speak the entire narration in a natural British English accent (Received Pronunciation). Do not use any other regional accent.',
-  },
-  {
-    id: 'in',
-    label: 'Indian',
-    instruction: 'Speak the entire narration in a natural Indian English accent. Do not use any other regional accent.',
-  },
-  {
-    id: 'au',
-    label: 'Australian',
-    instruction: 'Speak the entire narration in a natural Australian English accent. Do not use any other regional accent.',
-  },
-];
+export const ACCENT_CATEGORY_ORDER: NarrationAccentCategory[] = ['international', 'national'];
+
+export const ACCENT_CATEGORY_LABELS: Record<NarrationAccentCategory, string> = {
+  international: 'International English',
+  national: 'National / Regional (India)',
+};
+
+function accentInstruction(variety: string): string {
+  return `Speak the entire narration in a natural ${variety} accent. Do not use any other regional accent.`;
+}
 
 /**
- * Built-in per-plan defaults. Free gets the neutral default only; paid tiers unlock
- * progressively. Admins override this via the narration_accent_tier_map flag.
+ * The master accent catalog ("bucket") admins choose from. Grouped into international
+ * English varieties and India-focused national/regional ones. Gemini TTS steers accent
+ * only via this prompt instruction, so fidelity is best-effort — admins can edit labels
+ * and enable/disable per plan.
+ */
+export const NARRATION_ACCENT_CATALOG: NarrationAccentOption[] = [
+  // International English
+  { id: 'us', label: 'American (US)', category: 'international', instruction: accentInstruction('American English (General American)') },
+  { id: 'uk', label: 'British (UK)', category: 'international', instruction: accentInstruction('British English (Received Pronunciation)') },
+  { id: 'au', label: 'Australian', category: 'international', instruction: accentInstruction('Australian English') },
+  { id: 'ca', label: 'Canadian', category: 'international', instruction: accentInstruction('Canadian English') },
+  { id: 'ie', label: 'Irish', category: 'international', instruction: accentInstruction('Irish English') },
+  { id: 'za', label: 'South African', category: 'international', instruction: accentInstruction('South African English') },
+  // National / Regional (India)
+  { id: 'in', label: 'Indian (Neutral)', category: 'national', instruction: accentInstruction('neutral Indian English') },
+  { id: 'in-hi', label: 'Indian (Hindi-belt)', category: 'national', instruction: accentInstruction('North Indian, Hindi-influenced English') },
+  { id: 'in-so', label: 'Indian (South Indian)', category: 'national', instruction: accentInstruction('South Indian English') },
+];
+
+const ACCENT_CATALOG_BY_ID = new Map(NARRATION_ACCENT_CATALOG.map((accent) => [accent.id, accent]));
+
+/** Look up a catalog accent by id (fresh label + instruction). */
+export function getCatalogAccentById(id: string | null | undefined): NarrationAccentOption | undefined {
+  const key = id?.trim().toLowerCase();
+  return key ? ACCENT_CATALOG_BY_ID.get(key) : undefined;
+}
+
+/** Build a stored accent list from enabled ids, using fresh catalog labels/instructions. */
+export function buildAccentOptionsFromIds(ids: readonly string[]): NarrationAccentOption[] {
+  const seen = new Set<string>();
+  const result: NarrationAccentOption[] = [];
+  for (const rawId of ids) {
+    const id = rawId?.trim().toLowerCase();
+    if (!id || seen.has(id)) continue;
+    const catalog = ACCENT_CATALOG_BY_ID.get(id);
+    if (!catalog) continue;
+    seen.add(id);
+    result.push({ id: catalog.id, label: catalog.label, instruction: catalog.instruction, category: catalog.category });
+  }
+  return result;
+}
+
+/** The accents enabled out of the box (a curated subset of the catalog). */
+export const DEFAULT_NARRATION_ACCENTS: NarrationAccentOption[] = buildAccentOptionsFromIds([
+  'us',
+  'uk',
+  'in',
+  'au',
+]);
+
+/**
+ * Built-in per-plan defaults keyed by the canonical plan keys. Free gets the neutral
+ * default only; paid tiers unlock progressively. Admins override this in the GUI.
  */
 export const DEFAULT_NARRATION_ACCENT_TIER_MAP: NarrationAccentTierMap = {
   free: ['us'],
-  starter: ['us', 'uk'],
-  pro: ['us', 'uk', 'in', 'au'],
-  studio: ['us', 'uk', 'in', 'au'],
+  plus: ['us', 'uk', 'au'],
+  studio: ['us', 'uk', 'au', 'in'],
 };
 
 export const NARRATION_ACCENT_FLAG_KEYS = {
