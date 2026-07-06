@@ -12,6 +12,7 @@ import type { BeatMediaStatus } from '@/lib/types/beat-media';
 import {
   normalizeBeatMediaFields,
   BEAT_ROW_NOT_FOUND_MESSAGE,
+  isBeatRowNotFoundError,
   getBeatPersistedAudioUrl,
   getBeatPersistedImageUrl,
 } from '@/lib/types/beat-media';
@@ -1486,6 +1487,39 @@ export async function updateBeatMediaState(
 
   if (storyUpdateError) {
     throw new Error(`Failed to patch story map media state: ${storyUpdateError.message}`);
+  }
+}
+
+/**
+ * Same as {@link updateBeatMediaState}, but retries when the beat row isn't found yet.
+ *
+ * In regular (interactive) mode, narration is kicked off before the client's
+ * fire-and-forget beat save has inserted the beat row, so a media patch can race
+ * ahead and hit BEAT_ROW_NOT_FOUND. That's transient — the insert lands moments
+ * later — so we retry that specific error a bounded number of times. Any other
+ * error propagates immediately. Runs in the background (the user already hears the
+ * audio), so the wait doesn't affect perceived latency. Batch/worker callers, which
+ * insert the beat row before narrating, should pass { attempts: 1 } to opt out.
+ */
+export async function updateBeatMediaStateWithRetry(
+  storyId: string,
+  nodeId: string,
+  patch: Parameters<typeof updateBeatMediaState>[2],
+  serverAuth?: { userId: string },
+  options: { attempts?: number; delayMs?: number } = {}
+): Promise<void> {
+  // Bounded so the total added time stays well under serverless duration caps —
+  // narration itself already runs ~20-27s inside this same invocation.
+  const attempts = Math.max(1, options.attempts ?? 8);
+  const delayMs = Math.max(250, options.delayMs ?? 1500);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await updateBeatMediaState(storyId, nodeId, patch, serverAuth);
+      return;
+    } catch (error) {
+      if (!isBeatRowNotFoundError(error) || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }
 

@@ -149,6 +149,10 @@ export function narrationLanguageDisplayName(
   const value = String(language).toLowerCase();
   if (value.startsWith('hi') || value === 'hindi') return 'Hindi';
   if (value.startsWith('en') || value === 'english') return 'English';
+  if (value.startsWith('bn') || value === 'bangla' || value === 'bengali') return 'Bangla';
+  if (value.startsWith('gu') || value === 'gujarati') return 'Gujarati';
+  if (value.startsWith('mr') || value === 'marathi') return 'Marathi';
+  if (value.startsWith('ur') || value === 'urdu') return 'Urdu';
   return String(language);
 }
 

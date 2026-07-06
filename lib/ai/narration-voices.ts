@@ -3,7 +3,7 @@ import type { NarrationAccentOption, NarrationAccentTierMap } from '@/lib/ai/nar
 
 export type NarrationGenderBucket = 'male' | 'female';
 export type NarrationVoiceMode = 'legacy_auto' | 'user_selected';
-export type NarrationLanguageCode = 'en-IN' | 'hi-IN';
+export type NarrationLanguageCode = 'en-IN' | 'hi-IN' | 'bn-IN' | 'gu-IN' | 'mr-IN';
 export type NarrationVoiceSampleStatus = 'pending' | 'generating' | 'ready' | 'failed';
 
 export interface NarrationVoiceLanguage {
@@ -88,6 +88,9 @@ export const DEFAULT_FEMALE_NARRATION_VOICES = [
 export const DEFAULT_NARRATION_SAMPLE_TEXT: Record<NarrationLanguageCode, string> = {
   'en-IN': 'Once upon a time, in a quiet corner of the world, a small story was waiting to come alive.',
   'hi-IN': 'एक बार की बात है, दुनिया के एक शांत कोने में, एक छोटी सी कहानी जीवंत होने का इंतज़ार कर रही थी।',
+  'bn-IN': 'একদা, পৃথিবীর এক নিরিবিলি কোণে, একটি ছোট্ট গল্প জীবন্ত হয়ে ওঠার অপেক্ষায় ছিল।',
+  'gu-IN': 'એક સમયે, દુનિયાના એક શાંત ખૂણામાં, એક નાનકડી વાર્તા જીવંત થવાની રાહ જોઈ રહી હતી.',
+  'mr-IN': 'एके काळी, जगाच्या एका शांत कोपऱ्यात, एक छोटीशी गोष्ट जिवंत होण्याची वाट पाहत होती.',
 };
 
 export const SUPPORTED_NARRATION_VOICE_LANGUAGES: NarrationVoiceLanguage[] = [
@@ -102,6 +105,24 @@ export const SUPPORTED_NARRATION_VOICE_LANGUAGES: NarrationVoiceLanguage[] = [
     storyLanguage: 'hindi',
     label: 'Hindi (India)',
     sampleTextFlagKey: 'narration_sample_text_hi_in',
+  },
+  {
+    code: 'bn-IN',
+    storyLanguage: 'bangla',
+    label: 'Bangla (India)',
+    sampleTextFlagKey: 'narration_sample_text_bn_in',
+  },
+  {
+    code: 'gu-IN',
+    storyLanguage: 'gujarati',
+    label: 'Gujarati (India)',
+    sampleTextFlagKey: 'narration_sample_text_gu_in',
+  },
+  {
+    code: 'mr-IN',
+    storyLanguage: 'marathi',
+    label: 'Marathi (India)',
+    sampleTextFlagKey: 'narration_sample_text_mr_in',
   },
 ];
 

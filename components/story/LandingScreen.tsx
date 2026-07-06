@@ -42,7 +42,6 @@ import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
-import { REEL_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -231,6 +230,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [authoringWordCap, setAuthoringWordCap] = useState(initialLandingData.authoringWordCap);
+  // Admin-enabled languages offered in the pickers (main story + reel).
+  const storyLanguageOptions = initialLandingData.storyLanguageOptions;
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
   const [setupSettings, setSetupSettings] = useState(initialLandingData.setupSettings);
   const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
@@ -1073,7 +1074,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                 <label className="flex h-6 items-center truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Language</label>
                                 <FilterDropdown
                                   value={reelLanguage}
-                                  options={REEL_LANGUAGE_OPTIONS}
+                                  options={storyLanguageOptions}
                                   onChange={(value) => {
                                     setReelLanguage(value as StoryLanguage);
                                     setReelDistributedTexts(null);
@@ -1422,6 +1423,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             {showAdvanced && (
               <AdvancedOptions
                 language={language}
+                languageOptions={storyLanguageOptions}
                 onLanguageChange={(value) => {
                   setLanguage(value);
                   clearSeedPreview();

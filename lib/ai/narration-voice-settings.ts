@@ -42,6 +42,21 @@ export interface NarrationVoiceSettingsInput {
   accentTierMap: NarrationAccentTierMap;
 }
 
+/**
+ * Build a complete sample-text record for every supported narration language,
+ * falling back to the built-in default when a stored/input value is blank. Keeps
+ * the record in sync with SUPPORTED_NARRATION_VOICE_LANGUAGES as languages are added.
+ */
+function buildSampleTextByLanguage(
+  read: (code: NarrationLanguageCode) => string | null | undefined
+): Record<NarrationLanguageCode, string> {
+  const result = {} as Record<NarrationLanguageCode, string>;
+  for (const language of SUPPORTED_NARRATION_VOICE_LANGUAGES) {
+    result[language.code] = read(language.code)?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT[language.code];
+  }
+  return result;
+}
+
 function normalizeDefaultVoice(defaultVoice: string | null | undefined, list: string[], fallback: string): {
   voice: string;
   warning: string | null;
@@ -69,8 +84,7 @@ export async function getNarrationVoiceSettings(): Promise<NarrationVoiceSetting
     femaleVoiceListValue,
     defaultMaleVoiceValue,
     defaultFemaleVoiceValue,
-    englishSampleText,
-    hindiSampleText,
+    sampleTextValues,
     accentSelectionEnabled,
     accentListValue,
     defaultAccentValue,
@@ -81,8 +95,12 @@ export async function getNarrationVoiceSettings(): Promise<NarrationVoiceSetting
     getFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.femaleVoiceList),
     getFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.defaultMaleVoice),
     getFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.defaultFemaleVoice),
-    getFeatureFlagValue('narration_sample_text_en_in'),
-    getFeatureFlagValue('narration_sample_text_hi_in'),
+    Promise.all(
+      SUPPORTED_NARRATION_VOICE_LANGUAGES.map(async (language) => ({
+        code: language.code,
+        value: await getFeatureFlagValue(language.sampleTextFlagKey),
+      }))
+    ),
     getFeatureFlag(NARRATION_ACCENT_FLAG_KEYS.enabled, false),
     getFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.accentList),
     getFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.defaultAccent),
@@ -98,16 +116,18 @@ export async function getNarrationVoiceSettings(): Promise<NarrationVoiceSetting
   const defaultAccent = resolveDefaultAccentId(accentOptions, defaultAccentValue);
   const accentTierMap = parseNarrationAccentTierMapValue(accentTierMapValue);
 
+  const storedSampleText = new Map(sampleTextValues.map((entry) => [entry.code, entry.value]));
+  const sampleTextByLanguage = buildSampleTextByLanguage(
+    (code) => storedSampleText.get(code) ?? undefined
+  );
+
   return {
     userLedVoiceSelectionEnabled,
     maleVoiceList,
     femaleVoiceList,
     defaultMaleVoice,
     defaultFemaleVoice,
-    sampleTextByLanguage: {
-      'en-IN': englishSampleText?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT['en-IN'],
-      'hi-IN': hindiSampleText?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT['hi-IN'],
-    },
+    sampleTextByLanguage,
     supportedLanguages: SUPPORTED_NARRATION_VOICE_LANGUAGES,
     accentSelectionEnabled,
     accentOptions,
@@ -175,10 +195,9 @@ export async function saveNarrationVoiceSettings(
   if (defaultMale.warning) warnings.push(defaultMale.warning);
   if (defaultFemale.warning) warnings.push(defaultFemale.warning);
 
-  const sampleTextByLanguage: Record<NarrationLanguageCode, string> = {
-    'en-IN': input.sampleTextByLanguage['en-IN']?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT['en-IN'],
-    'hi-IN': input.sampleTextByLanguage['hi-IN']?.trim() || DEFAULT_NARRATION_SAMPLE_TEXT['hi-IN'],
-  };
+  const sampleTextByLanguage = buildSampleTextByLanguage(
+    (code) => input.sampleTextByLanguage[code]
+  );
 
   let accentOptions = normalizeNarrationAccentList(input.accentOptions);
   if (accentOptions.length === 0) {
@@ -206,8 +225,9 @@ export async function saveNarrationVoiceSettings(
     setFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.femaleVoiceList, serializeNarrationVoiceList(femaleVoiceList)),
     setFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.defaultMaleVoice, defaultMale.voice),
     setFeatureFlagValue(NARRATION_VOICE_FLAG_KEYS.defaultFemaleVoice, defaultFemale.voice),
-    setFeatureFlagValue('narration_sample_text_en_in', sampleTextByLanguage['en-IN']),
-    setFeatureFlagValue('narration_sample_text_hi_in', sampleTextByLanguage['hi-IN']),
+    ...SUPPORTED_NARRATION_VOICE_LANGUAGES.map((language) =>
+      setFeatureFlagValue(language.sampleTextFlagKey, sampleTextByLanguage[language.code])
+    ),
     setFeatureFlag(NARRATION_ACCENT_FLAG_KEYS.enabled, input.accentSelectionEnabled),
     setFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.accentList, serializeNarrationAccentList(accentOptions)),
     setFeatureFlagValue(NARRATION_ACCENT_FLAG_KEYS.defaultAccent, defaultAccent),

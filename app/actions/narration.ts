@@ -42,13 +42,14 @@ import {
 import { getAllowedAccentIdsForPlan, isEnglishNarrationLanguage, narrationLanguageDisplayName } from '@/lib/ai/narration-accents';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
-import { updateBeatMediaState } from '@/app/actions/persistence';
+import { updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { putR2Object, createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { recordMediaAsset } from '@/lib/media/media-assets';
 import {
   getDefaultVoiceForGender,
   resolveStoryNarrationLanguage,
+  SUPPORTED_NARRATION_VOICE_LANGUAGES,
   type NarrationGenderBucket,
   type NarrationLanguageCode,
   type NarrationVoiceClientConfig,
@@ -356,7 +357,8 @@ export async function getNarrationVoiceSelectionConfig(
     defaultMaleVoice: settings.defaultMaleVoice,
     defaultFemaleVoice: settings.defaultFemaleVoice,
     languageCode: languageResolution.languageCode,
-    requestedStoryLanguage: storyLanguage === 'hindi' ? 'hindi' : 'english',
+    requestedStoryLanguage:
+      SUPPORTED_NARRATION_VOICE_LANGUAGES.find((lang) => lang.storyLanguage === storyLanguage)?.storyLanguage ?? 'english',
     fallbackToEnglishSample: languageResolution.fallbackToEnglishSample,
     samples: samples.filter((sample) => sample.languageCode === languageResolution.languageCode),
     accentEnabled,
@@ -571,11 +573,13 @@ async function callGeminiTTS(
       const accentInstruction = options.accent && isEnglishNarrationLanguage(language)
         ? (await getNarrationAccentInstruction(options.accent)) ?? ''
         : '';
-      // When an accent is applied, feed the prompt a region-neutral language name so
-      // the accent decides the variety. A locale code like "en-IN" would otherwise
-      // hard-steer Indian English and override the accent instruction entirely.
-      const promptLanguage = accentInstruction ? narrationLanguageDisplayName(language) : language;
-      const ttsPrompt = resolvePromptTemplate(
+      // Always feed the prompt a plain, region-neutral language NAME rather than a
+      // locale code. Gemini TTS has no locale parameter — the {{language}} slot is
+      // pure prompt text, so a code like "en-IN" reads as "narrate in en-IN" and
+      // hard-steers Indian English, overriding any accent instruction. Using the
+      // bare name ("English", "Bangla", "Marathi") lets the accent decide the variety.
+      const promptLanguage = narrationLanguageDisplayName(language);
+      let ttsPrompt = resolvePromptTemplate(
         await getPublishedPrompt(taskKey),
         {
           storyText,
@@ -586,6 +590,25 @@ async function callGeminiTTS(
           accent: accentInstruction,
         }
       );
+      // Defensive: a published prompt template saved before the {{accent}} slot
+      // existed would silently drop the instruction. Ensure it always reaches the
+      // model so a locked accent actually takes effect regardless of prompt version.
+      if (accentInstruction && !ttsPrompt.includes(accentInstruction)) {
+        ttsPrompt = `${accentInstruction}\n${ttsPrompt}`;
+      }
+      // TEMP DEBUG: prints the exact prompt sent to Gemini TTS so we can verify the
+      // accent instruction actually reaches the model on the live path. Remove once
+      // accent behavior is confirmed.
+      console.info('[narration.tts_prompt_debug]', {
+        taskKey,
+        language,
+        promptLanguage,
+        voiceName,
+        requestedAccent: options.accent ?? null,
+        accentApplied: Boolean(accentInstruction),
+        accentInstruction: accentInstruction || null,
+        resolvedPrompt: ttsPrompt,
+      });
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
       const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
 
@@ -1562,7 +1585,11 @@ export async function generateAndPersistNarration(
         },
         async () => {
           try {
-            await updateBeatMediaState(savedStoryId, nodeId, {
+            // Interactive mode kicks off narration before the client's fire-and-forget
+            // beat save has inserted the beat row, so retry BEAT_ROW_NOT_FOUND until the
+            // insert lands. The worker path (serverAuth) inserts the row first, so it
+            // opts out of retries.
+            await updateBeatMediaStateWithRetry(savedStoryId, nodeId, {
               audioUrl: persistedAudioUrl,
               audioStatus: 'ready',
               audioError: null,
@@ -1574,7 +1601,7 @@ export async function generateAndPersistNarration(
               }),
               activeNarrationPreviewId: null,
               ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
-            }, options.serverAuth);
+            }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
             narrationMetadata = buildBeatNarrationMetadata({
               payload: audioPayload,
               audioUrl: persistedAudioUrl,

@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
-import { updateBeatMediaState } from '@/app/actions/persistence';
+import { updateBeatMediaState, updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import {
   estimateElevenLabsForcedAlignmentCostUsd,
@@ -613,13 +613,15 @@ export async function generateAndPersistStoryNarrationWithOverlay(
   });
 
   try {
-    await updateBeatMediaState(savedStoryId, nodeId, {
+    // Retry BEAT_ROW_NOT_FOUND: in interactive mode the beat row may still be landing
+    // from the client's fire-and-forget save. The worker path (serverAuth) opts out.
+    await updateBeatMediaStateWithRetry(savedStoryId, nodeId, {
       storyTextOverlayEnabled: overlayConfig.enabled,
       storyTextOverlayMode: overlayConfig.mode,
       storyTextOverlayStyle: overlayConfig.style,
       storyTextOverlayCaptions: overlay.captions,
       storyTextOverlayAlignment: overlay.alignment,
-    }, options.serverAuth);
+    }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
   } catch (error) {
     console.warn(
       '[story-narration] Failed to persist story text overlay metadata:',

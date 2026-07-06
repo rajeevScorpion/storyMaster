@@ -63,7 +63,10 @@ import {
   setVideoDownloadAdminBypass,
   saveImageUploadOptimizationSettings,
   saveMediaStorageSettings,
+  saveAdminStoryLanguageSettings,
 } from '@/app/actions/admin';
+import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
+import type { StoryLanguage } from '@/lib/types/story';
 import { generateNarrationVoiceSamples, getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
 import {
   normalizeNarrationVoiceList,
@@ -409,6 +412,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [narrationAccentOptions, setNarrationAccentOptions] = useState<NarrationAccentOption[]>([]);
   const [narrationDefaultAccent, setNarrationDefaultAccent] = useState('');
   const [narrationAccentTierMap, setNarrationAccentTierMap] = useState<NarrationAccentTierMap>({});
+  const [enabledStoryLanguageIds, setEnabledStoryLanguageIds] = useState<StoryLanguage[]>([]);
+  const [storyLanguageSaving, setStoryLanguageSaving] = useState(false);
+  const [storyLanguageError, setStoryLanguageError] = useState<string | null>(null);
   const [newAccentLabel, setNewAccentLabel] = useState('');
   const [newAccentInstruction, setNewAccentInstruction] = useState('');
   const [imageUploadSettings, setImageUploadSettings] = useState<ImageUploadOptimizationSettings>(
@@ -487,6 +493,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         mediaStorage: nextMediaStorage,
         narrationVoiceSettings: nextNarrationVoiceSettings,
         narrationVoiceSampleStatuses: nextNarrationVoiceSampleStatuses,
+        enabledStoryLanguageIds: nextEnabledStoryLanguageIds,
       }) => {
         setCycleOverrideState(co);
         setCycleMsState(cm);
@@ -562,6 +569,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setNarrationDefaultAccent(nextNarrationVoiceSettings.defaultAccent);
         setNarrationAccentTierMap(nextNarrationVoiceSettings.accentTierMap);
         setNarrationVoiceSampleStatuses(nextNarrationVoiceSampleStatuses);
+        setEnabledStoryLanguageIds(nextEnabledStoryLanguageIds);
         setLoading(false);
       })
       .catch((err) => {
@@ -742,6 +750,32 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       setNarrationVoiceWarnings([`${summary}.`]);
     } finally {
       setNarrationVoiceGenerating(false);
+    }
+  }
+
+  function toggleStoryLanguage(id: StoryLanguage) {
+    setEnabledStoryLanguageIds((current) => {
+      if (current.includes(id)) {
+        // Never allow disabling the last remaining language.
+        if (current.length <= 1) return current;
+        return current.filter((existing) => existing !== id);
+      }
+      // Keep catalog order so the picker reads consistently.
+      const next = new Set([...current, id]);
+      return STORY_LANGUAGE_OPTIONS.filter((option) => next.has(option.value)).map((option) => option.value);
+    });
+  }
+
+  async function handleSaveStoryLanguages() {
+    setStoryLanguageSaving(true);
+    setStoryLanguageError(null);
+    try {
+      const result = await saveAdminStoryLanguageSettings(enabledStoryLanguageIds);
+      setEnabledStoryLanguageIds(result.enabledStoryLanguageIds);
+    } catch (err) {
+      setStoryLanguageError(err instanceof Error ? err.message : 'Failed to save languages');
+    } finally {
+      setStoryLanguageSaving(false);
     }
   }
 
@@ -1437,6 +1471,58 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
               )}
             </div>
           </div>
+          )}
+
+          {section === 'narration' && (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
+              <h2 className="text-sm font-medium uppercase tracking-wider text-neutral-500">Story Languages</h2>
+              <p className="text-xs text-neutral-400 -mt-2">
+                Enable the languages users can pick for new stories. Language controls both the written
+                story text and the narration. Disabling a language only hides it from the picker — stories
+                already written in it keep working. English narration accent (US/UK/…) is a separate control below.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {STORY_LANGUAGE_OPTIONS.map((option) => {
+                  const active = enabledStoryLanguageIds.includes(option.value);
+                  const isLastEnabled = active && enabledStoryLanguageIds.length <= 1;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => toggleStoryLanguage(option.value)}
+                      disabled={isLastEnabled}
+                      aria-pressed={active}
+                      title={isLastEnabled ? 'At least one language must stay enabled' : undefined}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                        active
+                          ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+                          : 'border-white/10 bg-neutral-800 text-neutral-300 hover:bg-white/10'
+                      }`}
+                    >
+                      {active ? <Check size={12} aria-hidden="true" /> : <Plus size={12} aria-hidden="true" />}
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {storyLanguageError && (
+                <p className="text-xs text-red-400">{storyLanguageError}</p>
+              )}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void handleSaveStoryLanguages()}
+                  disabled={storyLanguageSaving}
+                  className="inline-flex items-center rounded-lg bg-emerald-500/90 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {storyLanguageSaving ? 'Saving…' : 'Save languages'}
+                </button>
+                <span className="text-[11px] text-neutral-500">
+                  Need a language not listed? It has to be added to the catalog in code first (each language
+                  needs a narration locale) — then it appears here to enable.
+                </span>
+              </div>
+            </div>
           )}
 
           {section === 'narration' && narrationVoiceSettings && (

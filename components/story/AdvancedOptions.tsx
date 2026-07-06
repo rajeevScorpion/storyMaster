@@ -7,6 +7,7 @@ import type { ImageModelPickerState, ImageModelSelection } from '@/lib/ai/image-
 import {
   SOURCE_FIDELITY_OPTIONS,
   STORY_DETAIL_OPTIONS,
+  STORY_LANGUAGE_OPTIONS,
   STORY_PALETTE_OPTIONS,
   STORY_THEME_OPTIONS,
   VISUAL_PRESET_OPTIONS,
@@ -20,10 +21,10 @@ import type {
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
 
-const LANGUAGE_OPTIONS: FilterDropdownOption[] = [
-  { value: 'english', label: 'English' },
-  { value: 'hindi', label: 'Hindi (हिन्दी)' },
-];
+const LANGUAGE_OPTIONS: FilterDropdownOption[] = STORY_LANGUAGE_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.label,
+}));
 
 const AGE_GROUP_OPTIONS: FilterDropdownOption[] = [
   { value: 'all_ages', label: 'All Ages' },
@@ -90,6 +91,8 @@ const IMAGE_CONTINUITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = [
 
 interface AdvancedOptionsProps {
   language: StoryLanguage;
+  /** Admin-enabled languages to offer; falls back to the full built-in catalog. */
+  languageOptions?: Array<{ value: StoryLanguage; label: string }>;
   onLanguageChange: (v: StoryLanguage) => void;
   ageGroup: AgeGroup;
   onAgeGroupChange: (v: AgeGroup) => void;
@@ -142,6 +145,7 @@ interface AdvancedOptionsProps {
 
 export default function AdvancedOptions({
   language,
+  languageOptions,
   onLanguageChange,
   ageGroup,
   onAgeGroupChange,
@@ -188,6 +192,10 @@ export default function AdvancedOptions({
   onNarrationVoiceSelectionChange,
 }: AdvancedOptionsProps) {
   const [allowOverflow, setAllowOverflow] = useState(false);
+  const effectiveLanguageOptions: FilterDropdownOption[] =
+    languageOptions && languageOptions.length > 0
+      ? languageOptions.map((option) => ({ value: option.value, label: option.label }))
+      : LANGUAGE_OPTIONS;
   const [playingSampleVoice, setPlayingSampleVoice] = useState<string | null>(null);
   const sampleAudioCacheRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
@@ -309,7 +317,7 @@ export default function AdvancedOptions({
           <div className="space-y-4 text-left">
             <FilterDropdown
               value={language}
-              options={LANGUAGE_OPTIONS}
+              options={effectiveLanguageOptions}
               onChange={(value) => onLanguageChange(value as StoryLanguage)}
               fullWidth
               size="form"

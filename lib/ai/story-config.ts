@@ -79,18 +79,94 @@ export const STORY_DETAIL_OPTIONS: Array<{ value: StoryDetailLevel; label: strin
   { value: 'lush', label: 'Lush' },
 ];
 
-export const STORY_LANGUAGE_OPTIONS: Array<{ value: Extract<StoryLanguage, 'english' | 'hindi'>; label: string }> = [
+export interface StoryLanguageOption {
+  value: StoryLanguage;
+  label: string;
+}
+
+/**
+ * Canonical language catalog for stories. Language controls the written story text
+ * AND the narration language sent to TTS. English narration variety (US/UK/…) is a
+ * separate axis handled by the accent picker — see lib/ai/narration-accents.ts.
+ *
+ * This is the full built-in catalog and the single source of truth for VALIDATION
+ * (normalizeStoryLanguage). Which of these are actually offered in the UI is a
+ * separate, admin-controlled concern — see the enabled-ids helpers below. Existing
+ * stories in a language later disabled by an admin keep working because validation
+ * still accepts the whole catalog.
+ */
+export const STORY_LANGUAGE_OPTIONS: StoryLanguageOption[] = [
   { value: 'english', label: 'English' },
-  { value: 'hindi', label: 'Hindi' },
+  { value: 'hindi', label: 'Hindi (हिन्दी)' },
+  { value: 'bangla', label: 'Bangla (বাংলা)' },
+  { value: 'gujarati', label: 'Gujarati (ગુજરાતી)' },
+  { value: 'marathi', label: 'Marathi (मराठी)' },
+  { value: 'urdu', label: 'Urdu (اردو)' },
 ];
 
-export const REEL_LANGUAGE_OPTIONS: Array<{ value: StoryLanguage; label: string }> = [
-  { value: 'english', label: 'English' },
-  { value: 'hindi', label: 'Hindi' },
-  { value: 'bangla', label: 'Bangla' },
-  { value: 'urdu', label: 'Urdu' },
-  { value: 'gujarati', label: 'Gujarati' },
+/** Reels share the same language catalog. */
+export const REEL_LANGUAGE_OPTIONS: StoryLanguageOption[] = STORY_LANGUAGE_OPTIONS;
+
+/** Feature flag holding the JSON array of admin-enabled story language ids. */
+export const STORY_LANGUAGE_ENABLED_FLAG_KEY = 'story_language_enabled_ids';
+
+/**
+ * Languages offered when no admin override exists. Urdu ships disabled by default;
+ * admins can enable it (and disable any other) from Global Settings.
+ */
+export const DEFAULT_ENABLED_STORY_LANGUAGE_IDS: StoryLanguage[] = [
+  'english',
+  'hindi',
+  'bangla',
+  'gujarati',
+  'marathi',
 ];
+
+const STORY_LANGUAGE_CATALOG_IDS = new Set<string>(STORY_LANGUAGE_OPTIONS.map((option) => option.value));
+
+/**
+ * Parse the stored enabled-language flag into a validated id list. Falls back to the
+ * default set when unset/malformed, and always guarantees at least one language
+ * (English) so the picker is never empty.
+ */
+export function parseEnabledStoryLanguageIds(value: string | null | undefined): StoryLanguage[] {
+  const fromDefault = () => [...DEFAULT_ENABLED_STORY_LANGUAGE_IDS];
+  if (!value?.trim()) return fromDefault();
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return fromDefault();
+    const seen = new Set<string>();
+    const ids: StoryLanguage[] = [];
+    for (const raw of parsed) {
+      const id = String(raw).trim().toLowerCase();
+      if (!STORY_LANGUAGE_CATALOG_IDS.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id as StoryLanguage);
+    }
+    if (ids.length === 0) return ['english'];
+    return ids;
+  } catch {
+    return fromDefault();
+  }
+}
+
+export function serializeEnabledStoryLanguageIds(ids: readonly StoryLanguage[]): string {
+  const seen = new Set<string>();
+  const clean = ids
+    .map((id) => String(id).trim().toLowerCase())
+    .filter((id) => STORY_LANGUAGE_CATALOG_IDS.has(id) && !seen.has(id) && seen.add(id));
+  return JSON.stringify(clean.length > 0 ? clean : ['english']);
+}
+
+/** The catalog entries a given enabled-id set maps to, preserving catalog order. */
+export function getEnabledStoryLanguageOptions(
+  enabledIds: readonly StoryLanguage[]
+): StoryLanguageOption[] {
+  const enabled = new Set<string>(enabledIds);
+  const options = STORY_LANGUAGE_OPTIONS.filter((option) => enabled.has(option.value));
+  return options.length > 0 ? options : [STORY_LANGUAGE_OPTIONS[0]];
+}
 
 export const SOURCE_FIDELITY_OPTIONS: Array<{
   value: SourceFidelity;

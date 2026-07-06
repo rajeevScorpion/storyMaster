@@ -188,7 +188,7 @@ export interface StoryBeat {
 
 export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
 
-export type StoryLanguage = 'english' | 'hindi' | 'bangla' | 'urdu' | 'gujarati';
+export type StoryLanguage = 'english' | 'hindi' | 'bangla' | 'urdu' | 'gujarati' | 'marathi';
 
 export type VisualStylePreset =
   | 'storybook_illustration'
