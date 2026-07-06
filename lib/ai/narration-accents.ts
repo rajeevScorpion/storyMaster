@@ -31,22 +31,22 @@ export const DEFAULT_NARRATION_ACCENTS: NarrationAccentOption[] = [
   {
     id: 'us',
     label: 'American (US)',
-    instruction: 'Narrate with a natural American English accent.',
+    instruction: 'Speak the entire narration in a natural American English accent (General American). Do not use any other regional accent.',
   },
   {
     id: 'uk',
     label: 'British (UK)',
-    instruction: 'Narrate with a natural British English accent (Received Pronunciation).',
+    instruction: 'Speak the entire narration in a natural British English accent (Received Pronunciation). Do not use any other regional accent.',
   },
   {
     id: 'in',
     label: 'Indian',
-    instruction: 'Narrate with a natural Indian English accent.',
+    instruction: 'Speak the entire narration in a natural Indian English accent. Do not use any other regional accent.',
   },
   {
     id: 'au',
     label: 'Australian',
-    instruction: 'Narrate with a natural Australian English accent.',
+    instruction: 'Speak the entire narration in a natural Australian English accent. Do not use any other regional accent.',
   },
 ];
 
@@ -78,6 +78,25 @@ export function isEnglishNarrationLanguage(
   if (!language) return false;
   const value = String(language).toLowerCase();
   return value === 'english' || value.startsWith('en');
+}
+
+/**
+ * Map a narration language value (story language like "english", or a locale code
+ * like "en-IN") to a plain, region-neutral language NAME for the TTS prompt.
+ *
+ * This matters for accent: the TTS prompt's {{language}} slot is the only place a
+ * region gets steered, and a locale like "en-IN" hard-forces Indian English, which
+ * overrides any accent instruction. Using the bare language name ("English") lets
+ * the accent instruction alone decide the regional variety.
+ */
+export function narrationLanguageDisplayName(
+  language: StoryLanguage | string | null | undefined
+): string {
+  if (!language) return 'English';
+  const value = String(language).toLowerCase();
+  if (value.startsWith('hi') || value === 'hindi') return 'Hindi';
+  if (value.startsWith('en') || value === 'english') return 'English';
+  return String(language);
 }
 
 export function normalizeNarrationAccentList(

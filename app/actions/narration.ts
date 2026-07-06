@@ -39,7 +39,7 @@ import {
   getNarrationAccentInstruction,
   getNarrationAccentSelectionForPlan,
 } from '@/lib/ai/narration-voice-settings';
-import { getAllowedAccentIdsForPlan, isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
+import { getAllowedAccentIdsForPlan, isEnglishNarrationLanguage, narrationLanguageDisplayName } from '@/lib/ai/narration-accents';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaState } from '@/app/actions/persistence';
@@ -571,13 +571,17 @@ async function callGeminiTTS(
       const accentInstruction = options.accent && isEnglishNarrationLanguage(language)
         ? (await getNarrationAccentInstruction(options.accent)) ?? ''
         : '';
+      // When an accent is applied, feed the prompt a region-neutral language name so
+      // the accent decides the variety. A locale code like "en-IN" would otherwise
+      // hard-steer Indian English and override the accent instruction entirely.
+      const promptLanguage = accentInstruction ? narrationLanguageDisplayName(language) : language;
       const ttsPrompt = resolvePromptTemplate(
         await getPublishedPrompt(taskKey),
         {
           storyText,
           tone,
           genre,
-          language,
+          language: promptLanguage,
           narrationStyle: options.narrationStyle || tone,
           accent: accentInstruction,
         }
