@@ -75,7 +75,9 @@ import {
   ACCENT_CATEGORY_LABELS,
   ACCENT_CATEGORY_ORDER,
   NARRATION_ACCENT_CATALOG,
-  buildAccentOptionsFromIds,
+  getCatalogAccentById,
+  slugifyAccentId,
+  type NarrationAccentOption,
   type NarrationAccentTierMap,
 } from '@/lib/ai/narration-accents';
 import { PLAN_KEYS, type PlanKey } from '@/lib/types/pricing';
@@ -239,6 +241,12 @@ function formatSampleTimestamp(value: string | null): string {
   return new Date(value).toLocaleString();
 }
 
+// Catalog accents always reflect the code catalog (fresh labels/instructions);
+// admin-created custom accents keep their stored definition.
+function refreshAccentOptionsFromCatalog(stored: NarrationAccentOption[]): NarrationAccentOption[] {
+  return stored.map((accent) => getCatalogAccentById(accent.id) ?? accent);
+}
+
 function sampleStatusClassName(status: NarrationVoiceSampleClientStatus['status']): string {
   if (status === 'ready') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
   if (status === 'failed') return 'border-rose-500/30 bg-rose-500/10 text-rose-300';
@@ -398,9 +406,11 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [narrationVoiceGenerating, setNarrationVoiceGenerating] = useState(false);
   const [narrationVoiceWarnings, setNarrationVoiceWarnings] = useState<string[]>([]);
   const [narrationAccentEnabled, setNarrationAccentEnabled] = useState(false);
-  const [narrationAccentEnabledIds, setNarrationAccentEnabledIds] = useState<string[]>([]);
+  const [narrationAccentOptions, setNarrationAccentOptions] = useState<NarrationAccentOption[]>([]);
   const [narrationDefaultAccent, setNarrationDefaultAccent] = useState('');
   const [narrationAccentTierMap, setNarrationAccentTierMap] = useState<NarrationAccentTierMap>({});
+  const [newAccentLabel, setNewAccentLabel] = useState('');
+  const [newAccentInstruction, setNewAccentInstruction] = useState('');
   const [imageUploadSettings, setImageUploadSettings] = useState<ImageUploadOptimizationSettings>(
     DEFAULT_IMAGE_UPLOAD_OPTIMIZATION_SETTINGS
   );
@@ -548,7 +558,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setNarrationSampleEnglish(nextNarrationVoiceSettings.sampleTextByLanguage['en-IN']);
         setNarrationSampleHindi(nextNarrationVoiceSettings.sampleTextByLanguage['hi-IN']);
         setNarrationAccentEnabled(nextNarrationVoiceSettings.accentSelectionEnabled);
-        setNarrationAccentEnabledIds(nextNarrationVoiceSettings.accentOptions.map((accent) => accent.id));
+        setNarrationAccentOptions(refreshAccentOptionsFromCatalog(nextNarrationVoiceSettings.accentOptions));
         setNarrationDefaultAccent(nextNarrationVoiceSettings.defaultAccent);
         setNarrationAccentTierMap(nextNarrationVoiceSettings.accentTierMap);
         setNarrationVoiceSampleStatuses(nextNarrationVoiceSampleStatuses);
@@ -604,10 +614,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     const maleVoiceList = parseNarrationVoiceInput(narrationMaleVoiceInput);
     const femaleVoiceList = parseNarrationVoiceInput(narrationFemaleVoiceInput);
 
-    // Accent list + tier map are edited structurally in the GUI. Rebuild the stored
-    // options from the enabled ids (fresh catalog labels/instructions) and keep the
-    // tier map scoped to enabled accents.
-    const accentOptions = buildAccentOptionsFromIds(narrationAccentEnabledIds);
+    // Accent list + tier map are edited structurally in the GUI. Persist the active
+    // accent list (catalog picks + custom) and scope the tier map to those accents.
+    const accentOptions = narrationAccentOptions;
     const enabledIdSet = new Set(accentOptions.map((accent) => accent.id));
     const accentTierMap: NarrationAccentTierMap = {};
     for (const planKey of PLAN_KEYS) {
@@ -641,7 +650,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       setNarrationSampleEnglish(result.settings.sampleTextByLanguage['en-IN']);
       setNarrationSampleHindi(result.settings.sampleTextByLanguage['hi-IN']);
       setNarrationAccentEnabled(result.settings.accentSelectionEnabled);
-      setNarrationAccentEnabledIds(result.settings.accentOptions.map((accent) => accent.id));
+      setNarrationAccentOptions(refreshAccentOptionsFromCatalog(result.settings.accentOptions));
       setNarrationDefaultAccent(result.settings.defaultAccent);
       setNarrationAccentTierMap(result.settings.accentTierMap);
       setNarrationVoiceSampleStatuses(await getNarrationVoiceSampleStatusesForAdmin());
@@ -651,23 +660,52 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
-  function toggleNarrationAccentEnabled(accentId: string) {
-    setNarrationAccentEnabledIds((current) => {
-      if (current.includes(accentId)) {
-        // Removing an accent also drops it from every plan's access list.
-        setNarrationAccentTierMap((map) => {
-          const next: NarrationAccentTierMap = {};
-          for (const [planKey, ids] of Object.entries(map)) {
-            const filtered = (ids ?? []).filter((id) => id !== accentId);
-            if (filtered.length > 0) next[planKey] = filtered;
-          }
-          return next;
-        });
-        if (narrationDefaultAccent === accentId) setNarrationDefaultAccent('');
-        return current.filter((id) => id !== accentId);
+  function dropAccentFromPlansAndDefault(accentId: string) {
+    setNarrationAccentTierMap((map) => {
+      const next: NarrationAccentTierMap = {};
+      for (const [planKey, ids] of Object.entries(map)) {
+        const filtered = (ids ?? []).filter((id) => id !== accentId);
+        if (filtered.length > 0) next[planKey] = filtered;
       }
-      return [...current, accentId];
+      return next;
     });
+    if (narrationDefaultAccent === accentId) setNarrationDefaultAccent('');
+  }
+
+  function toggleCatalogAccent(accent: NarrationAccentOption) {
+    setNarrationAccentOptions((current) => {
+      if (current.some((option) => option.id === accent.id)) {
+        dropAccentFromPlansAndDefault(accent.id);
+        return current.filter((option) => option.id !== accent.id);
+      }
+      return [...current, { id: accent.id, label: accent.label, instruction: accent.instruction, category: accent.category }];
+    });
+  }
+
+  function removeNarrationAccent(accentId: string) {
+    dropAccentFromPlansAndDefault(accentId);
+    setNarrationAccentOptions((current) => current.filter((option) => option.id !== accentId));
+  }
+
+  function addCustomNarrationAccent() {
+    const label = newAccentLabel.trim();
+    const instruction = newAccentInstruction.trim();
+    if (!label || !instruction) return;
+    const baseId = slugifyAccentId(label);
+    if (!baseId) return;
+    setNarrationAccentOptions((current) => {
+      // Ensure a unique id if the slug collides with an existing accent.
+      let id = baseId;
+      let suffix = 2;
+      const existing = new Set(current.map((option) => option.id));
+      while (existing.has(id)) {
+        id = `${baseId}-${suffix}`;
+        suffix += 1;
+      }
+      return [...current, { id, label, instruction }];
+    });
+    setNewAccentLabel('');
+    setNewAccentInstruction('');
   }
 
   function toggleNarrationAccentForPlan(planKey: string, accentId: string) {
@@ -914,9 +952,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const parsedPromptOnlyGalleryCleanupDays = parseInt(promptOnlyGalleryCleanupDaysInput, 10);
   const parsedNarrationMaleVoices = parseNarrationVoiceInput(narrationMaleVoiceInput);
   const parsedNarrationFemaleVoices = parseNarrationVoiceInput(narrationFemaleVoiceInput);
-  const enabledNarrationAccents = NARRATION_ACCENT_CATALOG.filter((accent) =>
-    narrationAccentEnabledIds.includes(accent.id)
-  );
+  const enabledNarrationAccents = narrationAccentOptions;
+  const enabledNarrationAccentIds = new Set(narrationAccentOptions.map((accent) => accent.id));
+  const customNarrationAccents = narrationAccentOptions.filter((accent) => !getCatalogAccentById(accent.id));
   const enabledNarrationAccentOptions: FilterDropdownOption[] = enabledNarrationAccents.map((accent) => ({
     value: accent.id,
     label: accent.label,
@@ -1515,12 +1553,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   </button>
                 </div>
 
-                {/* 1. Accent bucket — pick which accents users can choose from. */}
+                {/* 1. Accent bucket — quick-pick common accents from the catalog. */}
                 <div className="space-y-3 border-t border-white/10 pt-3">
                   <div>
                     <p className="text-sm font-medium text-neutral-100">Accent bucket</p>
                     <p className="mt-1 text-xs text-neutral-400">
-                      Choose which accents are available. Grouped by region — click to add or remove.
+                      Quick-pick common accents. Grouped by region — click to add or remove.
                       Hover an accent to see the exact instruction sent to the model.
                     </p>
                   </div>
@@ -1534,12 +1572,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                         </p>
                         <div className="flex flex-wrap gap-2">
                           {accentsInCategory.map((accent) => {
-                            const active = narrationAccentEnabledIds.includes(accent.id);
+                            const active = enabledNarrationAccentIds.has(accent.id);
                             return (
                               <button
                                 key={accent.id}
                                 type="button"
-                                onClick={() => toggleNarrationAccentEnabled(accent.id)}
+                                onClick={() => toggleCatalogAccent(accent)}
                                 title={accent.instruction}
                                 aria-pressed={active}
                                 className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
@@ -1557,14 +1595,68 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                       </div>
                     );
                   })}
-                  {narrationAccentEnabledIds.length === 0 && (
+                  {narrationAccentOptions.length === 0 && (
                     <p className="text-xs text-amber-300/80">
                       No accents enabled yet — add at least one so users have a choice.
                     </p>
                   )}
                 </div>
 
-                {/* 2. Default accent — used by free tier and as the fallback. */}
+                {/* 2. Custom accents — admin-created, beyond the catalog. */}
+                <div className="space-y-3 border-t border-white/10 pt-3">
+                  <div>
+                    <p className="text-sm font-medium text-neutral-100">Custom accents</p>
+                    <p className="mt-1 text-xs text-neutral-400">
+                      Add any accent not in the bucket. The instruction is the exact sentence sent to the
+                      TTS model, e.g. &ldquo;Speak the entire narration in a natural Scottish English accent.&rdquo;
+                    </p>
+                  </div>
+                  {customNarrationAccents.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {customNarrationAccents.map((accent) => (
+                        <span
+                          key={accent.id}
+                          title={accent.instruction}
+                          className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200"
+                        >
+                          {accent.label}
+                          <button
+                            type="button"
+                            onClick={() => removeNarrationAccent(accent.id)}
+                            aria-label={`Remove ${accent.label}`}
+                            className="text-emerald-300/70 hover:text-rose-300"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_auto]">
+                    <input
+                      value={newAccentLabel}
+                      onChange={(event) => setNewAccentLabel(event.target.value)}
+                      placeholder="Label (e.g. Scottish)"
+                      className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <input
+                      value={newAccentInstruction}
+                      onChange={(event) => setNewAccentInstruction(event.target.value)}
+                      placeholder="Instruction sent to the model"
+                      className="rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={addCustomNarrationAccent}
+                      disabled={!newAccentLabel.trim() || !newAccentInstruction.trim()}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-neutral-900/70 px-4 py-2 text-xs font-medium text-neutral-200 hover:bg-white/10 disabled:opacity-50"
+                    >
+                      <Plus size={12} aria-hidden="true" /> Add accent
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. Default accent — used by free tier and as the fallback. */}
                 <div className="border-t border-white/10 pt-3">
                   <p className="text-sm font-medium text-neutral-100 mb-1">Default accent</p>
                   <p className="mb-2 text-xs text-neutral-500">
@@ -1586,7 +1678,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   )}
                 </div>
 
-                {/* 3. Per-plan access matrix. */}
+                {/* 4. Per-plan access matrix. */}
                 <div className="border-t border-white/10 pt-3">
                   <p className="text-sm font-medium text-neutral-100 mb-1">Access by plan</p>
                   <p className="mb-3 text-xs text-neutral-500">

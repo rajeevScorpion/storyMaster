@@ -71,6 +71,16 @@ export function getCatalogAccentById(id: string | null | undefined): NarrationAc
   return key ? ACCENT_CATALOG_BY_ID.get(key) : undefined;
 }
 
+/** Derive a stable, url-safe accent id from a human label (for admin-created accents). */
+export function slugifyAccentId(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
 /** Build a stored accent list from enabled ids, using fresh catalog labels/instructions. */
 export function buildAccentOptionsFromIds(ids: readonly string[]): NarrationAccentOption[] {
   const seen = new Set<string>();
