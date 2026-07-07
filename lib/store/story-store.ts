@@ -2390,6 +2390,173 @@ export const useStoryStore = create<StoryState>()(
           );
 
 
+          // Server-pipeline routing (admin processing mode): persist the opening
+          // beat server-side, then hand the image to a durable background job —
+          // from here the browser can close without losing anything. Mirrors the
+          // continue-story branch; requires the early story save to have landed.
+          let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
+          if (!promptOnly && storyPrompt.toLowerCase() !== 'mock') {
+            try {
+              effectiveImageMode = await resolveImageProcessingModeAction();
+            } catch {
+              // Resolver failure = legacy; the server re-checks on enqueue anyway.
+            }
+          }
+
+          if (effectiveImageMode === 'server_pipeline') {
+            const [voiceResolution, savedStoryId] = await Promise.all([
+              lockedVoicePromise,
+              earlySavePromise,
+            ]);
+            if (savedStoryId) {
+              earlySavedByUserId = (await resolveCurrentUserId()) ?? undefined;
+              // The worker replays generateSelectedImage with this exact final
+              // prompt — built here because the prompt orchestrator is client code.
+              const jobFinalPrompt = buildFinalStoryboardImagePrompt(
+                storyboardPrompt,
+                beat.characters,
+                initialSession.visualStyle!,
+                beat.beatNumber,
+                modelOverrides,
+                {
+                  aspectRatio: storyAspectRatio,
+                  task: getImageTaskKey(storyConfig),
+                  ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                }
+              );
+              beat.finalImagePromptText = jobFinalPrompt;
+
+              storyMap.nodes[rootNodeId] = {
+                ...storyMap.nodes[rootNodeId],
+                data: {
+                  ...normalizeBeatMediaFields({
+                    ...beat,
+                    imageUrl: undefined,
+                    persistedImageUrl: undefined,
+                    imageStatus: 'pending',
+                    imageError: undefined,
+                    audioStatus: 'not_requested',
+                    audioError: undefined,
+                  }),
+                  narrationVoiceId: voiceResolution.voiceId,
+                },
+              };
+              // DB copy: strip inline portrait payloads (the job carries its own
+              // staged references; base64 must never land in story_map).
+              const durableRootNode: StoryNode = {
+                ...storyMap.nodes[rootNodeId],
+                data: {
+                  ...storyMap.nodes[rootNodeId].data,
+                  characters: storyMap.nodes[rootNodeId].data.characters.map((character) => ({
+                    ...character,
+                    portraitBase64: undefined,
+                  })),
+                },
+              };
+
+              setLoadingStage(set, 'start_story', 'finish');
+              let earlyBeatSaved = false;
+              try {
+                const { beatId } = await measureAsyncStep(
+                  timingSteps,
+                  'early_beat_save',
+                  'Persist opening beat before image job',
+                  () => saveBeatAction(savedStoryId, rootNodeId, durableRootNode)
+                );
+                earlyBeatSaved = true;
+                linkCostEventsToBeat({
+                  storySessionId: initialSessionId,
+                  storyId: savedStoryId,
+                  nodeId: rootNodeId,
+                  beatId,
+                }).catch((error) => console.error('Failed to link opening beat cost events:', error));
+              } catch (err) {
+                console.error('Opening beat early save failed; falling back to inline image generation:', err);
+              }
+
+              if (earlyBeatSaved) {
+                const enqueueResult = await measureAsyncStep(
+                  timingSteps,
+                  'image_job_enqueue',
+                  'Queue background image job',
+                  () => enqueueBeatImageJob({
+                    storyId: savedStoryId,
+                    nodeId: rootNodeId,
+                    kind: 'beat_image',
+                    beatNumber: beat.beatNumber,
+                    reservationId,
+                    payload: {
+                      finalPrompt: jobFinalPrompt,
+                      beatNumber: beat.beatNumber,
+                      aspectRatio: storyAspectRatio,
+                      imageTask: getImageTaskKey(storyConfig),
+                      imageSize: normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings).imageSize,
+                      imageModelSelection: storyConfig.imageModelSelection ?? null,
+                      imageContinuity: imageContinuityOptions(
+                        storyConfig,
+                        portraitGenerationResult.latestState
+                      ) ?? null,
+                      costTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(storyConfig), {
+                        referenceCount: portraitRefs.length,
+                      }),
+                      references: portraitRefs,
+                    },
+                  })
+                );
+
+                if (enqueueResult.status === 'queued') {
+                  // The worker owns the reservation now (finalizes on ready,
+                  // releases on terminal failure).
+                  shouldReleaseReservation = false;
+
+                  const fullSession = deriveSessionFields(
+                    {
+                      ...initialSession,
+                      title: resolvedTitle,
+                      narratorVoice: voiceResolution.voiceId,
+                      narrationVoiceMode: voiceResolution.mode,
+                      narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                      narrationLanguageCode: voiceResolution.languageCode,
+                      savedStoryId,
+                      ...(earlySavedByUserId ? { savedByUserId: earlySavedByUserId } : {}),
+                    } as StorySession,
+                    storyMap
+                  );
+                  set({
+                    session: fullSession,
+                    isLoading: false,
+                    saveStatus: 'unsaved',
+                    loadingClues: [],
+                    loadingStage: null,
+                    loadingReader: null,
+                    error: null,
+                    errorAction: null,
+                    activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, rootNodeId])),
+                  });
+                  startImageJobPolling(savedStoryId);
+                  dispatchPricingRuntimeRefresh();
+                  logGenerationTiming({
+                    scope: 'start_story',
+                    totalMs: Math.round(nowMs() - generationStartedAt),
+                    steps: timingSteps,
+                    meta: {
+                      success: true,
+                      beatNumber: beat.beatNumber,
+                      storyId: savedStoryId,
+                      usedReferencePortraits: portraitRefs.length,
+                      promptOnly,
+                      serverPipeline: true,
+                    },
+                  });
+                  return;
+                }
+                // legacy_mode / duplicate / error: the reservation is still ours —
+                // fall through to inline generation below.
+                console.warn('Opening image job enqueue did not queue; using inline generation:', enqueueResult.status);
+              }
+            }
+          }
+
           // Step A: Generate portraits first (parallelized) so beat 1 scene can use
           // them as references - makes portrait the single source of truth from the very first image.
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
