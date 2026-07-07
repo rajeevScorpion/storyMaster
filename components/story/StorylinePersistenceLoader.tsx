@@ -24,6 +24,8 @@ interface StorylinePersistenceLoaderProps {
   likeCount: number;
   isVerticalStory: boolean;
   aspectRatio: '16:9' | '9:16';
+  /** Validated unlisted share token (server-checked) for RLS-hidden storylines. */
+  shareToken?: string | null;
 }
 
 async function preloadFirstStorylineMedia(beats: StorylineManifestPayload['beats']) {
@@ -52,7 +54,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
         userId: props.userId,
       }).catch(() => null);
 
-      const networkPromise = loadStorylineWithBeats(props.storylineId);
+      const networkPromise = loadStorylineWithBeats(props.storylineId, { shareToken: props.shareToken ?? null });
 
       void cachePromise.then(async (cached) => {
         if (!active || !cached || cached.manifest.payload.beats.length === 0) return;
@@ -130,6 +132,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
     props.storylineId,
     props.title,
     props.userId,
+    props.shareToken,
   ]);
 
   if (error && !payload) {
