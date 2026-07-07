@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { type ComponentType, useEffect, useState } from 'react';
+import MediaProcessingModeCard from '@/components/admin/MediaProcessingModeCard';
 import {
   BookOpenText,
   Brush,
@@ -2371,6 +2372,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
             )}
           </div>
           )}
+
+          {section === 'media' && <MediaProcessingModeCard />}
 
           {section === 'media' && (
           <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
