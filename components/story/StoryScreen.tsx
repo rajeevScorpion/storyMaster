@@ -18,6 +18,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
+import HqDownloadButton from './HqDownloadButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
@@ -5925,6 +5926,9 @@ function StoryScreenInner({
                       )}
                     </AnimatePresence>
                   </div>
+                )}
+                {session.savedStoryId && !isPromptOnlyStory && (
+                  <HqDownloadButton storyId={session.savedStoryId} nodeId={currentNodeId} />
                 )}
                 {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton

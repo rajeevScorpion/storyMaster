@@ -22,6 +22,9 @@ export interface MediaPipelineSettings {
   shareHighQuality: number;
   cleanupEnabled: boolean;
   cleanupBatchSize: number;
+  /** Tier gates for high-quality download/share (Free never qualifies). */
+  allowPlusHighQuality: boolean;
+  allowStudioHighQuality: boolean;
   maxAttempts: number;
   signedUrlTtlSeconds: number;
   variantsForBulkJobs: boolean;
@@ -53,6 +56,8 @@ export const DEFAULT_MEDIA_PIPELINE_SETTINGS: MediaPipelineSettings = {
   shareHighQuality: 92,
   cleanupEnabled: true,
   cleanupBatchSize: 100,
+  allowPlusHighQuality: true,
+  allowStudioHighQuality: true,
   maxAttempts: 3,
   signedUrlTtlSeconds: 300,
   variantsForBulkJobs: false,
@@ -122,6 +127,8 @@ export function normalizeMediaPipelineSettings(
     shareHighQuality: normalizeInteger(input?.shareHighQuality, defaults.shareHighQuality, 40, 100),
     cleanupEnabled: normalizeBoolean(input?.cleanupEnabled, defaults.cleanupEnabled),
     cleanupBatchSize: normalizeInteger(input?.cleanupBatchSize, defaults.cleanupBatchSize, 1, 1000),
+    allowPlusHighQuality: normalizeBoolean(input?.allowPlusHighQuality, defaults.allowPlusHighQuality),
+    allowStudioHighQuality: normalizeBoolean(input?.allowStudioHighQuality, defaults.allowStudioHighQuality),
     maxAttempts: normalizeInteger(input?.maxAttempts, defaults.maxAttempts, 1, 10),
     signedUrlTtlSeconds: normalizeInteger(input?.signedUrlTtlSeconds, defaults.signedUrlTtlSeconds, 60, 3600),
     variantsForBulkJobs: normalizeBoolean(input?.variantsForBulkJobs, defaults.variantsForBulkJobs),

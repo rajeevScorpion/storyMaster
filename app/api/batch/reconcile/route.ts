@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { reconcileActiveImageBatches } from '@/app/actions/image-batch';
 import { reconcileActiveNarrationJobs } from '@/app/actions/narration-batch';
 import { runImageGenerationJobs } from '@/lib/media/image-job-runner';
+import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -33,12 +34,18 @@ async function handle(request: Request): Promise<Response> {
         return { processed: 0, failed: 0, remaining: 0 };
       }),
     ]);
+    // Retention cleanup after the reconcile work (no-ops when disabled).
+    const cleanup = await cleanupExpiredOriginals().catch((error) => {
+      console.error('Retention cleanup failed:', error instanceof Error ? error.message : error);
+      return { scanned: 0, deleted: 0, failed: 0 };
+    });
     return NextResponse.json({
       ok: true,
       ...images,
       narrationProcessed: narration.processed,
       imageJobsProcessed: imageJobs.processed,
       imageJobsRemaining: imageJobs.remaining,
+      originalsDeleted: cleanup.deleted,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';

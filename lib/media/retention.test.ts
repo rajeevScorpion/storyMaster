@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_MEDIA_PIPELINE_SETTINGS } from './media-pipeline-settings';
-import { resolveOriginalExpiresAt, resolveOriginalRetentionMs } from './retention';
+import { isHqEntitled, resolveOriginalExpiresAt, resolveOriginalRetentionMs } from './retention';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -17,6 +17,27 @@ describe('resolveOriginalRetentionMs', () => {
     const settings = { ...DEFAULT_MEDIA_PIPELINE_SETTINGS, freeRetentionHours: 0, plusRetentionDays: 14 };
     expect(resolveOriginalRetentionMs('free', settings)).toBe(0);
     expect(resolveOriginalRetentionMs('plus', settings)).toBe(14 * DAY_MS);
+  });
+});
+
+describe('isHqEntitled', () => {
+  it('never entitles free users', () => {
+    expect(isHqEntitled('free', DEFAULT_MEDIA_PIPELINE_SETTINGS)).toBe(false);
+  });
+
+  it('entitles plus and studio by default', () => {
+    expect(isHqEntitled('plus', DEFAULT_MEDIA_PIPELINE_SETTINGS)).toBe(true);
+    expect(isHqEntitled('studio', DEFAULT_MEDIA_PIPELINE_SETTINGS)).toBe(true);
+  });
+
+  it('respects the admin per-tier gates', () => {
+    const settings = {
+      ...DEFAULT_MEDIA_PIPELINE_SETTINGS,
+      allowPlusHighQuality: false,
+      allowStudioHighQuality: false,
+    };
+    expect(isHqEntitled('plus', settings)).toBe(false);
+    expect(isHqEntitled('studio', settings)).toBe(false);
   });
 });
 

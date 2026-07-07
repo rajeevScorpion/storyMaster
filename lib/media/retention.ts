@@ -28,3 +28,14 @@ export function resolveOriginalExpiresAt(
 ): string {
   return new Date(now.getTime() + resolveOriginalRetentionMs(planKey, settings)).toISOString();
 }
+
+/**
+ * Whether a plan may download/share the high-quality original. Free never
+ * qualifies; Plus/Studio are admin-gated. Availability (original not yet
+ * expired) is checked separately against the row's original_expires_at.
+ */
+export function isHqEntitled(planKey: PlanKey, settings: MediaPipelineSettings): boolean {
+  if (planKey === 'studio') return settings.allowStudioHighQuality;
+  if (planKey === 'plus') return settings.allowPlusHighQuality;
+  return false;
+}
