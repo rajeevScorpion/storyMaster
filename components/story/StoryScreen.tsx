@@ -5541,7 +5541,7 @@ function StoryScreenInner({
               </p>
               {showPendingImageState && isServerImageJobPending && (
                 <p className="mt-2 text-[11px] text-neutral-500">
-                  Safe to leave this page — the image will appear when ready.
+                  Safe to switch tabs or close the browser — the image is being generated on our servers and will be here when you return.
                 </p>
               )}
             </div>
@@ -5686,7 +5686,7 @@ function StoryScreenInner({
                       </p>
                       {isServerImageJobPending && (
                         <p className="text-xs text-neutral-400">
-                          Safe to leave this page — the image will appear when ready.
+                          Safe to switch tabs or close the browser — the image is being generated on our servers and will be here when you return.
                         </p>
                       )}
                     </>
