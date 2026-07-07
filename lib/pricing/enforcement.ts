@@ -595,6 +595,22 @@ export async function reconcileRazorpayTopup(
   };
 }
 
+/**
+ * Cookieless plan lookup for background workers: resolves the user's
+ * effective plan key from the same pricing state the enforcement paths use.
+ * Falls back to 'free' on any failure.
+ */
+export async function resolvePlanKeyForUser(userId: string): Promise<PlanKey> {
+  try {
+    const supabase = createAdminClient();
+    const state = await loadPricingState(supabase, userId);
+    return state.snapshot.planKey;
+  } catch (error) {
+    console.error('resolvePlanKeyForUser failed, defaulting to free:', error instanceof Error ? error.message : error);
+    return 'free';
+  }
+}
+
 async function loadPricingState(
   supabase: AdminClient,
   userId: string,
