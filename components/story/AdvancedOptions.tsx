@@ -12,6 +12,7 @@ import {
   STORY_THEME_OPTIONS,
   VISUAL_PRESET_OPTIONS,
 } from '@/lib/ai/story-config';
+import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
 import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
@@ -211,7 +212,14 @@ export default function AdvancedOptions({
   ) || voiceList[0] || '';
   const voiceDropdownOptions: FilterDropdownOption[] = voiceList.map((voice) => ({ value: voice, label: voice }));
   const voiceAccent = narrationVoiceSelection?.accent || '';
-  const accentEnabled = Boolean(narrationVoiceConfig?.accentEnabled && (narrationVoiceConfig?.accentOptions?.length ?? 0) > 0);
+  // Gate on the *currently selected* language, not just the fetched config: the
+  // config refetch is async, so a stale English config would otherwise flash the
+  // accent picker for a non-English language until the refetch resolves.
+  const accentEnabled = Boolean(
+    narrationVoiceConfig?.accentEnabled
+    && (narrationVoiceConfig?.accentOptions?.length ?? 0) > 0
+    && isEnglishNarrationLanguage(language)
+  );
   const accentOptions = narrationVoiceConfig?.accentOptions ?? [];
   const selectedAccent = accentEnabled
     ? (accentOptions.some((option) => option.id === voiceAccent)

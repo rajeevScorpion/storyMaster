@@ -8,6 +8,7 @@ import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
 import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
+import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
 import { generateSeedPlanPreview, distributeReelTextAction } from '@/app/actions/story-runtime';
 import {
   authorizeCurrentUserBillableAction,
@@ -612,6 +613,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     }
 
     const verticalStoryEnabled = setupSettings.verticalStoriesSettingEnabled && isVerticalStory;
+    // Accents are English-only. Guard on the story language here too: if the user
+    // starts a non-English story before the per-language config refetch resolves,
+    // the stale (English) config would otherwise attach an accent to the story.
+    const accentForStory = voiceConfig?.accentEnabled && isEnglishNarrationLanguage(language)
+      ? narrationVoiceSelection.accent
+      : '';
     return {
       storyKind: 'story',
       language,
@@ -654,15 +661,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 : voiceConfig.defaultFemaleVoice
             ),
             languageCode: voiceConfig.languageCode,
-            ...(voiceConfig.accentEnabled && narrationVoiceSelection.accent
-              ? { accent: narrationVoiceSelection.accent }
-              : {}),
+            ...(accentForStory ? { accent: accentForStory } : {}),
           }
-        : voiceConfig?.accentEnabled && narrationVoiceSelection.accent
+        : accentForStory
           ? {
               // Legacy auto voice, but the user still picked an accent.
               mode: 'legacy_auto',
-              accent: narrationVoiceSelection.accent,
+              accent: accentForStory,
             }
           : {
               mode: 'legacy_auto',
