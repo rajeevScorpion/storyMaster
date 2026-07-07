@@ -1633,6 +1633,7 @@ export default function StoryScreen() {
   const restartExploration = useStoryStore((state) => state.restartExploration);
   const isGeneratingAudio = useStoryStore((state) => state.isGeneratingAudio);
   const isRegeneratingImage = useStoryStore((state) => state.isRegeneratingImage);
+  const activeImageJobNodeIds = useStoryStore((state) => state.activeImageJobNodeIds);
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const updateStoryboardNarrationTiming = useStoryStore((state) => state.updateStoryboardNarrationTiming);
@@ -1823,6 +1824,7 @@ export default function StoryScreen() {
       hasExistingBranch={hasExistingBranch}
       isGeneratingAudio={isGeneratingAudio}
       isRegeneratingImage={isRegeneratingImage}
+      activeImageJobNodeIds={activeImageJobNodeIds}
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
       updateStoryboardNarrationTiming={updateStoryboardNarrationTiming}
@@ -1882,6 +1884,7 @@ function StoryScreenInner({
   hasExistingBranch,
   isGeneratingAudio,
   isRegeneratingImage,
+  activeImageJobNodeIds,
   audioReadyNodeId,
   generateNarrationForNode,
   updateStoryboardNarrationTiming,
@@ -1930,6 +1933,7 @@ function StoryScreenInner({
   hasExistingBranch: (optionId: string) => boolean;
   isGeneratingAudio: boolean;
   isRegeneratingImage: boolean;
+  activeImageJobNodeIds: string[];
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateStoryboardNarrationTiming: (
@@ -2241,6 +2245,10 @@ function StoryScreenInner({
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
   const showResolvingImageState = imageIsResolving && Boolean(normalizedCurrentBeat.imageUrl);
   const showPendingImageState = !displayImageUrl && !showResolvingImageState && normalizedCurrentBeat.imageStatus === 'pending';
+  // Server-pipeline job in flight: generation is durable server-side, so the
+  // pending copy reassures the user the tab can be closed.
+  const isServerImageJobPending = activeImageJobNodeIds.includes(currentNodeId)
+    && normalizedCurrentBeat.imageStatus === 'pending';
   const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showResolvingImageState && !showPendingImageState;
   const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && !showResolvingImageState && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
@@ -5526,8 +5534,15 @@ function StoryScreenInner({
                 )}
               </div>
               <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">
-                {showPendingImageState ? 'Beat Image Syncing' : 'Beat Image Needs Retry'}
+                {showPendingImageState
+                  ? (isServerImageJobPending ? 'Generating In Background' : 'Beat Image Syncing')
+                  : 'Beat Image Needs Retry'}
               </p>
+              {showPendingImageState && isServerImageJobPending && (
+                <p className="mt-2 text-[11px] text-neutral-500">
+                  Safe to leave this page — the image will appear when ready.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -5665,7 +5680,14 @@ function StoryScreenInner({
                   {showPendingImageState ? (
                     <>
                       <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                      <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Syncing</p>
+                      <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">
+                        {isServerImageJobPending ? 'Generating In Background' : 'Image Syncing'}
+                      </p>
+                      {isServerImageJobPending && (
+                        <p className="text-xs text-neutral-400">
+                          Safe to leave this page — the image will appear when ready.
+                        </p>
+                      )}
                     </>
                   ) : (
                     <>

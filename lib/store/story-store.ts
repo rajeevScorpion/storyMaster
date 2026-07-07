@@ -27,6 +27,12 @@ import {
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import { submitStoryImageBatch, submitStoryStatefulVisuals, reconcileStoryBatch } from '@/app/actions/image-batch';
+import {
+  enqueueBeatImageJob,
+  getReadyBeatImages,
+  getStoryImageJobStatuses,
+  resolveImageProcessingModeAction,
+} from '@/app/actions/image-jobs';
 import { submitStoryNarrationBatch, reconcileStoryNarration } from '@/app/actions/narration-batch';
 import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
@@ -165,6 +171,8 @@ interface StoryState {
   errorAction: StoryErrorAction | null;
   isGeneratingAudio: boolean;
   isRegeneratingImage: boolean;
+  /** Nodes with an in-flight server-pipeline image job (safe-to-close UI hint). */
+  activeImageJobNodeIds: string[];
   isSubmittingImageBatch: boolean;
   imageBatchMessage: string | null;
   isGeneratingNarrationBatch: boolean;
@@ -553,6 +561,11 @@ let activeSavePromise: Promise<void> | null = null;
 let queuedSaveRequest: { userId: string; options?: SaveStoryToCloudOptions } | null = null;
 let activeBeatAssetSyncPromise: Promise<void> | null = null;
 const queuedBeatAssetSyncStoryIds = new Set<string>();
+// Poll cadence for server-pipeline image jobs while the tab stays open. The
+// jobs are durable server-side; polling only refreshes the visible session.
+const IMAGE_JOB_POLL_INTERVAL_MS = 8_000;
+let imageJobPollTimer: ReturnType<typeof setTimeout> | null = null;
+let imageJobPollStoryId: string | null = null;
 const beatAssetRetryTimers = new Map<string, number>();
 let cachedStorySaveRuntimeSettings = DEFAULT_STORY_SAVE_RUNTIME_SETTINGS;
 let cachedStorySaveRuntimeSettingsHydrated = false;
@@ -1901,6 +1914,98 @@ export const useStoryStore = create<StoryState>()(
         }
       };
 
+      const stopImageJobPolling = () => {
+        if (imageJobPollTimer) {
+          clearTimeout(imageJobPollTimer);
+          imageJobPollTimer = null;
+        }
+        imageJobPollStoryId = null;
+        if (get().activeImageJobNodeIds.length > 0) {
+          set({ activeImageJobNodeIds: [] });
+        }
+      };
+
+      // Merge worker-completed images into the live session and report whether
+      // any jobs are still in flight for this story.
+      const pollImageJobsOnce = async (storyId: string): Promise<boolean> => {
+        const session = get().session;
+        if (!session || session.savedStoryId !== storyId) return false;
+
+        const statuses = await getStoryImageJobStatuses(storyId);
+        if (statuses.length === 0) return false;
+
+        const finishedNodes = statuses.filter((status) => {
+          if (status.status !== 'ready') return false;
+          const node = session.storyMap.nodes[status.nodeId];
+          return node ? node.data.imageStatus !== 'ready' : false;
+        });
+
+        if (finishedNodes.length > 0) {
+          const readyImages = await getReadyBeatImages(storyId, finishedNodes.map((status) => status.nodeId));
+          for (const ready of readyImages) {
+            if (!ready.imageUrl || ready.imageStatus !== 'ready') continue;
+            const latestSession = get().session;
+            if (!latestSession || latestSession.savedStoryId !== storyId) return false;
+            if (!latestSession.storyMap.nodes[ready.nodeId]) continue;
+            updateStoreSaveUi({
+              session: updateSessionBeat(latestSession, ready.nodeId, (beat) => ({
+                ...beat,
+                imageUrl: ready.imageUrl ?? beat.imageUrl,
+                persistedImageUrl: ready.imageUrl ?? beat.persistedImageUrl,
+                imageStatus: 'ready',
+                imageError: undefined,
+              })),
+            });
+          }
+        }
+
+        for (const status of statuses) {
+          if (status.status !== 'failed' && status.status !== 'cancelled') continue;
+          const latestSession = get().session;
+          if (!latestSession || latestSession.savedStoryId !== storyId) return false;
+          const node = latestSession.storyMap.nodes[status.nodeId];
+          if (!node || node.data.imageStatus === 'failed' || node.data.imageStatus === 'ready') continue;
+          updateStoreSaveUi({
+            session: updateSessionBeat(latestSession, status.nodeId, (beat) => ({
+              ...beat,
+              imageStatus: 'failed',
+              imageError: status.error ?? 'Image generation failed. Please try again.',
+            })),
+          });
+        }
+
+        const pendingNodeIds = statuses
+          .filter((status) => status.beatImageStatus === 'pending')
+          .map((status) => status.nodeId);
+        set({ activeImageJobNodeIds: pendingNodeIds });
+        return pendingNodeIds.length > 0;
+      };
+
+      const startImageJobPolling = (storyId: string) => {
+        if (imageJobPollStoryId === storyId && imageJobPollTimer) return;
+        stopImageJobPolling();
+        imageJobPollStoryId = storyId;
+
+        const tick = async () => {
+          if (imageJobPollStoryId !== storyId) return;
+          let stillPending = false;
+          try {
+            stillPending = await pollImageJobsOnce(storyId);
+          } catch (error) {
+            console.error('Image job polling failed:', error);
+            stillPending = true; // transient failure — keep watching
+          }
+          if (imageJobPollStoryId !== storyId) return;
+          if (stillPending) {
+            imageJobPollTimer = setTimeout(() => { void tick(); }, IMAGE_JOB_POLL_INTERVAL_MS);
+          } else {
+            stopImageJobPolling();
+          }
+        };
+
+        imageJobPollTimer = setTimeout(() => { void tick(); }, IMAGE_JOB_POLL_INTERVAL_MS);
+      };
+
       const retryPendingBeatAssetSyncInternal = async (storyId?: string) => {
         if (storyId) {
           queuedBeatAssetSyncStoryIds.add(storyId);
@@ -1943,6 +2048,7 @@ export const useStoryStore = create<StoryState>()(
       errorAction: null,
       isGeneratingAudio: false,
       isRegeneratingImage: false,
+      activeImageJobNodeIds: [],
       isSubmittingImageBatch: false,
       imageBatchMessage: null,
       isGeneratingNarrationBatch: false,
@@ -4834,6 +4940,17 @@ export const useStoryStore = create<StoryState>()(
         let reservationId: string | null = null;
         let shouldReleaseReservation = false;
 
+        // Server-pipeline routing (admin processing mode). Requires a saved
+        // story (jobs reference the story row); unsaved sessions stay legacy.
+        let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
+        if (!promptOnly && session.savedStoryId) {
+          try {
+            effectiveImageMode = await resolveImageProcessingModeAction();
+          } catch {
+            // Resolver failure = legacy; the server re-checks on enqueue anyway.
+          }
+        }
+
         try {
           if (!promptOnly) {
             const billingAuthorization = await authorizeCurrentUserImageModelBillableAction({
@@ -4941,6 +5058,109 @@ export const useStoryStore = create<StoryState>()(
           const regenerationContinuityStrategy =
             regenerationContinuityState ? undefined : 'resend_refs';
           const storyboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
+
+          if (effectiveImageMode === 'server_pipeline' && !promptOnly && session.savedStoryId) {
+            const enqueueResult = await enqueueBeatImageJob({
+              storyId: session.savedStoryId,
+              nodeId,
+              kind: isReelStoryConfig(session.storyConfig) ? 'reel_image' : 'beat_image',
+              beatNumber: beatForRender.beatNumber,
+              reservationId,
+              payload: {
+                prompt: storyboardPrompt,
+                characters: beatForRender.characters,
+                visualStyle: session.visualStyle,
+                modelOverrides,
+                beatNumber: beatForRender.beatNumber,
+                aspectRatio: storyAspectRatio,
+                imageTask: getImageTaskKey(session.storyConfig),
+                imagePromptOptions: getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+                imageContinuity: imageContinuityOptions(
+                  session.storyConfig,
+                  regenerationContinuityState,
+                  regenerationContinuityStrategy
+                ) ?? null,
+                costTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), {
+                  referenceCount: referenceImages.length,
+                }),
+                references: referenceImages,
+              },
+            });
+
+            if (enqueueResult.status === 'queued') {
+              // The worker finalizes/releases the reservation from here on.
+              shouldReleaseReservation = false;
+
+              const latestSession = get().session;
+              if (!latestSession) return;
+              const currentData = latestSession.storyMap.nodes[nodeId]?.data;
+              if (!currentData) return;
+              const updatedNodes = {
+                ...latestSession.storyMap.nodes,
+                [nodeId]: {
+                  ...latestSession.storyMap.nodes[nodeId],
+                  data: normalizeBeatMediaFields({
+                    ...currentData,
+                    ...beatForRender,
+                    // Keep the previous image visible while the job runs.
+                    imageUrl: currentData.imageUrl,
+                    persistedImageUrl: currentData.persistedImageUrl,
+                    isStoryboard: true,
+                    imageStatus: 'pending',
+                    imageError: undefined,
+                  }),
+                },
+              };
+              const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
+              const updatedSession = deriveSessionFields(latestSession, updatedMap);
+              set({
+                session: updatedSession,
+                isRegeneratingImage: false,
+                activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, nodeId])),
+                saveStatus: 'idle',
+              });
+              startImageJobPolling(session.savedStoryId);
+
+              // Persist the refreshed storyboard plan/prompt text; the image
+              // itself is attached to beats/story_map by the worker.
+              const authClient = createBrowserClient();
+              const { data: { user } } = await authClient.auth.getUser();
+              const saveUserId = user?.id || updatedSession.savedByUserId;
+              if (saveUserId && !updatedSession.sourceStoryOwnerId) {
+                const runtimeSettings = await resolveStorySaveRuntimeSettings(get().saveRuntimeSettings);
+                await get().saveStoryToCloud(saveUserId, {
+                  signedUrlSwapEnabled: runtimeSettings.storyAssetSignedUrlSwapEnabled,
+                  incrementalAssetSyncEnabled: runtimeSettings.storyIncrementalAssetSyncEnabled,
+                  pauseAssetUploadsDuringGenerationEnabled: runtimeSettings.storyAssetUploadPauseDuringGenerationEnabled,
+                  assetSyncWarningTimeoutMs: runtimeSettings.storyAssetSyncWarningTimeoutMs,
+                });
+              }
+              return;
+            }
+
+            if (enqueueResult.status === 'duplicate' || enqueueResult.status === 'error') {
+              if (reservationId) {
+                await releaseCurrentUserBillableAction({
+                  reservationId,
+                  reason: enqueueResult.status === 'duplicate' ? 'image_job_duplicate' : 'image_job_enqueue_failed',
+                  releaseStatus: 'released',
+                  metadata: { nodeId },
+                });
+                shouldReleaseReservation = false;
+              }
+              set({
+                isRegeneratingImage: false,
+                error: enqueueResult.status === 'duplicate'
+                  ? 'This image is already being generated in the background. It will appear automatically when ready.'
+                  : enqueueResult.message,
+              });
+              return;
+            }
+            // 'legacy_mode': the admin flipped the setting mid-flight — fall
+            // through to the legacy path with the reservation we already hold.
+          }
+
           const imageResult = promptOnly
             ? {
                 imageUrl: '',

@@ -53,7 +53,7 @@ async function signSupabaseUrls(
   return signed;
 }
 
-async function signMixedUrls(
+export async function signMixedUrls(
   supabase: SupabaseClient,
   urls: string[],
   bucket: string,
