@@ -1,8 +1,12 @@
 import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { setFeatureFlagValue } from '@/lib/ai/model-config';
 import { deleteR2Object } from '@/lib/media/r2-server';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+
+/** Feature-flag key holding the last cleanup run summary (admin metrics). */
+export const MEDIA_CLEANUP_LAST_RUN_FLAG = 'media_cleanup_last_run';
 
 export interface CleanupResult {
   scanned: number;
@@ -59,5 +63,12 @@ export async function cleanupExpiredOriginals(options: { batchSize?: number } = 
     }
   }
 
-  return { scanned: pending.length, deleted, failed };
+  const result: CleanupResult = { scanned: pending.length, deleted, failed };
+  if (pending.length > 0) {
+    await setFeatureFlagValue(
+      MEDIA_CLEANUP_LAST_RUN_FLAG,
+      JSON.stringify({ ...result, ranAt: new Date().toISOString() })
+    ).catch(() => {});
+  }
+  return result;
 }

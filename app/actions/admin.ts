@@ -168,12 +168,20 @@ export async function adminUnpublishStoryline(id: string): Promise<void> {
   await verifyAdmin();
   const supabase = createAdminClient();
 
+  // The 073 sync trigger maps is_public=false onto visibility='private'.
   const { error } = await supabase
     .from('storylines')
-    .update({ is_public: false })
+    .update({ is_public: false, unpublished_at: new Date().toISOString() })
     .eq('id', id);
 
-  if (error) throw new Error(`Failed to unpublish: ${error.message}`);
+  if (error) {
+    // Pre-073 databases: unpublished_at doesn't exist yet.
+    const { error: fallbackError } = await supabase
+      .from('storylines')
+      .update({ is_public: false })
+      .eq('id', id);
+    if (fallbackError) throw new Error(`Failed to unpublish: ${fallbackError.message}`);
+  }
 }
 
 export async function adminDeleteStoryline(id: string): Promise<void> {

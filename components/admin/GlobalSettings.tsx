@@ -112,6 +112,7 @@ export type GlobalSettingsSection =
   | 'authoring'
   | 'characters'
   | 'media'
+  | 'media-pipeline'
   | 'video-export'
   | 'generation'
   | 'pages';
@@ -181,6 +182,13 @@ const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
     label: 'Image uploads',
     href: '/admin/settings/media',
     description: 'Client-side upload compression, raw limits, optimized size limits, and rollback controls.',
+    icon: ImageIcon,
+  },
+  {
+    section: 'media-pipeline',
+    label: 'Media pipeline',
+    href: '/admin/settings/media-pipeline',
+    description: 'Server-side processing mode, HQ retention, variants, cleanup, publishing gates, and job monitoring.',
     icon: ImageIcon,
   },
   {
@@ -1010,6 +1018,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
+    'media-pipeline': 'Server-side processing mode, HQ retention, variants, cleanup, and job monitoring',
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
     pages: 'Managed rollout pages, footer controls, and route guards',
