@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildFinalStoryboardImagePrompt,
@@ -1485,15 +1485,6 @@ function defersLiveImageGeneration(storyConfig: StoryConfig): boolean {
   return isPromptOnlyStoryConfig(storyConfig) || isBatchImageDeliveryStoryConfig(storyConfig);
 }
 
-// Whether live per-beat narration should be skipped during interactive
-// generation. True only for batch-delivery stories — narration is bulk-generated
-// later via the terminal-beat "Generate all narration" action. This keeps the
-// auto-build walk fast (beat text + image prompt only) and avoids narrating beats
-// the user may abandon.
-function defersLiveNarration(storyConfig: StoryConfig): boolean {
-  return isBatchImageDeliveryStoryConfig(storyConfig);
-}
-
 function getStoryAspectRatio(storyConfig: StoryConfig): StoryAspectRatio {
   return storyConfig.isVerticalStory || storyConfig.aspectRatio === '9:16' ? '9:16' : '16:9';
 }
@@ -2331,14 +2322,6 @@ export const useStoryStore = create<StoryState>()(
           // portraits, storyboard metadata, and later image continuity anchors together.
           const storyMap = createStoryMap(beat, rootNodeId);
 
-          // Track resolved audio URL for merging after image resolves
-          let resolvedAudioUrl: string | undefined;
-          let resolvedNarrationMetadata: StoryBeat['narrationMetadata'];
-          let resolvedStoryTextOverlayCaptions: StoryBeat['storyTextOverlayCaptions'];
-          let resolvedStoryTextOverlayAlignment: StoryBeat['storyTextOverlayAlignment'];
-          let resolvedStoryTextOverlayEnabled: StoryBeat['storyTextOverlayEnabled'];
-          let resolvedStoryTextOverlayMode: StoryBeat['storyTextOverlayMode'];
-          let resolvedStoryTextOverlayStyle: StoryBeat['storyTextOverlayStyle'];
           let earlySavedStoryId: string | undefined;
           let earlySavedByUserId: string | undefined;
           const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
@@ -2406,123 +2389,6 @@ export const useStoryStore = create<StoryState>()(
             { background: true }
           );
 
-          // Fire-and-forget: once voice + storyId resolve, start narration in parallel with image
-          // Reels skip auto-narration — user triggers it on-demand via the speaker icon.
-          // Batch-delivery stories defer narration to the terminal-beat batch action.
-          if (storyPrompt.toLowerCase() !== 'mock' && !isReelStoryConfig(storyConfig) && !defersLiveNarration(storyConfig)) {
-            Promise.all([lockedVoicePromise, earlySavePromise]).then(([voiceResolution, storyId]) => {
-              set({ isGeneratingAudio: true });
-              const narrationStartedAt = nowMs();
-
-              const narrationFn = storyId
-                ? generateAndPersistStoryNarrationWithOverlay(
-                  beat.storyText, initialSession.tone!, initialSession.genre!,
-                  voiceResolution.voiceId, voiceResolution.languageCode, storyId, rootNodeId,
-                  costPhase({ ...baseCostTelemetry, storyId }, 'tts'),
-                  {
-                    accent: voiceResolution.accent,
-                    storyTextParts: beat.storyTextParts,
-                    overlayConfig: storyConfig.storyTextOverlay,
-                  }
-                )
-                : generateStoryNarrationOnlyWithOverlay(
-                  beat.storyText, initialSession.tone!, initialSession.genre!,
-                  voiceResolution.voiceId, voiceResolution.languageCode,
-                  costPhase(baseCostTelemetry, 'tts'),
-                  {
-                    accent: voiceResolution.accent,
-                    storyTextParts: beat.storyTextParts,
-                    overlayConfig: storyConfig.storyTextOverlay,
-                  }
-                );
-
-              narrationFn.then(({
-                audioUrl,
-                narrationMetadata,
-                storyTextOverlayCaptions,
-                storyTextOverlayAlignment,
-                storyTextOverlayEnabled,
-                storyTextOverlayMode,
-                storyTextOverlayStyle,
-              }) => {
-                console.info('[timing:start_story.narration]', {
-                  durationMs: Math.round(nowMs() - narrationStartedAt),
-                  mode: storyId ? 'persisted' : 'base64_fallback',
-                  success: true,
-                });
-                resolvedAudioUrl = audioUrl;
-                resolvedNarrationMetadata = narrationMetadata;
-                resolvedStoryTextOverlayCaptions = storyTextOverlayCaptions;
-                resolvedStoryTextOverlayAlignment = storyTextOverlayAlignment;
-                resolvedStoryTextOverlayEnabled = storyTextOverlayEnabled;
-                resolvedStoryTextOverlayMode = storyTextOverlayMode;
-                resolvedStoryTextOverlayStyle = storyTextOverlayStyle;
-                beat.storyTextOverlayCaptions = storyTextOverlayCaptions;
-                beat.storyTextOverlayAlignment = storyTextOverlayAlignment;
-                beat.storyTextOverlayEnabled = storyTextOverlayEnabled;
-                beat.storyTextOverlayMode = storyTextOverlayMode;
-                beat.storyTextOverlayStyle = storyTextOverlayStyle;
-                const latestSession = get().session;
-                if (!latestSession) return;
-                const rootId = latestSession.storyMap.rootNodeId;
-                const rootNode = latestSession.storyMap.nodes[rootId];
-                if (!rootNode || rootNode.data.audioUrl) return;
-
-                const updatedNodes = {
-                  ...latestSession.storyMap.nodes,
-                  [rootId]: {
-                    ...rootNode,
-                    data: normalizeBeatMediaFields({
-                      ...rootNode.data,
-                      audioUrl,
-                      ...(narrationMetadata ? {
-                        narrationMetadata,
-                        activeNarrationPreviewId: undefined,
-                      } : {}),
-                      storyTextOverlayEnabled,
-                      storyTextOverlayMode,
-                      storyTextOverlayStyle,
-                      storyTextOverlayCaptions,
-                      storyTextOverlayAlignment,
-                      narrationVoiceId: voiceResolution.voiceId,
-                      audioStatus: storyId ? 'ready' : 'not_requested',
-                      audioError: undefined,
-                    }),
-                  },
-                };
-                const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
-                set({
-                  session: deriveSessionFields(latestSession, updatedMap),
-                  isGeneratingAudio: false,
-                  audioReadyNodeId: rootId,
-                });
-              }).catch((err) => {
-                console.info('[timing:start_story.narration]', {
-                  durationMs: Math.round(nowMs() - narrationStartedAt),
-                  mode: storyId ? 'persisted' : 'base64_fallback',
-                  success: false,
-                  message: err instanceof Error ? err.message : 'Narration generation failed',
-                });
-                console.error('Narration generation failed:', err);
-                const latestSession = get().session;
-                if (storyId && latestSession?.storyMap.nodes[rootNodeId]) {
-                  set({
-                    session: updateSessionBeat(latestSession, rootNodeId, (rootBeat) => ({
-                      ...rootBeat,
-                      audioStatus: 'failed',
-                      audioError: err instanceof Error ? err.message : 'Narration generation failed',
-                    })),
-                    isGeneratingAudio: false,
-                  });
-                } else {
-                  set({ isGeneratingAudio: false });
-                }
-              });
-            }).catch((err) => {
-              console.error('Narration pipeline failed:', err);
-              set({ isGeneratingAudio: false });
-            });
-          }
 
           // Step A: Generate portraits first (parallelized) so beat 1 scene can use
           // them as references - makes portrait the single source of truth from the very first image.
@@ -2652,32 +2518,11 @@ export const useStoryStore = create<StoryState>()(
                   : openingImagePersisted
                   ? 'ready'
                   : 'pending',
-                audioStatus: resolvedAudioUrl
-                  ? (earlySavedStoryId ? 'ready' : 'not_requested')
-                  : !defersLiveNarration(storyConfig)
-                    && storyPrompt.toLowerCase() !== 'mock'
-                    && earlySavedStoryId
-                  ? 'pending'
-                  : 'not_requested',
+                // Narration is on-demand — the user triggers it per beat.
+                audioStatus: 'not_requested',
               }),
               imageUrl: promptOnly ? undefined : imageResult.imageUrl,
               narrationVoiceId: narratorVoiceResolution.voiceId,
-              ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
-              ...(resolvedNarrationMetadata ? {
-                narrationMetadata: resolvedNarrationMetadata,
-                activeNarrationPreviewId: undefined,
-              } : {}),
-              ...(typeof resolvedStoryTextOverlayEnabled === 'boolean'
-                ? { storyTextOverlayEnabled: resolvedStoryTextOverlayEnabled }
-                : {}),
-              ...(resolvedStoryTextOverlayMode ? { storyTextOverlayMode: resolvedStoryTextOverlayMode } : {}),
-              ...(resolvedStoryTextOverlayStyle ? { storyTextOverlayStyle: resolvedStoryTextOverlayStyle } : {}),
-              ...(resolvedStoryTextOverlayCaptions?.length
-                ? { storyTextOverlayCaptions: resolvedStoryTextOverlayCaptions }
-                : {}),
-              ...(resolvedStoryTextOverlayAlignment
-                ? { storyTextOverlayAlignment: resolvedStoryTextOverlayAlignment }
-                : {}),
             },
           };
 
@@ -2695,11 +2540,6 @@ export const useStoryStore = create<StoryState>()(
             storyMap
           );
 
-          // If narration already resolved, signal readiness immediately
-          const audioExtra = resolvedAudioUrl
-            ? { isGeneratingAudio: false, audioReadyNodeId: rootNodeId }
-            : {};
-
           set({
             session: fullSession,
             isLoading: false,
@@ -2709,7 +2549,6 @@ export const useStoryStore = create<StoryState>()(
             loadingReader: null,
             error: null,
             errorAction: null,
-            ...audioExtra,
           });
           if (earlySavedStoryId) {
             const cleanRootNode = {
@@ -3359,19 +3198,9 @@ export const useStoryStore = create<StoryState>()(
           }
           const storyboardPrompt = beat.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
 
-          // Track resolved audio URL — if narration finishes before image,
-          // the .then() can't update the store (node doesn't exist yet),
-          // so we capture the URL and apply it during the merge.
-          let resolvedAudioUrl: string | undefined;
-          let resolvedNarrationMetadata: StoryBeat['narrationMetadata'];
-          let resolvedStoryTextOverlayCaptions: StoryBeat['storyTextOverlayCaptions'];
-          let resolvedStoryTextOverlayAlignment: StoryBeat['storyTextOverlayAlignment'];
-          let resolvedStoryTextOverlayEnabled: StoryBeat['storyTextOverlayEnabled'];
-          let resolvedStoryTextOverlayMode: StoryBeat['storyTextOverlayMode'];
-          let resolvedStoryTextOverlayStyle: StoryBeat['storyTextOverlayStyle'];
-
-          // Fire-and-forget: start narration in parallel with image generation
-          // Voice is locked at story start — use it directly or fall back to default constant
+          // Narration is on-demand (user clicks the speaker icon on the beat),
+          // but the locked voice is still resolved here so the beat records the
+          // voice it will narrate with.
           const voiceResolution = await measureAsyncStep(
             timingSteps,
             'voice_resolution',
@@ -3380,7 +3209,6 @@ export const useStoryStore = create<StoryState>()(
           );
           const voiceForBeat = voiceResolution.voiceId;
           const narrationLanguageCode = voiceResolution.languageCode;
-          const narrationAccent = voiceResolution.accent;
           if (
             session.narratorVoice !== voiceForBeat
             || session.narrationVoiceMode !== voiceResolution.mode
@@ -3397,204 +3225,197 @@ export const useStoryStore = create<StoryState>()(
               },
             } : state);
           }
-          let narrationPromise: Promise<void> | null = null;
-          // Batch-delivery stories defer narration to the terminal-beat batch action.
-          if (session.userPrompt.toLowerCase() !== 'mock' && !defersLiveNarration(session.storyConfig)) {
-            set({ isGeneratingAudio: true });
-            const narrationStartedAt = nowMs();
-
-            const handleNarrationResolved = (
-              audioUrl: string,
-              reelCaptions?: StoryBeat['reelCaptions'],
-              narrationMetadata?: StoryBeat['narrationMetadata'],
-              storyOverlay?: Pick<
-                StoryBeat,
-                | 'storyTextOverlayCaptions'
-                | 'storyTextOverlayAlignment'
-                | 'storyTextOverlayEnabled'
-                | 'storyTextOverlayMode'
-                | 'storyTextOverlayStyle'
-              >
-            ) => {
-              console.info('[timing:continue_story.narration]', {
-                durationMs: Math.round(nowMs() - narrationStartedAt),
-                mode: session.savedStoryId ? 'persisted' : 'base64_fallback',
-                success: true,
-                nodeId: newNodeId,
-              });
-              resolvedAudioUrl = audioUrl;
-              resolvedNarrationMetadata = narrationMetadata;
-              if (reelCaptions?.length) {
-                beat.reelCaptions = reelCaptions;
-              }
-              if (storyOverlay) {
-                resolvedStoryTextOverlayCaptions = storyOverlay.storyTextOverlayCaptions;
-                resolvedStoryTextOverlayAlignment = storyOverlay.storyTextOverlayAlignment;
-                resolvedStoryTextOverlayEnabled = storyOverlay.storyTextOverlayEnabled;
-                resolvedStoryTextOverlayMode = storyOverlay.storyTextOverlayMode;
-                resolvedStoryTextOverlayStyle = storyOverlay.storyTextOverlayStyle;
-                beat.storyTextOverlayCaptions = storyOverlay.storyTextOverlayCaptions;
-                beat.storyTextOverlayAlignment = storyOverlay.storyTextOverlayAlignment;
-                beat.storyTextOverlayEnabled = storyOverlay.storyTextOverlayEnabled;
-                beat.storyTextOverlayMode = storyOverlay.storyTextOverlayMode;
-                beat.storyTextOverlayStyle = storyOverlay.storyTextOverlayStyle;
-              }
-              if (narrationMetadata) {
-                beat.narrationMetadata = narrationMetadata;
-                beat.activeNarrationPreviewId = undefined;
-              }
-              const latestSession = get().session;
-              if (!latestSession) return;
-              const node = latestSession.storyMap.nodes[newNodeId];
-              if (!node || node.data.audioUrl) return;
-
-              const updatedNodes = {
-                ...latestSession.storyMap.nodes,
-                [newNodeId]: {
-                  ...node,
-                  data: normalizeBeatMediaFields({
-                    ...node.data,
-                    audioUrl,
-                    ...(reelCaptions?.length ? { reelCaptions } : {}),
-                    ...(narrationMetadata ? {
-                      narrationMetadata,
-                      activeNarrationPreviewId: undefined,
-                    } : {}),
-                    ...(storyOverlay?.storyTextOverlayCaptions?.length ? {
-                      storyTextOverlayCaptions: storyOverlay.storyTextOverlayCaptions,
-                    } : {}),
-                    ...(storyOverlay?.storyTextOverlayAlignment ? {
-                      storyTextOverlayAlignment: storyOverlay.storyTextOverlayAlignment,
-                    } : {}),
-                    ...(typeof storyOverlay?.storyTextOverlayEnabled === 'boolean' ? {
-                      storyTextOverlayEnabled: storyOverlay.storyTextOverlayEnabled,
-                    } : {}),
-                    ...(storyOverlay?.storyTextOverlayMode ? {
-                      storyTextOverlayMode: storyOverlay.storyTextOverlayMode,
-                    } : {}),
-                    ...(storyOverlay?.storyTextOverlayStyle ? {
-                      storyTextOverlayStyle: storyOverlay.storyTextOverlayStyle,
-                    } : {}),
-                    narrationVoiceId: voiceForBeat,
-                    audioStatus: session.savedStoryId ? 'ready' : 'not_requested',
-                    audioError: undefined,
-                  }),
-                },
-              };
-              const updatedMap = { ...latestSession.storyMap, nodes: updatedNodes };
-              set({
-                session: deriveSessionFields(latestSession, updatedMap),
-                isGeneratingAudio: false,
-                audioReadyNodeId: newNodeId,
-              });
-            };
-
-            const handleNarrationError = (err: unknown) => {
-              console.info('[timing:continue_story.narration]', {
-                durationMs: Math.round(nowMs() - narrationStartedAt),
-                mode: session.savedStoryId ? 'persisted' : 'base64_fallback',
-                success: false,
-                nodeId: newNodeId,
-                message: err instanceof Error ? err.message : 'Narration generation failed',
-              });
-              console.error('Narration generation failed:', err);
-              const latestSession = get().session;
-              if (session.savedStoryId && latestSession?.storyMap.nodes[newNodeId]) {
-                set({
-                  session: updateSessionBeat(latestSession, newNodeId, (beatState) => ({
-                    ...beatState,
-                    audioStatus: 'failed',
-                    audioError: err instanceof Error ? err.message : 'Narration generation failed',
-                  })),
-                  isGeneratingAudio: false,
-                });
-              } else {
-                set({ isGeneratingAudio: false });
-              }
-            };
-
-            const isReelNarration = isReelStoryConfig(session.storyConfig);
-            const reelNarrationOptions = isReelNarration
-              ? {
-                  reelCaptions: beat.reelCaptions,
-                  reelSettings: modelOverrides?.reelSettings,
-                  narrationSettings: session.storyConfig.reel.narrationSettings,
-                  generationMode: 'final' as const,
-                  panelPauseMs: normalizeReelTransitionSettings(session.storyConfig.reel.transitionSettings).pauseMs,
-                }
-              : {};
-
-            if (session.savedStoryId && isReelNarration) {
-              // Server-side: generate + upload to Supabase in one round trip
-              narrationPromise = generateAndPersistNarration(
-                beat.storyText, session.tone, session.genre,
-                voiceForBeat, narrationLanguageCode,
-                session.savedStoryId, newNodeId,
-                costPhase(baseCostTelemetry, 'tts'),
-                {
-                  taskKey: isReelNarration ? 'reel_tts' : 'tts',
-                  narrationStyle: getReelNarrationStyle(modelOverrides, session.storyConfig),
-                  ...reelNarrationOptions,
-                }
-              ).then(({ audioUrl, reelCaptions, narrationMetadata }) => handleNarrationResolved(audioUrl, reelCaptions, narrationMetadata))
-                .catch(handleNarrationError);
-            } else if (session.savedStoryId) {
-              narrationPromise = generateAndPersistStoryNarrationWithOverlay(
-                beat.storyText, session.tone, session.genre,
-                voiceForBeat, narrationLanguageCode,
-                session.savedStoryId, newNodeId,
-                costPhase(baseCostTelemetry, 'tts'),
-                {
-                  accent: narrationAccent,
-                  storyTextParts: beat.storyTextParts,
-                  overlayConfig: session.storyConfig.storyTextOverlay,
-                }
-              ).then((result) => handleNarrationResolved(result.audioUrl, undefined, result.narrationMetadata, {
-                storyTextOverlayEnabled: result.storyTextOverlayEnabled,
-                storyTextOverlayMode: result.storyTextOverlayMode,
-                storyTextOverlayStyle: result.storyTextOverlayStyle,
-                storyTextOverlayCaptions: result.storyTextOverlayCaptions,
-                storyTextOverlayAlignment: result.storyTextOverlayAlignment,
-              }))
-                .catch(handleNarrationError);
-            } else if (isReelNarration) {
-              narrationPromise = generateReelNarrationOnly(
-                beat.storyText, session.tone, session.genre,
-                voiceForBeat, narrationLanguageCode,
-                costPhase(baseCostTelemetry, 'tts'),
-                {
-                  narrationStyle: getReelNarrationStyle(modelOverrides, session.storyConfig),
-                  ...reelNarrationOptions,
-                }
-              ).then(({ audioUrl, reelCaptions, narrationMetadata }) => handleNarrationResolved(audioUrl, reelCaptions, narrationMetadata))
-                .catch(handleNarrationError);
-            } else {
-              // Fallback: generate only (no persistence yet)
-              narrationPromise = generateStoryNarrationOnlyWithOverlay(
-                beat.storyText, session.tone, session.genre,
-                voiceForBeat, narrationLanguageCode,
-                costPhase(baseCostTelemetry, 'tts'),
-                {
-                  accent: narrationAccent,
-                  storyTextParts: beat.storyTextParts,
-                  overlayConfig: session.storyConfig.storyTextOverlay,
-                }
-              ).then((result) => handleNarrationResolved(result.audioUrl, undefined, result.narrationMetadata, {
-                storyTextOverlayEnabled: result.storyTextOverlayEnabled,
-                storyTextOverlayMode: result.storyTextOverlayMode,
-                storyTextOverlayStyle: result.storyTextOverlayStyle,
-                storyTextOverlayCaptions: result.storyTextOverlayCaptions,
-                storyTextOverlayAlignment: result.storyTextOverlayAlignment,
-              }))
-                .catch(handleNarrationError);
-            }
-          }
 
           const referenceImages = buildStoryboardReferenceImages(
             beat,
             currentNode.data.imageUrl,
             portraitRefs
           );
+
+          // Server-pipeline routing (admin processing mode): persist the beat
+          // text server-side immediately, then hand the image to a durable
+          // background job — from here the browser can close without losing
+          // anything. Requires a saved story owned by this user.
+          let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
+          if (
+            !promptOnly
+            && session.savedStoryId
+            && !session.sourceStoryOwnerId
+            && session.userPrompt.toLowerCase() !== 'mock'
+          ) {
+            try {
+              effectiveImageMode = await resolveImageProcessingModeAction();
+            } catch {
+              // Resolver failure = legacy; the server re-checks on enqueue anyway.
+            }
+          }
+
+          if (effectiveImageMode === 'server_pipeline' && session.savedStoryId) {
+            const savedStoryId = session.savedStoryId;
+            // The worker replays generateSelectedImage with this exact final
+            // prompt — built here because the prompt orchestrator is client code.
+            const jobFinalPrompt = buildFinalStoryboardImagePrompt(
+              storyboardPrompt,
+              beat.characters,
+              session.visualStyle,
+              beat.beatNumber,
+              modelOverrides,
+              {
+                aspectRatio: storyAspectRatio,
+                task: getImageTaskKey(session.storyConfig),
+                ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+              }
+            );
+            beat.finalImagePromptText = jobFinalPrompt;
+
+            // Durable early save: the beat text (with parent link and cursor)
+            // lands in beats + story_map before any image work starts.
+            const durableNode: StoryNode = {
+              id: newNodeId,
+              beatNumber: beat.beatNumber,
+              parentId,
+              selectedOptionId: optionId,
+              data: normalizeBeatMediaFields({
+                ...beat,
+                imageUrl: undefined,
+                persistedImageUrl: undefined,
+                narrationVoiceId: voiceForBeat,
+                imageStatus: 'pending',
+                imageError: undefined,
+                audioStatus: 'not_requested',
+                audioError: undefined,
+                characters: beat.characters.map((character) => ({
+                  ...character,
+                  portraitBase64: undefined,
+                })),
+              }),
+              children: [],
+            };
+
+            setLoadingStage(set, 'continue_story', 'finish');
+            let earlySaved = false;
+            try {
+              const { beatId } = await measureAsyncStep(
+                timingSteps,
+                'early_beat_save',
+                'Persist beat before image job',
+                () => saveBeatAction(savedStoryId, newNodeId, durableNode, {
+                  linkToParent: true,
+                  setAsCurrent: true,
+                })
+              );
+              earlySaved = true;
+              linkCostEventsToBeat({
+                storySessionId: session.storySessionId,
+                storyId: savedStoryId,
+                nodeId: newNodeId,
+                beatId,
+              }).catch((err) => console.error('Failed to link branch beat cost events:', err));
+            } catch (err) {
+              console.error('Early beat save failed; falling back to inline image generation:', err);
+            }
+
+            if (earlySaved) {
+              const enqueueResult = await measureAsyncStep(
+                timingSteps,
+                'image_job_enqueue',
+                'Queue background image job',
+                () => enqueueBeatImageJob({
+                  storyId: savedStoryId,
+                  nodeId: newNodeId,
+                  kind: isReelStoryConfig(session.storyConfig) ? 'reel_image' : 'beat_image',
+                  beatNumber: beat.beatNumber,
+                  reservationId,
+                  payload: {
+                    finalPrompt: jobFinalPrompt,
+                    beatNumber: beat.beatNumber,
+                    aspectRatio: storyAspectRatio,
+                    imageTask: getImageTaskKey(session.storyConfig),
+                    imageSize: normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings).imageSize,
+                    imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+                    imageContinuity: imageContinuityOptions(
+                      session.storyConfig,
+                      portraitGenerationResult.latestState
+                    ) ?? null,
+                    costTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), {
+                      referenceCount: referenceImages.length,
+                    }),
+                    references: referenceImages,
+                  },
+                })
+              );
+
+              if (enqueueResult.status === 'queued') {
+                // The worker owns the reservation now (finalizes on ready,
+                // releases on terminal failure).
+                shouldReleaseReservation = false;
+
+                const updatedMap = addChildNode(
+                  session.storyMap,
+                  session.storyMap.currentNodeId,
+                  optionId,
+                  durableNode.data,
+                  newNodeId
+                );
+                const latestSession = get().session;
+                if (!latestSession) return;
+                const mergedMap = {
+                  ...updatedMap,
+                  nodes: {
+                    ...updatedMap.nodes,
+                    ...latestSession.storyMap.nodes,
+                    [parentId]: {
+                      ...(latestSession.storyMap.nodes[parentId] || updatedMap.nodes[parentId]),
+                      children: updatedMap.nodes[parentId].children,
+                    },
+                    [newNodeId]: updatedMap.nodes[newNodeId],
+                  },
+                };
+
+                set({
+                  session: deriveSessionFields(
+                    {
+                      ...latestSession,
+                      narratorVoice: voiceForBeat,
+                      narrationVoiceMode: voiceResolution.mode,
+                      narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                      narrationLanguageCode,
+                    },
+                    mergedMap
+                  ),
+                  isLoading: false,
+                  saveStatus: 'unsaved',
+                  loadingClues: [],
+                  loadingStage: null,
+                  loadingReader: null,
+                  error: null,
+                  errorAction: null,
+                  activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, newNodeId])),
+                });
+                startImageJobPolling(savedStoryId);
+                dispatchPricingRuntimeRefresh();
+                logGenerationTiming({
+                  scope: 'continue_story',
+                  totalMs: Math.round(nowMs() - generationStartedAt),
+                  steps: timingSteps,
+                  meta: {
+                    success: true,
+                    beatNumber: beat.beatNumber,
+                    optionId,
+                    optionLabel: selectedOption.label,
+                    newNodeId,
+                    usedReferenceImages: referenceImages.length,
+                    promptOnly,
+                    serverPipeline: true,
+                  },
+                });
+                return;
+              }
+              // legacy_mode / duplicate / error: the reservation is still ours —
+              // fall through to inline generation below.
+              console.warn('Image job enqueue did not queue; using inline generation:', enqueueResult.status);
+            }
+          }
 
           // Block loading on image only
           setLoadingStage(set, 'continue_story', 'image', { deferImages: promptOnly });
@@ -3682,42 +3503,20 @@ export const useStoryStore = create<StoryState>()(
                 ...(latestSession.storyMap.nodes[parentId] || updatedMap.nodes[parentId]),
                 children: updatedMap.nodes[parentId].children,
               },
-              // Re-apply new node, merging in audioUrl if narration already resolved
+              // Re-apply new node (narration is generated on-demand later)
               [newNodeId]: {
                 ...updatedMap.nodes[newNodeId],
                 data: normalizeBeatMediaFields({
                   ...updatedMap.nodes[newNodeId].data,
                   narrationVoiceId: voiceForBeat,
                   persistedImageUrl: undefined,
-                  ...(resolvedAudioUrl ? { audioUrl: resolvedAudioUrl } : {}),
-                  ...(resolvedNarrationMetadata ? {
-                    narrationMetadata: resolvedNarrationMetadata,
-                    activeNarrationPreviewId: undefined,
-                  } : {}),
-                  ...(typeof resolvedStoryTextOverlayEnabled === 'boolean'
-                    ? { storyTextOverlayEnabled: resolvedStoryTextOverlayEnabled }
-                    : {}),
-                  ...(resolvedStoryTextOverlayMode ? { storyTextOverlayMode: resolvedStoryTextOverlayMode } : {}),
-                  ...(resolvedStoryTextOverlayStyle ? { storyTextOverlayStyle: resolvedStoryTextOverlayStyle } : {}),
-                  ...(resolvedStoryTextOverlayCaptions?.length
-                    ? { storyTextOverlayCaptions: resolvedStoryTextOverlayCaptions }
-                    : {}),
-                  ...(resolvedStoryTextOverlayAlignment
-                    ? { storyTextOverlayAlignment: resolvedStoryTextOverlayAlignment }
-                    : {}),
                   imageStatus: promptOnly
                     ? 'not_requested'
                     : branchImagePersisted
                     ? 'ready'
                     : 'pending',
                   ...(branchImagePersisted ? { persistedImageUrl: imageResult.imageUrl } : {}),
-                  audioStatus: resolvedAudioUrl
-                    ? (session.savedStoryId ? 'ready' : 'not_requested')
-                    : !defersLiveNarration(session.storyConfig)
-                      && session.userPrompt.toLowerCase() !== 'mock'
-                      && session.savedStoryId
-                    ? 'pending'
-                    : 'not_requested',
+                  audioStatus: 'not_requested',
                 }),
               },
             },
@@ -3750,11 +3549,6 @@ export const useStoryStore = create<StoryState>()(
             shouldReleaseReservation = false;
           }
 
-          // If narration already resolved, signal readiness immediately
-          const audioExtra = resolvedAudioUrl
-            ? { isGeneratingAudio: false, audioReadyNodeId: newNodeId }
-            : {};
-
           set({
             session: deriveSessionFields(
               {
@@ -3773,7 +3567,6 @@ export const useStoryStore = create<StoryState>()(
             loadingReader: null,
             error: null,
             errorAction: null,
-            ...audioExtra,
           });
           dispatchPricingRuntimeRefresh();
           logGenerationTiming({

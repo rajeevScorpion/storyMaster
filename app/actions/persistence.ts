@@ -1165,7 +1165,14 @@ export async function loadStory(storyId: string): Promise<StorySession> {
 export async function saveBeat(
   storyId: string,
   nodeId: string,
-  node: StoryNode
+  node: StoryNode,
+  options?: {
+    /** Append this node to its parent's children in story_map so a beat saved
+     *  before the client's next full save is reachable after reload. */
+    linkToParent?: boolean;
+    /** Move story_map.currentNodeId to this node (branch continuation). */
+    setAsCurrent?: boolean;
+  }
 ): Promise<{ beatId: string }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -1236,13 +1243,20 @@ export async function saveBeat(
 
   if (!storyForPatchError && storyForPatch?.story_map && typeof storyForPatch.story_map === 'object' && 'nodes' in storyForPatch.story_map) {
     const storyMap = storyForPatch.story_map as unknown as StoryMap;
+    const patchedNodes: StoryMap['nodes'] = {
+      ...storyMap.nodes,
+      [nodeId]: node,
+    };
+    if (options?.linkToParent && node.parentId) {
+      const parent = storyMap.nodes[node.parentId];
+      if (parent && !parent.children.includes(nodeId)) {
+        patchedNodes[node.parentId] = { ...parent, children: [...parent.children, nodeId] };
+      }
+    }
     const patchedMap: StoryMap = {
       ...storyMap,
-      nodes: {
-        ...storyMap.nodes,
-        [nodeId]: node,
-      },
-      currentNodeId: storyMap.currentNodeId || nodeId,
+      nodes: patchedNodes,
+      currentNodeId: options?.setAsCurrent ? nodeId : (storyMap.currentNodeId || nodeId),
       rootNodeId: storyMap.rootNodeId || nodeId,
     };
 
