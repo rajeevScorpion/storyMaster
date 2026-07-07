@@ -2,13 +2,10 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { extractMediaObjectScopeCandidates } from '@/lib/media/media-object-keys';
+
 function cleanId(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
-export function extractMediaObjectScopeId(objectKey: string): string | null {
-  const parts = objectKey.split('/').filter(Boolean);
-  return parts[0] === 'stories' && parts[1] ? parts[1] : null;
 }
 
 async function userOwnsStory(
@@ -56,16 +53,17 @@ export async function verifyUserCanReadMediaObject(
   supabase: SupabaseClient,
   input: { objectKey: string }
 ): Promise<{ allowed: boolean; storyId: string | null; storylineId: string | null }> {
-  const scopeId = extractMediaObjectScopeId(input.objectKey);
-  if (!scopeId) return { allowed: false, storyId: null, storylineId: null };
+  const scopeIds = extractMediaObjectScopeCandidates(input.objectKey);
 
-  if (await userCanReadStory(supabase, scopeId)) {
-    return { allowed: true, storyId: scopeId, storylineId: null };
-  }
+  for (const scopeId of scopeIds) {
+    if (await userCanReadStory(supabase, scopeId)) {
+      return { allowed: true, storyId: scopeId, storylineId: null };
+    }
 
-  const storyline = await loadReadableStoryline(supabase, scopeId);
-  if (storyline && await userCanReadStory(supabase, storyline.story_id)) {
-    return { allowed: true, storyId: storyline.story_id, storylineId: storyline.id };
+    const storyline = await loadReadableStoryline(supabase, scopeId);
+    if (storyline && await userCanReadStory(supabase, storyline.story_id)) {
+      return { allowed: true, storyId: storyline.story_id, storylineId: storyline.id };
+    }
   }
 
   return { allowed: false, storyId: null, storylineId: null };
@@ -120,16 +118,17 @@ export async function verifyUserCanWriteMediaObject(
     return { allowed: true, storyId: explicitStoryId, storylineId: null };
   }
 
-  const scopeId = extractMediaObjectScopeId(input.objectKey);
-  if (!scopeId) return { allowed: false, storyId: null, storylineId: null };
+  const scopeIds = extractMediaObjectScopeCandidates(input.objectKey);
 
-  if (await userOwnsStory(supabase, userId, scopeId)) {
-    return { allowed: true, storyId: scopeId, storylineId: null };
-  }
+  for (const scopeId of scopeIds) {
+    if (await userOwnsStory(supabase, userId, scopeId)) {
+      return { allowed: true, storyId: scopeId, storylineId: null };
+    }
 
-  const storyline = await loadOwnedStoryline(supabase, userId, scopeId);
-  if (storyline) {
-    return { allowed: true, storyId: storyline.story_id, storylineId: storyline.id };
+    const storyline = await loadOwnedStoryline(supabase, userId, scopeId);
+    if (storyline) {
+      return { allowed: true, storyId: storyline.story_id, storylineId: storyline.id };
+    }
   }
 
   return { allowed: false, storyId: null, storylineId: null };
