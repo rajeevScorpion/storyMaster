@@ -547,11 +547,15 @@ export default function LoadingState({
                   )}
                 </div>
 
-                {loadingStage.flow === 'start_story' && (
+                {loadingStage.note ? (
+                  <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/[0.07] px-4 py-3 text-sm leading-relaxed text-emerald-100/90">
+                    {loadingStage.note}
+                  </div>
+                ) : loadingStage.flow === 'start_story' ? (
                   <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-relaxed text-neutral-200/85">
                     The first beat usually takes a little longer while Kissago sets the scene and prepares your characters.
                   </div>
-                )}
+                ) : null}
               </div>
             )}
           </div>

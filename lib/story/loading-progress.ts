@@ -19,6 +19,9 @@ export interface StoryLoadingStage {
   currentStepKey: StoryLoadingStepKey;
   detail: string;
   steps: StoryLoadingStepDefinition[];
+  /** Optional reassurance note rendered under the progress rail (e.g. "safe to
+   *  leave" once the work is durably queued server-side). */
+  note?: string;
 }
 
 const SHARED_STEPS: StoryLoadingStepDefinition[] = [
@@ -74,7 +77,7 @@ const FLOW_DETAIL_OVERRIDES: Record<StoryLoadingFlow, Partial<Record<StoryLoadin
 export function createStoryLoadingStage(
   flow: StoryLoadingFlow,
   currentStepKey: StoryLoadingStepKey,
-  opts?: { deferImages?: boolean }
+  opts?: { deferImages?: boolean; note?: string }
 ): StoryLoadingStage {
   const steps = SHARED_STEPS
     // When live images are deferred (batch / prompt-only), no image is rendered,
@@ -95,6 +98,7 @@ export function createStoryLoadingStage(
     currentStepKey: resolvedStepKey,
     detail: currentStep.description,
     steps,
+    ...(opts?.note ? { note: opts.note } : {}),
   };
 }
 

@@ -1117,11 +1117,48 @@ function setLoadingStage(
   setState: (partial: Partial<StoryState>) => void,
   flow: StoryLoadingFlow,
   step: StoryLoadingStage['currentStepKey'],
-  opts?: { deferImages?: boolean }
+  opts?: { deferImages?: boolean; note?: string }
 ) {
   setState({
     loadingStage: createStoryLoadingStage(flow, step, opts),
   });
+}
+
+/** Preloader reassurance shown once the beat + image job are durable server-side. */
+const IMAGE_JOB_SAFE_TO_LEAVE_NOTE =
+  'Your beat is saved and the image is being painted on our servers — you can '
+  + 'close this tab or come back later and it will be ready here.';
+
+const IMAGE_JOB_FOREGROUND_WAIT_MS = 150_000;
+const IMAGE_JOB_FOREGROUND_POLL_MS = 4_000;
+
+/**
+ * Foreground wait for a queued image job: the user who stays on the preloader
+ * should receive the beat *with* its image, exactly like the legacy inline
+ * path. Polls the durable beats row (worker-written) until it turns ready or
+ * failed; returns null on timeout, leaving the beat in its pending state for
+ * the background poller to finish.
+ */
+async function waitForQueuedBeatImage(
+  storyId: string,
+  nodeId: string
+): Promise<{ imageStatus: 'ready'; imageUrl: string } | { imageStatus: 'failed'; imageError: string | null } | null> {
+  const deadline = Date.now() + IMAGE_JOB_FOREGROUND_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, IMAGE_JOB_FOREGROUND_POLL_MS));
+    try {
+      const [row] = await getReadyBeatImages(storyId, [nodeId]);
+      if (row?.imageStatus === 'ready' && row.imageUrl) {
+        return { imageStatus: 'ready', imageUrl: row.imageUrl };
+      }
+      if (row?.imageStatus === 'failed') {
+        return { imageStatus: 'failed', imageError: row.imageError };
+      }
+    } catch {
+      // Transient poll failure — keep waiting; the job itself is durable.
+    }
+  }
+  return null;
 }
 
 function costPhase(
@@ -2454,7 +2491,7 @@ export const useStoryStore = create<StoryState>()(
                 },
               };
 
-              setLoadingStage(set, 'start_story', 'finish');
+              setLoadingStage(set, 'start_story', 'image');
               let earlyBeatSaved = false;
               try {
                 const { beatId } = await measureAsyncStep(
@@ -2509,6 +2546,42 @@ export const useStoryStore = create<StoryState>()(
                   // releases on terminal failure).
                   shouldReleaseReservation = false;
 
+                  // Everything is durable from here — tell the user they may
+                  // leave, but keep the preloader on the image stage so a user
+                  // who stays receives the beat complete with its image
+                  // (background delivery is the safety net, not the UX).
+                  setLoadingStage(set, 'start_story', 'image', { note: IMAGE_JOB_SAFE_TO_LEAVE_NOTE });
+                  const jobOutcome = await measureAsyncStep(
+                    timingSteps,
+                    'image_job_wait',
+                    'Wait for background image render',
+                    () => waitForQueuedBeatImage(savedStoryId, rootNodeId)
+                  );
+
+                  const pendingRootNode = storyMap.nodes[rootNodeId];
+                  if (jobOutcome?.imageStatus === 'ready') {
+                    storyMap.nodes[rootNodeId] = {
+                      ...pendingRootNode,
+                      data: {
+                        ...pendingRootNode.data,
+                        imageUrl: jobOutcome.imageUrl,
+                        persistedImageUrl: jobOutcome.imageUrl,
+                        imageStatus: 'ready',
+                        imageError: undefined,
+                      },
+                    };
+                  } else if (jobOutcome?.imageStatus === 'failed') {
+                    storyMap.nodes[rootNodeId] = {
+                      ...pendingRootNode,
+                      data: {
+                        ...pendingRootNode.data,
+                        imageStatus: 'failed',
+                        imageError: jobOutcome.imageError ?? 'Image generation failed. You can retry it from the story.',
+                      },
+                    };
+                  }
+                  const imageStillPending = !jobOutcome;
+
                   const fullSession = deriveSessionFields(
                     {
                       ...initialSession,
@@ -2531,9 +2604,13 @@ export const useStoryStore = create<StoryState>()(
                     loadingReader: null,
                     error: null,
                     errorAction: null,
-                    activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, rootNodeId])),
+                    ...(imageStillPending
+                      ? { activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, rootNodeId])) }
+                      : {}),
                   });
-                  startImageJobPolling(savedStoryId);
+                  if (imageStillPending) {
+                    startImageJobPolling(savedStoryId);
+                  }
                   dispatchPricingRuntimeRefresh();
                   logGenerationTiming({
                     scope: 'start_story',
@@ -2546,6 +2623,7 @@ export const useStoryStore = create<StoryState>()(
                       usedReferencePortraits: portraitRefs.length,
                       promptOnly,
                       serverPipeline: true,
+                      imageWaitOutcome: jobOutcome?.imageStatus ?? 'pending',
                     },
                   });
                   return;
@@ -3459,7 +3537,7 @@ export const useStoryStore = create<StoryState>()(
               children: [],
             };
 
-            setLoadingStage(set, 'continue_story', 'finish');
+            setLoadingStage(set, 'continue_story', 'image');
             let earlySaved = false;
             try {
               const { beatId } = await measureAsyncStep(
@@ -3517,11 +3595,39 @@ export const useStoryStore = create<StoryState>()(
                 // releases on terminal failure).
                 shouldReleaseReservation = false;
 
+                // Everything is durable from here — tell the user they may
+                // leave, but keep the preloader on the image stage so a user
+                // who stays receives the beat complete with its image
+                // (background delivery is the safety net, not the UX).
+                setLoadingStage(set, 'continue_story', 'image', { note: IMAGE_JOB_SAFE_TO_LEAVE_NOTE });
+                const jobOutcome = await measureAsyncStep(
+                  timingSteps,
+                  'image_job_wait',
+                  'Wait for background image render',
+                  () => waitForQueuedBeatImage(savedStoryId, newNodeId)
+                );
+                const imageStillPending = !jobOutcome;
+                const settledNodeData = jobOutcome?.imageStatus === 'ready'
+                  ? {
+                      ...durableNode.data,
+                      imageUrl: jobOutcome.imageUrl,
+                      persistedImageUrl: jobOutcome.imageUrl,
+                      imageStatus: 'ready' as const,
+                      imageError: undefined,
+                    }
+                  : jobOutcome?.imageStatus === 'failed'
+                    ? {
+                        ...durableNode.data,
+                        imageStatus: 'failed' as const,
+                        imageError: jobOutcome.imageError ?? 'Image generation failed. You can retry it from the story.',
+                      }
+                    : durableNode.data;
+
                 const updatedMap = addChildNode(
                   session.storyMap,
                   session.storyMap.currentNodeId,
                   optionId,
-                  durableNode.data,
+                  settledNodeData,
                   newNodeId
                 );
                 const latestSession = get().session;
@@ -3557,9 +3663,13 @@ export const useStoryStore = create<StoryState>()(
                   loadingReader: null,
                   error: null,
                   errorAction: null,
-                  activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, newNodeId])),
+                  ...(imageStillPending
+                    ? { activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, newNodeId])) }
+                    : {}),
                 });
-                startImageJobPolling(savedStoryId);
+                if (imageStillPending) {
+                  startImageJobPolling(savedStoryId);
+                }
                 dispatchPricingRuntimeRefresh();
                 logGenerationTiming({
                   scope: 'continue_story',
@@ -3574,6 +3684,7 @@ export const useStoryStore = create<StoryState>()(
                     usedReferenceImages: referenceImages.length,
                     promptOnly,
                     serverPipeline: true,
+                    imageWaitOutcome: jobOutcome?.imageStatus ?? 'pending',
                   },
                 });
                 return;

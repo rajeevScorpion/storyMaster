@@ -5524,26 +5524,34 @@ function StoryScreenInner({
             />
           </motion.div>
         </AnimatePresence>
-        {!displayImageUrl && (showPendingImageState || showFailedImageState) && !(isBatchDeliveryStory && showPendingImageState) && (
-          <div className="absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
-            <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
+        {!displayImageUrl && showFailedImageState && (
+          <div className="pointer-events-none absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
+            <div className="pointer-events-auto rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
               <div className="mb-3 flex justify-center">
-                {showPendingImageState ? (
-                  <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                ) : (
-                  <AlertTriangle className="h-8 w-8 text-amber-300" />
-                )}
+                <AlertTriangle className="h-8 w-8 text-amber-300" />
               </div>
-              <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">
-                {showPendingImageState
-                  ? (isServerImageJobPending ? 'Generating In Background' : 'Beat Image Syncing')
-                  : 'Beat Image Needs Retry'}
-              </p>
-              {showPendingImageState && isServerImageJobPending && (
-                <p className="mt-2 text-[11px] text-neutral-500">
-                  Safe to switch tabs or close the browser — the image is being generated on our servers and will be here when you return.
-                </p>
-              )}
+              <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">Beat Image Needs Retry</p>
+            </div>
+          </div>
+        )}
+        {!displayImageUrl && showPendingImageState && !showFailedImageState && !isBatchDeliveryStory && (
+          // Deliberately quiet: the image is on its way (background job or asset
+          // sync), so all the user needs is a small in-progress hint, not a modal.
+          <div className="pointer-events-none absolute inset-0 hidden items-center justify-center px-6 md:flex">
+            <div className="group pointer-events-auto relative">
+              <div className="pointer-events-none absolute bottom-full left-1/2 mb-3 w-72 -translate-x-1/2 rounded-2xl border border-white/10 bg-neutral-950/90 px-4 py-3 text-left text-xs leading-relaxed text-neutral-300 opacity-0 shadow-[0_20px_40px_rgba(0,0,0,0.35)] backdrop-blur-md transition-opacity duration-150 group-hover:opacity-100">
+                {isServerImageJobPending
+                  ? 'The image is being generated in the background and will appear here automatically. Safe to switch tabs or close the browser.'
+                  : 'The image for this beat is syncing and will appear here automatically.'}
+              </div>
+              <div
+                className="relative flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-neutral-950/70 backdrop-blur-md"
+                role="status"
+                aria-label="Image generating in background"
+              >
+                <ImageIcon className="h-4 w-4 text-neutral-300" />
+                <Loader2 className="absolute h-10 w-10 animate-spin text-emerald-300/70" strokeWidth={1} />
+              </div>
             </div>
           </div>
         )}
@@ -5680,15 +5688,19 @@ function StoryScreenInner({
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
                   {showPendingImageState ? (
                     <>
-                      <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                      <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">
-                        {isServerImageJobPending ? 'Generating In Background' : 'Image Syncing'}
+                      <div
+                        className="relative flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-neutral-950/60"
+                        role="status"
+                        aria-label="Image generating in background"
+                      >
+                        <ImageIcon className="h-4 w-4 text-neutral-300" />
+                        <Loader2 className="absolute h-10 w-10 animate-spin text-emerald-300/70" strokeWidth={1} />
+                      </div>
+                      <p className="px-8 text-[11px] leading-relaxed text-neutral-400">
+                        {isServerImageJobPending
+                          ? 'Generating in the background — it will appear automatically. Safe to leave and come back.'
+                          : 'Image syncing — it will appear automatically.'}
                       </p>
-                      {isServerImageJobPending && (
-                        <p className="text-xs text-neutral-400">
-                          Safe to switch tabs or close the browser — the image is being generated on our servers and will be here when you return.
-                        </p>
-                      )}
                     </>
                   ) : (
                     <>
