@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveEffectiveProcessingMode, getConfiguredProcessingMode, getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { putR2Object } from '@/lib/media/r2-server';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
+import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import type { ReferenceImage } from '@/app/actions/story-runtime';
 import type {
   BeatImageJobReference,
@@ -55,18 +56,6 @@ function extensionForMime(mimeType: string): string {
   if (mimeType.includes('png')) return 'png';
   if (mimeType.includes('jpeg') || mimeType.includes('jpg')) return 'jpg';
   return 'webp';
-}
-
-/** Drop inline base64 payloads from characters — prompt building only needs text. */
-function sanitizeCharactersForPayload(
-  characters: BeatImageJobRequestPayload['characters']
-): BeatImageJobRequestPayload['characters'] {
-  return characters.map((character) => ({
-    ...character,
-    portraitBase64: undefined,
-    portraitUrl: character.portraitUrl?.startsWith('data:') ? undefined : character.portraitUrl,
-    referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:') ? undefined : character.referenceSheetUrl,
-  }));
 }
 
 export async function enqueueBeatImageJob(input: EnqueueBeatImageJobInput): Promise<EnqueueBeatImageJobResult> {
@@ -127,10 +116,16 @@ export async function enqueueBeatImageJob(input: EnqueueBeatImageJobInput): Prom
       }
     }
 
+    // Snapshot the owner's plan so the cookieless worker resolves tier-gated
+    // models and retention exactly as the interactive request would have.
+    const planKey = await getPricingRuntimeContext()
+      .then((pricing) => pricing.snapshot.planKey)
+      .catch(() => 'free' as const);
+
     const payload: BeatImageJobRequestPayload = {
       ...input.payload,
-      characters: sanitizeCharactersForPayload(input.payload.characters),
       references,
+      currentPlanKey: planKey,
     };
 
     const { error: insertError } = await admin
@@ -215,6 +210,41 @@ export async function getStoryImageJobStatuses(storyId: string): Promise<StoryIm
   return Array.from(byNode.values());
 }
 
+/**
+ * Story-reopen backstop: reclaim this story's stale claims and kick the
+ * worker for any pending jobs so an interrupted generation resumes without
+ * waiting for the cron. Returns the number of in-flight jobs so the client
+ * knows whether to poll.
+ */
+export async function reconcileStoryImageJobs(storyId: string): Promise<{ inFlight: number }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { inFlight: 0 };
+
+  const admin = createAdminClient();
+  const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  await admin
+    .from('image_generation_jobs')
+    .update({ status: 'pending' })
+    .eq('story_id', storyId)
+    .eq('user_id', user.id)
+    .eq('status', 'processing')
+    .lt('claimed_at', cutoff);
+
+  const { count } = await admin
+    .from('image_generation_jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('story_id', storyId)
+    .eq('user_id', user.id)
+    .in('status', ['pending', 'processing']);
+  const inFlight = count ?? 0;
+
+  if (inFlight > 0) {
+    await kickImageJobWorker(null);
+  }
+  return { inFlight };
+}
+
 export interface ReadyBeatImage {
   nodeId: string;
   imageUrl: string | null;
@@ -271,7 +301,7 @@ function mediaJobsBaseUrl(): string {
  *  image-batch.ts: on Vercel an un-awaited fetch fired from a finishing
  *  invocation gets dropped, which would strand pending jobs until the
  *  reconcile backstop. */
-async function kickImageJobWorker(jobId: string): Promise<void> {
+async function kickImageJobWorker(jobId: string | null): Promise<void> {
   const secret = process.env.CRON_SECRET;
   await fetch(`${mediaJobsBaseUrl()}/api/media/jobs/run`, {
     method: 'POST',

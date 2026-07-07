@@ -31,8 +31,10 @@ import {
   enqueueBeatImageJob,
   getReadyBeatImages,
   getStoryImageJobStatuses,
+  reconcileStoryImageJobs,
   resolveImageProcessingModeAction,
 } from '@/app/actions/image-jobs';
+import { normalizeStoryboardImageQualitySettings } from '@/lib/types/storyboard-settings';
 import { submitStoryNarrationBatch, reconcileStoryNarration } from '@/app/actions/narration-batch';
 import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
@@ -2548,22 +2550,31 @@ export const useStoryStore = create<StoryState>()(
                   timingSteps,
                   getImageTaskKey(storyConfig),
                   'Render opening storyboard image',
-                  () => generateImage(
-                    storyboardPrompt,
-                    beat.characters,
-                    initialSession.visualStyle!,
-                    modelOverrides,
-                    portraitRefs.length > 0 ? portraitRefs : undefined,
-                    beat.beatNumber,
-                    costPhase(baseCostTelemetry, getImageTaskKey(storyConfig), {
-                      referenceCount: portraitRefs.length,
-                    }),
-                    storyAspectRatio,
-                    getImageTaskKey(storyConfig),
-                    getReelVisualStylePromptOptions(modelOverrides, storyConfig),
-                    storyConfig.imageModelSelection,
-                    imageContinuityOptions(storyConfig, portraitGenerationResult.latestState)
-                  ),
+                  async () => {
+                    // The early save is a fast DB insert; waiting for it here
+                    // lets the runtime persist the opening image server-side
+                    // (durable, no base64 round trip) when the pipeline is on.
+                    await earlySavePromise.catch(() => {});
+                    return generateImage(
+                      storyboardPrompt,
+                      beat.characters,
+                      initialSession.visualStyle!,
+                      modelOverrides,
+                      portraitRefs.length > 0 ? portraitRefs : undefined,
+                      beat.beatNumber,
+                      costPhase(baseCostTelemetry, getImageTaskKey(storyConfig), {
+                        referenceCount: portraitRefs.length,
+                      }),
+                      storyAspectRatio,
+                      getImageTaskKey(storyConfig),
+                      getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                      storyConfig.imageModelSelection,
+                      imageContinuityOptions(storyConfig, portraitGenerationResult.latestState),
+                      earlySavedStoryId
+                        ? { persistTarget: { storyId: earlySavedStoryId, nodeId: rootNodeId } }
+                        : undefined
+                    );
+                  },
                   {
                     referenceCount: portraitRefs.length,
                     beatNumber: beat.beatNumber,
@@ -2587,7 +2598,12 @@ export const useStoryStore = create<StoryState>()(
             }).catch((error) => console.error('Failed to link opening beat cost events:', error));
           }
 
-          if (earlySavedStoryId && imageResult.imageUrl) {
+          const openingImagePersisted = Boolean(
+            ('imageGenerationMetadata' in imageResult
+              ? (imageResult.imageGenerationMetadata as Record<string, unknown> | undefined)
+              : undefined)?.persisted
+          );
+          if (earlySavedStoryId && imageResult.imageUrl && !openingImagePersisted) {
             const stagedForRecovery = await stageGeneratedBeatImageForLocalRecovery({
               storyId: earlySavedStoryId,
               userId: earlySavedByUserId,
@@ -2630,8 +2646,12 @@ export const useStoryStore = create<StoryState>()(
             data: {
               ...normalizeBeatMediaFields({
                 ...beat,
-                persistedImageUrl: undefined,
-                imageStatus: promptOnly ? 'not_requested' : 'pending',
+                persistedImageUrl: openingImagePersisted ? imageResult.imageUrl : undefined,
+                imageStatus: promptOnly
+                  ? 'not_requested'
+                  : openingImagePersisted
+                  ? 'ready'
+                  : 'pending',
                 audioStatus: resolvedAudioUrl
                   ? (earlySavedStoryId ? 'ready' : 'not_requested')
                   : !defersLiveNarration(storyConfig)
@@ -3612,7 +3632,10 @@ export const useStoryStore = create<StoryState>()(
                   getImageTaskKey(session.storyConfig),
                   getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
                   session.storyConfig.imageModelSelection,
-                  imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState)
+                  imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState),
+                  session.savedStoryId
+                    ? { persistTarget: { storyId: session.savedStoryId, nodeId: newNodeId } }
+                    : undefined
                 ),
                 {
                   beatNumber: beat.beatNumber,
@@ -3623,7 +3646,8 @@ export const useStoryStore = create<StoryState>()(
           beat.imageUrl = promptOnly ? undefined : imageResult.imageUrl;
           beat = applyImageGenerationResultMetadata(beat, imageResult);
 
-          if (session.savedStoryId && imageResult.imageUrl) {
+          const branchImagePersisted = Boolean(imageResult.imageGenerationMetadata?.persisted);
+          if (session.savedStoryId && imageResult.imageUrl && !branchImagePersisted) {
             const recoveryUserId = await resolveCurrentUserId(session.savedByUserId);
             const stagedForRecovery = await stageGeneratedBeatImageForLocalRecovery({
               storyId: session.savedStoryId,
@@ -3681,7 +3705,12 @@ export const useStoryStore = create<StoryState>()(
                   ...(resolvedStoryTextOverlayAlignment
                     ? { storyTextOverlayAlignment: resolvedStoryTextOverlayAlignment }
                     : {}),
-                  imageStatus: promptOnly ? 'not_requested' : 'pending',
+                  imageStatus: promptOnly
+                    ? 'not_requested'
+                    : branchImagePersisted
+                    ? 'ready'
+                    : 'pending',
+                  ...(branchImagePersisted ? { persistedImageUrl: imageResult.imageUrl } : {}),
                   audioStatus: resolvedAudioUrl
                     ? (session.savedStoryId ? 'ready' : 'not_requested')
                     : !defersLiveNarration(session.storyConfig)
@@ -5060,6 +5089,20 @@ export const useStoryStore = create<StoryState>()(
           const storyboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
 
           if (effectiveImageMode === 'server_pipeline' && !promptOnly && session.savedStoryId) {
+            // The worker replays generateSelectedImage with this exact final
+            // prompt — built here because the prompt orchestrator is client code.
+            const jobFinalPrompt = buildFinalStoryboardImagePrompt(
+              storyboardPrompt,
+              beatForRender.characters,
+              session.visualStyle,
+              beatForRender.beatNumber,
+              modelOverrides,
+              {
+                aspectRatio: storyAspectRatio,
+                task: getImageTaskKey(session.storyConfig),
+                ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+              }
+            );
             const enqueueResult = await enqueueBeatImageJob({
               storyId: session.savedStoryId,
               nodeId,
@@ -5067,14 +5110,11 @@ export const useStoryStore = create<StoryState>()(
               beatNumber: beatForRender.beatNumber,
               reservationId,
               payload: {
-                prompt: storyboardPrompt,
-                characters: beatForRender.characters,
-                visualStyle: session.visualStyle,
-                modelOverrides,
+                finalPrompt: jobFinalPrompt,
                 beatNumber: beatForRender.beatNumber,
                 aspectRatio: storyAspectRatio,
                 imageTask: getImageTaskKey(session.storyConfig),
-                imagePromptOptions: getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                imageSize: normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings).imageSize,
                 imageModelSelection: session.storyConfig.imageModelSelection ?? null,
                 imageContinuity: imageContinuityOptions(
                   session.storyConfig,
@@ -6360,14 +6400,22 @@ export const useStoryStore = create<StoryState>()(
         if (!storyId) return;
         try {
           // Resume any interrupted image and narration jobs in parallel.
-          await Promise.all([
+          const [, , imageJobs] = await Promise.all([
             reconcileStoryBatch(storyId),
             reconcileStoryNarration(storyId).catch((error) =>
               console.error('reconcileStoryNarration failed:', error)
             ),
+            reconcileStoryImageJobs(storyId).catch((error) => {
+              console.error('reconcileStoryImageJobs failed:', error);
+              return { inFlight: 0 };
+            }),
           ]);
           // Re-hydrate so freshly materialized batch images/audio appear in the session.
           await get().loadStoryFromCloud(storyId);
+          // Keep watching interactive server-pipeline jobs that are still running.
+          if (imageJobs.inFlight > 0) {
+            startImageJobPolling(storyId);
+          }
         } catch (error) {
           console.error('reconcileCurrentStoryBatch failed:', error);
         }

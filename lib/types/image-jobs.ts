@@ -1,8 +1,9 @@
-import type { Character, StoryAspectRatio } from '@/lib/types/story';
+import type { StoryAspectRatio } from '@/lib/types/story';
 import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
-import type { ImageContinuityRuntimeOptions, StoryModelOverrides } from '@/app/actions/story-runtime';
+import type { PlanKey } from '@/lib/types/pricing';
+import type { ImageContinuityRuntimeOptions } from '@/app/actions/story-runtime';
 
 export type ImageGenerationJobKind = 'beat_image' | 'reel_image';
 
@@ -12,13 +13,6 @@ export type ImageGenerationJobStatus =
   | 'ready'
   | 'failed'
   | 'cancelled';
-
-/** Mirrors the private StoryboardImagePromptOptions shape in story-runtime. */
-export interface BeatImageJobPromptOptions {
-  visualStyleDefiner?: string;
-  noFaceRule?: string;
-  textOverlayMode?: string;
-}
 
 /**
  * Serializable reference image. Data URLs are staged to private R2 at enqueue
@@ -32,24 +26,26 @@ export interface BeatImageJobReference {
 }
 
 /**
- * The full generateImage() argument set, minus anything non-serializable.
- * The worker replays this against the same story-runtime entry point the
- * interactive flow uses, so results are identical across modes.
+ * Everything the worker needs to call generateSelectedImage() exactly as the
+ * interactive request would have. The final prompt is built client-side at
+ * enqueue time (the prompt-building orchestrator lives in the 'use client'
+ * story-runtime module), so worker retries are deterministic.
  */
 export interface BeatImageJobRequestPayload {
-  prompt: string;
-  characters: Character[];
-  visualStyle: string;
-  /** Snapshot taken at enqueue so worker retries are deterministic. */
-  modelOverrides?: StoryModelOverrides;
+  /** Fully-built final image prompt (buildFinalStoryboardImagePrompt output). */
+  finalPrompt: string;
   beatNumber?: number;
   aspectRatio: StoryAspectRatio;
   imageTask: 'image_generation' | 'reel_image_generation';
-  imagePromptOptions: BeatImageJobPromptOptions;
+  /** Storyboard quality setting snapshot (e.g. '1K', '2K'). */
+  imageSize?: string;
   imageModelSelection?: ImageModelSelection | null;
   imageContinuity?: ImageContinuityRuntimeOptions | null;
   costTelemetry?: CostTelemetryContext;
   references: BeatImageJobReference[];
+  /** Owner's plan at enqueue time — the worker has no cookie session, so
+   *  tier-gated model access and retention are resolved from this snapshot. */
+  currentPlanKey?: PlanKey;
 }
 
 export interface ImageGenerationJobRow {

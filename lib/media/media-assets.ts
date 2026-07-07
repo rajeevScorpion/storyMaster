@@ -15,6 +15,11 @@ export type MediaAssetType =
   | 'portrait'
   | 'unknown';
 
+/** Role of a stored object within a media group (migration 072). */
+export type MediaAssetVariant = 'legacy' | 'original' | 'display' | 'thumbnail' | 'share_low' | 'share_high';
+
+export type MediaAssetProcessingMode = 'client_legacy' | 'server_pipeline' | 'imported';
+
 export async function recordMediaAsset(input: {
   storyId?: string | null;
   beatId?: string | null;
@@ -35,6 +40,11 @@ export async function recordMediaAsset(input: {
   cacheControl?: string | null;
   status?: 'ready' | 'failed';
   errorMessage?: string | null;
+  variant?: MediaAssetVariant;
+  mediaGroupId?: string | null;
+  processingMode?: MediaAssetProcessingMode | null;
+  sourceJobId?: string | null;
+  originalExpiresAt?: string | null;
 }): Promise<void> {
   try {
     const admin = createAdminClient();
@@ -58,6 +68,11 @@ export async function recordMediaAsset(input: {
       cache_control: input.cacheControl ?? null,
       status: input.status ?? 'ready',
       error_message: input.errorMessage ?? null,
+      variant: input.variant ?? 'legacy',
+      media_group_id: input.mediaGroupId ?? null,
+      processing_mode: input.processingMode ?? null,
+      source_job_id: input.sourceJobId ?? null,
+      original_expires_at: input.originalExpiresAt ?? null,
     }, { onConflict: 'storage_provider,bucket,object_key' });
   } catch (error) {
     console.error('Failed to record media asset metadata:', error instanceof Error ? error.message : error);
