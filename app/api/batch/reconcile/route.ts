@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { reconcileActiveImageBatches } from '@/app/actions/image-batch';
 import { reconcileActiveNarrationJobs } from '@/app/actions/narration-batch';
+import { runImageGenerationJobs } from '@/lib/media/image-job-runner';
+import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -19,14 +21,32 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const [images, narration] = await Promise.all([
+    const [images, narration, imageJobs] = await Promise.all([
       reconcileActiveImageBatches(),
       reconcileActiveNarrationJobs().catch((error) => {
         console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
         return { processed: 0 };
       }),
+      // Backstop for interactive server-pipeline jobs: reclaims stale claims
+      // and drains pending work within its own time budget (self re-kicks).
+      runImageGenerationJobs({}).catch((error) => {
+        console.error('Image job reconcile failed:', error instanceof Error ? error.message : error);
+        return { processed: 0, failed: 0, remaining: 0 };
+      }),
     ]);
-    return NextResponse.json({ ok: true, ...images, narrationProcessed: narration.processed });
+    // Retention cleanup after the reconcile work (no-ops when disabled).
+    const cleanup = await cleanupExpiredOriginals().catch((error) => {
+      console.error('Retention cleanup failed:', error instanceof Error ? error.message : error);
+      return { scanned: 0, deleted: 0, failed: 0 };
+    });
+    return NextResponse.json({
+      ok: true,
+      ...images,
+      narrationProcessed: narration.processed,
+      imageJobsProcessed: imageJobs.processed,
+      imageJobsRemaining: imageJobs.remaining,
+      originalsDeleted: cleanup.deleted,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';
     console.error('Image batch reconcile route failed:', message);

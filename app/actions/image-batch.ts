@@ -25,7 +25,12 @@ import {
   authorizeBillableAction,
   finalizeBillableAction,
   releaseBillableAction,
+  resolvePlanKeyForUser,
 } from '@/lib/pricing/enforcement';
+import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+import { processAndStoreImageVariants } from '@/lib/media/variant-pipeline';
+import { parseR2Reference } from '@/lib/media/r2-reference';
+import type { PlanKey } from '@/lib/types/pricing';
 import {
   pollImageBatchWithProvider,
   submitImageBatchWithProvider,
@@ -485,6 +490,49 @@ async function uploadBeatImage(
   return normalizeStorageUrl(data.publicUrl, STORY_ASSETS_BUCKET);
 }
 
+/** Store a worker-generated beat image. With the media-pipeline bulk flag on,
+ *  the shared variant pipeline saves a tier-retained private original plus
+ *  webp variants and the display r2:// reference becomes the beat URL; any
+ *  pipeline failure falls back to the legacy single-webp upload so bulk jobs
+ *  never regress. */
+async function storeWorkerBeatImage(
+  admin: AdminClient,
+  job: { user_id: string; story_id: string },
+  nodeId: string,
+  dataUrl: string,
+  aspectRatio: string | undefined,
+  options: { variantsEnabled: boolean; planKey: PlanKey; sourceJobId: string | null }
+): Promise<{ url: string; storageKey: string | null }> {
+  if (options.variantsEnabled) {
+    try {
+      const variants = await processAndStoreImageVariants({
+        dataUrl,
+        userId: job.user_id,
+        storyId: job.story_id,
+        nodeId,
+        assetType: 'beat_image',
+        processingMode: 'server_pipeline',
+        planKey: options.planKey,
+        sourceJobId: options.sourceJobId,
+      });
+      const parsed = parseR2Reference(variants.displayReference);
+      return { url: variants.displayReference, storageKey: parsed?.objectKey ?? null };
+    } catch (error) {
+      console.error(
+        'Bulk variant pipeline failed; falling back to legacy upload:',
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+  const compressed = await compressImageDataUrlServer({
+    dataUrl,
+    assetType: 'beat_image',
+    aspectRatio,
+  });
+  const url = await uploadBeatImage(admin, job.user_id, job.story_id, nodeId, compressed.buffer);
+  return { url, storageKey: `${job.user_id}/${job.story_id}/${nodeId}/image.webp` };
+}
+
 async function applyReadyImagesToStoryMap(
   admin: AdminClient,
   storyId: string,
@@ -580,6 +628,10 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
   const items = (pendingItems ?? []) as BatchItemRow[];
   const resultByKey = new Map(poll.items.map((r) => [r.requestKey, r]));
 
+  const pipelineSettings = await getMediaPipelineSettings();
+  const variantsEnabled = pipelineSettings.variantsForBulkJobs;
+  const jobPlanKey: PlanKey = variantsEnabled ? await resolvePlanKeyForUser(job.user_id) : 'free';
+
   const readyByNode = new Map<string, string>();
   await mapWithConcurrency(items, MATERIALIZE_CONCURRENCY, async (item) => {
     const result = resultByKey.get(item.request_key);
@@ -594,19 +646,21 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
     }
     if (!result.dataUrl) return;
     try {
-      const compressed = await compressImageDataUrlServer({
-        dataUrl: result.dataUrl,
-        assetType: 'beat_image',
-        aspectRatio: item.aspect_ratio ?? undefined,
-      });
-      const url = await uploadBeatImage(admin, job.user_id, job.story_id, item.node_id, compressed.buffer);
+      const stored = await storeWorkerBeatImage(
+        admin,
+        job,
+        item.node_id,
+        result.dataUrl,
+        item.aspect_ratio ?? undefined,
+        { variantsEnabled, planKey: jobPlanKey, sourceJobId: job.id }
+      );
       await admin.from('image_batch_items')
-        .update({ status: 'ready', image_url: url, image_storage_key: `${job.user_id}/${job.story_id}/${item.node_id}/image.webp` })
+        .update({ status: 'ready', image_url: stored.url, image_storage_key: stored.storageKey })
         .eq('id', item.id);
       await admin.from('beats')
-        .update({ image_url: url, image_status: 'ready', image_error: null, image_synced_at: new Date().toISOString() })
+        .update({ image_url: stored.url, image_status: 'ready', image_error: null, image_synced_at: new Date().toISOString() })
         .eq('story_id', job.story_id).eq('node_id', item.node_id);
-      readyByNode.set(item.node_id, url);
+      readyByNode.set(item.node_id, stored.url);
       await recordBatchImageCost(admin, job, item, result.providerUsage);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Materialization failed.';
@@ -895,6 +949,9 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
   const config = normalizeStoryConfig((storyRow?.story_config as Partial<StoryConfig> | null) ?? null);
   const task = imageTaskForStoryKind(config.storyKind);
   const visualStyle = deriveVisualStyleSummary(config.visualSettings);
+  const pipelineSettings = await getMediaPipelineSettings();
+  const variantsEnabled = pipelineSettings.variantsForBulkJobs;
+  const jobPlanKey: PlanKey = variantsEnabled ? await resolvePlanKeyForUser(job.user_id) : 'free';
 
   // Resolve whether the selected model can actually thread state. Providers without
   // stateful support (e.g. groq, and future integrations) resolve to resend_refs —
@@ -1043,14 +1100,17 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
         continue;
       }
 
-      const compressed = await compressImageDataUrlServer({
-        dataUrl: result.dataUrl,
-        assetType: 'beat_image',
-        aspectRatio: item.aspect_ratio ?? config.aspectRatio,
-      });
-      const url = await uploadBeatImage(admin, job.user_id, job.story_id, item.node_id, compressed.buffer);
+      const stored = await storeWorkerBeatImage(
+        admin,
+        job,
+        item.node_id,
+        result.dataUrl,
+        item.aspect_ratio ?? config.aspectRatio,
+        { variantsEnabled, planKey: jobPlanKey, sourceJobId: job.id }
+      );
+      const url = stored.url;
       await admin.from('image_batch_items')
-        .update({ status: 'ready', image_url: url, image_storage_key: `${job.user_id}/${job.story_id}/${item.node_id}/image.webp` })
+        .update({ status: 'ready', image_url: url, image_storage_key: stored.storageKey })
         .eq('id', item.id);
       await admin.from('beats')
         .update({ image_url: url, image_status: 'ready', image_error: null, image_synced_at: new Date().toISOString() })

@@ -48,6 +48,7 @@ import {
   type TaskKey,
 } from '@/lib/ai/model-config.shared';
 import type { ImageModelSelection, ImageModelSnapshot } from '@/lib/ai/image-models.shared';
+import { persistInlineBeatImageAction } from '@/app/actions/media-persist';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   findReelDefiner,
@@ -1258,7 +1259,14 @@ export async function generateImage(
   imageTask: Extract<TaskKey, 'image_generation' | 'reel_image_generation'> = 'image_generation',
   imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {},
   imageModelSelection?: ImageModelSelection | null,
-  imageContinuity?: ImageContinuityRuntimeOptions | null
+  imageContinuity?: ImageContinuityRuntimeOptions | null,
+  // persistTarget: inline flows pass the saved story/node so the generated
+  // image is stored server-side (private original + variants) instead of
+  // relying on the browser to upload it later. All gating (admin setting,
+  // processing mode, ownership, R2 availability) happens server-side.
+  persistOptions?: {
+    persistTarget?: { storyId: string; nodeId: string };
+  }
 ): Promise<GeneratedImageResult> {
   const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
   const finalImagePrompt = buildFinalStoryboardImagePrompt(
@@ -1340,18 +1348,21 @@ export async function generateImage(
             },
             resolvedAspectRatio
           );
-          return {
-            imageUrl,
-            finalPromptText: finalImagePrompt,
-            imageModelSnapshot: result.modelSnapshot,
-            imageGenerationMetadata: {
-              ...result.metadata,
+          return finalizeInlineImageResult(
+            {
+              imageUrl,
+              finalPromptText: finalImagePrompt,
               imageModelSnapshot: result.modelSnapshot,
-              referenceCount: referenceParts.length,
-              aspectRatio: resolvedAspectRatio,
-              imageSize,
+              imageGenerationMetadata: {
+                ...result.metadata,
+                imageModelSnapshot: result.modelSnapshot,
+                referenceCount: referenceParts.length,
+                aspectRatio: resolvedAspectRatio,
+                imageSize,
+              },
             },
-          };
+            persistOptions?.persistTarget
+          );
         }
 
         if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
@@ -1391,19 +1402,22 @@ export async function generateImage(
               },
               resolvedAspectRatio
             );
-            return {
-              imageUrl,
-              finalPromptText: retryPrompt,
-              imageModelSnapshot: retryResult.modelSnapshot,
-              imageGenerationMetadata: {
-                ...retryResult.metadata,
+            return finalizeInlineImageResult(
+              {
+                imageUrl,
+                finalPromptText: retryPrompt,
                 imageModelSnapshot: retryResult.modelSnapshot,
-                referenceCount: referenceParts.length,
-                aspectRatio: resolvedAspectRatio,
-                imageSize,
-                retry: true,
+                imageGenerationMetadata: {
+                  ...retryResult.metadata,
+                  imageModelSnapshot: retryResult.modelSnapshot,
+                  referenceCount: referenceParts.length,
+                  aspectRatio: resolvedAspectRatio,
+                  imageSize,
+                  retry: true,
+                },
               },
-            };
+              persistOptions?.persistTarget
+            );
           }
         }
 
@@ -1421,6 +1435,37 @@ export async function generateImage(
       },
     };
   }
+}
+
+/** When an inline flow supplied a persist target, store the generated image
+ *  server-side (private original + variants) and hand the client a signed
+ *  display URL instead of multi-MB base64. Falls back to the base64 result
+ *  whenever the pipeline declines (legacy mode, setting off, R2 down). */
+async function finalizeInlineImageResult(
+  result: GeneratedImageResult,
+  persistTarget?: { storyId: string; nodeId: string }
+): Promise<GeneratedImageResult> {
+  if (!persistTarget || !result.imageUrl.startsWith('data:')) return result;
+  const persisted = await persistInlineBeatImageAction({
+    dataUrl: result.imageUrl,
+    storyId: persistTarget.storyId,
+    nodeId: persistTarget.nodeId,
+  }).catch((error) => {
+    console.error('Inline image persist action failed:', error);
+    return null;
+  });
+  if (!persisted) return result;
+  return {
+    ...result,
+    imageUrl: persisted.signedDisplayUrl,
+    imageGenerationMetadata: {
+      ...(result.imageGenerationMetadata ?? {}),
+      persisted: true,
+      persistedReference: persisted.displayReference,
+      mediaGroupId: persisted.mediaGroupId,
+      processingMode: 'server_pipeline',
+    },
+  };
 }
 
 async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): Promise<InlineImagePart[]> {

@@ -32,6 +32,14 @@ import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
+import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+import { resolveValidatedPublishQuality } from '@/lib/story/publish-quality';
+import {
+  generateShareToken,
+  normalizeStorylineVisibility,
+  type StorylinePublishQuality,
+  type StorylineVisibility,
+} from '@/lib/story/visibility';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -412,6 +420,14 @@ const ADDITIVE_STORY_COLUMNS = [
 
 const ADDITIVE_STORYLINE_COLUMNS = [
   'story_kind',
+  // Migration 073 visibility columns — stripped when the migration hasn't
+  // been applied yet so publishing keeps working during rollout.
+  'visibility',
+  'share_token',
+  'published_at',
+  'unpublished_at',
+  'moderation_status',
+  'publish_quality',
 ] as const;
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -2220,10 +2236,27 @@ export async function publishStoryline(params: {
   youtubeThumbnailPrompt?: string | null;
   reelThumbnailPrompt?: string | null;
   audioCoverPrompt?: string | null;
-}): Promise<{ storylineId: string }> {
+  visibility?: StorylineVisibility;
+  quality?: StorylinePublishQuality;
+}): Promise<{ storylineId: string; shareToken?: string | null }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Visibility + quality are server-validated; default keeps today's
+  // public-publish behavior.
+  const requestedVisibility = normalizeStorylineVisibility(params.visibility ?? 'public');
+  const pipelineSettings = await getMediaPipelineSettings();
+  if (requestedVisibility === 'public' && !pipelineSettings.publicPublishingEnabled) {
+    throw new Error('Public publishing is currently disabled by the admin.');
+  }
+  if (requestedVisibility === 'unlisted' && !pipelineSettings.unlistedSharingEnabled) {
+    throw new Error('Unlisted sharing is currently disabled by the admin.');
+  }
+  const { quality: validatedQuality } = await resolveValidatedPublishQuality(
+    params.storyId,
+    params.quality ?? 'standard'
+  );
 
   const { data: sourceStory } = await supabase
     .from('stories')
@@ -2278,7 +2311,15 @@ export async function publishStoryline(params: {
     beats: publishedBeats as unknown as Record<string, unknown>[],
     choices: params.choices as unknown as Record<string, unknown>[],
     author_name: profile?.display_name || 'Anonymous',
-    is_public: true,
+    is_public: requestedVisibility === 'public',
+    visibility: requestedVisibility,
+    publish_quality: validatedQuality,
+    published_at: requestedVisibility === 'public' ? new Date().toISOString() : null,
+    share_token: requestedVisibility === 'unlisted' ? generateShareToken() : null,
+    moderation_status:
+      requestedVisibility === 'public' && pipelineSettings.moderationRequiredForPublic
+        ? 'pending'
+        : 'none',
     path_hash: pathHash,
   };
 
@@ -2384,7 +2425,10 @@ export async function publishStoryline(params: {
     audioCoverPrompt: params.audioCoverPrompt ?? null,
   });
 
-  return { storylineId: publishedStorylineId };
+  return {
+    storylineId: publishedStorylineId,
+    shareToken: (storylineRow.share_token as string | null) ?? null,
+  };
 }
 
 // ============================================================

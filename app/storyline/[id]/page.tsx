@@ -1,5 +1,7 @@
 import { Suspense } from 'react';
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { shareTokensEqual } from '@/lib/story/visibility';
 import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import StorylinePersistenceLoader from '@/components/story/StorylinePersistenceLoader';
@@ -15,6 +17,7 @@ export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ token?: string }>;
 }
 
 function normalizeOriginValue(value: string | null | undefined): string | null {
@@ -55,8 +58,13 @@ async function getRequestOrigin(): Promise<string | null> {
   return headerOrigin ?? configuredOrigin;
 }
 
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   const { id } = await params;
+  const { token } = (await searchParams) ?? {};
+  // Tokenized (unlisted) links must never be indexed or previewed richly.
+  if (token) {
+    return { title: 'Storyline - Kissago', robots: { index: false, follow: false } };
+  }
   const supabase = await createClient();
 
   const { data: storyline } = await supabase
@@ -134,18 +142,39 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function StorylinePage({ params }: PageProps) {
+export default async function StorylinePage({ params, searchParams }: PageProps) {
   const { id } = await params;
+  const { token } = (await searchParams) ?? {};
   const supabase = await createClient();
 
   // Fetch the storyline (RLS allows public storylines for everyone)
-  const { data: storyline, error } = await supabase
+  let { data: storyline } = await supabase
     .from('storylines')
     .select('*')
     .eq('id', id)
-    .single();
+    .maybeSingle();
 
-  if (error || !storyline) {
+  // Unlisted storylines are hidden from RLS; a valid revocable share token
+  // grants access through a server-side service-role check instead.
+  let validatedShareToken: string | null = null;
+  if (!storyline && token) {
+    const admin = createAdminClient();
+    const { data: tokenRow } = await admin
+      .from('storylines')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    if (
+      tokenRow
+      && tokenRow.visibility === 'unlisted'
+      && shareTokensEqual(tokenRow.share_token, token)
+    ) {
+      storyline = tokenRow;
+      validatedShareToken = token;
+    }
+  }
+
+  if (!storyline) {
     notFound();
   }
 
@@ -202,6 +231,7 @@ export default async function StorylinePage({ params }: PageProps) {
         isSaved={isSaved}
         isLiked={isLiked}
         likeCount={likeCount}
+        shareToken={validatedShareToken}
       />
     </Suspense>
   );
