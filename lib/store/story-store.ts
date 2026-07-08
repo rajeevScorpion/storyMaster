@@ -2598,7 +2598,16 @@ export const useStoryStore = create<StoryState>()(
                   set({
                     session: fullSession,
                     isLoading: false,
-                    saveStatus: 'unsaved',
+                    // The opening beat (text, image state, narrator voice) is
+                    // already durably persisted server-side by this point —
+                    // via the early beat save and, once the job lands, the
+                    // worker's own writes to beats + story_map. Marking this
+                    // 'unsaved' would trigger the legacy full-session cloud
+                    // save (asset scan + story_map rewrite) for a beat with
+                    // nothing left to upload, racing the worker's own write
+                    // to the same story row and surfacing a confusing "taking
+                    // longer than usual" notice for a save that isn't needed.
+                    saveStatus: 'saved',
                     loadingClues: [],
                     loadingStage: null,
                     loadingReader: null,
@@ -3657,7 +3666,13 @@ export const useStoryStore = create<StoryState>()(
                     mergedMap
                   ),
                   isLoading: false,
-                  saveStatus: 'unsaved',
+                  // Same reasoning as the opening-beat branch in startStory:
+                  // the branch beat is already durably persisted (early save
+                  // + worker writes), so there's nothing left for the legacy
+                  // full-session save to do — and running it anyway races
+                  // the worker's own story_map write and produces a
+                  // misleading "cloud save taking longer" notice.
+                  saveStatus: 'saved',
                   loadingClues: [],
                   loadingStage: null,
                   loadingReader: null,
