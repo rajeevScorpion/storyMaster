@@ -50,7 +50,27 @@
       "PowerShell(taskkill /F /IM node.exe 2>&1)",
       "PowerShell(if \\($LASTEXITCODE -eq 0\\) { \"All node processes stopped.\" } else { \"No node processes found or error occurred.\" })",
       "Bash(ls -la \"d:\\\\AiCoding\\\\storyMaster\\\\\" | grep -i \"wrangler\\\\|cloudflare\")",
-      "Read(//d/AiCoding/**)"
+      "Read(//d/AiCoding/**)",
+      "Bash(tee /tmp/tsc_out.txt)",
+      "Read(//tmp/**)",
+      "Bash(npx eslint *)",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -m 30 http://localhost:3000/api/batch/reconcile)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -m 60 http://localhost:3000/story/smoke-test)",
+      "Bash(grep -vE '^\\\\s*$')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" -m 30 http://localhost:3000/story/smoke-test2)",
+      "PowerShell($conn = Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue; if \\($conn\\) { $conn.OwningProcess | Select-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop; \"stopped PID $_\" } catch {} } } else { \"no listener on 3000\" })",
+      "PowerShell(npx tsc --noEmit)",
+      "PowerShell(npm run lint 2>&1)",
+      "PowerShell(npm run build 2>&1)",
+      "Bash(git -C d:/AiCoding/storyMaster status --short)",
+      "Bash(git -C d:/AiCoding/storyMaster diff --stat)",
+      "PowerShell(npm run lint)",
+      "PowerShell(npm run build)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(git commit -m ' *)"
     ]
   },
   "sandbox": {

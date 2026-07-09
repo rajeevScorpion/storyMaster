@@ -1,4 +1,9 @@
 import type {
+  ImageModelSelection,
+  ImageTaskKey,
+} from '@/lib/ai/image-models.shared';
+import { normalizeImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import type {
   PortraitReferenceConfig,
   PortraitReferenceQuality,
   PortraitReferenceMode,
@@ -74,18 +79,94 @@ export const STORY_DETAIL_OPTIONS: Array<{ value: StoryDetailLevel; label: strin
   { value: 'lush', label: 'Lush' },
 ];
 
-export const STORY_LANGUAGE_OPTIONS: Array<{ value: Extract<StoryLanguage, 'english' | 'hindi'>; label: string }> = [
+export interface StoryLanguageOption {
+  value: StoryLanguage;
+  label: string;
+}
+
+/**
+ * Canonical language catalog for stories. Language controls the written story text
+ * AND the narration language sent to TTS. English narration variety (US/UK/…) is a
+ * separate axis handled by the accent picker — see lib/ai/narration-accents.ts.
+ *
+ * This is the full built-in catalog and the single source of truth for VALIDATION
+ * (normalizeStoryLanguage). Which of these are actually offered in the UI is a
+ * separate, admin-controlled concern — see the enabled-ids helpers below. Existing
+ * stories in a language later disabled by an admin keep working because validation
+ * still accepts the whole catalog.
+ */
+export const STORY_LANGUAGE_OPTIONS: StoryLanguageOption[] = [
   { value: 'english', label: 'English' },
-  { value: 'hindi', label: 'Hindi' },
+  { value: 'hindi', label: 'Hindi (हिन्दी)' },
+  { value: 'bangla', label: 'Bangla (বাংলা)' },
+  { value: 'gujarati', label: 'Gujarati (ગુજરાતી)' },
+  { value: 'marathi', label: 'Marathi (मराठी)' },
+  { value: 'urdu', label: 'Urdu (اردو)' },
 ];
 
-export const REEL_LANGUAGE_OPTIONS: Array<{ value: StoryLanguage; label: string }> = [
-  { value: 'english', label: 'English' },
-  { value: 'hindi', label: 'Hindi' },
-  { value: 'bangla', label: 'Bangla' },
-  { value: 'urdu', label: 'Urdu' },
-  { value: 'gujarati', label: 'Gujarati' },
+/** Reels share the same language catalog. */
+export const REEL_LANGUAGE_OPTIONS: StoryLanguageOption[] = STORY_LANGUAGE_OPTIONS;
+
+/** Feature flag holding the JSON array of admin-enabled story language ids. */
+export const STORY_LANGUAGE_ENABLED_FLAG_KEY = 'story_language_enabled_ids';
+
+/**
+ * Languages offered when no admin override exists. Urdu ships disabled by default;
+ * admins can enable it (and disable any other) from Global Settings.
+ */
+export const DEFAULT_ENABLED_STORY_LANGUAGE_IDS: StoryLanguage[] = [
+  'english',
+  'hindi',
+  'bangla',
+  'gujarati',
+  'marathi',
 ];
+
+const STORY_LANGUAGE_CATALOG_IDS = new Set<string>(STORY_LANGUAGE_OPTIONS.map((option) => option.value));
+
+/**
+ * Parse the stored enabled-language flag into a validated id list. Falls back to the
+ * default set when unset/malformed, and always guarantees at least one language
+ * (English) so the picker is never empty.
+ */
+export function parseEnabledStoryLanguageIds(value: string | null | undefined): StoryLanguage[] {
+  const fromDefault = () => [...DEFAULT_ENABLED_STORY_LANGUAGE_IDS];
+  if (!value?.trim()) return fromDefault();
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return fromDefault();
+    const seen = new Set<string>();
+    const ids: StoryLanguage[] = [];
+    for (const raw of parsed) {
+      const id = String(raw).trim().toLowerCase();
+      if (!STORY_LANGUAGE_CATALOG_IDS.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id as StoryLanguage);
+    }
+    if (ids.length === 0) return ['english'];
+    return ids;
+  } catch {
+    return fromDefault();
+  }
+}
+
+export function serializeEnabledStoryLanguageIds(ids: readonly StoryLanguage[]): string {
+  const seen = new Set<string>();
+  const clean = ids
+    .map((id) => String(id).trim().toLowerCase())
+    .filter((id) => STORY_LANGUAGE_CATALOG_IDS.has(id) && !seen.has(id) && seen.add(id));
+  return JSON.stringify(clean.length > 0 ? clean : ['english']);
+}
+
+/** The catalog entries a given enabled-id set maps to, preserving catalog order. */
+export function getEnabledStoryLanguageOptions(
+  enabledIds: readonly StoryLanguage[]
+): StoryLanguageOption[] {
+  const enabled = new Set<string>(enabledIds);
+  const options = STORY_LANGUAGE_OPTIONS.filter((option) => enabled.has(option.value));
+  return options.length > 0 ? options : [STORY_LANGUAGE_OPTIONS[0]];
+}
 
 export const SOURCE_FIDELITY_OPTIONS: Array<{
   value: SourceFidelity;
@@ -162,6 +243,9 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   settingCountry: 'generic',
   maxBeats: 6,
   imageGenerationMode: 'prompt_only',
+  imageDeliveryMode: 'live',
+  episodicCharacters: false,
+  imageContinuityStrategy: 'auto',
   isVerticalStory: false,
   aspectRatio: '16:9',
   visualSettings: DEFAULT_VISUAL_SETTINGS,
@@ -211,6 +295,10 @@ type RawStoryConfig = Partial<StoryConfig> & {
   is_vertical_story?: boolean | null;
   aspect_ratio?: string | null;
   visualSettings?: Partial<VisualSettings> | null;
+  imageModelSelection?: Partial<ImageModelSelection> | null;
+  image_model_selection?: Partial<ImageModelSelection> | null;
+  imageContinuityStrategy?: string | null;
+  image_continuity_strategy?: string | null;
   authoring?: (Partial<StoryAuthoringConfig> & {
     mode?: string | null;
     preludeText?: string | null;
@@ -253,6 +341,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
   const narrationVoice = normalizeNarrationVoiceSelection(input?.narrationVoice);
+  const imageModelSelection = normalizeImageModelSelection(input?.imageModelSelection ?? input?.image_model_selection);
   const isVerticalStory = storyKind === 'reel' ? true : normalizeVerticalStoryFlag(input);
   const aspectRatio = isVerticalStory ? '9:16' : '16:9';
   const maxBeats = storyKind === 'reel'
@@ -266,6 +355,12 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats,
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),
+    imageDeliveryMode: normalizeImageDeliveryMode(input?.imageDeliveryMode),
+    episodicCharacters: input?.episodicCharacters === true,
+    ...(imageModelSelection ? { imageModelSelection } : {}),
+    imageContinuityStrategy: normalizeImageContinuityStrategy(
+      input?.imageContinuityStrategy ?? input?.image_continuity_strategy
+    ),
     isVerticalStory,
     aspectRatio,
     visualSettings,
@@ -276,6 +371,27 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     portraitReferences,
     ...(narrationVoice ? { narrationVoice } : {}),
   };
+}
+
+function normalizeImageModelSelection(input?: Partial<ImageModelSelection> | null): ImageModelSelection | undefined {
+  const modelKey = sanitizeText(input?.modelKey);
+  if (!modelKey) {
+    return undefined;
+  }
+
+  const taskKey = normalizeImageTaskKey(input?.taskKey);
+  return {
+    ...(taskKey ? { taskKey } : {}),
+    modelKey,
+  };
+}
+
+function normalizeImageTaskKey(value?: string | null): ImageTaskKey | undefined {
+  if (value === 'image_generation' || value === 'reel_image_generation' || value === 'portrait_generation') {
+    return value;
+  }
+
+  return undefined;
 }
 
 function normalizeStoryTextOverlayConfig(
@@ -364,8 +480,12 @@ function normalizeNarrationVoiceSelection(
   }
 
   const mode = normalizeNarrationVoiceMode(input.mode);
+  const accent = sanitizeText(input.accent).toLowerCase();
+
   if (mode === 'legacy_auto') {
-    return { mode };
+    // Accent is independent of the voice-selection mode — preserve it even when the
+    // narrator voice itself is auto-selected.
+    return { mode, ...(accent ? { accent } : {}) };
   }
 
   const voiceId = sanitizeText(input.voiceId);
@@ -377,6 +497,7 @@ function normalizeNarrationVoiceSelection(
     genderBucket,
     ...(voiceId ? { voiceId } : {}),
     ...(languageCode ? { languageCode } : {}),
+    ...(accent ? { accent } : {}),
   };
 }
 
@@ -543,7 +664,14 @@ function clampMaxBeats(value?: number | null): number {
 }
 
 function normalizeImageGenerationMode(value?: string | null): StoryConfig['imageGenerationMode'] {
-  return value === 'prompt_only' ? 'prompt_only' : DEFAULT_STORY_CONFIG.imageGenerationMode;
+  if (value === 'generate' || value === 'prompt_only') {
+    return value;
+  }
+  return DEFAULT_STORY_CONFIG.imageGenerationMode;
+}
+
+function normalizeImageDeliveryMode(value?: string | null): StoryConfig['imageDeliveryMode'] {
+  return value === 'batch' || value === 'stateful' ? value : 'live';
 }
 
 function normalizeVerticalStoryFlag(input?: RawStoryConfig | null): boolean {

@@ -2,8 +2,14 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
-import { updateBeatMediaState } from '@/app/actions/persistence';
+import { updateBeatMediaState, updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
+import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
+import {
+  estimateElevenLabsForcedAlignmentCostUsd,
+  getElevenLabsForcedAlignmentUsdPerHour,
+} from '@/lib/ai/provider-costs';
 import { normalizeStoryConfig, isReelStoryConfig } from '@/lib/ai/story-config';
 import {
   applyForcedAlignmentToStoryCaptions,
@@ -85,11 +91,14 @@ type StoryTextOverlaySourceBeat = Pick<
   | 'storyTextOverlayStyle'
   | 'storyTextOverlayCaptions'
   | 'storyTextOverlayAlignment'
+  | 'narrationMetadata'
 >;
 
 interface LoadedStoryTextOverlayBeat {
   storyId: string;
+  beatId: string | null;
   nodeId: string;
+  beatNumber: number | null;
   storyConfig: StoryConfig;
   beat: StoryTextOverlaySourceBeat;
 }
@@ -112,11 +121,11 @@ function normalizeOverlayConfig(config: Partial<StoryTextOverlayConfig> | null |
 }
 
 function parseDataAudioUrl(dataUrl: string): { buffer: Buffer; mimeType: string } | null {
-  const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/);
-  if (!match) return null;
+  const parsed = splitBase64DataUrl(dataUrl);
+  if (!parsed) return null;
   return {
-    mimeType: match[1] || 'audio/wav',
-    buffer: Buffer.from(match[2], 'base64'),
+    mimeType: parsed.mimeType || 'audio/wav',
+    buffer: Buffer.from(parsed.base64, 'base64'),
   };
 }
 
@@ -220,6 +229,8 @@ async function buildStoryOverlayTiming(input: {
   storyText: string;
   storyTextParts?: StoryTextParts;
   supabase?: SupabaseClient;
+  costTelemetry?: CostTelemetryContext | null;
+  audioSeconds?: number | null;
 }): Promise<{
   captions: StoryTextOverlayCaption[];
   alignment: StoryTextOverlayAlignment;
@@ -229,6 +240,7 @@ async function buildStoryOverlayTiming(input: {
     storyTextParts: input.storyTextParts,
   });
 
+  const startedAt = Date.now();
   try {
     const audio = await readAudioUrl(input.audioUrl, input.supabase);
     const response = await callElevenLabsForcedAlignment({
@@ -236,9 +248,31 @@ async function buildStoryOverlayTiming(input: {
       mimeType: audio.mimeType,
       transcript: input.storyText,
     });
-    return applyForcedAlignmentToStoryCaptions(captions, response);
+    const overlay = applyForcedAlignmentToStoryCaptions(captions, response);
+    const audioSeconds = input.audioSeconds || getCaptionAudioSeconds(overlay.captions);
+    await recordForcedAlignmentCostEvent({
+      context: input.costTelemetry,
+      status: 'success',
+      storyText: input.storyText,
+      audioSeconds,
+      latencyMs: Date.now() - startedAt,
+      alignedWordCount: overlay.alignment.alignedWordCount,
+      loss: overlay.alignment.loss,
+    });
+    return overlay;
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Story text alignment failed.';
+    await recordForcedAlignmentCostEvent({
+      context: input.costTelemetry,
+      status: 'failed',
+      storyText: input.storyText,
+      audioSeconds: input.audioSeconds,
+      latencyMs: Date.now() - startedAt,
+      error: message,
+      failedBeforeProviderCall:
+        message.includes('ELEVENLABS_API_KEY')
+        || message.includes('Unable to load story narration audio'),
+    });
     console.warn('[story-narration] Forced alignment failed; story overlay will show without timed highlight:', message);
     return {
       captions,
@@ -261,6 +295,65 @@ function getStoryTextPartsFromMap(storyMap: unknown, nodeId: string): StoryTextP
 
 function isSyncedAlignment(alignment: StoryTextOverlayAlignment): boolean {
   return alignment.source === 'elevenlabs_forced_alignment' && alignment.textHighlightSupported !== false;
+}
+
+function getCaptionAudioSeconds(captions: StoryTextOverlayCaption[]): number {
+  const maxEndMs = captions.reduce((max, caption) => Math.max(max, caption.endMs ?? 0), 0);
+  return maxEndMs > 0 ? maxEndMs / 1000 : 0;
+}
+
+function withOverlayPhase(context: CostTelemetryContext): CostTelemetryContext {
+  return {
+    ...context,
+    phase: 'story_text_overlay_alignment',
+    metadata: {
+      ...(context.metadata || {}),
+      overlayProvider: 'elevenlabs',
+      overlayEndpoint: 'forced-alignment',
+    },
+  };
+}
+
+async function recordForcedAlignmentCostEvent(input: {
+  context?: CostTelemetryContext | null;
+  status: 'success' | 'failed';
+  storyText: string;
+  audioSeconds?: number | null;
+  latencyMs: number;
+  alignedWordCount?: number | null;
+  loss?: number | null;
+  error?: string | null;
+  failedBeforeProviderCall?: boolean;
+}) {
+  if (!input.context) return;
+
+  const audioSeconds = Math.max(0, Number.isFinite(input.audioSeconds ?? NaN) ? Number(input.audioSeconds) : 0);
+  const [estimatedCostUsd, usdPerHour] = await Promise.all([
+    input.status === 'success'
+      ? estimateElevenLabsForcedAlignmentCostUsd({ audioSeconds })
+      : Promise.resolve(0),
+    getElevenLabsForcedAlignmentUsdPerHour(),
+  ]);
+
+  await recordModelCostEvent({
+    context: withOverlayPhase(input.context),
+    taskKey: 'story_text_overlay_alignment',
+    provider: 'elevenlabs',
+    modelId: 'elevenlabs-forced-alignment',
+    audioSeconds,
+    latencyMs: input.latencyMs,
+    estimatedCostUsdOverride: estimatedCostUsd,
+    status: input.status,
+    metadata: {
+      transcriptCharacterCount: input.storyText.length,
+      pricingBasis: 'audio_seconds',
+      forcedAlignmentUsdPerHour: usdPerHour,
+      ...(input.alignedWordCount != null ? { alignedWordCount: input.alignedWordCount } : {}),
+      ...(input.loss != null && Number.isFinite(input.loss) ? { loss: input.loss } : {}),
+      ...(input.error ? { error: input.error.slice(0, 240) } : {}),
+      ...(input.failedBeforeProviderCall ? { failedBeforeProviderCall: true } : {}),
+    },
+  });
 }
 
 async function loadSavedStoryOverlayBeat(
@@ -312,7 +405,9 @@ async function loadSavedStoryOverlayBeat(
 
   return {
     storyId,
+    beatId: beat.id || null,
     nodeId,
+    beatNumber: typeof beat.beat_number === 'number' ? beat.beat_number : null,
     storyConfig,
     beat: {
       isStoryboard: Boolean(beat.is_storyboard || mapBeat?.isStoryboard),
@@ -320,6 +415,7 @@ async function loadSavedStoryOverlayBeat(
       audioUrl: beat.audio_url || mapBeat?.audioUrl,
       storyText: beat.story_text || mapBeat?.storyText || '',
       storyTextParts: mapTextParts,
+      narrationMetadata: (beat.narration_metadata as StoryBeat['narrationMetadata'] | undefined) ?? mapBeat?.narrationMetadata,
       storyTextOverlayEnabled: typeof beat.story_text_overlay_enabled === 'boolean'
         ? beat.story_text_overlay_enabled
         : mapBeat?.storyTextOverlayEnabled,
@@ -354,6 +450,16 @@ async function generateAndPersistOverlayForLoadedBeat(
     storyText: source.beat.storyText,
     storyTextParts: source.beat.storyTextParts,
     supabase,
+    costTelemetry: {
+      activityKey: 'generate_story_text_overlay',
+      storyId: source.storyId,
+      beatId: source.beatId,
+      nodeId: source.nodeId,
+      beatNumber: source.beatNumber,
+    },
+    audioSeconds: source.beat.narrationMetadata?.durationMs
+      ? source.beat.narrationMetadata.durationMs / 1000
+      : null,
   });
 
   await updateBeatMediaState(source.storyId, source.nodeId, {
@@ -470,8 +576,12 @@ export async function generateAndPersistStoryNarrationWithOverlay(
   costTelemetry?: CostTelemetryContext,
   options: {
     narrationStyle?: string;
+    accent?: string | null;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
+    // Background worker path: persist on behalf of `userId` via the service-role
+    // client. Absent for the interactive path (unchanged behaviour).
+    serverAuth?: { userId: string };
   } = {}
 ): Promise<StoryOverlayNarrationResult> {
   const overlayConfig = normalizeOverlayConfig(options.overlayConfig);
@@ -487,6 +597,8 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      accent: options.accent,
+      ...(options.serverAuth ? { serverAuth: options.serverAuth } : {}),
     }
   );
 
@@ -494,16 +606,22 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     audioUrl: narration.audioUrl,
     storyText,
     storyTextParts: options.storyTextParts,
+    costTelemetry,
+    audioSeconds: narration.narrationMetadata?.durationMs
+      ? narration.narrationMetadata.durationMs / 1000
+      : null,
   });
 
   try {
-    await updateBeatMediaState(savedStoryId, nodeId, {
+    // Retry BEAT_ROW_NOT_FOUND: in interactive mode the beat row may still be landing
+    // from the client's fire-and-forget save. The worker path (serverAuth) opts out.
+    await updateBeatMediaStateWithRetry(savedStoryId, nodeId, {
       storyTextOverlayEnabled: overlayConfig.enabled,
       storyTextOverlayMode: overlayConfig.mode,
       storyTextOverlayStyle: overlayConfig.style,
       storyTextOverlayCaptions: overlay.captions,
       storyTextOverlayAlignment: overlay.alignment,
-    });
+    }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
   } catch (error) {
     console.warn(
       '[story-narration] Failed to persist story text overlay metadata:',
@@ -531,6 +649,7 @@ export async function generateStoryNarrationOnlyWithOverlay(
   costTelemetry?: CostTelemetryContext,
   options: {
     narrationStyle?: string;
+    accent?: string | null;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
   } = {}
@@ -546,12 +665,14 @@ export async function generateStoryNarrationOnlyWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      accent: options.accent,
     }
   );
   const overlay = await buildStoryOverlayTiming({
     audioUrl,
     storyText,
     storyTextParts: options.storyTextParts,
+    costTelemetry,
   });
 
   return {

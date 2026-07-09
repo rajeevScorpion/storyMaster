@@ -12,6 +12,7 @@ import {
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
+import { estimateElevenLabsModelCostUsd } from '@/lib/ai/provider-costs';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { StoryBeat, WordTiming } from '@/lib/types/story';
@@ -33,15 +34,22 @@ import {
   type ReelNarrationSettings,
   type WordTimestamp,
 } from '@/lib/reel/narration';
-import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
+import {
+  getNarrationVoiceSettings,
+  getNarrationAccentInstruction,
+  getNarrationAccentSelectionForPlan,
+} from '@/lib/ai/narration-voice-settings';
+import { getAllowedAccentIdsForPlan, isEnglishNarrationLanguage, narrationLanguageDisplayName } from '@/lib/ai/narration-accents';
+import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
-import { updateBeatMediaState } from '@/app/actions/persistence';
+import { updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { putR2Object, createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { recordMediaAsset } from '@/lib/media/media-assets';
 import {
   getDefaultVoiceForGender,
   resolveStoryNarrationLanguage,
+  SUPPORTED_NARRATION_VOICE_LANGUAGES,
   type NarrationGenderBucket,
   type NarrationLanguageCode,
   type NarrationVoiceClientConfig,
@@ -309,11 +317,38 @@ async function listNarrationVoiceSampleStatuses(
 }
 
 export async function getNarrationVoiceSelectionConfig(
-  storyLanguage: string = 'english'
+  storyLanguage: string = 'english',
+  // `skipPlanResolution` avoids the per-user plan lookup (which reads cookies) so
+  // this can run inside a shared `unstable_cache` scope — e.g. the anonymous
+  // landing-page data cache. The plan-specific accent gating is then re-resolved
+  // per user at runtime by LandingScreen. Resolving a per-user plan inside a
+  // cross-user cache would be both an unstable_cache violation and semantically
+  // wrong (one user's plan leaking into everyone's cached payload).
+  options: { skipPlanResolution?: boolean } = {}
 ): Promise<NarrationVoiceClientConfig> {
   const settings = await getNarrationVoiceSettings();
   const languageResolution = resolveStoryNarrationLanguage(storyLanguage);
   const samples = await listNarrationVoiceSampleStatuses(settings);
+
+  // Accents are English-only and gated by the current user's plan.
+  let accentEnabled = false;
+  let accentOptions: NarrationVoiceClientConfig['accentOptions'] = [];
+  let defaultAccent = settings.defaultAccent;
+  if (settings.accentSelectionEnabled && isEnglishNarrationLanguage(storyLanguage)) {
+    let planKey: string | null = null;
+    if (!options.skipPlanResolution) {
+      try {
+        const pricing = await getPricingRuntimeContext();
+        planKey = pricing.snapshot.planKey ?? null;
+      } catch (error) {
+        console.warn('[narration] Failed to load plan for accent options:', error);
+      }
+    }
+    const accentSelection = await getNarrationAccentSelectionForPlan(planKey);
+    accentEnabled = accentSelection.enabled && accentSelection.accentOptions.length > 0;
+    accentOptions = accentSelection.accentOptions;
+    defaultAccent = accentSelection.defaultAccent;
+  }
 
   return {
     enabled: settings.userLedVoiceSelectionEnabled,
@@ -322,9 +357,13 @@ export async function getNarrationVoiceSelectionConfig(
     defaultMaleVoice: settings.defaultMaleVoice,
     defaultFemaleVoice: settings.defaultFemaleVoice,
     languageCode: languageResolution.languageCode,
-    requestedStoryLanguage: storyLanguage === 'hindi' ? 'hindi' : 'english',
+    requestedStoryLanguage:
+      SUPPORTED_NARRATION_VOICE_LANGUAGES.find((lang) => lang.storyLanguage === storyLanguage)?.storyLanguage ?? 'english',
     fallbackToEnglishSample: languageResolution.fallbackToEnglishSample,
     samples: samples.filter((sample) => sample.languageCode === languageResolution.languageCode),
+    accentEnabled,
+    accentOptions,
+    defaultAccent,
   };
 }
 
@@ -513,6 +552,9 @@ async function callGeminiTTS(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    // Accent id (e.g. 'us', 'uk') locked on the story. Resolved to a natural-language
+    // prompt instruction here — the only lever Gemini TTS exposes for accent.
+    accent?: string | null;
   } = {}
 ): Promise<GeminiTTSResult> {
   return timeNarrationStep(
@@ -526,16 +568,47 @@ async function callGeminiTTS(
       const ai = new GoogleGenAI({ apiKey: getApiKey() });
       const taskKey = options.taskKey ?? 'tts';
       const ttsConfig = await getModelConfig(taskKey);
-      const ttsPrompt = resolvePromptTemplate(
+      // Accent steering only applies to English narration; for other languages the
+      // built-in accents don't apply, so we leave the {{accent}} slot blank.
+      const accentInstruction = options.accent && isEnglishNarrationLanguage(language)
+        ? (await getNarrationAccentInstruction(options.accent)) ?? ''
+        : '';
+      // Always feed the prompt a plain, region-neutral language NAME rather than a
+      // locale code. Gemini TTS has no locale parameter — the {{language}} slot is
+      // pure prompt text, so a code like "en-IN" reads as "narrate in en-IN" and
+      // hard-steers Indian English, overriding any accent instruction. Using the
+      // bare name ("English", "Bangla", "Marathi") lets the accent decide the variety.
+      const promptLanguage = narrationLanguageDisplayName(language);
+      let ttsPrompt = resolvePromptTemplate(
         await getPublishedPrompt(taskKey),
         {
           storyText,
           tone,
           genre,
-          language,
+          language: promptLanguage,
           narrationStyle: options.narrationStyle || tone,
+          accent: accentInstruction,
         }
       );
+      // Defensive: a published prompt template saved before the {{accent}} slot
+      // existed would silently drop the instruction. Ensure it always reaches the
+      // model so a locked accent actually takes effect regardless of prompt version.
+      if (accentInstruction && !ttsPrompt.includes(accentInstruction)) {
+        ttsPrompt = `${accentInstruction}\n${ttsPrompt}`;
+      }
+      // TEMP DEBUG: prints the exact prompt sent to Gemini TTS so we can verify the
+      // accent instruction actually reaches the model on the live path. Remove once
+      // accent behavior is confirmed.
+      console.info('[narration.tts_prompt_debug]', {
+        taskKey,
+        language,
+        promptLanguage,
+        voiceName,
+        requestedAccent: options.accent ?? null,
+        accentApplied: Boolean(accentInstruction),
+        accentInstruction: accentInstruction || null,
+        resolvedPrompt: ttsPrompt,
+      });
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
       const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
 
@@ -783,6 +856,39 @@ function getAlignmentDurationMs(alignment: ElevenLabsAlignment | undefined): num
   return last ? Math.round(last * 1000) : 0;
 }
 
+async function recordElevenLabsReelTtsCostEvent(input: {
+  costTelemetry: CostTelemetryContext | undefined;
+  taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+  modelId: string;
+  characterCount: number;
+  audioSeconds?: number | null;
+  latencyMs?: number | null;
+  status?: 'success' | 'failed';
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  if (!input.costTelemetry) return;
+  const estimatedSuccessCostUsd = await estimateElevenLabsModelCostUsd({
+    modelId: input.modelId,
+    characterCount: input.characterCount,
+  }).catch(() => 0);
+  const status = input.status ?? 'success';
+  await recordModelCostEvent({
+    context: input.costTelemetry,
+    taskKey: input.taskKey ?? 'reel_tts',
+    provider: 'elevenlabs',
+    modelId: input.modelId,
+    audioSeconds: input.audioSeconds ?? null,
+    latencyMs: input.latencyMs ?? null,
+    status,
+    estimatedCostUsdOverride: status === 'success' ? estimatedSuccessCostUsd : 0,
+    metadata: {
+      charsUsed: input.characterCount,
+      estimatedSuccessCostUsd,
+      ...(input.metadata || {}),
+    },
+  });
+}
+
 function buildBeatNarrationMetadata(input: {
   payload: NarrationAudioPayload;
   audioUrl?: string | null;
@@ -906,6 +1012,7 @@ async function buildGeminiReelAudio(input: {
   panelPauseMs: number;
   narrationStyle?: string;
   taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
+  accent?: string | null;
 }): Promise<{
   buffer: Buffer;
   reelCaptions?: ReelCaptionTiming;
@@ -957,6 +1064,7 @@ async function buildGeminiReelAudio(input: {
         {
           taskKey: input.taskKey,
           narrationStyle: panelScript.deliveryInstruction || input.narrationStyle || input.tone,
+          accent: input.accent,
         }
       );
       const pcm = Buffer.from(result.pcmBase64, 'base64');
@@ -1002,6 +1110,7 @@ async function buildGeminiReelAudio(input: {
     {
       taskKey: input.taskKey,
       narrationStyle: baseScript.deliveryInstruction || input.narrationStyle,
+      accent: input.accent,
     }
   );
   const durationMs = pcmBase64DurationMs(result.pcmBase64);
@@ -1026,6 +1135,7 @@ async function buildNarrationAudioPayload(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    accent?: string | null;
     reelCaptions?: ReelCaptionTiming;
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
@@ -1071,8 +1181,25 @@ async function buildNarrationAudioPayload(
         adminSettings: reelSettings.narration,
       }
     );
+    const elevenAttemptStartedAt = narrationNowMs();
     const fallbackToGemini = async (error: unknown): Promise<NarrationAudioPayload> => {
       console.warn('ElevenLabs reel TTS failed; falling back to Gemini TTS:', error instanceof Error ? error.message : error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      await recordElevenLabsReelTtsCostEvent({
+        costTelemetry,
+        taskKey: options.taskKey,
+        modelId: elevenNarrationSettings.model,
+        characterCount: narrationText.length,
+        latencyMs: narrationNowMs() - elevenAttemptStartedAt,
+        status: 'failed',
+        metadata: {
+          errorMessage,
+          voiceId: elevenNarrationSettings.voiceId,
+          language: elevenNarrationSettings.language,
+          presetId: elevenNarrationSettings.presetId,
+          generationMode: options.generationMode ?? 'final',
+        },
+      });
       const gemini = await buildGeminiReelAudio({
         narrationText,
         tone,
@@ -1089,8 +1216,8 @@ async function buildNarrationAudioPayload(
         panelPauseMs,
         narrationStyle: options.narrationStyle || tone,
         taskKey: options.taskKey,
+        accent: options.accent,
       });
-      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         buffer: gemini.buffer,
         mimeType: 'audio/wav',
@@ -1157,6 +1284,23 @@ async function buildNarrationAudioPayload(
       const wordTimestamps = flattenWordTimestamps(reelCaptions);
       const textHighlightSupported = getTextHighlightSupported('elevenlabs', wordTimestamps);
       const durationMs = getAlignmentDurationMs(eleven.alignment) || getLastCaptionEndMs(reelCaptions);
+      await recordElevenLabsReelTtsCostEvent({
+        costTelemetry,
+        taskKey: options.taskKey,
+        modelId: elevenNarrationSettings.model,
+        characterCount: narrationText.length,
+        audioSeconds: durationMs > 0 ? durationMs / 1000 : null,
+        latencyMs: narrationNowMs() - elevenAttemptStartedAt,
+        status: 'success',
+        metadata: {
+          voiceId: elevenNarrationSettings.voiceId,
+          language: elevenNarrationSettings.language,
+          presetId: elevenNarrationSettings.presetId,
+          generationMode: options.generationMode ?? 'final',
+          expressiveTagsUsed: elevenScript.expressiveTagsUsed,
+          timestampSource: textHighlightSupported ? 'elevenlabs' : 'none',
+        },
+      });
 
       return {
         buffer: eleven.audioBuffer,
@@ -1205,6 +1349,7 @@ async function buildNarrationAudioPayload(
         panelPauseMs,
         narrationStyle: options.narrationStyle,
         taskKey: options.taskKey,
+        accent: options.accent,
       })
     : null;
   const nonReelGemini = !isReel
@@ -1218,6 +1363,7 @@ async function buildNarrationAudioPayload(
         {
           taskKey: options.taskKey,
           narrationStyle: options.narrationStyle,
+          accent: options.accent,
         }
       )
     : null;
@@ -1304,11 +1450,15 @@ export async function generateAndPersistNarration(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    accent?: string | null;
     reelCaptions?: ReelCaptionTiming;
     reelSettings?: ReelStorySettings;
     narrationSettings?: ReelNarrationSettings;
     generationMode?: NarrationGenerationMode;
     panelPauseMs?: number;
+    // When present, upload + persist on behalf of `userId` via the service-role
+    // client (background worker path). Absent for the interactive path.
+    serverAuth?: { userId: string };
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata?: BeatNarrationMetadata }> {
   return timeNarrationStep(
@@ -1322,11 +1472,17 @@ export async function generateAndPersistNarration(
     async () => {
       const audioPayload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, options);
 
-      const supabase = await createClient();
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError || !user) throw new Error('Not authenticated');
+      const supabase = options.serverAuth ? createAdminClient() : await createClient();
+      let userId: string;
+      if (options.serverAuth) {
+        userId = options.serverAuth.userId;
+      } else {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || !user) throw new Error('Not authenticated');
+        userId = user.id;
+      }
 
-      const storagePath = `${user.id}/${savedStoryId}/${nodeId}/audio.${audioPayload.extension}`;
+      const storagePath = `${userId}/${savedStoryId}/${nodeId}/audio.${audioPayload.extension}`;
       const r2ObjectKey = `stories/${savedStoryId}/beats/${nodeId}/audio.${audioPayload.extension}`;
       const storageConfig = await getEffectiveMediaStorageConfig();
       let persistedAudioUrl: string | null = null;
@@ -1353,7 +1509,7 @@ export async function generateAndPersistNarration(
               await recordMediaAsset({
                 storyId: savedStoryId,
                 nodeId,
-                userId: user.id,
+                userId,
                 assetType: 'narration_audio',
                 storageProvider: 'r2',
                 bucket: r2.bucket,
@@ -1406,7 +1562,7 @@ export async function generateAndPersistNarration(
           await recordMediaAsset({
             storyId: savedStoryId,
             nodeId,
-            userId: user.id,
+            userId,
             assetType: 'narration_audio',
             storageProvider: 'supabase',
             bucket: 'story-assets',
@@ -1429,7 +1585,11 @@ export async function generateAndPersistNarration(
         },
         async () => {
           try {
-            await updateBeatMediaState(savedStoryId, nodeId, {
+            // Interactive mode kicks off narration before the client's fire-and-forget
+            // beat save has inserted the beat row, so retry BEAT_ROW_NOT_FOUND until the
+            // insert lands. The worker path (serverAuth) inserts the row first, so it
+            // opts out of retries.
+            await updateBeatMediaStateWithRetry(savedStoryId, nodeId, {
               audioUrl: persistedAudioUrl,
               audioStatus: 'ready',
               audioError: null,
@@ -1441,7 +1601,7 @@ export async function generateAndPersistNarration(
               }),
               activeNarrationPreviewId: null,
               ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
-            });
+            }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
             narrationMetadata = buildBeatNarrationMetadata({
               payload: audioPayload,
               audioUrl: persistedAudioUrl,
@@ -1482,7 +1642,7 @@ export async function generateAndPersistNarration(
       await recordNarrationGenerationLog({
         storyId: savedStoryId,
         nodeId,
-        userId: user.id,
+        userId,
         mode: options.generationMode ?? 'final',
         payload: audioPayload,
         storagePath: persistedAudioUrl,
@@ -1515,6 +1675,7 @@ export async function generateNarrationOnly(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    accent?: string | null;
   } = {}
 ): Promise<string> {
   return timeNarrationStep(
@@ -1676,6 +1837,7 @@ export async function resolveNarrationVoiceServer(input: {
   requestedMode?: NarrationVoiceMode | null;
   requestedVoiceId?: string | null;
   requestedGenderBucket?: NarrationGenderBucket | null;
+  requestedAccent?: string | null;
   language?: string | null;
   genre: string;
   tone: string;
@@ -1686,11 +1848,17 @@ export async function resolveNarrationVoiceServer(input: {
   mode: NarrationVoiceMode;
   genderBucket: NarrationGenderBucket | null;
   languageCode: NarrationLanguageCode;
+  accent: string | null;
   usedLegacySelector: boolean;
   warnings: string[];
 }> {
   const settings = await getNarrationVoiceSettings();
   const languageResolution = resolveStoryNarrationLanguage(input.language);
+  const accent = await resolveNarrationAccentServer({
+    requestedAccent: input.requestedAccent,
+    language: input.language,
+    settings,
+  });
   let storyRecord: {
     voiceId: string | null;
     mode: NarrationVoiceMode | null;
@@ -1770,6 +1938,7 @@ export async function resolveNarrationVoiceServer(input: {
     mode: decision.mode,
     voiceId,
     languageCode: languageResolution.languageCode,
+    accent,
     usedLegacySelector,
     warnings: decision.warnings,
   });
@@ -1779,9 +1948,46 @@ export async function resolveNarrationVoiceServer(input: {
     mode: decision.mode,
     genderBucket: decision.genderBucket,
     languageCode: languageResolution.languageCode,
+    accent,
     usedLegacySelector,
     warnings: decision.warnings,
   };
+}
+
+/**
+ * Resolve + tier-gate the narrator accent for a story. Returns an accent id only
+ * when accent selection is enabled and the story language is English; otherwise
+ * null (blank {{accent}} slot). The requested accent is honored only if the user's
+ * current plan is allowed to use it — server-side defense-in-depth over the UI gate.
+ */
+async function resolveNarrationAccentServer(input: {
+  requestedAccent?: string | null;
+  language?: string | null;
+  settings: NarrationVoiceSettings;
+}): Promise<string | null> {
+  const { settings } = input;
+  if (!settings.accentSelectionEnabled) return null;
+  if (!isEnglishNarrationLanguage(input.language)) return null;
+
+  const requested = input.requestedAccent?.trim().toLowerCase() || null;
+
+  let planKey: string | null = null;
+  try {
+    const pricing = await getPricingRuntimeContext();
+    planKey = pricing.snapshot.planKey ?? null;
+  } catch (error) {
+    console.warn('[narration.accent_resolver] Failed to load plan for accent gating:', error);
+  }
+
+  const allowed = getAllowedAccentIdsForPlan(
+    settings.accentOptions,
+    settings.accentTierMap,
+    planKey,
+    settings.defaultAccent
+  );
+  if (allowed.length === 0) return null;
+  if (requested && allowed.includes(requested)) return requested;
+  return allowed.includes(settings.defaultAccent) ? settings.defaultAccent : allowed[0];
 }
 
 /**

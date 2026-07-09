@@ -1,6 +1,9 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { shareTokensEqual } from '@/lib/story/visibility';
 import { signStoryMapAssetUrls, signStorylineBeatsUrls } from '@/lib/media/storage-url-signing';
 import type { StorySession, StoryMap, StoryBeat, StoryNode } from '@/lib/types/story';
 import type { DbBeat, DbStory } from '@/lib/types/database';
@@ -433,7 +436,10 @@ export async function listExploredStories(): Promise<Array<{
  * Load a storyline using normalized beats (via storyline_beats junction).
  * Falls back to legacy beats JSONB if no junction rows exist.
  */
-export async function loadStorylineWithBeats(storylineId: string): Promise<{
+export async function loadStorylineWithBeats(
+  storylineId: string,
+  options: { shareToken?: string | null } = {}
+): Promise<{
   storyline: {
     id: string;
     story_id: string;
@@ -455,14 +461,36 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
-  // Fetch storyline metadata
-  const { data: storyline, error: slError } = await supabase
-    .from('storylines')
-    .select('id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio, updated_at)')
-    .eq('id', storylineId)
-    .single();
+  const storylineSelect = 'id, story_id, title, beat_count, cover_image_url, is_vertical_story, aspect_ratio, author_name, is_public, created_at, node_path, beats, choices, publish_quality, stories(story_map, story_config, story_kind, is_vertical_story, aspect_ratio, updated_at)';
 
-  if (slError || !storyline) throw new Error('Storyline not found');
+  // Fetch storyline metadata (RLS: public rows or the owner's own).
+  let client: SupabaseClient = supabase;
+  let { data: storyline } = await supabase
+    .from('storylines')
+    .select(storylineSelect)
+    .eq('id', storylineId)
+    .maybeSingle();
+
+  // Unlisted storylines are hidden from RLS; a valid share token grants
+  // read access through the service-role client instead.
+  if (!storyline && options.shareToken) {
+    const admin = createAdminClient();
+    const { data: tokenRow } = await admin
+      .from('storylines')
+      .select(`${storylineSelect}, visibility, share_token`)
+      .eq('id', storylineId)
+      .maybeSingle();
+    if (
+      tokenRow
+      && (tokenRow as { visibility?: string }).visibility === 'unlisted'
+      && shareTokensEqual((tokenRow as { share_token?: string | null }).share_token, options.shareToken)
+    ) {
+      storyline = tokenRow;
+      client = admin;
+    }
+  }
+
+  if (!storyline) throw new Error('Storyline not found');
   const fallbackStoryMap = getStoryMapFromStorylineRow(storyline);
   const sourceStory = (storyline as any).stories as {
     story_config?: Record<string, unknown> | null;
@@ -484,8 +512,23 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
     : '16:9';
   const storylineIsVertical = storylineAspectRatio === '9:16';
 
+  // Publish quality: high-quality publishes render the share_high variant
+  // where one exists (derived safe asset — never the private original).
+  const hqRefByNode = new Map<string, string>();
+  if ((storyline as { publish_quality?: string }).publish_quality === 'high') {
+    const admin = createAdminClient();
+    const { data: hqAssets } = await admin
+      .from('media_assets')
+      .select('node_id, bucket, object_key')
+      .eq('story_id', storyline.story_id)
+      .eq('variant', 'share_high');
+    for (const asset of hqAssets ?? []) {
+      if (asset.node_id) hqRefByNode.set(asset.node_id, `r2://${asset.bucket}/${asset.object_key}`);
+    }
+  }
+
   // Try normalized junction first
-  const { data: junctionBeats } = await supabase
+  const { data: junctionBeats } = await client
     .from('storyline_beats')
     .select(`
       position,
@@ -511,7 +554,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
         clues: (b.clues || []) as string[],
         nextBeatGoal: b.next_beat_goal || '',
         endingForecast: (b.ending_forecast || []) as string[],
-        imageUrl: b.image_url || undefined,
+        imageUrl: hqRefByNode.get(b.node_id) ?? (b.image_url || undefined),
         imageVersion: b.image_synced_at || undefined,
         imageStatus: b.image_status,
         imageError: b.image_error || undefined,
@@ -552,7 +595,7 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
       }));
 
     // Sign private storage URLs for authenticated access
-    const signedBeats = await signStorylineBeatsUrls(supabase, beats);
+    const signedBeats = await signStorylineBeatsUrls(client, beats);
 
     return {
       storyline: {
@@ -578,16 +621,18 @@ export async function loadStorylineWithBeats(storylineId: string): Promise<{
   const nodePath = Array.isArray(storyline.node_path) ? storyline.node_path : [];
   const legacyBeats = (storyline.beats as any[]).map((b, index) => {
     const nodeId = nodePath[index];
+    const hqRef = nodeId ? hqRefByNode.get(nodeId) : undefined;
     return mergeStoryMapBeatFallback(
       {
         ...(b as unknown as StoryBeat),
+        ...(hqRef ? { imageUrl: hqRef } : {}),
         reelTextOverlayEnabled: sourceStoryConfig.reel.textOverlayEnabled,
         reelTextOverlayStyle: sourceStoryConfig.reel.textOverlayStyle,
       },
       nodeId ? fallbackStoryMap?.nodes?.[nodeId]?.data : undefined
     );
   });
-  const signedLegacyBeats = await signStorylineBeatsUrls(supabase, legacyBeats);
+  const signedLegacyBeats = await signStorylineBeatsUrls(client, legacyBeats);
 
   return {
     storyline: {

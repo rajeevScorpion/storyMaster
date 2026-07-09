@@ -24,6 +24,11 @@ import type {
   NarrationVoiceSettings,
   NarrationVoiceSettingsSaveResult,
 } from '@/lib/ai/narration-voices';
+import {
+  getEnabledStoryLanguageIds,
+  saveEnabledStoryLanguageIds,
+} from '@/lib/ai/story-language-settings';
+import type { StoryLanguage } from '@/lib/types/story';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import {
   DEFAULT_STORYBOARD_IMAGE_QUALITY_SETTINGS,
@@ -163,12 +168,20 @@ export async function adminUnpublishStoryline(id: string): Promise<void> {
   await verifyAdmin();
   const supabase = createAdminClient();
 
+  // The 073 sync trigger maps is_public=false onto visibility='private'.
   const { error } = await supabase
     .from('storylines')
-    .update({ is_public: false })
+    .update({ is_public: false, unpublished_at: new Date().toISOString() })
     .eq('id', id);
 
-  if (error) throw new Error(`Failed to unpublish: ${error.message}`);
+  if (error) {
+    // Pre-073 databases: unpublished_at doesn't exist yet.
+    const { error: fallbackError } = await supabase
+      .from('storylines')
+      .update({ is_public: false })
+      .eq('id', id);
+    if (fallbackError) throw new Error(`Failed to unpublish: ${fallbackError.message}`);
+  }
 }
 
 export async function adminDeleteStoryline(id: string): Promise<void> {
@@ -485,9 +498,10 @@ export async function getGlobalSettings(): Promise<{
   mediaStorage: MediaStorageAdminState;
   narrationVoiceSettings: NarrationVoiceSettings;
   narrationVoiceSampleStatuses: NarrationVoiceSampleClientStatus[];
+  enabledStoryLanguageIds: StoryLanguage[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses, enabledStoryLanguageIds] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -529,6 +543,7 @@ export async function getGlobalSettings(): Promise<{
     loadMediaStorageAdminState(),
     getNarrationVoiceSettings(),
     getNarrationVoiceSampleStatusesForAdmin(),
+    getEnabledStoryLanguageIds(),
   ]);
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
@@ -586,7 +601,16 @@ export async function getGlobalSettings(): Promise<{
     mediaStorage,
     narrationVoiceSettings,
     narrationVoiceSampleStatuses,
+    enabledStoryLanguageIds,
   };
+}
+
+export async function saveAdminStoryLanguageSettings(
+  enabledIds: StoryLanguage[]
+): Promise<{ enabledStoryLanguageIds: StoryLanguage[] }> {
+  await verifyAdmin();
+  const enabledStoryLanguageIds = await saveEnabledStoryLanguageIds(enabledIds);
+  return { enabledStoryLanguageIds };
 }
 
 export async function setCycleOverride(enabled: boolean): Promise<void> {

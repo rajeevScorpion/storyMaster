@@ -7,6 +7,12 @@ import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
+import {
+  STORY_LANGUAGE_OPTIONS,
+  getEnabledStoryLanguageOptions,
+  DEFAULT_ENABLED_STORY_LANGUAGE_IDS,
+  type StoryLanguageOption,
+} from '@/lib/ai/story-config';
 
 export interface LandingSetupSettings {
   freePlusCharacterSheetsEnabled: boolean;
@@ -20,6 +26,8 @@ export interface LandingInitialData {
   authoringWordCap: number;
   reelSetup: ReelStorySetupSettings;
   narrationVoiceConfig: NarrationVoiceClientConfig | null;
+  /** Admin-enabled story languages offered in the picker (catalog order). */
+  storyLanguageOptions: StoryLanguageOption[];
 }
 
 export const DEFAULT_LANDING_SETUP_SETTINGS: LandingSetupSettings = {
@@ -40,6 +48,7 @@ export const DEFAULT_LANDING_INITIAL_DATA: LandingInitialData = {
   authoringWordCap: 500,
   reelSetup: FALLBACK_REEL_SETUP,
   narrationVoiceConfig: null,
+  storyLanguageOptions: getEnabledStoryLanguageOptions(DEFAULT_ENABLED_STORY_LANGUAGE_IDS),
 };
 
 export function normalizeLandingInitialData(input?: Partial<LandingInitialData> | null): LandingInitialData {
@@ -59,15 +68,23 @@ export function normalizeLandingInitialData(input?: Partial<LandingInitialData> 
         }
       : FALLBACK_REEL_SETUP,
     narrationVoiceConfig: input?.narrationVoiceConfig ?? null,
+    storyLanguageOptions:
+      input?.storyLanguageOptions && input.storyLanguageOptions.length > 0
+        ? input.storyLanguageOptions
+        : getEnabledStoryLanguageOptions(DEFAULT_ENABLED_STORY_LANGUAGE_IDS),
   };
 }
+
+/** All catalog languages (for admin/reference), regardless of enabled state. */
+export const ALL_STORY_LANGUAGE_OPTIONS: StoryLanguageOption[] = STORY_LANGUAGE_OPTIONS;
 
 export function getDefaultNarrationVoiceSelection(
   config: NarrationVoiceClientConfig | null | undefined,
   genderBucket: NarrationGenderBucket = 'female'
-): { genderBucket: NarrationGenderBucket; voiceId: string } {
+): { genderBucket: NarrationGenderBucket; voiceId: string; accent: string } {
+  const accent = config?.accentEnabled ? (config.defaultAccent || config.accentOptions[0]?.id || '') : '';
   if (!config?.enabled) {
-    return { genderBucket, voiceId: '' };
+    return { genderBucket, voiceId: '', accent };
   }
 
   const voiceList = genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
@@ -75,5 +92,6 @@ export function getDefaultNarrationVoiceSelection(
   return {
     genderBucket,
     voiceId: voiceList.includes(configuredDefault) ? configuredDefault : voiceList[0] || '',
+    accent,
   };
 }

@@ -13,6 +13,7 @@ export type TaskKey =
   | 'graphic_style_extraction'
   | 'tts'
   | 'reel_tts'
+  | 'story_text_overlay_alignment'
   | 'voice_selection';
 
 export interface ModelConfig {
@@ -43,6 +44,7 @@ export const TASK_DEFINITIONS: {
   { key: 'graphic_style_extraction', label: 'Graphic Style Extraction', description: 'Analyzes a reference image and returns a concise ≤150-word visual style description for the Graphic Style Studio' },
   { key: 'tts', label: 'Text-to-Speech', description: 'Narrates story text with expressive voice acting' },
   { key: 'reel_tts', label: 'Reel Text-to-Speech', description: 'Narrates reel text with short-form pacing and selected narration style' },
+  { key: 'story_text_overlay_alignment', label: 'Story Text Overlay Alignment', description: 'Aligns generated narration audio to story text for timed overlay highlighting' },
   { key: 'voice_selection', label: 'Legacy Voice Selection', description: 'Legacy AI selector used only when user-led narration voice selection is off' },
 ];
 
@@ -59,6 +61,7 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   graphic_style_extraction: { modelId: 'gemini-2.5-flash', temperature: 0.4 },
   tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
   reel_tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
+  story_text_overlay_alignment: { modelId: 'elevenlabs-forced-alignment', temperature: null },
   voice_selection: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
 };
 

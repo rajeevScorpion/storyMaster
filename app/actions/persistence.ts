@@ -12,11 +12,16 @@ import type { BeatMediaStatus } from '@/lib/types/beat-media';
 import {
   normalizeBeatMediaFields,
   BEAT_ROW_NOT_FOUND_MESSAGE,
+  isBeatRowNotFoundError,
   getBeatPersistedAudioUrl,
   getBeatPersistedImageUrl,
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import {
+  extractImageContinuityState,
+  summarizeImageContinuityState,
+} from '@/lib/ai/image-continuity.shared';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import {
   getReelRetentionDaysForPlan,
@@ -27,6 +32,14 @@ import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
+import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+import { resolveValidatedPublishQuality } from '@/lib/story/publish-quality';
+import {
+  generateShareToken,
+  normalizeStorylineVisibility,
+  type StorylinePublishQuality,
+  type StorylineVisibility,
+} from '@/lib/story/visibility';
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -72,6 +85,11 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
             }));
           return {
             ...c,
+            portraitUrl: c.portraitUrl?.startsWith('data:')
+              ? undefined
+              : c.portraitUrl
+                ? normalizeStorageUrl(c.portraitUrl, 'story-assets')
+                : undefined,
             portraitBase64: undefined,
             referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
               ? undefined
@@ -99,6 +117,11 @@ function sanitizeSessionCharacters(session: StorySession): StorySession['charact
       }));
     return {
       ...character,
+      portraitUrl: character.portraitUrl?.startsWith('data:')
+        ? undefined
+        : character.portraitUrl
+          ? normalizeStorageUrl(character.portraitUrl, 'story-assets')
+          : undefined,
       portraitBase64: undefined,
       referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
         ? undefined
@@ -177,6 +200,7 @@ function normalizePublishedBeatAssetUrls(beat: StoryBeat): StoryBeat {
     })),
     characters: beat.characters.map((character) => ({
       ...character,
+      portraitUrl: normalizePersistedAssetUrl(character.portraitUrl),
       referenceSheetUrl: normalizePersistedAssetUrl(character.referenceSheetUrl),
       referenceSheetGallery: character.referenceSheetGallery?.map((entry) => ({
         ...entry,
@@ -372,6 +396,9 @@ const ADDITIVE_BEAT_COLUMNS = [
   'narration_voice_id',
   'image_status',
   'image_error',
+  'image_provider_key',
+  'image_model_key',
+  'image_generation_metadata',
   'image_synced_at',
   'image_gallery',
   'audio_status',
@@ -385,10 +412,22 @@ const ADDITIVE_STORY_COLUMNS = [
   'reel_retention_days',
   'reel_expires_at',
   'reel_cleanup_status',
+  'image_provider_key',
+  'image_model_key',
+  'image_model_snapshot',
+  'visual_profile',
 ] as const;
 
 const ADDITIVE_STORYLINE_COLUMNS = [
   'story_kind',
+  // Migration 073 visibility columns — stripped when the migration hasn't
+  // been applied yet so publishing keeps working during rollout.
+  'visibility',
+  'share_token',
+  'published_at',
+  'unpublished_at',
+  'moderation_status',
+  'publish_quality',
 ] as const;
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -507,6 +546,9 @@ function nodeToBeatRow(
     canonical_option_id: normalizedBeat.canonicalOptionId || null,
     image_status: normalizedBeat.imageStatus,
     image_error: normalizedBeat.imageError || null,
+    image_provider_key: normalizedBeat.imageProviderKey || null,
+    image_model_key: normalizedBeat.imageModelKey || null,
+    image_generation_metadata: normalizedBeat.imageGenerationMetadata || null,
     image_synced_at: normalizedBeat.imageStatus === 'ready'
       ? (normalizedImageUrl === existingImageUrl && existingBeat?.imageSyncedAt
           ? existingBeat.imageSyncedAt
@@ -610,6 +652,9 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
     imageError: beat.image_error || undefined,
+    imageProviderKey: beat.image_provider_key || undefined,
+    imageModelKey: beat.image_model_key || undefined,
+    imageGenerationMetadata: beat.image_generation_metadata || undefined,
     imageGallery: Array.isArray(beat.image_gallery)
       ? beat.image_gallery.map((entry) => ({
           url: entry.url,
@@ -784,6 +829,19 @@ export async function saveStory(
 
   const cleanMap = stripBase64(storyMapWithUrls, fallbackStoryMap);
   const storyOrientation = getStoryOrientation(session.storyConfig);
+  const firstImageBeat = Object.values(cleanMap.nodes)
+    .map((node) => node.data)
+    .find((beat) => beat.imageModelKey || beat.imageGenerationMetadata?.imageModelSnapshot);
+  const imageModelSnapshot = (
+    firstImageBeat?.imageGenerationMetadata?.imageModelSnapshot
+    && typeof firstImageBeat.imageGenerationMetadata.imageModelSnapshot === 'object'
+  )
+    ? firstImageBeat.imageGenerationMetadata.imageModelSnapshot as Record<string, unknown>
+    : null;
+  const latestContinuityState = Object.values(cleanMap.nodes)
+    .map((node) => extractImageContinuityState(node.data.imageGenerationMetadata))
+    .filter((state): state is NonNullable<typeof state> => Boolean(state))
+    .at(-1) ?? null;
 
   const reelPersistencePatch = await buildReelStoryPersistencePatch(session.storyConfig, !session.savedStoryId);
 
@@ -796,6 +854,19 @@ export async function saveStory(
     visual_style: session.visualStyle,
     target_age: session.targetAge,
     story_config: session.storyConfig as unknown as Record<string, unknown>,
+    image_provider_key: firstImageBeat?.imageProviderKey || (imageModelSnapshot?.providerKey as string | undefined) || null,
+    image_model_key: firstImageBeat?.imageModelKey || session.storyConfig.imageModelSelection?.modelKey || null,
+    image_model_snapshot: imageModelSnapshot,
+    visual_profile: {
+      visualSettings: session.storyConfig.visualSettings,
+      aspectRatio: session.storyConfig.aspectRatio,
+      storyKind: session.storyConfig.storyKind,
+      imageContinuity: {
+        requestedStrategy: session.storyConfig.imageContinuityStrategy,
+        latestState: summarizeImageContinuityState(latestContinuityState),
+        updatedAt: new Date().toISOString(),
+      },
+    },
     ...reelPersistencePatch,
     is_vertical_story: storyOrientation.isVerticalStory,
     aspect_ratio: storyOrientation.aspectRatio,
@@ -1094,7 +1165,14 @@ export async function loadStory(storyId: string): Promise<StorySession> {
 export async function saveBeat(
   storyId: string,
   nodeId: string,
-  node: StoryNode
+  node: StoryNode,
+  options?: {
+    /** Append this node to its parent's children in story_map so a beat saved
+     *  before the client's next full save is reachable after reload. */
+    linkToParent?: boolean;
+    /** Move story_map.currentNodeId to this node (branch continuation). */
+    setAsCurrent?: boolean;
+  }
 ): Promise<{ beatId: string }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -1165,13 +1243,20 @@ export async function saveBeat(
 
   if (!storyForPatchError && storyForPatch?.story_map && typeof storyForPatch.story_map === 'object' && 'nodes' in storyForPatch.story_map) {
     const storyMap = storyForPatch.story_map as unknown as StoryMap;
+    const patchedNodes: StoryMap['nodes'] = {
+      ...storyMap.nodes,
+      [nodeId]: node,
+    };
+    if (options?.linkToParent && node.parentId) {
+      const parent = storyMap.nodes[node.parentId];
+      if (parent && !parent.children.includes(nodeId)) {
+        patchedNodes[node.parentId] = { ...parent, children: [...parent.children, nodeId] };
+      }
+    }
     const patchedMap: StoryMap = {
       ...storyMap,
-      nodes: {
-        ...storyMap.nodes,
-        [nodeId]: node,
-      },
-      currentNodeId: storyMap.currentNodeId || nodeId,
+      nodes: patchedNodes,
+      currentNodeId: options?.setAsCurrent ? nodeId : (storyMap.currentNodeId || nodeId),
       rootNodeId: storyMap.rootNodeId || nodeId,
     };
 
@@ -1218,11 +1303,22 @@ export async function updateBeatMediaState(
     storyTextOverlayCaptions?: StoryBeat['storyTextOverlayCaptions'] | null;
     storyTextOverlayAlignment?: StoryBeat['storyTextOverlayAlignment'] | null;
     storyEffects?: StoryBeat['storyEffects'] | null;
-  }
+  },
+  // When present, run against the service-role client on behalf of `userId`
+  // instead of the caller's auth session. This lets a background worker (which
+  // has no user cookie) persist beat media. The interactive path passes nothing
+  // and is byte-for-byte unchanged.
+  serverAuth?: { userId: string }
 ): Promise<void> {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error('Not authenticated');
+  const supabase = serverAuth ? createAdminClient() : await createClient();
+  let userId: string;
+  if (serverAuth) {
+    userId = serverAuth.userId;
+  } else {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) throw new Error('Not authenticated');
+    userId = user.id;
+  }
 
   const updateData: Record<string, unknown> = {};
   if ('imageUrl' in patch) {
@@ -1309,12 +1405,15 @@ export async function updateBeatMediaState(
 
   if (Object.keys(updateData).length === 0) return;
 
-  const { data: updatedBeatRows, error } = await supabase
+  let beatUpdateQuery = supabase
     .from('beats')
     .update(updateData)
     .eq('story_id', storyId)
-    .eq('node_id', nodeId)
-    .eq('generated_by', user.id)
+    .eq('node_id', nodeId);
+  // The worker (admin client) scopes by story + node only; the interactive path
+  // keeps the RLS-aligned generated_by guard.
+  if (!serverAuth) beatUpdateQuery = beatUpdateQuery.eq('generated_by', userId);
+  const { data: updatedBeatRows, error } = await beatUpdateQuery
     .select('id')
     .limit(1);
 
@@ -1325,12 +1424,12 @@ export async function updateBeatMediaState(
     throw new Error(`Failed to update beat media state: ${BEAT_ROW_NOT_FOUND_MESSAGE}`);
   }
 
-  const { data: story, error: storyError } = await supabase
+  let storyQuery = supabase
     .from('stories')
     .select('story_map')
-    .eq('id', storyId)
-    .eq('user_id', user.id)
-    .single();
+    .eq('id', storyId);
+  if (!serverAuth) storyQuery = storyQuery.eq('user_id', userId);
+  const { data: story, error: storyError } = await storyQuery.single();
 
   if (storyError || !story) {
     throw new Error(`Failed to load story map for media patch: ${storyError?.message || 'Story not found'}`);
@@ -1406,17 +1505,51 @@ export async function updateBeatMediaState(
     },
   };
 
-  const { error: storyUpdateError } = await supabase
+  let storyUpdateQuery = supabase
     .from('stories')
     .update({
       story_map: stripBase64(patchedMap) as unknown as Record<string, unknown>,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', storyId)
-    .eq('user_id', user.id);
+    .eq('id', storyId);
+  if (!serverAuth) storyUpdateQuery = storyUpdateQuery.eq('user_id', userId);
+  const { error: storyUpdateError } = await storyUpdateQuery;
 
   if (storyUpdateError) {
     throw new Error(`Failed to patch story map media state: ${storyUpdateError.message}`);
+  }
+}
+
+/**
+ * Same as {@link updateBeatMediaState}, but retries when the beat row isn't found yet.
+ *
+ * In regular (interactive) mode, narration is kicked off before the client's
+ * fire-and-forget beat save has inserted the beat row, so a media patch can race
+ * ahead and hit BEAT_ROW_NOT_FOUND. That's transient — the insert lands moments
+ * later — so we retry that specific error a bounded number of times. Any other
+ * error propagates immediately. Runs in the background (the user already hears the
+ * audio), so the wait doesn't affect perceived latency. Batch/worker callers, which
+ * insert the beat row before narrating, should pass { attempts: 1 } to opt out.
+ */
+export async function updateBeatMediaStateWithRetry(
+  storyId: string,
+  nodeId: string,
+  patch: Parameters<typeof updateBeatMediaState>[2],
+  serverAuth?: { userId: string },
+  options: { attempts?: number; delayMs?: number } = {}
+): Promise<void> {
+  // Bounded so the total added time stays well under serverless duration caps —
+  // narration itself already runs ~20-27s inside this same invocation.
+  const attempts = Math.max(1, options.attempts ?? 8);
+  const delayMs = Math.max(250, options.delayMs ?? 1500);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await updateBeatMediaState(storyId, nodeId, patch, serverAuth);
+      return;
+    } catch (error) {
+      if (!isBeatRowNotFoundError(error) || attempt >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
 }
 
@@ -2117,10 +2250,27 @@ export async function publishStoryline(params: {
   youtubeThumbnailPrompt?: string | null;
   reelThumbnailPrompt?: string | null;
   audioCoverPrompt?: string | null;
-}): Promise<{ storylineId: string }> {
+  visibility?: StorylineVisibility;
+  quality?: StorylinePublishQuality;
+}): Promise<{ storylineId: string; shareToken?: string | null }> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Visibility + quality are server-validated; default keeps today's
+  // public-publish behavior.
+  const requestedVisibility = normalizeStorylineVisibility(params.visibility ?? 'public');
+  const pipelineSettings = await getMediaPipelineSettings();
+  if (requestedVisibility === 'public' && !pipelineSettings.publicPublishingEnabled) {
+    throw new Error('Public publishing is currently disabled by the admin.');
+  }
+  if (requestedVisibility === 'unlisted' && !pipelineSettings.unlistedSharingEnabled) {
+    throw new Error('Unlisted sharing is currently disabled by the admin.');
+  }
+  const { quality: validatedQuality } = await resolveValidatedPublishQuality(
+    params.storyId,
+    params.quality ?? 'standard'
+  );
 
   const { data: sourceStory } = await supabase
     .from('stories')
@@ -2175,7 +2325,15 @@ export async function publishStoryline(params: {
     beats: publishedBeats as unknown as Record<string, unknown>[],
     choices: params.choices as unknown as Record<string, unknown>[],
     author_name: profile?.display_name || 'Anonymous',
-    is_public: true,
+    is_public: requestedVisibility === 'public',
+    visibility: requestedVisibility,
+    publish_quality: validatedQuality,
+    published_at: requestedVisibility === 'public' ? new Date().toISOString() : null,
+    share_token: requestedVisibility === 'unlisted' ? generateShareToken() : null,
+    moderation_status:
+      requestedVisibility === 'public' && pipelineSettings.moderationRequiredForPublic
+        ? 'pending'
+        : 'none',
     path_hash: pathHash,
   };
 
@@ -2281,7 +2439,10 @@ export async function publishStoryline(params: {
     audioCoverPrompt: params.audioCoverPrompt ?? null,
   });
 
-  return { storylineId: publishedStorylineId };
+  return {
+    storylineId: publishedStorylineId,
+    shareToken: (storylineRow.share_token as string | null) ?? null,
+  };
 }
 
 // ============================================================

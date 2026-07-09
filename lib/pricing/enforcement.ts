@@ -254,6 +254,7 @@ export async function authorizeBillableAction(input: {
   metadata?: Record<string, unknown>;
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
+  requestedBeatCostOverride?: number | null;
 }): Promise<PricingBillableActionAuthorization> {
   return timeEnforcementStep(
     'pricing.authorize_billable_action',
@@ -263,7 +264,10 @@ export async function authorizeBillableAction(input: {
     },
     async () => {
       const actionCost = await loadActionCost(input.actionKey);
-      const beatCost = asBeatAmount(actionCost?.beat_cost);
+      const overrideBeatCost = Number(input.requestedBeatCostOverride ?? NaN);
+      const beatCost = Number.isFinite(overrideBeatCost) && overrideBeatCost >= 0
+        ? Number(overrideBeatCost.toFixed(2))
+        : asBeatAmount(actionCost?.beat_cost);
       const coinCost = beatsToCoins(beatCost);
 
       if (!input.userId) {
@@ -589,6 +593,22 @@ export async function reconcileRazorpayTopup(
     grantedCoins,
     paymentId,
   };
+}
+
+/**
+ * Cookieless plan lookup for background workers: resolves the user's
+ * effective plan key from the same pricing state the enforcement paths use.
+ * Falls back to 'free' on any failure.
+ */
+export async function resolvePlanKeyForUser(userId: string): Promise<PlanKey> {
+  try {
+    const supabase = createAdminClient();
+    const state = await loadPricingState(supabase, userId);
+    return state.snapshot.planKey;
+  } catch (error) {
+    console.error('resolvePlanKeyForUser failed, defaulting to free:', error instanceof Error ? error.message : error);
+    return 'free';
+  }
 }
 
 async function loadPricingState(

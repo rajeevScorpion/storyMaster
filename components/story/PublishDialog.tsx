@@ -10,6 +10,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { uploadNodeAssets, uploadCoverImage, extractStoragePath, stripBase64FromStoryMap } from '@/lib/supabase/storage';
 import { publishStoryline, saveStory, copyCoverToPublicBucket } from '@/app/actions/persistence';
+import { extractImageContinuityState } from '@/lib/ai/image-continuity.shared';
 import {
   buildStoryCoverPromptInputFromSession,
   generateStoryCoverPrompt,
@@ -81,8 +82,14 @@ export default function PublishDialog({
   const [status, setStatus] = useState<'idle' | 'saving' | 'uploading' | 'publishing' | 'done' | 'error'>('idle');
   const [storylineUrl, setStorylineUrl] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [visibility, setVisibility] = useState<'public' | 'unlisted'>('public');
+  const [publishQuality, setPublishQuality] = useState<'standard' | 'high'>('standard');
 
   if (!session || !user) return null;
+
+  // UI hint only — the server re-validates entitlement and asset availability.
+  const planKey = pricing.snapshot?.planKey ?? 'free';
+  const hqPlanEligible = planKey === 'plus' || planKey === 'studio';
 
   const { storyMap } = session;
   const storylineData = extractStoryline(storyMap, endingNodeId);
@@ -99,6 +106,13 @@ export default function PublishDialog({
   const socialCoverPrompt = generateStoryCoverPrompt(promptInput, { variant: publishMode === 'audio_story' ? 'audio' : 'social' });
   const youtubeThumbnailPrompt = generateStoryCoverPrompt(promptInput, { variant: 'youtube' });
   const reelThumbnailPrompt = generateStoryCoverPrompt(promptInput, { variant: 'reel' });
+  const latestImageContinuityState = (() => {
+    for (let index = storylineData.path.length - 1; index >= 0; index -= 1) {
+      const state = extractImageContinuityState(storylineData.path[index]?.data.imageGenerationMetadata);
+      if (state) return state;
+    }
+    return null;
+  })();
 
   const handleDialogClose = () => {
     setStatus('idle');
@@ -158,7 +172,7 @@ export default function PublishDialog({
       });
 
       setStatus('publishing');
-      const { storylineId } = await publishStoryline({
+      const { storylineId, shareToken } = await publishStoryline({
         storyId: storyId!,
         title: session.title,
         beats: beatsWithUrls,
@@ -166,10 +180,14 @@ export default function PublishDialog({
         nodePath: nodeIds,
         coverImageUrl,
         publishMode,
+        visibility,
+        quality: publishQuality,
         ...submission,
       });
 
-      setStorylineUrl(`/storyline/${storylineId}`);
+      setStorylineUrl(
+        `/storyline/${storylineId}${shareToken ? `?token=${encodeURIComponent(shareToken)}` : ''}`
+      );
       setStatus('done');
     } catch (error: any) {
       setErrorMsg(error?.message || 'Failed to publish');
@@ -213,6 +231,68 @@ export default function PublishDialog({
             </div>
 
             {status === 'idle' && (
+              <div className="mb-5 space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wider text-neutral-500">Visibility</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {([
+                    ['public', 'Public', 'Listed in the gallery for everyone to discover.'],
+                    ['unlisted', 'Unlisted link', 'Only people with the share link can view. Not listed anywhere.'],
+                  ] as const).map(([value, label, description]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setVisibility(value)}
+                      className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                        visibility === value
+                          ? 'border-emerald-500/50 bg-emerald-500/10'
+                          : 'border-white/10 bg-neutral-900/60 hover:border-white/20'
+                      }`}
+                    >
+                      <span className={`block text-sm ${visibility === value ? 'text-emerald-200' : 'text-neutral-100'}`}>{label}</span>
+                      <span className="mt-0.5 block text-[11px] leading-snug text-neutral-400">{description}</span>
+                    </button>
+                  ))}
+                </div>
+
+                <p className="text-xs font-medium uppercase tracking-wider text-neutral-500">Quality</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setPublishQuality('standard')}
+                    className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      publishQuality === 'standard'
+                        ? 'border-emerald-500/50 bg-emerald-500/10'
+                        : 'border-white/10 bg-neutral-900/60 hover:border-white/20'
+                    }`}
+                  >
+                    <span className={`block text-sm ${publishQuality === 'standard' ? 'text-emerald-200' : 'text-neutral-100'}`}>Standard quality</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-neutral-400">Faster loading — recommended.</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => hqPlanEligible && setPublishQuality('high')}
+                    disabled={!hqPlanEligible}
+                    title={hqPlanEligible ? undefined : 'High quality publishing is available on Plus and Studio plans'}
+                    className={`rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      publishQuality === 'high'
+                        ? 'border-emerald-500/50 bg-emerald-500/10'
+                        : hqPlanEligible
+                        ? 'border-white/10 bg-neutral-900/60 hover:border-white/20'
+                        : 'cursor-not-allowed border-white/5 bg-neutral-900/40 opacity-60'
+                    }`}
+                  >
+                    <span className={`block text-sm ${publishQuality === 'high' ? 'text-emerald-200' : 'text-neutral-100'}`}>High quality</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-neutral-400">
+                      {hqPlanEligible
+                        ? 'Better visual quality where high-quality assets are available.'
+                        : 'Available on Plus and Studio plans.'}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {status === 'idle' && (
               <StorylineCoverEditorForm
                 mode="publish"
                 storyId={session.savedStoryId ?? null}
@@ -244,6 +324,11 @@ export default function PublishDialog({
                   : isPromptOnlyStory
                     ? 'If you publish without uploading or generating a cover, Kissago will use a branded default cover.'
                     : 'If you skip this, Kissago will process the best available beat image into a dedicated share cover.'}
+                imageModelSelection={session.storyConfig.imageModelSelection ?? null}
+                imageContinuity={{
+                  requestedStrategy: session.storyConfig.imageContinuityStrategy,
+                  previousState: latestImageContinuityState,
+                }}
                 onCancel={handleDialogClose}
                 onSubmit={(submission) => void handlePublish(submission)}
               />

@@ -2,7 +2,9 @@
 
 import { StorySession, StoryBeat, StoryboardPlan, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
-import { callGeminiText, callGeminiImage, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
+import { callGeminiText, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import { generateSelectedImage } from '@/app/actions/image-generation';
 import {
   buildPromptCharacterAnchors,
   buildValidationRepairNote,
@@ -24,6 +26,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
+import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import {
   PORTRAIT_MAX_WIDTH,
   PORTRAIT_MAX_HEIGHT,
@@ -33,13 +36,19 @@ import {
   STORYBOARD_VERTICAL_MAX_WIDTH,
   STORYBOARD_VERTICAL_MAX_HEIGHT,
 } from '@/lib/constants/media';
-import type { Character, PortraitReferenceConfig, PortraitReferenceMode } from '@/lib/types/story';
+import type { Character, PortraitReferenceConfig } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import type {
+  ImageContinuityProviderState,
+  ImageContinuityStrategy,
+} from '@/lib/ai/image-continuity.shared';
 import {
   DEFAULT_IMAGE_MODEL_ID,
   DEFAULT_TEXT_MODEL_ID,
   type TaskKey,
 } from '@/lib/ai/model-config.shared';
+import type { ImageModelSelection, ImageModelSnapshot } from '@/lib/ai/image-models.shared';
+import { persistInlineBeatImageAction } from '@/app/actions/media-persist';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   findReelDefiner,
@@ -430,11 +439,6 @@ export async function materializeSeededBeat(
   return normalizeStoryBeatTextParts(beat);
 }
 
-interface CharacterReferenceGenerationOptions {
-  mode: PortraitReferenceMode;
-  quality: PortraitReferenceConfig['quality'];
-}
-
 export async function generateStoryBeat(
   userPrompt: string,
   sessionState: Partial<StorySession> | null,
@@ -800,11 +804,21 @@ export interface ReferenceImage {
 export interface GeneratedImageResult {
   imageUrl: string;
   finalPromptText: string;
+  imageModelSnapshot?: ImageModelSnapshot;
+  imageGenerationMetadata?: Record<string, unknown>;
 }
 
 export interface GeneratedPortraitResult {
   imageUrl: string;
   finalPromptText: string;
+  imageModelSnapshot?: ImageModelSnapshot;
+  imageGenerationMetadata?: Record<string, unknown>;
+}
+
+export interface ImageContinuityRuntimeOptions {
+  requestedStrategy: ImageContinuityStrategy;
+  previousState?: ImageContinuityProviderState | null;
+  allowRuntimeFallback?: boolean;
 }
 
 function buildFallbackStoryboardPlan(
@@ -1243,7 +1257,16 @@ export async function generateImage(
   costTelemetry?: CostTelemetryContext,
   aspectRatio: StoryAspectRatio = '16:9',
   imageTask: Extract<TaskKey, 'image_generation' | 'reel_image_generation'> = 'image_generation',
-  imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {}
+  imagePromptOptions: Omit<StoryboardImagePromptOptions, 'aspectRatio' | 'task'> = {},
+  imageModelSelection?: ImageModelSelection | null,
+  imageContinuity?: ImageContinuityRuntimeOptions | null,
+  // persistTarget: inline flows pass the saved story/node so the generated
+  // image is stored server-side (private original + variants) instead of
+  // relying on the browser to upload it later. All gating (admin setting,
+  // processing mode, ownership, R2 availability) happens server-side.
+  persistOptions?: {
+    persistTarget?: { storyId: string; nodeId: string };
+  }
 ): Promise<GeneratedImageResult> {
   const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
   const finalImagePrompt = buildFinalStoryboardImagePrompt(
@@ -1266,6 +1289,10 @@ export async function generateImage(
     return {
       imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/${fallbackSize.width}/${fallbackSize.height}?blur=4`,
       finalPromptText: finalImagePrompt,
+      imageGenerationMetadata: {
+        placeholder: true,
+        reason: 'mock_prompt',
+      },
     };
   }
 
@@ -1282,26 +1309,31 @@ export async function generateImage(
         const imageModel = imageTask === 'reel_image_generation'
           ? modelOverrides?.reelImageModel || modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID
           : modelOverrides?.imageModel || DEFAULT_IMAGE_MODEL_ID;
+        const selection = imageModelSelection ?? {
+          taskKey: imageTask,
+          modelKey: imageModel,
+        };
         const referenceParts = await resolveReferenceImageParts(referenceImages);
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
 
         const result = await timeRuntimeStep(
-          'story_runtime.generate_image.gemini',
+          'story_runtime.generate_image.provider',
           {
             beatNumber: beatNumber ?? null,
             referencePartCount: referenceParts.length,
             hasRetryFallback: false,
             aspectRatio: resolvedAspectRatio,
           },
-          () => callGeminiImage({
+          () => generateSelectedImage({
             task: imageTask,
-            model: imageModel,
             prompt: finalImagePrompt,
             referenceParts,
             aspectRatio: resolvedAspectRatio,
             imageSize,
             telemetry: costTelemetry,
+            selection,
+            continuity: imageContinuity ?? null,
           })
         );
 
@@ -1316,10 +1348,21 @@ export async function generateImage(
             },
             resolvedAspectRatio
           );
-          return {
-            imageUrl,
-            finalPromptText: finalImagePrompt,
-          };
+          return finalizeInlineImageResult(
+            {
+              imageUrl,
+              finalPromptText: finalImagePrompt,
+              imageModelSnapshot: result.modelSnapshot,
+              imageGenerationMetadata: {
+                ...result.metadata,
+                imageModelSnapshot: result.modelSnapshot,
+                referenceCount: referenceParts.length,
+                aspectRatio: resolvedAspectRatio,
+                imageSize,
+              },
+            },
+            persistOptions?.persistTarget
+          );
         }
 
         if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
@@ -1329,23 +1372,24 @@ export async function generateImage(
             getStoryboardLayoutHardRequirements(resolvedAspectRatio),
           ].join('\n\n');
           const retryResult = await timeRuntimeStep(
-            'story_runtime.generate_image.gemini_retry',
-            {
-              beatNumber: beatNumber ?? null,
-              referencePartCount: referenceParts.length,
-              hasRetryFallback: true,
-              aspectRatio: resolvedAspectRatio,
-            },
-            () => callGeminiImage({
-              task: imageTask,
-              model: imageModel,
-              prompt: retryPrompt,
-              referenceParts,
-              aspectRatio: resolvedAspectRatio,
-              imageSize,
-              telemetry: costTelemetry,
-            })
-          );
+              'story_runtime.generate_image.provider_retry',
+              {
+                beatNumber: beatNumber ?? null,
+                referencePartCount: referenceParts.length,
+                hasRetryFallback: true,
+                aspectRatio: resolvedAspectRatio,
+              },
+              () => generateSelectedImage({
+                task: imageTask,
+                prompt: retryPrompt,
+                referenceParts,
+                aspectRatio: resolvedAspectRatio,
+                imageSize,
+                telemetry: costTelemetry,
+                selection,
+                continuity: imageContinuity ?? null,
+              })
+            );
           if (retryResult.dataUrl) {
             const imageUrl = await maybeProcessStoryboardImage(
               retryResult.dataUrl,
@@ -1358,10 +1402,22 @@ export async function generateImage(
               },
               resolvedAspectRatio
             );
-            return {
-              imageUrl,
-              finalPromptText: retryPrompt,
-            };
+            return finalizeInlineImageResult(
+              {
+                imageUrl,
+                finalPromptText: retryPrompt,
+                imageModelSnapshot: retryResult.modelSnapshot,
+                imageGenerationMetadata: {
+                  ...retryResult.metadata,
+                  imageModelSnapshot: retryResult.modelSnapshot,
+                  referenceCount: referenceParts.length,
+                  aspectRatio: resolvedAspectRatio,
+                  imageSize,
+                  retry: true,
+                },
+              },
+              persistOptions?.persistTarget
+            );
           }
         }
 
@@ -1373,8 +1429,43 @@ export async function generateImage(
     return {
       imageUrl: `https://picsum.photos/seed/${encodeURIComponent(prompt.substring(0, 20))}/${fallbackSize.width}/${fallbackSize.height}?blur=4`,
       finalPromptText: finalImagePrompt,
+      imageGenerationMetadata: {
+        placeholder: true,
+        reason: error instanceof Error ? error.message : 'image_generation_failed',
+      },
     };
   }
+}
+
+/** When an inline flow supplied a persist target, store the generated image
+ *  server-side (private original + variants) and hand the client a signed
+ *  display URL instead of multi-MB base64. Falls back to the base64 result
+ *  whenever the pipeline declines (legacy mode, setting off, R2 down). */
+async function finalizeInlineImageResult(
+  result: GeneratedImageResult,
+  persistTarget?: { storyId: string; nodeId: string }
+): Promise<GeneratedImageResult> {
+  if (!persistTarget || !result.imageUrl.startsWith('data:')) return result;
+  const persisted = await persistInlineBeatImageAction({
+    dataUrl: result.imageUrl,
+    storyId: persistTarget.storyId,
+    nodeId: persistTarget.nodeId,
+  }).catch((error) => {
+    console.error('Inline image persist action failed:', error);
+    return null;
+  });
+  if (!persisted) return result;
+  return {
+    ...result,
+    imageUrl: persisted.signedDisplayUrl,
+    imageGenerationMetadata: {
+      ...(result.imageGenerationMetadata ?? {}),
+      persisted: true,
+      persistedReference: persisted.displayReference,
+      mediaGroupId: persisted.mediaGroupId,
+      processingMode: 'server_pipeline',
+    },
+  };
 }
 
 async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): Promise<InlineImagePart[]> {
@@ -1391,9 +1482,9 @@ async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): P
       const parts: InlineImagePart[] = [];
       for (const dataUrl of resolvedDataUrls) {
         if (!dataUrl) continue;
-        const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-        if (match) {
-          parts.push({ mimeType: match[1], data: match[2] });
+        const parsed = splitBase64DataUrl(dataUrl);
+        if (parsed) {
+          parts.push({ mimeType: parsed.mimeType, data: parsed.base64 });
         }
       }
       return parts;
@@ -1407,7 +1498,9 @@ export async function generateCharacterPortrait(
   portraitReferenceConfig: PortraitReferenceConfig,
   modelOverrides?: StoryModelOverrides,
   promptOverride?: string,
-  costTelemetry?: CostTelemetryContext
+  costTelemetry?: CostTelemetryContext,
+  imageModelSelection?: ImageModelSelection | null,
+  imageContinuity?: ImageContinuityRuntimeOptions | null
 ): Promise<GeneratedPortraitResult> {
   try {
     return await timeRuntimeStep(
@@ -1429,13 +1522,17 @@ export async function generateCharacterPortrait(
         );
 
         const portraitModel = modelOverrides?.portraitModel || DEFAULT_IMAGE_MODEL_ID;
-        const result = await callGeminiImage({
+        const result = await generateSelectedImage({
           task: 'portrait_generation',
-          model: portraitModel,
           prompt,
           aspectRatio: '1:1',
           imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
           telemetry: costTelemetry,
+          selection: imageModelSelection ?? {
+            taskKey: 'portrait_generation',
+            modelKey: portraitModel,
+          },
+          continuity: imageContinuity ?? null,
         });
 
         if (result.dataUrl) {
@@ -1449,6 +1546,13 @@ export async function generateCharacterPortrait(
           return {
             imageUrl,
             finalPromptText: prompt,
+            imageModelSnapshot: result.modelSnapshot,
+            imageGenerationMetadata: {
+              ...result.metadata,
+              imageModelSnapshot: result.modelSnapshot,
+              aspectRatio: '1:1',
+              imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
+            },
           };
         }
 
@@ -1555,45 +1659,6 @@ async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string
 
   const blob = await response.blob();
   return blobToDataUrl(blob);
-}
-
-function buildPortraitReferenceLayoutDescription(
-  portraitReferenceConfig: CharacterReferenceGenerationOptions
-): string {
-  if (portraitReferenceConfig.mode === 'single_portrait') {
-    return 'one clean full-body reference portrait with a clear face, either front-facing or 3/4 view';
-  }
-
-  if (portraitReferenceConfig.quality === '1K') {
-    return 'a single square character sheet showing the same character in four views: close-up face, front full body, 3/4 full body, and back full body';
-  }
-
-  return 'a single square character sheet showing the same character in three views: close-up face, front full body, and 3/4 full body';
-}
-
-export function buildFinalPortraitPrompt(
-  character: Character,
-  visualStyle: string,
-  portraitReferenceConfig: PortraitReferenceConfig,
-  modelOverrides?: StoryModelOverrides,
-  promptOverride?: string
-): string {
-  const normalizedPortraitReferenceConfig = normalizePortraitReferenceConfig(portraitReferenceConfig);
-  const referenceLayout = buildPortraitReferenceLayoutDescription(normalizedPortraitReferenceConfig);
-  const portraitTemplateCandidate = modelOverrides?.portraitPrompt || getDefaultPromptBody('portrait_generation');
-  const portraitTemplate = validatePromptTemplate('portrait_generation', portraitTemplateCandidate).isValid
-    ? portraitTemplateCandidate
-    : getDefaultPromptBody('portrait_generation');
-
-  return resolvePromptTemplate(portraitTemplate, {
-    characterName: character.name,
-    characterAppearance: promptOverride || character.appearanceSummary,
-    characterType: character.type,
-    visualStyle,
-    portraitMode: normalizedPortraitReferenceConfig.mode === 'character_sheet' ? 'character sheet' : 'single portrait',
-    referenceQuality: normalizedPortraitReferenceConfig.quality,
-    sheetLayout: referenceLayout,
-  });
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

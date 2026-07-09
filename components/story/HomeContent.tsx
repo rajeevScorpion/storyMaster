@@ -61,13 +61,24 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
     }
   }, [isConsumingHomeReset, sessionForDisplay, router]);
 
-  const handleBegin = async (prompt: string, config?: StoryConfig) => {
+  const handleBegin = async (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => {
     if (!user) {
       sessionStorage.setItem('kissago_pending_prompt', prompt);
       if (config) {
         sessionStorage.setItem('kissago_pending_config', JSON.stringify(config));
       }
+      if (opts?.autoBuild) {
+        sessionStorage.setItem('kissago_pending_autobuild', '1');
+      } else {
+        sessionStorage.removeItem('kissago_pending_autobuild');
+      }
       openAuthDialog('sign_in');
+      return;
+    }
+
+    if (opts?.autoBuild) {
+      const generateAutomatedStory = useStoryStore.getState().generateAutomatedStory;
+      generateAutomatedStory(prompt, config);
       return;
     }
 

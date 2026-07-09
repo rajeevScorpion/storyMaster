@@ -11,12 +11,14 @@ import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
 import PublishDialog from './PublishDialog';
+import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
+import HqDownloadButton from './HqDownloadButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
@@ -35,6 +37,7 @@ import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timin
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset } from '@/lib/persistence';
 import { saveTreeProgress } from '@/lib/persistence/runtime';
+import { parseR2Reference } from '@/lib/media/r2-reference';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { getStoryboardSettings, checkIsAdmin } from '@/app/actions/admin';
 import {
@@ -1286,7 +1289,28 @@ type CharacterPromptCopyItem = {
   referenceSheetUrl?: string;
   referenceSheetStorageKey?: string;
   referenceSheetGallery: import('@/lib/types/story').CharacterSheetGalleryEntry[];
+  generatedReferenceUrl?: string;
 };
+
+function resolveRenderableGeneratedReferenceUrl(...candidates: Array<string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const r2Reference = parseR2Reference(candidate);
+    if (r2Reference) {
+      return `/api/media/r2/object?bucket=${encodeURIComponent(r2Reference.bucket)}&key=${encodeURIComponent(r2Reference.objectKey)}`;
+    }
+    if (
+      candidate.startsWith('data:')
+      || candidate.startsWith('blob:')
+      || candidate.startsWith('http://')
+      || candidate.startsWith('https://')
+      || candidate.startsWith('/')
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
 
 function buildCharacterPromptCopyItems(
   beat: StoryBeat,
@@ -1320,6 +1344,12 @@ function buildCharacterPromptCopyItems(
     const activeUrl = rosterEntry?.referenceSheetUrl ?? character.referenceSheetUrl;
     const activeKey = rosterEntry?.referenceSheetStorageKey ?? character.referenceSheetStorageKey;
     const gallery = rosterEntry?.referenceSheetGallery ?? character.referenceSheetGallery ?? [];
+    const generatedReferenceUrl = resolveRenderableGeneratedReferenceUrl(
+      rosterEntry?.portraitUrl,
+      character.portraitUrl,
+      rosterEntry?.portraitBase64,
+      character.portraitBase64
+    );
     items.push({
       key: `${character.id}:${items.length}`,
       label: character.name,
@@ -1329,6 +1359,7 @@ function buildCharacterPromptCopyItems(
       referenceSheetUrl: activeUrl,
       referenceSheetStorageKey: activeKey,
       referenceSheetGallery: gallery,
+      generatedReferenceUrl,
     });
   }
 
@@ -1603,6 +1634,7 @@ export default function StoryScreen() {
   const restartExploration = useStoryStore((state) => state.restartExploration);
   const isGeneratingAudio = useStoryStore((state) => state.isGeneratingAudio);
   const isRegeneratingImage = useStoryStore((state) => state.isRegeneratingImage);
+  const activeImageJobNodeIds = useStoryStore((state) => state.activeImageJobNodeIds);
   const audioReadyNodeId = useStoryStore((state) => state.audioReadyNodeId);
   const generateNarrationForNode = useStoryStore((state) => state.generateNarrationForNode);
   const updateStoryboardNarrationTiming = useStoryStore((state) => state.updateStoryboardNarrationTiming);
@@ -1780,6 +1812,7 @@ export default function StoryScreen() {
     findChildForOption(session.storyMap, session.storyMap.currentNodeId, optionId) !== null;
 
   return (
+    <>
     <StoryScreenInner
       session={session}
       currentBeat={currentBeat}
@@ -1792,6 +1825,7 @@ export default function StoryScreen() {
       hasExistingBranch={hasExistingBranch}
       isGeneratingAudio={isGeneratingAudio}
       isRegeneratingImage={isRegeneratingImage}
+      activeImageJobNodeIds={activeImageJobNodeIds}
       audioReadyNodeId={audioReadyNodeId}
       generateNarrationForNode={generateNarrationForNode}
       updateStoryboardNarrationTiming={updateStoryboardNarrationTiming}
@@ -1834,6 +1868,7 @@ export default function StoryScreen() {
       permanentlyDeleteCharacterReferenceSheet={permanentlyDeleteCharacterReferenceSheet}
       persistenceUserId={user?.id}
     />
+    </>
   );
 }
 
@@ -1850,6 +1885,7 @@ function StoryScreenInner({
   hasExistingBranch,
   isGeneratingAudio,
   isRegeneratingImage,
+  activeImageJobNodeIds,
   audioReadyNodeId,
   generateNarrationForNode,
   updateStoryboardNarrationTiming,
@@ -1898,6 +1934,7 @@ function StoryScreenInner({
   hasExistingBranch: (optionId: string) => boolean;
   isGeneratingAudio: boolean;
   isRegeneratingImage: boolean;
+  activeImageJobNodeIds: string[];
   audioReadyNodeId: string | null;
   generateNarrationForNode: (nodeId: string) => Promise<void>;
   updateStoryboardNarrationTiming: (
@@ -2047,6 +2084,8 @@ function StoryScreenInner({
   const [isPromptToolsHelpOpen, setIsPromptToolsHelpOpen] = useState(false);
   const [savedRefsExpanded, setSavedRefsExpanded] = useState(false);
   const [promptToolsSuccess, setPromptToolsSuccess] = useState<string | null>(null);
+  const [batchModeNotice, setBatchModeNotice] = useState(false);
+  const [batchModeNarrationNotice, setBatchModeNarrationNotice] = useState(false);
   const [uploadPreview, setUploadPreview] = useState<PromptOnlyUploadPreview | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isOptimizingPromptOnlyImage, setIsOptimizingPromptOnlyImage] = useState(false);
@@ -2179,6 +2218,11 @@ function StoryScreenInner({
     return () => { active = false; };
   }, [currentNodeId, persistenceUserId, session.explorationMode, session.savedStoryId]);
   const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
+  // Deferred-delivery stories (cost-saver batch or fast stateful) produce beat
+  // images via a background job. Live per-beat (re)generation is disabled so an
+  // accidental click can't defeat deferred mode.
+  const isBatchDeliveryStory = session.storyConfig.imageDeliveryMode === 'batch'
+    || session.storyConfig.imageDeliveryMode === 'stateful';
   const reelTimelineNodes = useMemo(
     () => (isReelStory ? getNodesByBeatNumber(session.storyMap) : undefined),
     [isReelStory, session.storyMap]
@@ -2202,10 +2246,20 @@ function StoryScreenInner({
   const imageLoadFailed = !!imageKey && failedImageUrl === imageKey;
   const showResolvingImageState = imageIsResolving && Boolean(normalizedCurrentBeat.imageUrl);
   const showPendingImageState = !displayImageUrl && !showResolvingImageState && normalizedCurrentBeat.imageStatus === 'pending';
+  // Server-pipeline job in flight: generation is durable server-side, so the
+  // pending copy reassures the user the tab can be closed.
+  const isServerImageJobPending = activeImageJobNodeIds.includes(currentNodeId)
+    && normalizedCurrentBeat.imageStatus === 'pending';
   const showPromptOnlyPlaceholder = isPromptOnlyStory && !displayImageUrl && !showResolvingImageState && !showPendingImageState;
   const showFailedImageState = !showPromptOnlyPlaceholder && !displayImageUrl && !showResolvingImageState && (normalizedCurrentBeat.imageStatus === 'failed' || hasImpossibleImageState);
   const showSaveAlert = Boolean(saveWarning) && saveStatus !== 'unsaved';
-  const canRegenerateImage = !isPromptOnlyStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
+  const canRegenerateImage = !isPromptOnlyStory && !isBatchDeliveryStory && (!normalizedCurrentBeat.imageUrl || isFallbackImageUrl(normalizedCurrentBeat.imageUrl) || imageLoadFailed);
+  // In batch mode, surface a disabled image control that explains the batch flow
+  // instead of silently generating a live image.
+  const showBatchModeImageLock = isBatchDeliveryStory && !normalizedCurrentBeat.imageUrl;
+  // In batch mode, narration is bulk-generated on the last beat. Disable the
+  // per-beat speaker control so an accidental click can't generate a live one.
+  const showBatchModeNarrationLock = isBatchDeliveryStory && !normalizedCurrentBeat.audioUrl;
   const cancelReelPlayAll = useCallback(() => {
     pendingReelPlayAllNodeIdRef.current = null;
     reelPlayAllNodeIdsRef.current = [];
@@ -2316,8 +2370,8 @@ function StoryScreenInner({
   const beatPromptText = buildBeatPromptCopyText(normalizedCurrentBeat);
   const characterPromptItems = buildCharacterPromptCopyItems(normalizedCurrentBeat, session);
   const promptToolsOpen = promptToolsModalState.view !== 'closed';
-  const needsAttentionCharacters = characterPromptItems.filter((item) => !item.referenceSheetUrl);
-  const readyInBeatCharacters = characterPromptItems.filter((item) => Boolean(item.referenceSheetUrl));
+  const needsAttentionCharacters = characterPromptItems.filter((item) => !item.referenceSheetUrl && !item.generatedReferenceUrl);
+  const readyInBeatCharacters = characterPromptItems.filter((item) => Boolean(item.referenceSheetUrl || item.generatedReferenceUrl));
   const activeCharacterSheetTarget = promptToolsModalState.view === 'character-upload' ? promptToolsModalState : null;
   const activeCharacterPromptItem = activeCharacterSheetTarget
     ? characterPromptItems.find((item) => item.characterId === activeCharacterSheetTarget.characterId) ?? null
@@ -2328,21 +2382,21 @@ function StoryScreenInner({
     ? 'Upload a square JPG, PNG, or WebP sheet. It stays attached to this character for future beats and continuations, then returns you to the tools overview.'
     : isPromptOnlyStory
     ? 'Copy prompts, upload this beat image, and add refs only for characters that still need them. Successful uploads return here automatically.'
-    : 'Copy prompts and add character refs only where this beat still needs them. Successful uploads return here automatically.';
+    : 'Copy prompts, replace this beat image when needed, and add character refs only where continuity still needs them. Successful uploads return here automatically.';
   const promptToolsShellLabel = promptToolsModalState.view === 'beat-upload'
     ? 'Beat image upload tools'
     : promptToolsModalState.view === 'character-upload'
     ? 'Character sheet tools'
-    : isPromptOnlyStory
-    ? 'Prompt and image tools'
-    : 'Prompt tools';
+    : 'Prompt and image tools';
   const canOpenPromptTools = Boolean(isPromptOnlyStory || beatPromptText || characterPromptItems.length > 0);
   const isPromptToolsOverview = promptToolsModalState.view === 'overview';
   const isBeatUploadView = promptToolsModalState.view === 'beat-upload';
   const isCharacterUploadView = promptToolsModalState.view === 'character-upload';
   const activeCharacterGallery = activeCharacterPromptItem?.referenceSheetGallery ?? [];
+  const activeCharacterGeneratedReferenceUrl = activeCharacterPromptItem?.generatedReferenceUrl;
   const activeCharacterStorageKey = activeCharacterPromptItem?.referenceSheetStorageKey;
   const activeCharacterHasSheet = Boolean(activeCharacterPromptItem?.referenceSheetUrl);
+  const activeCharacterHasReference = Boolean(activeCharacterPromptItem?.referenceSheetUrl || activeCharacterPromptItem?.generatedReferenceUrl);
   const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
   const canPublishStandardStoryline = Boolean(
     publishPath?.beats.every((beat) => {
@@ -3678,8 +3732,13 @@ function StoryScreenInner({
     return () => window.clearTimeout(timeoutId);
   }, [promptToolsSuccess]);
 
-  // Auto-save when a new beat is generated
+  // Auto-save when a new beat is generated.
+  // Suppressed during an automated batch walk: beats are persisted incrementally
+  // by saveBeatAction, and one full save runs when the walk finishes. Firing a
+  // full-session save per beat here would overlap the next beat's save and trip
+  // the benign "retry queued" notice, which used to abort the walk.
   useEffect(() => {
+    if (useStoryStore.getState().autoBuildProgress?.active) return;
     if (saveStatus === 'unsaved' && onSave && !isSaving) {
       onSave();
     }
@@ -3693,9 +3752,15 @@ function StoryScreenInner({
     const timeoutId = window.setTimeout(() => {
       const latest = useStoryStore.getState();
       if (latest.saveStatus !== 'saving') return;
+      // Never surface the "save queued" notice during an automated batch walk —
+      // it would abort the walk on the store's error channel.
+      if (latest.autoBuildProgress?.active) return;
 
       if (cycleSettings.storyIncrementalAssetSyncEnabled) {
-        if (!isPromptOnlyStory) {
+        // Deferred-delivery (batch/stateful) stories generate their images on the
+        // server, not via client-side sync — so the "beat media is syncing" notice
+        // (and its header warning triangle) doesn't apply and would only confuse.
+        if (!isPromptOnlyStory && !isBatchDeliveryStory) {
           useStoryStore.setState({
             saveWarning: latest.saveWarning || 'Beat media is syncing in the background.',
           });
@@ -3716,6 +3781,7 @@ function StoryScreenInner({
     saveStatus,
     onSave,
     isPromptOnlyStory,
+    isBatchDeliveryStory,
     cycleSettings.cloudSaveTimeoutMs,
     cycleSettings.storyIncrementalAssetSyncEnabled,
     cycleSettings.storyAssetSyncWarningTimeoutMs,
@@ -5458,19 +5524,34 @@ function StoryScreenInner({
             />
           </motion.div>
         </AnimatePresence>
-        {!displayImageUrl && (showPendingImageState || showFailedImageState) && (
-          <div className="absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
-            <div className="rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
+        {!displayImageUrl && showFailedImageState && (
+          <div className="pointer-events-none absolute inset-0 hidden items-center justify-center px-6 text-center md:flex">
+            <div className="pointer-events-auto rounded-3xl border border-white/10 bg-neutral-950/65 px-6 py-5 backdrop-blur-md">
               <div className="mb-3 flex justify-center">
-                {showPendingImageState ? (
-                  <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                ) : (
-                  <AlertTriangle className="h-8 w-8 text-amber-300" />
-                )}
+                <AlertTriangle className="h-8 w-8 text-amber-300" />
               </div>
-              <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">
-                {showPendingImageState ? 'Beat Image Syncing' : 'Beat Image Needs Retry'}
-              </p>
+              <p className="text-xs uppercase tracking-[0.22em] text-neutral-400">Beat Image Needs Retry</p>
+            </div>
+          </div>
+        )}
+        {!displayImageUrl && showPendingImageState && !showFailedImageState && !isBatchDeliveryStory && (
+          // Deliberately quiet: the image is on its way (background job or asset
+          // sync), so all the user needs is a small in-progress hint, not a modal.
+          <div className="pointer-events-none absolute inset-0 hidden items-center justify-center px-6 md:flex">
+            <div className="group pointer-events-auto relative">
+              <div className="pointer-events-none absolute bottom-full left-1/2 mb-3 w-72 -translate-x-1/2 rounded-2xl border border-white/10 bg-neutral-950/90 px-4 py-3 text-left text-xs leading-relaxed text-neutral-300 opacity-0 shadow-[0_20px_40px_rgba(0,0,0,0.35)] backdrop-blur-md transition-opacity duration-150 group-hover:opacity-100">
+                {isServerImageJobPending
+                  ? 'The image is being generated in the background and will appear here automatically. Safe to switch tabs or close the browser.'
+                  : 'The image for this beat is syncing and will appear here automatically.'}
+              </div>
+              <div
+                className="relative flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-neutral-950/70 backdrop-blur-md"
+                role="status"
+                aria-label="Image generating in background"
+              >
+                <ImageIcon className="h-4 w-4 text-neutral-300" />
+                <Loader2 className="absolute h-10 w-10 animate-spin text-emerald-300/70" strokeWidth={1} />
+              </div>
             </div>
           </div>
         )}
@@ -5607,8 +5688,19 @@ function StoryScreenInner({
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-neutral-900/70 text-center text-neutral-200">
                   {showPendingImageState ? (
                     <>
-                      <Loader2 className="h-8 w-8 animate-spin text-emerald-300" />
-                      <p className="text-sm uppercase tracking-[0.18em] text-neutral-300">Image Syncing</p>
+                      <div
+                        className="relative flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-neutral-950/60"
+                        role="status"
+                        aria-label="Image generating in background"
+                      >
+                        <ImageIcon className="h-4 w-4 text-neutral-300" />
+                        <Loader2 className="absolute h-10 w-10 animate-spin text-emerald-300/70" strokeWidth={1} />
+                      </div>
+                      <p className="px-8 text-[11px] leading-relaxed text-neutral-400">
+                        {isServerImageJobPending
+                          ? 'Generating in the background — it will appear automatically. Safe to leave and come back.'
+                          : 'Image syncing — it will appear automatically.'}
+                      </p>
                     </>
                   ) : (
                     <>
@@ -5717,7 +5809,7 @@ function StoryScreenInner({
                         ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
                         : 'bg-white/5 hover:bg-white/10 text-neutral-300'
                     }`}
-                    title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                    title="Prompt & image tools"
                   >
                     <Layers className="w-5 h-5" />
                   </button>
@@ -5818,6 +5910,38 @@ function StoryScreenInner({
                     )}
                   </button>
                 )}
+                {/* Batch-mode: image generation is disabled — explain the batch flow */}
+                {showBatchModeImageLock && (
+                  <div className="relative flex flex-col items-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchModeNotice(true);
+                        window.setTimeout(() => setBatchModeNotice(false), 4000);
+                      }}
+                      aria-disabled="true"
+                      className="p-2.5 backdrop-blur-md rounded-full bg-neutral-900/60 border border-white/10 text-neutral-500 cursor-not-allowed"
+                      title="Batch mode — finish all beats, then tap Create all visuals on the last beat"
+                    >
+                      <ImageOff className="w-5 h-5" />
+                    </button>
+                    <AnimatePresence>
+                      {batchModeNotice && (
+                        <motion.p
+                          initial={{ opacity: 0, x: -6 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0, x: -6 }}
+                          className="absolute left-full ml-2 top-1/2 z-50 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                        >
+                          You&apos;re in batch mode. Finish all beats, then tap “Create all visuals” on the last beat.
+                        </motion.p>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                )}
+                {session.savedStoryId && !isPromptOnlyStory && (
+                  <HqDownloadButton storyId={session.savedStoryId} nodeId={currentNodeId} />
+                )}
                 {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton
                     active={isAutoScrolling}
@@ -5825,22 +5949,44 @@ function StoryScreenInner({
                     disabled={scrollState.atBottom}
                   />
                 )}
-                <NarrationButton
-                  isGeneratingAudio={isGeneratingAudio}
-                  isAudioReady={isAudioReady}
-                  playbackState={playbackState}
-                  hasAudio={!!normalizedCurrentBeat.audioUrl}
-                  onTogglePlayPause={togglePlayPause}
-                  onGenerateNarration={handleGenerateNarration}
-                  onClearGlow={clearAudioReady}
-                  storyMode={storyMode}
-                  onToggleStoryMode={toggleStoryMode}
-                  disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
-                  disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
-                />
+                <div className="relative flex flex-col items-center">
+                  <NarrationButton
+                    isGeneratingAudio={isGeneratingAudio}
+                    isAudioReady={isAudioReady}
+                    playbackState={playbackState}
+                    hasAudio={!!normalizedCurrentBeat.audioUrl}
+                    onTogglePlayPause={togglePlayPause}
+                    onGenerateNarration={handleGenerateNarration}
+                    onClearGlow={clearAudioReady}
+                    storyMode={storyMode}
+                    onToggleStoryMode={toggleStoryMode}
+                    disabled={narrationIsResolving || (isReelStory && hasUnsavedReelText)}
+                    disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
+                    batchLocked={showBatchModeNarrationLock}
+                    onBatchLockedClick={() => {
+                      setBatchModeNarrationNotice(true);
+                      window.setTimeout(() => setBatchModeNarrationNotice(false), 4000);
+                    }}
+                  />
+                  <AnimatePresence>
+                    {batchModeNarrationNotice && (
+                      <motion.p
+                        initial={{ opacity: 0, x: -6 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, x: -6 }}
+                        className="absolute left-full ml-2 top-1/2 z-50 -translate-y-1/2 w-56 rounded-xl border border-white/10 bg-neutral-900/95 px-3 py-2 text-xs leading-relaxed text-neutral-200 shadow-xl backdrop-blur-md"
+                      >
+                        You&apos;re in batch mode. Finish all beats, then tap “Generate all narration” on the last beat.
+                      </motion.p>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             )}
 
+          <div className="flex w-full flex-col">
+          {/* Batch visuals CTA — sits directly above the card, matching its width (all breakpoints) */}
+          <BatchVisualsBanner />
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -5891,7 +6037,7 @@ function StoryScreenInner({
                           ? 'bg-sky-500/20 hover:bg-sky-500/25 text-sky-200'
                           : 'bg-white/5 hover:bg-white/10 text-neutral-300'
                       }`}
-                      title={isPromptOnlyStory ? 'Prompt & image tools' : 'Prompt tools'}
+                      title="Prompt & image tools"
                     >
                       <Layers className="w-4 h-4" />
                     </button>
@@ -6202,6 +6348,7 @@ function StoryScreenInner({
               </div>
             )}
           </motion.div>
+          </div>{/* end banner + card stack */}
           </div>{/* end card + narration button row */}
 
           </div>
@@ -6344,12 +6491,10 @@ function StoryScreenInner({
                     {isBeatUploadView
                       ? 'Upload Beat Image'
                       : isCharacterUploadView
-                      ? activeCharacterHasSheet
+                      ? activeCharacterHasReference
                         ? 'Manage Character Sheets'
                         : 'Upload Character Sheet'
-                      : isPromptOnlyStory
-                      ? 'Prompt and Image Tools'
-                      : 'Prompt Tools'}
+                      : 'Prompt and Image Tools'}
                   </p>
                   <h3 className="mt-2 text-2xl font-serif text-neutral-100">
                     {isBeatUploadView
@@ -6358,7 +6503,7 @@ function StoryScreenInner({
                       ? activeCharacterSheetTarget?.characterName
                       : isPromptOnlyStory
                       ? 'Copy prompts and keep going'
-                      : 'Copy prompts and manage refs'}
+                      : 'Copy prompts and manage images'}
                   </h3>
                   <p className="mt-1 text-sm leading-relaxed text-neutral-400">
                     {isBeatUploadView
@@ -6367,7 +6512,7 @@ function StoryScreenInner({
                       ? 'Reference sheets persist with this character so future episodes and continuations can reuse them.'
                       : isPromptOnlyStory
                       ? `Copy the exact prompts for this beat, then upload a ${isVerticalStory ? '9:16' : '16:9'} image or add only the character refs still missing.`
-                      : 'Copy the exact prompt text for this beat and add character refs only where continuity still needs them.'}
+                      : 'Copy the exact prompt text for this beat, replace the generated image if needed, and add character refs where continuity still needs them.'}
                   </p>
                 </div>
                 <div className="relative flex items-start gap-2">
@@ -6429,17 +6574,15 @@ function StoryScreenInner({
                           {copiedPromptKey === 'beat' ? 'Copied' : 'Copy Beat Prompt'}
                         </button>
                       )}
-                      {isPromptOnlyStory && (
-                        <button
-                          type="button"
-                          onClick={openBeatUploadView}
-                          className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
-                          title={displayImageUrl ? 'Replace this beat image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
-                        >
-                          <Upload className="h-3.5 w-3.5" />
-                          {displayImageUrl ? 'Replace Image' : 'Upload Image'}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={openBeatUploadView}
+                        className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-4 py-2 text-xs uppercase tracking-[0.18em] text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                        title={displayImageUrl ? 'Replace this beat image' : `Upload a ${isVerticalStory ? '9:16' : '16:9'} image for this beat`}
+                      >
+                        <Upload className="h-3.5 w-3.5" />
+                        {displayImageUrl ? 'Replace Image' : 'Upload Image'}
+                      </button>
                     </div>
 
                     {characterPromptItems.length > 0 && (
@@ -6521,7 +6664,11 @@ function StoryScreenInner({
                                   <div className="min-w-0">
                                     <p className="truncate text-sm font-medium text-neutral-100">{item.label}</p>
                                     <p className="mt-1 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-                                      {item.referenceSheetGallery.length} saved
+                                      {item.referenceSheetGallery.length > 0
+                                        ? `${item.referenceSheetGallery.length} saved`
+                                        : item.generatedReferenceUrl
+                                        ? 'Generated reference'
+                                        : 'No saved sheet'}
                                     </p>
                                   </div>
                                   {cycleSettings.characterSheetUploadEnabled && (
@@ -6782,8 +6929,35 @@ function StoryScreenInner({
 
                   return (
                     <>
-                      {activeCharacterGallery.length > 0 && (
+                      {activeCharacterGeneratedReferenceUrl && (
                         <div>
+                          <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
+                            Generated Reference
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-3">
+                            <div className="relative">
+                              <div className="relative block aspect-square w-28 overflow-hidden rounded-xl border border-emerald-400/40 bg-neutral-950/70 ring-1 ring-emerald-400/20">
+                                <Image
+                                  src={activeCharacterGeneratedReferenceUrl}
+                                  alt={`${activeCharacterSheetTarget.characterName} generated reference`}
+                                  fill
+                                  className="object-cover"
+                                  unoptimized
+                                />
+                                <span className="absolute bottom-1 left-1 rounded-full bg-emerald-500/90 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-950">
+                                  AI
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <p className="mt-2 text-[11px] text-neutral-500">
+                            Generated by the story image pipeline and used for continuity. Upload a sheet below only when you want to replace or improve this reference.
+                          </p>
+                        </div>
+                      )}
+
+                      {activeCharacterGallery.length > 0 && (
+                        <div className={activeCharacterGeneratedReferenceUrl ? 'mt-5' : undefined}>
                           <div className="flex items-center justify-between">
                             <p className="text-xs uppercase tracking-[0.18em] text-neutral-400">
                               Saved Sheets ({activeCharacterGallery.length} / {cap})

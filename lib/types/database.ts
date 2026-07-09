@@ -17,6 +17,7 @@ import type { ManagedPageAccessLevel, ManagedPageType } from '../managed-pages/t
 import type { BeatMediaStatus } from './beat-media';
 import type { ReelPanelCaption, StoryAspectRatio, StoryboardNarrationTiming, StoryKind } from './story';
 import type { StoryEffectConfig } from '@/lib/story-effects/settings';
+import type { ImageProviderKey } from '@/lib/ai/image-models.shared';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -73,6 +74,10 @@ export interface DbStory {
   reel_cleanup_status?: string | null;
   reel_deleted_at?: string | null;
   reel_cleanup_last_error?: string | null;
+  image_provider_key?: ImageProviderKey | null;
+  image_model_key?: string | null;
+  image_model_snapshot?: Record<string, unknown> | null;
+  visual_profile?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -166,6 +171,9 @@ export interface DbBeat {
   image_url: string | null;
   image_status: BeatMediaStatus;
   image_error: string | null;
+  image_provider_key?: ImageProviderKey | null;
+  image_model_key?: string | null;
+  image_generation_metadata?: Record<string, unknown> | null;
   image_synced_at: string | null;
   image_gallery: Array<{
     url: string;
@@ -228,6 +236,7 @@ export interface DbAiCostEvent {
   node_id: string | null;
   story_session_id: string | null;
   activity_key: string;
+  generation_mode: string;
   task_key: string;
   provider: string;
   model_id: string;

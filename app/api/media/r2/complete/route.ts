@@ -98,6 +98,8 @@ export async function POST(request: Request) {
     durationSeconds: typeof body?.durationSeconds === 'number' ? body.durationSeconds : null,
     isPublic: access === 'public',
     cacheControl,
+    // Browser-side compress + presigned upload = the legacy processing flow.
+    processingMode: 'client_legacy',
   });
 
   return NextResponse.json({

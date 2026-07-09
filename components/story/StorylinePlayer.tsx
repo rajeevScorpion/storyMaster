@@ -67,6 +67,7 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { resolveVideoExportWatermarkVisibility } from '@/lib/types/pricing';
 import { mergeRefreshedStorylineBeatAssetUrls } from '@/lib/media/refresh-merge';
+import { preloadAudioForPlayback } from '@/lib/media/audio-preload';
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset, type StorylineManifestPayload } from '@/lib/persistence';
 import { saveStorylineAndPrefetch, saveStorylineProgress } from '@/lib/persistence/runtime';
@@ -408,6 +409,8 @@ export default function StorylinePlayer({
   const imageIsResolving = Boolean(imageAsset && resolvedImage.isResolving);
   const resolvedAudio = useResolvedStoryMediaState(audioAsset);
   const resolvedAudioUrl = audioAsset ? resolvedAudio.url : currentBeat.audioUrl;
+  const nextBeatAudioUrl = currentBeats[currentIndex + 1]?.audioUrl;
+  const followingBeatAudioUrl = currentBeats[currentIndex + 2]?.audioUrl;
   const isStoryboard = Boolean(currentBeat.imageUrl && isStoryboardBeat(currentBeat));
   const hasStoryTextOverlay = Boolean(currentBeat.storyTextOverlayCaptions?.length);
   const storyTextOverlayEnabled = storyTextOverlayVisible && currentBeat.storyTextOverlayEnabled !== false;
@@ -470,6 +473,14 @@ export default function StorylinePlayer({
       },
     }
   );
+
+  useEffect(() => {
+    const urls = [nextBeatAudioUrl, followingBeatAudioUrl]
+      .filter((url): url is string => Boolean(url));
+    urls.forEach((url) => {
+      void preloadAudioForPlayback(url);
+    });
+  }, [followingBeatAudioUrl, nextBeatAudioUrl]);
   const storyboardAudioDurationMs = audioDurationMs > 0
     ? audioDurationMs
     : currentBeat.narrationMetadata?.durationMs ?? 0;
@@ -651,14 +662,13 @@ export default function StorylinePlayer({
     }
     if (
       pendingAutoPlayIndexRef.current === currentIndex
-      && !resolvedAudio.isResolving
       && resolvedAudioUrl
       && playbackState === 'idle'
     ) {
       pendingAutoPlayIndexRef.current = null;
       playAudio();
     }
-  }, [currentIndex, autoPlay, resolvedAudio.isResolving, resolvedAudioUrl, playbackState, playAudio]);
+  }, [currentIndex, autoPlay, resolvedAudioUrl, playbackState, playAudio]);
 
   // Advance only for a genuine media-ended event. Pauses and manual navigation must not advance.
   const handledAudioEndedCountRef = useRef(0);

@@ -1028,6 +1028,8 @@ export function storyLanguageToNarrationLanguage(language: StoryLanguage | strin
       return 'ur-IN';
     case 'gujarati':
       return 'gu-IN';
+    case 'marathi':
+      return 'mr-IN';
     default:
       return 'en-IN';
   }

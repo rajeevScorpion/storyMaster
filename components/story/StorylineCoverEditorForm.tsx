@@ -7,6 +7,8 @@ import { generateDraftStoryCoverImage } from '@/app/actions/storyline-covers';
 import { getImageUploadOptimizationSettings } from '@/app/actions/admin';
 import type { StoryCoverPromptVariant } from '@/lib/story/cover-prompts';
 import type { StorylineFormat, StorylineShareCoverSource } from '@/lib/types/database';
+import type { ImageContinuityProviderState, ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   blobToDataUrl,
   compressImageFile,
@@ -96,6 +98,11 @@ interface StorylineCoverEditorFormProps {
   emptyHint?: string | null;
   submitBusy?: boolean;
   persistedAssets?: StorylineCoverEditorPersistedAssets | null;
+  imageModelSelection?: ImageModelSelection | null;
+  imageContinuity?: {
+    requestedStrategy: ImageContinuityStrategy;
+    previousState?: ImageContinuityProviderState | null;
+  } | null;
   onCancel: () => void;
   onSubmit: (submission: StorylineCoverEditorSubmission) => Promise<void> | void;
 }
@@ -287,6 +294,8 @@ export default function StorylineCoverEditorForm({
   emptyHint = null,
   submitBusy = false,
   persistedAssets = null,
+  imageModelSelection = null,
+  imageContinuity = null,
   onCancel,
   onSubmit,
 }: StorylineCoverEditorFormProps) {
@@ -407,6 +416,8 @@ export default function StorylineCoverEditorForm({
         storylineId,
         prompt,
         kind,
+        imageModelSelection,
+        imageContinuity,
       });
       const { width, height } = await readImageDimensions(result.dataUrl);
       const preview: CoverUploadPreview = {

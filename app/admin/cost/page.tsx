@@ -49,8 +49,19 @@ function activityLabel(key: string) {
     generate_social_share_cover: 'Share cover',
     generate_audio_story_cover: 'Audio cover',
     generate_reel_thumbnail: 'Reel thumb',
+    generate_story_text_overlay: 'Text overlay',
+    batch_image_generation: 'Batch image',
   };
   return labels[key] || key.replaceAll('_', ' ');
+}
+
+function generationModeLabel(mode: string) {
+  const labels: Record<string, string> = {
+    regular: 'Regular',
+    batch: 'Batch',
+    stateful: 'Stateful',
+  };
+  return labels[mode] || mode;
 }
 
 function taskLabel(key: string) {
@@ -66,6 +77,7 @@ function taskLabel(key: string) {
     reel_story_generation: 'Reel story',
     tts: 'TTS',
     reel_tts: 'Reel TTS',
+    story_text_overlay_alignment: 'Overlay STT',
     voice_selection: 'Voice',
   };
   return labels[key] || key.replaceAll('_', ' ');
@@ -93,14 +105,43 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
             <p className="text-xs font-medium uppercase tracking-[0.14em] text-neutral-500">{taskLabel(item.taskKey)}</p>
             <p className="text-sm text-emerald-300">{formatInr(item.estimatedCostUsd * 93)}</p>
           </div>
+          {item.generationModes.some((mode) => mode !== 'regular') && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {item.generationModes.map((mode) => (
+                <span
+                  key={mode}
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                    mode === 'batch'
+                      ? 'bg-indigo-500/15 text-indigo-300'
+                      : mode === 'stateful'
+                      ? 'bg-purple-500/15 text-purple-300'
+                      : 'bg-white/5 text-neutral-400'
+                  }`}
+                >
+                  {generationModeLabel(mode)}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="mt-1 text-xs text-neutral-500">{formatUsd(item.estimatedCostUsd)}</p>
-          <p className="mt-2 truncate text-xs text-neutral-400" title={item.models.join(', ')}>
-            {item.models.join(', ')}
+          <p className="mt-2 truncate text-xs text-neutral-400" title={(item.providers.length ? item.providers : item.models).join(', ')}>
+            {(item.providers.length ? item.providers : item.models).join(', ')}
           </p>
           <p className="mt-2 text-xs text-neutral-500">
             {item.inputTokens.toLocaleString()} in / {item.outputTokens.toLocaleString()} out
+            {item.cachedTokens > 0 ? ` / ${item.cachedTokens.toLocaleString()} cached` : ''}
             {item.imageCount > 0 ? ` / ${item.imageCount} image${item.imageCount === 1 ? '' : 's'}` : ''}
+            {item.audioSeconds > 0 ? ` / ${item.audioSeconds.toFixed(1)}s audio` : ''}
           </p>
+          {(item.runtimeCostUsd > 0 || item.imageCostUsd > 0 || item.strategies.length > 0 || item.fallbacks.length > 0) && (
+            <p className="mt-2 text-xs text-neutral-500">
+              {item.runtimeCostUsd > 0 ? `runtime ${formatUsd(item.runtimeCostUsd)}` : ''}
+              {item.runtimeCostUsd > 0 && item.imageCostUsd > 0 ? ' / ' : ''}
+              {item.imageCostUsd > 0 ? `image ${formatUsd(item.imageCostUsd)}` : ''}
+              {item.strategies.length > 0 ? ` / ${item.strategies.join(', ')}` : ''}
+              {item.fallbacks.length > 0 ? ` / fallback: ${item.fallbacks.join(', ')}` : ''}
+            </p>
+          )}
         </div>
       ))}
     </div>

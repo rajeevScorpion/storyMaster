@@ -1,5 +1,6 @@
 import { createClient } from './client';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import type { StoryMap, StoryBeat } from '@/lib/types/story';
 import { getBeatPersistedAudioUrl, getBeatPersistedImageUrl } from '@/lib/types/beat-media';
 import { normalizeR2UrlLikeReference } from '@/lib/media/r2-reference';
@@ -29,12 +30,12 @@ export interface StorageUploadOptions {
  * Convert a base64 data URL to a Blob with the correct content type.
  */
 export function base64ToBlob(base64DataUrl: string): { blob: Blob; contentType: string; ext: string } {
-  const match = base64DataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
+  const parsed = splitBase64DataUrl(base64DataUrl);
+  if (!parsed) {
     throw new Error('Invalid base64 data URL');
   }
-  const contentType = match[1];
-  const base64 = match[2];
+  const contentType = parsed.mimeType;
+  const base64 = parsed.base64;
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -442,6 +443,11 @@ export function stripBase64FromStoryMap(storyMap: StoryMap): StoryMap {
             }));
           return {
             ...c,
+            portraitUrl: c.portraitUrl?.startsWith('data:')
+              ? undefined
+              : c.portraitUrl
+                ? normalizeStorageUrl(c.portraitUrl, 'story-assets')
+                : undefined,
             portraitBase64: undefined,
             referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
               ? undefined
@@ -574,11 +580,13 @@ export async function signStoryMapAssetUrls(
 ): Promise<StoryMap> {
   type FieldEntry = { nodeId: string; field: 'imageUrl' | 'audioUrl'; path: string };
   type GalleryEntry = { nodeId: string; galleryIdx: number; path: string };
+  type CharacterPortraitEntry = { nodeId: string; characterIdx: number; path: string };
   type CharacterSheetEntry = { nodeId: string; characterIdx: number; path: string };
   type CharacterSheetGalleryEntry = { nodeId: string; characterIdx: number; galleryIdx: number; path: string };
 
   const fieldEntries: FieldEntry[] = [];
   const galleryEntries: GalleryEntry[] = [];
+  const characterPortraitEntries: CharacterPortraitEntry[] = [];
   const characterSheetEntries: CharacterSheetEntry[] = [];
   const characterSheetGalleryEntries: CharacterSheetGalleryEntry[] = [];
 
@@ -601,6 +609,12 @@ export async function signStoryMapAssetUrls(
       });
     }
     (node.data.characters ?? []).forEach((character, idx) => {
+      if (character.portraitUrl) {
+        const path = extractStoragePath(character.portraitUrl, bucket);
+        if (path) {
+          characterPortraitEntries.push({ nodeId, characterIdx: idx, path });
+        }
+      }
       if (character.referenceSheetUrl) {
         const path = extractStoragePath(character.referenceSheetUrl, bucket);
         if (path) {
@@ -631,6 +645,7 @@ export async function signStoryMapAssetUrls(
   if (
     fieldEntries.length === 0 &&
     galleryEntries.length === 0 &&
+    characterPortraitEntries.length === 0 &&
     characterSheetEntries.length === 0 &&
     characterSheetGalleryEntries.length === 0
   ) {
@@ -640,6 +655,7 @@ export async function signStoryMapAssetUrls(
   const paths = [
     ...fieldEntries.map((e) => e.path),
     ...galleryEntries.map((e) => e.path),
+    ...characterPortraitEntries.map((e) => e.path),
     ...characterSheetEntries.map((e) => e.path),
     ...characterSheetGalleryEntries.map((e) => e.path),
   ];
@@ -685,7 +701,26 @@ export async function signStoryMapAssetUrls(
     };
   }
 
-  const characterSheetOffset = fieldEntries.length + galleryEntries.length;
+  const characterPortraitOffset = fieldEntries.length + galleryEntries.length;
+  for (let i = 0; i < characterPortraitEntries.length; i++) {
+    const entry = characterPortraitEntries[i];
+    const signed = data[characterPortraitOffset + i];
+    if (signed.error || !signed.signedUrl) continue;
+
+    const node = cloned.nodes[entry.nodeId];
+    const characters = node.data.characters ?? [];
+    const updatedCharacters = characters.map((character, idx) =>
+      idx === entry.characterIdx
+        ? { ...character, portraitUrl: signed.signedUrl }
+        : character
+    );
+    cloned.nodes[entry.nodeId] = {
+      ...node,
+      data: { ...node.data, characters: updatedCharacters },
+    };
+  }
+
+  const characterSheetOffset = characterPortraitOffset + characterPortraitEntries.length;
   for (let i = 0; i < characterSheetEntries.length; i++) {
     const entry = characterSheetEntries[i];
     const signed = data[characterSheetOffset + i];
@@ -731,8 +766,8 @@ export async function signStoryMapAssetUrls(
 
 /**
  * Replace Supabase Storage public URLs on a story-level Character[] roster
- * with signed URLs. Covers both the active referenceSheetUrl pointer and
- * every entry in referenceSheetGallery. Used at load time by `loadStory`,
+ * with signed URLs. Covers generated portraitUrl, the active referenceSheetUrl
+ * pointer, and every entry in referenceSheetGallery. Used at load time by `loadStory`,
  * since `signStoryMapAssetUrls` only walks `storyMap.nodes` and the gallery
  * lives canonically on `stories.characters`.
  */
@@ -744,13 +779,19 @@ export async function signCharacterRosterReferenceSheetUrls<T extends import('@/
 ): Promise<T[]> {
   if (!characters || characters.length === 0) return characters ?? [];
 
+  type PortraitEntry = { characterIdx: number; path: string };
   type ActiveEntry = { characterIdx: number; path: string };
   type GalleryEntry = { characterIdx: number; galleryIdx: number; path: string };
 
+  const portraitEntries: PortraitEntry[] = [];
   const activeEntries: ActiveEntry[] = [];
   const galleryEntries: GalleryEntry[] = [];
 
   characters.forEach((character, idx) => {
+    if (character.portraitUrl) {
+      const path = extractStoragePath(character.portraitUrl, bucket);
+      if (path) portraitEntries.push({ characterIdx: idx, path });
+    }
     if (character.referenceSheetUrl) {
       const path = extractStoragePath(character.referenceSheetUrl, bucket);
       if (path) activeEntries.push({ characterIdx: idx, path });
@@ -761,9 +802,10 @@ export async function signCharacterRosterReferenceSheetUrls<T extends import('@/
     });
   });
 
-  if (activeEntries.length === 0 && galleryEntries.length === 0) return characters;
+  if (portraitEntries.length === 0 && activeEntries.length === 0 && galleryEntries.length === 0) return characters;
 
   const paths = [
+    ...portraitEntries.map((e) => e.path),
     ...activeEntries.map((e) => e.path),
     ...galleryEntries.map((e) => e.path),
   ];
@@ -783,9 +825,20 @@ export async function signCharacterRosterReferenceSheetUrls<T extends import('@/
       : character.referenceSheetGallery,
   }));
 
+  for (let i = 0; i < portraitEntries.length; i++) {
+    const entry = portraitEntries[i];
+    const signed = data[i];
+    if (signed.error || !signed.signedUrl) continue;
+    cloned[entry.characterIdx] = {
+      ...cloned[entry.characterIdx],
+      portraitUrl: signed.signedUrl,
+    };
+  }
+
+  const activeOffset = portraitEntries.length;
   for (let i = 0; i < activeEntries.length; i++) {
     const entry = activeEntries[i];
-    const signed = data[i];
+    const signed = data[activeOffset + i];
     if (signed.error || !signed.signedUrl) continue;
     cloned[entry.characterIdx] = {
       ...cloned[entry.characterIdx],
@@ -793,7 +846,7 @@ export async function signCharacterRosterReferenceSheetUrls<T extends import('@/
     };
   }
 
-  const galleryOffset = activeEntries.length;
+  const galleryOffset = activeOffset + activeEntries.length;
   for (let i = 0; i < galleryEntries.length; i++) {
     const entry = galleryEntries[i];
     const signed = data[galleryOffset + i];

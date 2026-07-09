@@ -7,6 +7,22 @@ import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryPage, GenreSection } from '@/lib/types/database';
 import type { StoryAspectRatio } from '@/lib/types/story';
+import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+
+/**
+ * Moderation gate for public listings: when the admin requires review before
+ * public discovery, pending/rejected storylines stay off the gallery (their
+ * direct /storyline links keep working — this filters listings only).
+ * Enforced in queries rather than the gallery SQL view, and only applied
+ * while the setting is on so pre-073 databases keep working.
+ */
+async function moderationGateActive(): Promise<boolean> {
+  try {
+    return (await getMediaPipelineSettings()).moderationRequiredForPublic;
+  } catch {
+    return false;
+  }
+}
 
 type LegacyGalleryBeat = {
   imageUrl?: string | null;
@@ -480,12 +496,16 @@ async function resolveStorylineCovers<T extends StorylineGalleryRow>(
 export async function getPublicStorylines(limit: number = 6): Promise<GalleryStoryline[]> {
   const supabase = await createClient();
 
-  const { data, error } = await supabase
+  let recentQuery = supabase
     .from('storylines')
     .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats')
     .eq('is_public', true)
     .eq('is_vertical_story', false)
-    .neq('aspect_ratio', '9:16')
+    .neq('aspect_ratio', '9:16');
+  if (await moderationGateActive()) {
+    recentQuery = recentQuery.in('moderation_status', ['none', 'approved']);
+  }
+  const { data, error } = await recentQuery
     .order('created_at', { ascending: false })
     .limit(limit);
 
@@ -514,12 +534,16 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   const supabase = await createClient();
 
   // Fetch public storylines joined with their parent story for genre
-  const { data: rows, error } = await supabase
+  let genreQuery = supabase
     .from('storylines')
     .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
     .eq('is_public', true)
     .eq('is_vertical_story', false)
-    .neq('aspect_ratio', '9:16')
+    .neq('aspect_ratio', '9:16');
+  if (await moderationGateActive()) {
+    genreQuery = genreQuery.in('moderation_status', ['none', 'approved']);
+  }
+  const { data: rows, error } = await genreQuery
     .order('created_at', { ascending: false })
     .limit(100);
 
@@ -620,6 +644,9 @@ export async function getGalleryItems(
       .eq('is_vertical_story', false)
       .neq('aspect_ratio', '9:16')
       .order('created_at', { ascending: false });
+    if (await moderationGateActive()) {
+      query = query.in('moderation_status', ['none', 'approved']);
+    }
 
     if (filters.search) {
       query = query.ilike('title', `%${filters.search}%`);
@@ -662,6 +689,9 @@ export async function getGalleryItems(
       .eq('is_public', true)
       .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
       .order('created_at', { ascending: false });
+    if (await moderationGateActive()) {
+      query = query.in('moderation_status', ['none', 'approved']);
+    }
 
     if (filters.search) {
       query = query.ilike('title', `%${filters.search}%`);

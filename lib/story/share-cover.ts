@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash, randomUUID } from 'crypto';
 import sharp from 'sharp';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -319,15 +320,15 @@ export async function verifyPublicStorylineBucket(
 }
 
 function parseDataUrl(dataUrl: string): { buffer: Buffer; mimeType: string } {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
+  const parsed = splitBase64DataUrl(dataUrl);
+  if (!parsed) {
     throw new Error('Invalid image data URL.');
   }
-  const mimeType = match[1];
+  const mimeType = parsed.mimeType;
   if (!SUPPORTED_INPUT_MIME_TYPES.has(mimeType)) {
     throw new Error('Use a JPG, PNG, or WebP image.');
   }
-  return { buffer: Buffer.from(match[2], 'base64'), mimeType };
+  return { buffer: Buffer.from(parsed.base64, 'base64'), mimeType };
 }
 
 export async function readImageSourceBuffer(

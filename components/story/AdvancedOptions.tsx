@@ -2,26 +2,30 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import type { ImageModelPickerState, ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   SOURCE_FIDELITY_OPTIONS,
   STORY_DETAIL_OPTIONS,
+  STORY_LANGUAGE_OPTIONS,
   STORY_PALETTE_OPTIONS,
   STORY_THEME_OPTIONS,
   VISUAL_PRESET_OPTIONS,
 } from '@/lib/ai/story-config';
+import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
 import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
-import { Coins, Monitor, Smartphone, Volume2 } from 'lucide-react';
+import { Coins, ImageIcon, Monitor, Smartphone, Volume2 } from 'lucide-react';
 import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
 
-const LANGUAGE_OPTIONS: FilterDropdownOption[] = [
-  { value: 'english', label: 'English' },
-  { value: 'hindi', label: 'Hindi (हिन्दी)' },
-];
+const LANGUAGE_OPTIONS: FilterDropdownOption[] = STORY_LANGUAGE_OPTIONS.map((option) => ({
+  value: option.value,
+  label: option.label,
+}));
 
 const AGE_GROUP_OPTIONS: FilterDropdownOption[] = [
   { value: 'all_ages', label: 'All Ages' },
@@ -79,9 +83,17 @@ const SOURCE_FIDELITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = SOURCE_FIDELITY
   label: option.label,
 }));
 
+const IMAGE_CONTINUITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = [
+  { value: 'auto', label: 'Auto continuity' },
+  { value: 'provider_stateful', label: 'Stateful thread' },
+  { value: 'resend_refs', label: 'Resend refs' },
+];
+
 
 interface AdvancedOptionsProps {
   language: StoryLanguage;
+  /** Admin-enabled languages to offer; falls back to the full built-in catalog. */
+  languageOptions?: Array<{ value: StoryLanguage; label: string }>;
   onLanguageChange: (v: StoryLanguage) => void;
   ageGroup: AgeGroup;
   onAgeGroupChange: (v: AgeGroup) => void;
@@ -107,6 +119,19 @@ interface AdvancedOptionsProps {
   storyPromptOnlyModeEnabled?: boolean;
   imageGenerationMode?: 'generate' | 'prompt_only';
   onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
+  batchImageDeliveryEnabled?: boolean;
+  imageDeliveryMode?: 'live' | 'batch' | 'stateful';
+  onImageDeliveryModeChange?: (value: 'live' | 'batch' | 'stateful') => void;
+  episodicCharacters?: boolean;
+  onEpisodicCharactersChange?: (value: boolean) => void;
+  statefulContinuityAvailable?: boolean;
+  autoBuildStory?: boolean;
+  onAutoBuildStoryChange?: (value: boolean) => void;
+  imageModelPicker?: ImageModelPickerState | null;
+  imageModelSelection?: ImageModelSelection;
+  onImageModelSelectionChange?: (value: ImageModelSelection | undefined) => void;
+  imageContinuityStrategy?: ImageContinuityStrategy;
+  onImageContinuityStrategyChange?: (value: ImageContinuityStrategy) => void;
   verticalStoriesSettingEnabled?: boolean;
   isVerticalStory?: boolean;
   onVerticalStoryChange?: (value: boolean) => void;
@@ -114,12 +139,14 @@ interface AdvancedOptionsProps {
   narrationVoiceSelection?: {
     genderBucket: NarrationGenderBucket;
     voiceId: string;
+    accent: string;
   };
-  onNarrationVoiceSelectionChange?: (value: { genderBucket: NarrationGenderBucket; voiceId: string }) => void;
+  onNarrationVoiceSelectionChange?: (value: { genderBucket: NarrationGenderBucket; voiceId: string; accent: string }) => void;
 }
 
 export default function AdvancedOptions({
   language,
+  languageOptions,
   onLanguageChange,
   ageGroup,
   onAgeGroupChange,
@@ -145,6 +172,19 @@ export default function AdvancedOptions({
   storyPromptOnlyModeEnabled = false,
   imageGenerationMode = 'generate',
   onImageGenerationModeChange,
+  batchImageDeliveryEnabled = false,
+  imageDeliveryMode = 'live',
+  onImageDeliveryModeChange,
+  episodicCharacters = false,
+  onEpisodicCharactersChange,
+  statefulContinuityAvailable = true,
+  autoBuildStory = false,
+  onAutoBuildStoryChange,
+  imageModelPicker = null,
+  imageModelSelection,
+  onImageModelSelectionChange,
+  imageContinuityStrategy = 'auto',
+  onImageContinuityStrategyChange,
   verticalStoriesSettingEnabled = false,
   isVerticalStory = false,
   onVerticalStoryChange,
@@ -153,6 +193,10 @@ export default function AdvancedOptions({
   onNarrationVoiceSelectionChange,
 }: AdvancedOptionsProps) {
   const [allowOverflow, setAllowOverflow] = useState(false);
+  const effectiveLanguageOptions: FilterDropdownOption[] =
+    languageOptions && languageOptions.length > 0
+      ? languageOptions.map((option) => ({ value: option.value, label: option.label }))
+      : LANGUAGE_OPTIONS;
   const [playingSampleVoice, setPlayingSampleVoice] = useState<string | null>(null);
   const sampleAudioCacheRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
@@ -167,7 +211,37 @@ export default function AdvancedOptions({
       : narrationVoiceConfig?.defaultFemaleVoice
   ) || voiceList[0] || '';
   const voiceDropdownOptions: FilterDropdownOption[] = voiceList.map((voice) => ({ value: voice, label: voice }));
+  const voiceAccent = narrationVoiceSelection?.accent || '';
+  // Gate on the *currently selected* language, not just the fetched config: the
+  // config refetch is async, so a stale English config would otherwise flash the
+  // accent picker for a non-English language until the refetch resolves.
+  const accentEnabled = Boolean(
+    narrationVoiceConfig?.accentEnabled
+    && (narrationVoiceConfig?.accentOptions?.length ?? 0) > 0
+    && isEnglishNarrationLanguage(language)
+  );
+  const accentOptions = narrationVoiceConfig?.accentOptions ?? [];
+  const selectedAccent = accentEnabled
+    ? (accentOptions.some((option) => option.id === voiceAccent)
+        ? voiceAccent
+        : (narrationVoiceConfig?.defaultAccent && accentOptions.some((o) => o.id === narrationVoiceConfig.defaultAccent)
+            ? narrationVoiceConfig!.defaultAccent
+            : accentOptions[0]?.id || ''))
+    : '';
+  const accentDropdownOptions: FilterDropdownOption[] = accentOptions.map((option) => ({
+    value: option.id,
+    label: option.label,
+  }));
   const storyboardImagesEnabled = imageGenerationMode !== 'prompt_only';
+  const imageModelOptions = imageModelPicker?.options ?? [];
+  const selectedImageModelKey = imageModelSelection?.modelKey || imageModelPicker?.selectedModelKey || imageModelPicker?.defaultModelKey || '';
+  const selectedImageModel = imageModelOptions.find((option) => option.modelKey === selectedImageModelKey)
+    ?? imageModelOptions.find((option) => option.isDefault)
+    ?? imageModelOptions[0];
+  const imageModelDropdownOptions: FilterDropdownOption[] = imageModelOptions.map((option) => ({
+    value: option.modelKey,
+    label: `${option.displayName}${option.badge ? ` · ${option.badge}` : ''}`,
+  }));
   const orientationLabel = isVerticalStory ? 'Portrait' : 'Landscape';
   const visualPresetDescription = VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description || 'Choose the illustration style Kissago should use for storyboards.';
   const sourceFidelityDescription = SOURCE_FIDELITY_OPTIONS.find((option) => option.value === sourceFidelity)?.description || 'Choose how closely Kissago should preserve the source material.';
@@ -190,11 +264,15 @@ export default function AdvancedOptions({
       ? narrationVoiceConfig.defaultMaleVoice
       : narrationVoiceConfig.defaultFemaleVoice;
     const nextVoice = nextVoiceList.includes(defaultVoice) ? defaultVoice : nextVoiceList[0] || '';
-    onNarrationVoiceSelectionChange({ genderBucket, voiceId: nextVoice });
+    onNarrationVoiceSelectionChange({ genderBucket, voiceId: nextVoice, accent: selectedAccent });
   };
 
   const setNarrationVoice = (voiceId: string) => {
-    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId });
+    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId, accent: selectedAccent });
+  };
+
+  const setNarrationAccent = (accent: string) => {
+    onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId: selectedVoice, accent });
   };
 
   useEffect(() => {
@@ -247,7 +325,7 @@ export default function AdvancedOptions({
           <div className="space-y-4 text-left">
             <FilterDropdown
               value={language}
-              options={LANGUAGE_OPTIONS}
+              options={effectiveLanguageOptions}
               onChange={(value) => onLanguageChange(value as StoryLanguage)}
               fullWidth
               size="form"
@@ -383,6 +461,178 @@ export default function AdvancedOptions({
                   >
                     <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
                   </button>
+                </div>
+              </div>
+            )}
+
+            {batchImageDeliveryEnabled && storyboardImagesEnabled && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-sans text-neutral-200">Image delivery</h4>
+                      <InfoPopover title="Image delivery" ariaLabel="Show image delivery details">
+                        <p>
+                          Live generates images immediately while you read, at full price.
+                        </p>
+                        <p>
+                          Fast renders all images in one go after the story, keeping characters
+                          consistent automatically. Regular price, ready in minutes.
+                        </p>
+                        <p>
+                          Cost-saver sends all images to a provider batch — ready within about a
+                          day and roughly 50% cheaper. Great for finishing a whole story affordably.
+                        </p>
+                      </InfoPopover>
+                    </div>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      {imageDeliveryMode === 'stateful'
+                        ? 'Fast (regular price, ready in minutes)'
+                        : imageDeliveryMode === 'batch'
+                        ? 'Cost-saver (~24h, ~50% cheaper)'
+                        : 'Live (immediate)'}
+                    </p>
+                  </div>
+                  <div
+                    className="grid h-10 w-52 shrink-0 grid-cols-3 rounded-full border border-white/10 bg-neutral-900/70 p-1 text-xs"
+                    role="group"
+                    aria-label="Image delivery mode"
+                  >
+                    {([
+                      { key: 'live', label: 'Live' },
+                      { key: 'stateful', label: 'Fast' },
+                      { key: 'batch', label: 'Saver' },
+                    ] as const).map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => onImageDeliveryModeChange?.(key)}
+                        className={`inline-flex items-center justify-center rounded-full transition-colors ${
+                          imageDeliveryMode === key ? 'bg-white text-black' : 'text-neutral-400 hover:text-neutral-100'
+                        }`}
+                        aria-pressed={imageDeliveryMode === key}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {imageDeliveryMode === 'stateful' && !statefulContinuityAvailable && (
+                  <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    The selected image model doesn&apos;t support stateful threads. Fast delivery
+                    will still run, falling back to reference-image continuity.
+                  </p>
+                )}
+
+                {imageDeliveryMode === 'stateful' && (
+                  <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/10 pt-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-sm font-sans text-neutral-200">Episodic characters</h4>
+                        <InfoPopover title="Episodic characters" ariaLabel="Show episodic details">
+                          <p>
+                            Generates and saves a portrait for each named character so they can be
+                            reused consistently across future stories. Adds a small extra cost.
+                          </p>
+                          <p>
+                            Off keeps characters consistent within this story via the stateful thread,
+                            but doesn&apos;t save reusable character references.
+                          </p>
+                        </InfoPopover>
+                      </div>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Save reusable character portraits for cross-story continuity.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onEpisodicCharactersChange?.(!episodicCharacters)}
+                      className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                        episodicCharacters
+                          ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                          : 'justify-start border-white/10 bg-neutral-800'
+                      }`}
+                      role="switch"
+                      aria-checked={episodicCharacters}
+                      aria-label="Episodic characters"
+                    >
+                      <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                    </button>
+                  </div>
+                )}
+
+                {(imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful') && (
+                  <div className="mt-3 flex items-center justify-between gap-4 border-t border-white/10 pt-3">
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-sans text-neutral-200">Auto-build whole story</h4>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        Kissago picks a path automatically and prepares every beat, ready for visuals.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onAutoBuildStoryChange?.(!autoBuildStory)}
+                      className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                        autoBuildStory
+                          ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
+                          : 'justify-start border-white/10 bg-neutral-800'
+                      }`}
+                      role="switch"
+                      aria-checked={autoBuildStory}
+                      aria-label="Auto-build whole story"
+                    >
+                      <span className="h-5 w-5 rounded-full bg-white shadow-sm transition-transform" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {storyboardImagesEnabled && imageModelDropdownOptions.length > 0 && (
+              <div className="rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="rounded-xl bg-emerald-500/10 p-2 text-emerald-300">
+                      <ImageIcon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-sans text-neutral-200">Image model</h4>
+                      {selectedImageModel && (
+                        <p className="mt-1 truncate text-xs text-neutral-500">
+                          {selectedImageModel.providerLabel} · {selectedImageModel.coinCostPerImage.toLocaleString()} coins/image
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  {selectedImageModel?.isRecommended && (
+                    <span className="shrink-0 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-emerald-200">
+                      Best
+                    </span>
+                  )}
+                </div>
+                <FilterDropdown
+                  value={selectedImageModelKey}
+                  options={imageModelDropdownOptions}
+                  onChange={(modelKey) => onImageModelSelectionChange?.({
+                    taskKey: imageModelPicker?.taskKey,
+                    modelKey,
+                  })}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Image model"
+                />
+                <div className="mt-3">
+                  <FilterDropdown
+                    value={imageContinuityStrategy}
+                    options={IMAGE_CONTINUITY_DROPDOWN_OPTIONS}
+                    onChange={(value) => onImageContinuityStrategyChange?.(value as ImageContinuityStrategy)}
+                    fullWidth
+                    size="form"
+                    mode="inline"
+                    ariaLabel="Image continuity strategy"
+                  />
                 </div>
               </div>
             )}
@@ -542,6 +792,54 @@ export default function AdvancedOptions({
                     </button>
                   </div>
                 )}
+
+                {accentEnabled && accentDropdownOptions.length > 0 && (
+                  <div className="space-y-2 border-t border-white/10 pt-3">
+                    <div className="flex items-center gap-2">
+                      <h5 className="text-xs font-sans uppercase tracking-[0.14em] text-neutral-400">Accent</h5>
+                      <InfoPopover title="Narration accent" ariaLabel="Show narration accent details">
+                        <p>The accent tells the narrator how to pronounce the story — for example American, British, or Indian English.</p>
+                        <p>It changes the delivery of the selected voice. The voice sample above previews the voice, not the exact accent.</p>
+                      </InfoPopover>
+                    </div>
+                    <FilterDropdown
+                      value={selectedAccent}
+                      options={accentDropdownOptions}
+                      onChange={setNarrationAccent}
+                      fullWidth
+                      size="form"
+                      mode="inline"
+                      ariaLabel="Choose narration accent"
+                    />
+                    <p className="text-xs leading-relaxed text-neutral-500">
+                      Applies to the whole story. The sample preview reflects the voice, not the accent.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {accentEnabled && accentDropdownOptions.length > 0 && !narrationVoiceConfig?.enabled && (
+              <div className="space-y-2 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-sans text-neutral-200">Narration Accent</h4>
+                  <InfoPopover title="Narration accent" ariaLabel="Show narration accent details">
+                    <p>The accent tells the narrator how to pronounce the story — for example American, British, or Indian English.</p>
+                    <p>It changes the delivery of the narrator voice for the whole story.</p>
+                  </InfoPopover>
+                </div>
+                <FilterDropdown
+                  value={selectedAccent}
+                  options={accentDropdownOptions}
+                  onChange={setNarrationAccent}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Choose narration accent"
+                />
+                <p className="text-xs leading-relaxed text-neutral-500">
+                  Applies to the whole story narration.
+                </p>
               </div>
             )}
 

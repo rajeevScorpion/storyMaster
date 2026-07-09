@@ -6,6 +6,8 @@ import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { StoryEffectConfig } from '@/lib/story-effects/settings';
+import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import type { ImageModelSelection, ImageProviderKey } from '@/lib/ai/image-models.shared';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -166,6 +168,9 @@ export interface StoryBeat {
   imageVersion?: string;
   imageStatus?: BeatMediaStatus;
   imageError?: string;
+  imageProviderKey?: ImageProviderKey;
+  imageModelKey?: string;
+  imageGenerationMetadata?: Record<string, unknown>;
   imageGallery?: BeatImageGalleryEntry[];
   isStoryboard?: boolean;
   portraitImageUrl?: string;
@@ -183,7 +188,7 @@ export interface StoryBeat {
 
 export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
 
-export type StoryLanguage = 'english' | 'hindi' | 'bangla' | 'urdu' | 'gujarati';
+export type StoryLanguage = 'english' | 'hindi' | 'bangla' | 'urdu' | 'gujarati' | 'marathi';
 
 export type VisualStylePreset =
   | 'storybook_illustration'
@@ -259,6 +264,21 @@ export interface StoryConfig {
   maxBeats: number;
   language: StoryLanguage;
   imageGenerationMode: 'generate' | 'prompt_only';
+  // When imageGenerationMode is 'generate', how images are delivered:
+  //  - 'live'     : rendered immediately at full price (default)
+  //  - 'batch'    : deferred to a background provider batch API (~24h, ~50% cheaper),
+  //                 continuity via resend_refs (character portraits generated up front)
+  //  - 'stateful' : deferred to a fast server-side sequential job at regular price,
+  //                 continuity via a provider-stateful thread (Gemini interactions /
+  //                 OpenAI responses); no ref re-sending
+  imageDeliveryMode?: 'live' | 'batch' | 'stateful';
+  // Only meaningful for the 'stateful' delivery path: when true, generate and persist
+  // character portraits (as the thread's seed turn and as reusable cross-story refs);
+  // when false, rely purely on the stateful thread and skip portraits. The 'batch' path
+  // always generates refs regardless (they are its only continuity channel).
+  episodicCharacters?: boolean;
+  imageModelSelection?: ImageModelSelection;
+  imageContinuityStrategy: ImageContinuityStrategy;
   isVerticalStory: boolean;
   aspectRatio: StoryAspectRatio;
   visualSettings: VisualSettings;
@@ -308,6 +328,7 @@ export interface StorySession {
     mood: string;
   };
   storyConfig: StoryConfig;
+  visualProfile?: Record<string, unknown>;
   storyMap: StoryMap;
   beats: StoryBeat[];
   choiceHistory: string[];

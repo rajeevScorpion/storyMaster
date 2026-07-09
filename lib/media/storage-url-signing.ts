@@ -53,7 +53,7 @@ async function signSupabaseUrls(
   return signed;
 }
 
-async function signMixedUrls(
+export async function signMixedUrls(
   supabase: SupabaseClient,
   urls: string[],
   bucket: string,
@@ -83,6 +83,7 @@ export async function signStoryMapAssetUrls(
 ): Promise<StoryMap> {
   const fieldEntries: StoryMapFieldEntry[] = [];
   const galleryEntries: StoryMapGalleryEntry[] = [];
+  const portraitEntries: StoryMapCharacterEntry[] = [];
   const characterSheetEntries: StoryMapCharacterEntry[] = [];
   const characterSheetGalleryEntries: StoryMapCharacterGalleryEntry[] = [];
   const urls: string[] = [];
@@ -99,6 +100,10 @@ export async function signStoryMapAssetUrls(
       addUrl(urls, entry.url);
     });
     node.data.characters?.forEach((character, characterIdx) => {
+      if (character.portraitUrl) {
+        portraitEntries.push({ nodeId, characterIdx, url: character.portraitUrl });
+        addUrl(urls, character.portraitUrl);
+      }
       if (character.referenceSheetUrl) {
         characterSheetEntries.push({ nodeId, characterIdx, url: character.referenceSheetUrl });
         addUrl(urls, character.referenceSheetUrl);
@@ -138,6 +143,22 @@ export async function signStoryMapAssetUrls(
         ...node.data,
         imageGallery: gallery.map((item, idx) =>
           idx === entry.galleryIdx ? { ...item, url: signedUrl } : item
+        ),
+      },
+    };
+  }
+
+  for (const entry of portraitEntries) {
+    const signedUrl = signed.get(entry.url);
+    if (!signedUrl) continue;
+    const node = cloned.nodes[entry.nodeId];
+    const characters = node.data.characters ?? [];
+    cloned.nodes[entry.nodeId] = {
+      ...node,
+      data: {
+        ...node.data,
+        characters: characters.map((character, idx) =>
+          idx === entry.characterIdx ? { ...character, portraitUrl: signedUrl } : character
         ),
       },
     };
@@ -194,6 +215,7 @@ export async function signCharacterRosterReferenceSheetUrls<T extends Character>
 
   const urls: string[] = [];
   characters.forEach((character) => {
+    addUrl(urls, character.portraitUrl);
     addUrl(urls, character.referenceSheetUrl);
     character.referenceSheetGallery?.forEach((entry) => addUrl(urls, entry.url));
   });
@@ -204,6 +226,9 @@ export async function signCharacterRosterReferenceSheetUrls<T extends Character>
 
   return characters.map((character) => ({
     ...character,
+    portraitUrl: character.portraitUrl
+      ? signed.get(character.portraitUrl) ?? character.portraitUrl
+      : character.portraitUrl,
     referenceSheetUrl: character.referenceSheetUrl
       ? signed.get(character.referenceSheetUrl) ?? character.referenceSheetUrl
       : character.referenceSheetUrl,

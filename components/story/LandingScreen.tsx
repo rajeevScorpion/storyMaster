@@ -3,10 +3,12 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
+import { getImageModelPickerState } from '@/app/actions/image-models';
 import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
 import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
+import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
 import { generateSeedPlanPreview, distributeReelTextAction } from '@/app/actions/story-runtime';
 import {
   authorizeCurrentUserBillableAction,
@@ -15,6 +17,8 @@ import {
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
 import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
   getReelTextLengthRange,
@@ -39,7 +43,6 @@ import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
-import { REEL_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -54,7 +57,7 @@ import type {
 } from '@/lib/ai/narration-voices';
 
 interface LandingScreenProps {
-  onBegin?: (prompt: string, config?: StoryConfig) => void;
+  onBegin?: (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => void;
   initialData?: LandingInitialData | null;
   initialPricing?: PricingRuntimeContext | null;
 }
@@ -206,6 +209,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const searchParams = useSearchParams();
   const [prompt, setPrompt] = useState('');
   const startStory = useStoryStore((state) => state.startStory);
+  const generateAutomatedStory = useStoryStore((state) => state.generateAutomatedStory);
   const isLoading = useStoryStore((state) => state.isLoading);
   const pricingRuntime = usePricingRuntime();
   const pricing = pricingRuntime.isLoading && initialPricing ? initialPricing : pricingRuntime.data;
@@ -227,6 +231,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
   const [authoringWordCap, setAuthoringWordCap] = useState(initialLandingData.authoringWordCap);
+  // Admin-enabled languages offered in the pickers (main story + reel).
+  const storyLanguageOptions = initialLandingData.storyLanguageOptions;
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
   const [setupSettings, setSetupSettings] = useState(initialLandingData.setupSettings);
   const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
@@ -248,31 +254,51 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [imageGenerationMode, setImageGenerationMode] = useState<StoryConfig['imageGenerationMode']>(
     DEFAULT_STORY_CONFIG.imageGenerationMode
   );
+  const [imageDeliveryMode, setImageDeliveryMode] = useState<NonNullable<StoryConfig['imageDeliveryMode']>>(
+    DEFAULT_STORY_CONFIG.imageDeliveryMode ?? 'live'
+  );
+  const [episodicCharacters, setEpisodicCharacters] = useState<boolean>(
+    DEFAULT_STORY_CONFIG.episodicCharacters ?? false
+  );
+  const [autoBuildStory, setAutoBuildStory] = useState(false);
+  const [imageModelSelection, setImageModelSelection] = useState<ImageModelSelection | undefined>(
+    DEFAULT_STORY_CONFIG.imageModelSelection
+  );
+  const [imageContinuityStrategy, setImageContinuityStrategy] = useState<ImageContinuityStrategy>(
+    DEFAULT_STORY_CONFIG.imageContinuityStrategy
+  );
+  const [imageModelPicker, setImageModelPicker] = useState<ImageModelPickerState | null>(null);
   const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(
     initialLandingData.narrationVoiceConfig
   );
   const [narrationVoiceSelection, setNarrationVoiceSelection] = useState<{
     genderBucket: NarrationGenderBucket;
     voiceId: string;
+    accent: string;
   }>(() => getDefaultNarrationVoiceSelection(initialLandingData.narrationVoiceConfig));
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const isReelMode = creationMode === 'reel';
   const reelMaxBeats = reelBeatCount;
   const effectiveMaxBeats = isReelMode ? reelMaxBeats : storyLengthUiEnabled ? Math.min(maxBeats, storyLengthCap) : maxBeats;
-  const startStoryCoinCost = (
-    isReelMode
-      ? pricing.actionCosts[
-          imageGenerationMode === 'prompt_only'
-            ? 'start_reel_full_generation_prompt_only'
-            : 'start_reel_full_generation'
-        ] ?? (imageGenerationMode === 'prompt_only' ? 1.5 : 3)
-      : pricing.actionCosts[
-          imageGenerationMode === 'prompt_only'
-            ? 'start_story_initial_beat_prompt_only'
-            : 'start_story_initial_beat'
-        ] ?? (imageGenerationMode === 'prompt_only' ? 0.5 : 1)
-  ) * 10;
+  const imageTaskKey = imageTaskForStoryKind(isReelMode ? 'reel' : 'story');
+  const selectedImageModel = imageModelPicker?.options.find((option) => option.modelKey === imageModelSelection?.modelKey)
+    ?? imageModelPicker?.options.find((option) => option.modelKey === imageModelPicker.selectedModelKey)
+    ?? imageModelPicker?.options.find((option) => option.isDefault)
+    ?? null;
+  const statefulContinuityAvailable = selectedImageModel
+    ? imageProviderSupportsStatefulContinuity(selectedImageModel.providerKey)
+    : true;
+  const promptOnlyActionCost = isReelMode
+    ? pricing.actionCosts.start_reel_full_generation_prompt_only ?? 1.5
+    : pricing.actionCosts.start_story_initial_beat_prompt_only ?? 0.5;
+  const generatedActionCostFallback = isReelMode
+    ? pricing.actionCosts.start_reel_full_generation ?? 3
+    : pricing.actionCosts.start_story_initial_beat ?? 1;
+  const modelImageCoinCost = selectedImageModel?.coinCostPerImage ?? Math.max(0, (generatedActionCostFallback - promptOnlyActionCost) * 10);
+  const startStoryCoinCost = imageGenerationMode === 'prompt_only'
+    ? promptOnlyActionCost * 10
+    : (promptOnlyActionCost * 10) + (modelImageCoinCost * (isReelMode ? reelBeatCount : 1));
   const isCreatorPlan = pricing.snapshot.creatorControls;
   const showCreatorSettings = isCreatorPlan && setupSettings.creatorCharacterSheetsEnabled;
   const selectedReelVisualStyle = reelVisualStyleCards.find((style) => style.id === reelVisualStyleId)
@@ -284,6 +310,30 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       setCreationMode('reel');
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getImageModelPickerState(imageTaskKey, imageModelSelection)
+      .then((state) => {
+        if (cancelled) return;
+        setImageModelPicker(state);
+        if (
+          (!imageModelSelection?.modelKey || imageModelSelection.taskKey !== state.taskKey)
+          && state.selectedModelKey
+        ) {
+          setImageModelSelection({
+            taskKey: state.taskKey,
+            modelKey: state.selectedModelKey,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setImageModelPicker(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageTaskKey, imageModelSelection, pricing.snapshot.planKey]);
 
   useEffect(() => {
     getStoryboardSettings()
@@ -373,16 +423,26 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       .then((config) => {
         if (cancelled) return;
         setNarrationVoiceConfig(config);
-        if (!config.enabled) return;
         setNarrationVoiceSelection((current) => {
+          // Keep the accent valid for the (possibly language-changed) config.
+          const accentIds = config.accentEnabled ? config.accentOptions.map((option) => option.id) : [];
+          const nextAccent = config.accentEnabled
+            ? (current.accent && accentIds.includes(current.accent)
+                ? current.accent
+                : (accentIds.includes(config.defaultAccent) ? config.defaultAccent : accentIds[0] || ''))
+            : '';
+          if (!config.enabled) {
+            return { ...current, accent: nextAccent };
+          }
           const list = current.genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
           const configuredDefault = current.genderBucket === 'male' ? config.defaultMaleVoice : config.defaultFemaleVoice;
           if (current.voiceId && list.includes(current.voiceId)) {
-            return current;
+            return { ...current, accent: nextAccent };
           }
           return {
             genderBucket: current.genderBucket,
             voiceId: list.includes(configuredDefault) ? configuredDefault : list[0] || '',
+            accent: nextAccent,
           };
         });
       })
@@ -428,16 +488,23 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
+            setImageDeliveryMode(config.imageDeliveryMode || DEFAULT_STORY_CONFIG.imageDeliveryMode || 'live');
+            setEpisodicCharacters(config.episodicCharacters === true);
+            setAutoBuildStory(sessionStorage.getItem('kissago_pending_autobuild') === '1');
+            sessionStorage.removeItem('kissago_pending_autobuild');
+            setImageModelSelection(config.imageModelSelection);
+            setImageContinuityStrategy(config.imageContinuityStrategy || DEFAULT_STORY_CONFIG.imageContinuityStrategy);
             setIsVerticalStory(config.isVerticalStory || config.aspectRatio === '9:16');
             setUseCreatorOneKCharacterSheet(
               config.portraitReferences.mode === 'character_sheet' &&
               config.portraitReferences.quality === '1K'
             );
             if (config.narrationVoice?.mode === 'user_selected') {
-              setNarrationVoiceSelection({
-                genderBucket: config.narrationVoice.genderBucket || 'female',
-                voiceId: config.narrationVoice.voiceId || '',
-              });
+              setNarrationVoiceSelection((current) => ({
+                genderBucket: config.narrationVoice!.genderBucket || 'female',
+                voiceId: config.narrationVoice!.voiceId || '',
+                accent: config.narrationVoice!.accent || current.accent,
+              }));
             }
           } catch { /* ignore parse errors */ }
           sessionStorage.removeItem('kissago_pending_config');
@@ -500,8 +567,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         ageGroup,
         settingCountry: 'generic',
         maxBeats: reelBeatCount,
-        imageGenerationMode,
-        isVerticalStory: true,
+      imageGenerationMode,
+      imageContinuityStrategy,
+      ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
+        ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
+        : {}),
+      isVerticalStory: true,
         aspectRatio: '9:16',
         visualSettings,
         authoring: reelInputMode === 'text' && reelDistributedTexts && reelDistributedImagePrompts
@@ -542,6 +613,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     }
 
     const verticalStoryEnabled = setupSettings.verticalStoriesSettingEnabled && isVerticalStory;
+    // Accents are English-only. Guard on the story language here too: if the user
+    // starts a non-English story before the per-language config refetch resolves,
+    // the stale (English) config would otherwise attach an accent to the story.
+    const accentForStory = voiceConfig?.accentEnabled && isEnglishNarrationLanguage(language)
+      ? narrationVoiceSelection.accent
+      : '';
     return {
       storyKind: 'story',
       language,
@@ -549,6 +626,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
       imageGenerationMode,
+      imageDeliveryMode: imageGenerationMode === 'generate' ? imageDeliveryMode : 'live',
+      episodicCharacters: imageGenerationMode === 'generate' && imageDeliveryMode === 'stateful' && episodicCharacters,
+      imageContinuityStrategy,
+      ...(imageGenerationMode !== 'prompt_only' && imageModelSelection
+        ? { imageModelSelection: { ...imageModelSelection, taskKey: imageTaskKey } }
+        : {}),
       isVerticalStory: verticalStoryEnabled,
       aspectRatio: verticalStoryEnabled ? '9:16' : '16:9',
       visualSettings,
@@ -578,10 +661,17 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 : voiceConfig.defaultFemaleVoice
             ),
             languageCode: voiceConfig.languageCode,
+            ...(accentForStory ? { accent: accentForStory } : {}),
           }
-        : {
-            mode: 'legacy_auto',
-          },
+        : accentForStory
+          ? {
+              // Legacy auto voice, but the user still picked an accent.
+              mode: 'legacy_auto',
+              accent: accentForStory,
+            }
+          : {
+              mode: 'legacy_auto',
+            },
     };
   };
 
@@ -597,8 +687,17 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         : prompt.trim();
     if (!storyPrompt) return;
 
+    const shouldAutoBuild =
+      autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
+      && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
+
     if (onBegin) {
-      onBegin(storyPrompt, config);
+      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild });
+      return;
+    }
+
+    if (shouldAutoBuild) {
+      await generateAutomatedStory(storyPrompt, config);
       return;
     }
 
@@ -980,7 +1079,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                 <label className="flex h-6 items-center truncate text-[10px] uppercase tracking-[0.14em] text-neutral-500 sm:text-[11px]">Language</label>
                                 <FilterDropdown
                                   value={reelLanguage}
-                                  options={REEL_LANGUAGE_OPTIONS}
+                                  options={storyLanguageOptions}
                                   onChange={(value) => {
                                     setReelLanguage(value as StoryLanguage);
                                     setReelDistributedTexts(null);
@@ -1329,6 +1428,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             {showAdvanced && (
               <AdvancedOptions
                 language={language}
+                languageOptions={storyLanguageOptions}
                 onLanguageChange={(value) => {
                   setLanguage(value);
                   clearSeedPreview();
@@ -1375,6 +1475,28 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
                 imageGenerationMode={imageGenerationMode}
                 onImageGenerationModeChange={setImageGenerationMode}
+                batchImageDeliveryEnabled
+                imageDeliveryMode={imageDeliveryMode}
+                onImageDeliveryModeChange={(value) => {
+                  setImageDeliveryMode(value);
+                  clearSeedPreview();
+                }}
+                episodicCharacters={episodicCharacters}
+                onEpisodicCharactersChange={setEpisodicCharacters}
+                statefulContinuityAvailable={statefulContinuityAvailable}
+                autoBuildStory={autoBuildStory}
+                onAutoBuildStoryChange={setAutoBuildStory}
+                imageModelPicker={imageModelPicker}
+                imageModelSelection={imageModelSelection}
+                onImageModelSelectionChange={(value) => {
+                  setImageModelSelection(value);
+                  clearSeedPreview();
+                }}
+                imageContinuityStrategy={imageContinuityStrategy}
+                onImageContinuityStrategyChange={(value) => {
+                  setImageContinuityStrategy(value);
+                  clearSeedPreview();
+                }}
                 verticalStoriesSettingEnabled={setupSettings.verticalStoriesSettingEnabled}
                 isVerticalStory={isVerticalStory}
                 onVerticalStoryChange={(value) => {

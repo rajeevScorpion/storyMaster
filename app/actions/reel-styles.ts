@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { putR2Object } from '@/lib/media/r2-server';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { recordMediaAsset } from '@/lib/media/media-assets';
@@ -46,13 +47,13 @@ function slugify(value: string): string {
 }
 
 function parseDataUrl(value: string): { buffer: Buffer; mimeType: string; extension: string } {
-  const match = value.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) {
+  const parsed = splitBase64DataUrl(value);
+  if (!parsed) {
     throw new Error('Sample image must be a generated data URL from the Reel Playground.');
   }
 
-  const mimeType = match[1];
-  const buffer = Buffer.from(match[2], 'base64');
+  const mimeType = parsed.mimeType;
+  const buffer = Buffer.from(parsed.base64, 'base64');
   if (buffer.byteLength === 0) {
     throw new Error('Sample image data is empty.');
   }
@@ -342,11 +343,11 @@ export async function extractGraphicStyleFromImageAction(input: {
 }): Promise<{ promptText: string; rawText: string }> {
   await verifyAdmin();
 
-  const match = input.referenceImageDataUrl.match(/^data:([^;]+);base64,(.+)$/);
-  if (!match) throw new Error('Reference image must be a base64 data URL.');
+  const parsed = splitBase64DataUrl(input.referenceImageDataUrl);
+  if (!parsed) throw new Error('Reference image must be a base64 data URL.');
 
-  const mimeType = match[1];
-  const base64Data = match[2];
+  const mimeType = parsed.mimeType;
+  const base64Data = parsed.base64;
   if (!base64Data) throw new Error('Reference image data is empty.');
 
   const modelConfig = await getModelConfig('graphic_style_extraction');
