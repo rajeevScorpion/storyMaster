@@ -113,6 +113,7 @@ export type GlobalSettingsSection =
   | 'characters'
   | 'media'
   | 'media-pipeline'
+  | 'beat-control'
   | 'video-export'
   | 'generation'
   | 'pages';
@@ -190,6 +191,13 @@ const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
     href: '/admin/settings/media-pipeline',
     description: 'Server-side processing mode, HQ retention, variants, cleanup, publishing gates, and job monitoring.',
     icon: ImageIcon,
+  },
+  {
+    section: 'beat-control',
+    label: 'Beat control',
+    href: '/admin/settings/beat-control',
+    description: 'Beat text editing, timeline rewrite, image/narration/options regeneration, custom options, and version history.',
+    icon: WandSparkles,
   },
   {
     section: 'video-export',
@@ -1019,6 +1027,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
     'media-pipeline': 'Server-side processing mode, HQ retention, variants, cleanup, and job monitoring',
+    'beat-control': 'Beat editing, timeline rewrite, regeneration controls, custom options, and version history',
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
     pages: 'Managed rollout pages, footer controls, and route guards',

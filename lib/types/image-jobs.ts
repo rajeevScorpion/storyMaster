@@ -26,6 +26,19 @@ export interface BeatImageJobReference {
 }
 
 /**
+ * Pack 1 user-driven regeneration metadata. Present only when the job was
+ * created from the regenerate-image dialog; its fields are recorded on the
+ * resulting image version entry.
+ */
+export interface BeatImageRegenerationMeta {
+  mode: 'refine' | 'reimagine';
+  overallSuggestion?: string;
+  /** Keyed by storyboard frame: topLeft | topRight | bottomLeft | bottomRight. */
+  panelSuggestions?: Record<string, string>;
+  source: 'user';
+}
+
+/**
  * Everything the worker needs to call generateSelectedImage() exactly as the
  * interactive request would have. The final prompt is built client-side at
  * enqueue time (the prompt-building orchestrator lives in the 'use client'
@@ -46,6 +59,9 @@ export interface BeatImageJobRequestPayload {
   /** Owner's plan at enqueue time — the worker has no cookie session, so
    *  tier-gated model access and retention are resolved from this snapshot. */
   currentPlanKey?: PlanKey;
+  /** Pack 1: set when the user requested this generation from the
+   *  regenerate-image dialog; recorded on the resulting version entry. */
+  regeneration?: BeatImageRegenerationMeta | null;
 }
 
 export interface ImageGenerationJobRow {

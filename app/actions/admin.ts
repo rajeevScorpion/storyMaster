@@ -58,6 +58,14 @@ import {
   type MediaStorageSettings,
 } from '@/lib/media/storage-settings';
 import { getMediaStorageAdminState as loadMediaStorageAdminState } from '@/lib/media/storage-config';
+import {
+  BEAT_CONTROL_FLAG_KEYS,
+  BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY,
+  MAX_BEAT_IMAGE_VERSIONS_PER_BEAT,
+  MIN_BEAT_IMAGE_VERSIONS_PER_BEAT,
+  normalizeMaxImageVersionsPerBeat,
+  type BeatControlFlagKey,
+} from '@/lib/beat-control/settings';
 
 // ============================================================
 // Search
@@ -869,6 +877,48 @@ export async function setAuthoringWordCap(words: number): Promise<void> {
     throw new Error('Authoring word cap must be at least 50 words.');
   }
   await setFeatureFlagValue('story_authoring_word_cap', String(Math.round(words)));
+}
+
+export interface BeatControlAdminSettings {
+  flags: Record<BeatControlFlagKey, boolean>;
+  maxImageVersionsPerBeat: number;
+}
+
+export async function getBeatControlAdminSettings(): Promise<BeatControlAdminSettings> {
+  await verifyAdmin();
+  const [values, maxVersionsRaw] = await Promise.all([
+    Promise.all(BEAT_CONTROL_FLAG_KEYS.map((key) => getFeatureFlag(key, false))),
+    getFeatureFlagValue(BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY),
+  ]);
+  const flags = Object.fromEntries(
+    BEAT_CONTROL_FLAG_KEYS.map((key, index) => [key, values[index]])
+  ) as Record<BeatControlFlagKey, boolean>;
+  return {
+    flags,
+    maxImageVersionsPerBeat: normalizeMaxImageVersionsPerBeat(maxVersionsRaw),
+  };
+}
+
+export async function setBeatControlFlag(key: BeatControlFlagKey, enabled: boolean): Promise<void> {
+  await verifyAdmin();
+  if (!BEAT_CONTROL_FLAG_KEYS.includes(key)) {
+    throw new Error(`Unknown beat control flag: ${key}`);
+  }
+  await setFeatureFlag(key, enabled);
+}
+
+export async function setBeatImageMaxVersionsPerBeat(count: number): Promise<void> {
+  await verifyAdmin();
+  if (
+    !Number.isFinite(count) ||
+    count < MIN_BEAT_IMAGE_VERSIONS_PER_BEAT ||
+    count > MAX_BEAT_IMAGE_VERSIONS_PER_BEAT
+  ) {
+    throw new Error(
+      `Max image versions per beat must be between ${MIN_BEAT_IMAGE_VERSIONS_PER_BEAT} and ${MAX_BEAT_IMAGE_VERSIONS_PER_BEAT}.`
+    );
+  }
+  await setFeatureFlagValue(BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY, String(Math.round(count)));
 }
 
 export async function setPreviewSeedPlanPriceCoins(coins: number): Promise<void> {

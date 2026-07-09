@@ -61,6 +61,26 @@ import { copyStoryEffectConfig, normalizeStoryEffectConfig, type StoryEffectConf
 import { applyStoryEffectsToMap } from '@/lib/story-effects/story-map';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
+import {
+  addCustomOption as addCustomOptionAction,
+  editBeatText as editBeatTextAction,
+  getBeatControlRuntimeSettings,
+  regenerateBeatOptions as regenerateBeatOptionsAction,
+  restoreBeatImageVersion as restoreBeatImageVersionAction,
+  type AddCustomOptionResult,
+  type EditBeatTextResult,
+  type RegenerateBeatOptionsResult,
+  type RestoreBeatImageVersionResult,
+} from '@/app/actions/beat-control';
+import {
+  buildRegenerationInstructionBlock,
+  cleanPanelSuggestions,
+  type BeatImageRegenerationOptions,
+} from '@/lib/ai/image-regeneration.shared';
+import {
+  DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
+  type BeatControlRuntimeSettings,
+} from '@/lib/beat-control/settings';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import {
   setCharacterReferenceSheetRecord,
@@ -111,6 +131,7 @@ import {
   getBeatsToNode,
   getChoiceHistoryToNode,
   getCurrentNode,
+  removeSubtree,
 } from '../utils/story-map';
 import {
   getLocalSessionUserId,
@@ -234,7 +255,14 @@ interface StoryState {
     }
   ) => Promise<StoryTextOverlayStoryGenerationResult>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
-  regenerateImageForNode: (nodeId: string) => Promise<void>;
+  regenerateImageForNode: (nodeId: string, regenOptions?: BeatImageRegenerationOptions) => Promise<void>;
+  beatControlSettings: BeatControlRuntimeSettings;
+  loadBeatControlSettings: () => Promise<void>;
+  applyTimelineRewrite: (nodeId: string, newText: string) => void;
+  editBeatTextForNode: (nodeId: string, newText: string, confirmTimelineRewrite?: boolean) => Promise<EditBeatTextResult>;
+  regenerateOptionsForNode: (nodeId: string, confirmTimelineRewrite?: boolean) => Promise<RegenerateBeatOptionsResult>;
+  addCustomOptionForNode: (nodeId: string, optionText: string) => Promise<AddCustomOptionResult>;
+  restoreImageVersionForNode: (nodeId: string, storageKey: string) => Promise<RestoreBeatImageVersionResult>;
   submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
   submitStatefulVisuals: (scope?: ImageBatchScope) => Promise<void>;
   generateNarrationBatch: () => Promise<void>;
@@ -2078,6 +2106,7 @@ export const useStoryStore = create<StoryState>()(
       errorAction: null,
       isGeneratingAudio: false,
       isRegeneratingImage: false,
+      beatControlSettings: DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
       activeImageJobNodeIds: [],
       isSubmittingImageBatch: false,
       imageBatchMessage: null,
@@ -5033,12 +5062,15 @@ export const useStoryStore = create<StoryState>()(
         }
       },
 
-      regenerateImageForNode: async (nodeId: string) => {
+      regenerateImageForNode: async (nodeId: string, regenOptions?: BeatImageRegenerationOptions) => {
         const { session } = get();
         if (!session) return;
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;
+
+        const regenPanelSuggestions = cleanPanelSuggestions(regenOptions?.panelSuggestions);
+        const regenOverallSuggestion = regenOptions?.overallSuggestion?.trim() || undefined;
         const baseCostTelemetry: CostTelemetryContext = {
           activityKey: 'regenerate_image',
           storySessionId: session.storySessionId,
@@ -5170,9 +5202,32 @@ export const useStoryStore = create<StoryState>()(
             parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
             portraitReferences
           );
+          // Refine mode stays visually anchored to the current image by
+          // sending it as an extra scene reference; reimagine deliberately
+          // does not, so the provider can re-stage the scene.
+          if (regenOptions?.mode === 'refine') {
+            const currentImage = node.data.imageUrl || getBeatPersistedImageUrl(node.data) || undefined;
+            if (currentImage && !currentImage.startsWith('r2://')) {
+              referenceImages.unshift(
+                currentImage.startsWith('data:')
+                  ? { type: 'scene', dataUrl: currentImage }
+                  : { type: 'scene', url: currentImage }
+              );
+            }
+          }
           const regenerationContinuityStrategy =
             regenerationContinuityState ? undefined : 'resend_refs';
-          const storyboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
+          const baseStoryboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
+          // Pack 1: append the user's regeneration directions (mode behavior,
+          // overall + per-panel suggestions, strict continuity rules).
+          const storyboardPrompt = regenOptions
+            ? `${baseStoryboardPrompt}\n\n${buildRegenerationInstructionBlock({
+                mode: regenOptions.mode,
+                overallSuggestion: regenOverallSuggestion,
+                panelSuggestions: regenPanelSuggestions,
+                isStoryboard: true,
+              })}`
+            : baseStoryboardPrompt;
 
           if (effectiveImageMode === 'server_pipeline' && !promptOnly && session.savedStoryId) {
             // The worker replays generateSelectedImage with this exact final
@@ -5211,6 +5266,14 @@ export const useStoryStore = create<StoryState>()(
                   referenceCount: referenceImages.length,
                 }),
                 references: referenceImages,
+                regeneration: regenOptions
+                  ? {
+                      mode: regenOptions.mode,
+                      ...(regenOverallSuggestion ? { overallSuggestion: regenOverallSuggestion } : {}),
+                      ...(regenPanelSuggestions ? { panelSuggestions: regenPanelSuggestions } : {}),
+                      source: 'user',
+                    }
+                  : null,
               },
             });
 
@@ -5427,6 +5490,201 @@ export const useStoryStore = create<StoryState>()(
           }
           set({ isRegeneratingImage: false });
         }
+      },
+
+      loadBeatControlSettings: async () => {
+        try {
+          const settings = await getBeatControlRuntimeSettings();
+          set({ beatControlSettings: settings });
+        } catch {
+          // Fail closed: controls stay hidden with the defaults.
+        }
+      },
+
+      // Applies a server-confirmed timeline rewrite to the local session:
+      // removes the descendant subtree, optionally applies the new beat text,
+      // and recomputes the flat session fields from the pruned tree. The
+      // server already wrote both persistence halves, so no client re-save.
+      applyTimelineRewrite: (nodeId: string, newText: string) => {
+        const { session } = get();
+        if (!session) return;
+        const source = session.storyMap.nodes[nodeId];
+        if (!source) return;
+
+        const prunedMap = removeSubtree(session.storyMap, nodeId);
+        const patchedMap: StoryMap = {
+          ...prunedMap,
+          nodes: {
+            ...prunedMap.nodes,
+            [nodeId]: {
+              ...prunedMap.nodes[nodeId],
+              data: {
+                ...prunedMap.nodes[nodeId].data,
+                ...(newText
+                  ? {
+                      storyText: newText,
+                      storyTextParts: undefined,
+                      storyTextOverlayCaptions: undefined,
+                      storyTextOverlayAlignment: undefined,
+                    }
+                  : {}),
+              },
+            },
+          },
+        };
+        const survivingNodeIds = new Set(Object.keys(patchedMap.nodes));
+        const updatedSession = deriveSessionFields(session, patchedMap);
+        set({
+          session: updatedSession,
+          activeImageJobNodeIds: get().activeImageJobNodeIds.filter((id) => survivingNodeIds.has(id)),
+          audioReadyNodeId:
+            get().audioReadyNodeId && survivingNodeIds.has(get().audioReadyNodeId!)
+              ? get().audioReadyNodeId
+              : null,
+          saveStatus: 'saved',
+          error: null,
+          errorAction: null,
+        });
+      },
+
+      editBeatTextForNode: async (nodeId: string, newText: string, confirmTimelineRewrite?: boolean) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before editing beats.' } as EditBeatTextResult;
+        }
+        const result = await editBeatTextAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          newText,
+          confirmTimelineRewrite,
+        });
+        if (result.status === 'updated') {
+          if (result.wipedNodeIds && result.wipedNodeIds.length > 0) {
+            get().applyTimelineRewrite(nodeId, newText.trim());
+          } else {
+            const latest = get().session;
+            const node = latest?.storyMap.nodes[nodeId];
+            if (latest && node) {
+              const patchedMap: StoryMap = {
+                ...latest.storyMap,
+                nodes: {
+                  ...latest.storyMap.nodes,
+                  [nodeId]: {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      storyText: newText.trim(),
+                      storyTextParts: undefined,
+                      storyTextOverlayCaptions: undefined,
+                      storyTextOverlayAlignment: undefined,
+                    },
+                  },
+                },
+              };
+              set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+            }
+          }
+        }
+        return result;
+      },
+
+      regenerateOptionsForNode: async (nodeId: string, confirmTimelineRewrite?: boolean) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before regenerating options.' } as RegenerateBeatOptionsResult;
+        }
+        const result = await regenerateBeatOptionsAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          confirmTimelineRewrite,
+        });
+        if (result.status === 'updated') {
+          // A confirmed regeneration on a beat with downstream content wiped
+          // that content server-side; mirror it locally before patching options.
+          if (confirmTimelineRewrite) {
+            get().applyTimelineRewrite(nodeId, '');
+          }
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: { ...node, data: { ...node.data, options: result.options } },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
+      },
+
+      addCustomOptionForNode: async (nodeId: string, optionText: string) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before adding your own option.' } as AddCustomOptionResult;
+        }
+        const result = await addCustomOptionAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          optionText,
+        });
+        if (result.status === 'added') {
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: {
+                  ...node,
+                  data: { ...node.data, options: [...(node.data.options ?? []), result.option] },
+                },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
+      },
+
+      restoreImageVersionForNode: async (nodeId: string, storageKey: string) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before restoring image versions.' } as RestoreBeatImageVersionResult;
+        }
+        const result = await restoreBeatImageVersionAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          storageKey,
+        });
+        if (result.status === 'restored') {
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: {
+                  ...node,
+                  data: normalizeBeatMediaFields({
+                    ...node.data,
+                    imageUrl: result.displayUrl,
+                    persistedImageUrl: result.imageUrl,
+                    imageStatus: 'ready',
+                    imageError: undefined,
+                    imageVersion: new Date().toISOString(),
+                  }),
+                },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
       },
 
       clearAudioReady: () => {

@@ -1,5 +1,25 @@
 import { Type } from '@google/genai';
 
+// Pack 1: options-only regeneration returns just fresh choices for the
+// current beat (no story text, characters, or continuity fields).
+export const optionsRegenerationSchema = {
+  type: Type.OBJECT,
+  properties: {
+    options: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          label: { type: Type.STRING },
+          intent: { type: Type.STRING },
+        },
+        required: ['label', 'intent'],
+      },
+    },
+  },
+  required: ['options'],
+};
+
 export const beatSchema = {
   type: Type.OBJECT,
   properties: {

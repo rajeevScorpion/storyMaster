@@ -27,8 +27,15 @@ import StoryNarrationTimingDialog from './StoryNarrationTimingDialog';
 import StoryTextOverlayDialog from './StoryTextOverlayDialog';
 import StoryTransitionDialog from './StoryTransitionDialog';
 import StoryEffectsDialog from './StoryEffectsDialog';
+import BeatActionsMenu from './BeatActionsMenu';
+import EditBeatTextDialog from './EditBeatTextDialog';
+import RegenerateImageDialog from './RegenerateImageDialog';
+import ImageVersionHistoryDialog from './ImageVersionHistoryDialog';
+import CustomOptionInput from './CustomOptionInput';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
-import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
+import { findChildForOption, getCurrentNode, getNodesByBeatNumber, hasActiveDescendants } from '@/lib/utils/story-map';
+import type { TimelineImpact } from '@/app/actions/beat-control';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
@@ -1715,6 +1722,8 @@ export default function StoryScreen() {
         });
       })
       .catch(() => {/* use defaults */});
+    // Pack 1 beat-control flags (fail-closed defaults until this resolves).
+    void useStoryStore.getState().loadBeatControlSettings();
   }, [setSaveRuntimeSettings]);
 
   useEffect(() => {
@@ -2072,6 +2081,47 @@ function StoryScreenInner({
   const [showStoryTextOverlay, setShowStoryTextOverlay] = useState(false);
   const [showStoryTransitions, setShowStoryTransitions] = useState(false);
   const [showStoryEffects, setShowStoryEffects] = useState(false);
+  // Pack 1 beat-control dialogs
+  const [showEditBeatText, setShowEditBeatText] = useState(false);
+  const [showRegenerateImage, setShowRegenerateImage] = useState(false);
+  const [showImageVersions, setShowImageVersions] = useState(false);
+  const [showNarrationRegenConfirm, setShowNarrationRegenConfirm] = useState(false);
+  const [optionsRegenState, setOptionsRegenState] = useState<
+    | { step: 'confirm' }
+    | { step: 'rewrite_confirm'; impact: TimelineImpact; message: string }
+    | { step: 'running' }
+    | null
+  >(null);
+  const [optionsRegenError, setOptionsRegenError] = useState<string | null>(null);
+
+  // Pack 1 beat controls: owner-only, saved stories only, never in exploration.
+  const canUseBeatControls =
+    !session.explorationMode && !session.sourceStoryOwnerId && Boolean(session.savedStoryId);
+  const beatIsLocked = hasActiveDescendants(session.storyMap, currentNodeId);
+  const regenerateOptionsForNode = useStoryStore((state) => state.regenerateOptionsForNode);
+  const beatControlSettings = useStoryStore((state) => state.beatControlSettings);
+
+  const runOptionsRegeneration = useCallback(
+    async (confirmTimelineRewrite: boolean) => {
+      setOptionsRegenState({ step: 'running' });
+      setOptionsRegenError(null);
+      try {
+        const result = await regenerateOptionsForNode(currentNodeId, confirmTimelineRewrite);
+        if (result.status === 'requires_confirmation') {
+          setOptionsRegenState({ step: 'rewrite_confirm', impact: result.impact, message: result.message });
+          return;
+        }
+        if (result.status === 'failed') {
+          setOptionsRegenError(result.error);
+        }
+        setOptionsRegenState(null);
+      } catch (error) {
+        setOptionsRegenError(error instanceof Error ? error.message : 'Failed to regenerate options.');
+        setOptionsRegenState(null);
+      }
+    },
+    [currentNodeId, regenerateOptionsForNode]
+  );
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
   const [isDiscardingReel, setIsDiscardingReel] = useState(false);
   const [discardReelError, setDiscardReelError] = useState<string | null>(null);
@@ -5981,6 +6031,21 @@ function StoryScreenInner({
                     )}
                   </AnimatePresence>
                 </div>
+                {canUseBeatControls && !isReelStory && !isPromptOnlyStory && (
+                  <BeatActionsMenu
+                    key={currentNodeId}
+                    nodeId={currentNodeId}
+                    isLocked={beatIsLocked}
+                    onEditText={() => setShowEditBeatText(true)}
+                    onRegenerateImage={() => setShowRegenerateImage(true)}
+                    onRegenerateNarration={() => setShowNarrationRegenConfirm(true)}
+                    onRegenerateOptions={() => {
+                      setOptionsRegenError(null);
+                      setOptionsRegenState({ step: 'confirm' });
+                    }}
+                    onViewVersions={() => setShowImageVersions(true)}
+                  />
+                )}
               </div>
             )}
 
@@ -6444,6 +6509,11 @@ function StoryScreenInner({
                                     Original path
                                   </span>
                                 )}
+                                {option.source === 'user_custom' && (
+                                  <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-sky-300">
+                                    Yours
+                                  </span>
+                                )}
                               </div>
                               <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider line-clamp-2">
                                 {option.intent}
@@ -6457,6 +6527,12 @@ function StoryScreenInner({
                           </motion.button>
                         );
                       })}
+                      {optionsRegenError && (
+                        <p className="px-1 text-xs leading-snug text-rose-300">{optionsRegenError}</p>
+                      )}
+                      {canUseBeatControls && !isReelStory && beatControlSettings.customOptionsEnabled && (
+                        <CustomOptionInput nodeId={currentNodeId} disabled={isLoading} />
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -7246,6 +7322,69 @@ function StoryScreenInner({
         onSave={(config) => updateStoryEffects(currentNodeId, config)}
         onApplyAll={applyStoryEffectsToAll}
       />
+
+      {/* Pack 1 beat-control dialogs */}
+      {canUseBeatControls && (
+        <>
+          <EditBeatTextDialog
+            open={showEditBeatText}
+            nodeId={currentNodeId}
+            initialText={normalizedCurrentBeat.storyText}
+            onClose={() => setShowEditBeatText(false)}
+          />
+          <RegenerateImageDialog
+            open={showRegenerateImage}
+            nodeId={currentNodeId}
+            isStoryboard={isStoryboardBeat(normalizedCurrentBeat)}
+            onClose={() => setShowRegenerateImage(false)}
+          />
+          <ImageVersionHistoryDialog
+            open={showImageVersions}
+            nodeId={currentNodeId}
+            onClose={() => setShowImageVersions(false)}
+          />
+          <ConfirmDialog
+            open={showNarrationRegenConfirm}
+            title="Regenerate narration?"
+            message="This will regenerate narration for this beat only. Story text and image will not change."
+            confirmLabel="Regenerate narration"
+            onConfirm={() => {
+              setShowNarrationRegenConfirm(false);
+              void handleGenerateNarration();
+            }}
+            onCancel={() => setShowNarrationRegenConfirm(false)}
+          />
+          <ConfirmDialog
+            open={optionsRegenState?.step === 'confirm'}
+            title="Regenerate options?"
+            message="This will replace the current generated options for this beat. Story text and image will not change. Options you wrote yourself are kept."
+            confirmLabel="Regenerate options"
+            busy={false}
+            onConfirm={() => void runOptionsRegeneration(false)}
+            onCancel={() => setOptionsRegenState(null)}
+          />
+          <ConfirmDialog
+            open={optionsRegenState?.step === 'rewrite_confirm'}
+            title="Rewrite the story from this beat?"
+            message={
+              <span>
+                Options for this beat already shaped the later story. Regenerating them will remove all later beats,
+                generated images, narration, and options after this beat.
+                {optionsRegenState?.step === 'rewrite_confirm' && (
+                  <span className="mt-2 block text-xs text-neutral-500">
+                    This will remove {optionsRegenState.impact.affectedBeatCount} later beat
+                    {optionsRegenState.impact.affectedBeatCount === 1 ? '' : 's'}.
+                  </span>
+                )}
+              </span>
+            }
+            confirmLabel="Rewrite from this beat"
+            tone="danger"
+            onConfirm={() => void runOptionsRegeneration(true)}
+            onCancel={() => setOptionsRegenState(null)}
+          />
+        </>
+      )}
 
       <AnimatePresence>
         {showDiscardReelDialog && (

@@ -46,6 +46,11 @@ export interface Option {
   id: string;
   label: string;
   intent: string;
+  // Pack 1 beat control: options live in beats.options JSONB, so these fields
+  // are additive with no migration. Absent source means legacy AI-generated.
+  source?: 'ai' | 'user_custom';
+  characterMentions?: string[];
+  createdByUserId?: string;
 }
 
 export interface SeedPlanOption {
@@ -127,11 +132,21 @@ export interface StoryboardNarrationTiming {
 
 export type StoryTextParts = [string, string, string, string];
 
+export type BeatImageVersionMode = 'initial' | 'refine' | 'reimagine' | 'restore' | 'upload';
+
 export interface BeatImageGalleryEntry {
   url: string;
   storageKey: string;
   uploadedAt: string;
   optimizationMetadata?: ImageCompressionMetadata;
+  // Pack 1 image version history. Entries without `mode` are legacy
+  // prompt-only uploads and keep their original prune/cap behavior.
+  mode?: BeatImageVersionMode;
+  overallSuggestion?: string;
+  panelSuggestions?: Record<string, string>;
+  promptSnapshot?: string;
+  source?: 'system' | 'user';
+  versionNumber?: number;
 }
 
 export interface StoryBeat {

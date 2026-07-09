@@ -33,6 +33,11 @@ import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+import {
+  parseGalleryRows,
+  sanitizeGalleryForBlob,
+  serializeGalleryRows,
+} from '@/lib/media/image-versions';
 import { resolveValidatedPublishQuality } from '@/lib/story/publish-quality';
 import {
   generateShareToken,
@@ -51,14 +56,9 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
     const existingBeat = existingStoryMap?.nodes?.[id]?.data;
     const persistedImageUrl = resolvePersistedImageUrlForSave(node.data, existingBeat);
     const persistedAudioUrl = resolvePersistedAudioUrlForSave(node.data, existingBeat);
-    const cleanedGallery = (node.data.imageGallery ?? [])
-      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
-      .map((entry) => ({
-        url: normalizeStorageUrl(entry.url, 'story-assets'),
-        storageKey: entry.storageKey,
-        uploadedAt: entry.uploadedAt,
-        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
-      }));
+    const cleanedGallery = sanitizeGalleryForBlob(node.data.imageGallery, (url) =>
+      normalizeStorageUrl(url, 'story-assets')
+    );
     nodes[id] = {
       ...node,
       data: {
@@ -621,12 +621,9 @@ function nodeToBeatRow(
     row.story_effects = normalizeStoryEffectConfig(normalizedBeat.storyEffects) as unknown as Record<string, unknown>;
   }
 
-  row.image_gallery = (normalizedBeat.imageGallery ?? []).map((entry) => ({
-    url: normalizeStorageUrl(entry.url, 'story-assets'),
-    storage_key: entry.storageKey,
-    uploaded_at: entry.uploadedAt,
-    ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
-  }));
+  row.image_gallery = serializeGalleryRows(normalizedBeat.imageGallery, (url) =>
+    normalizeStorageUrl(url, 'story-assets')
+  );
 
   return row;
 }
@@ -655,16 +652,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageProviderKey: beat.image_provider_key || undefined,
     imageModelKey: beat.image_model_key || undefined,
     imageGenerationMetadata: beat.image_generation_metadata || undefined,
-    imageGallery: Array.isArray(beat.image_gallery)
-      ? beat.image_gallery.map((entry) => ({
-          url: entry.url,
-          storageKey: entry.storage_key,
-          uploadedAt: entry.uploaded_at,
-          ...(entry.optimization_metadata ? {
-            optimizationMetadata: entry.optimization_metadata as unknown as import('@/lib/media/imageUploadOptimization').ImageCompressionMetadata,
-          } : {}),
-        }))
-      : [],
+    imageGallery: parseGalleryRows(beat.image_gallery),
     audioUrl: beat.audio_url || undefined,
     audioVersion: beat.audio_synced_at || undefined,
     audioStatus: beat.audio_status,
@@ -1332,12 +1320,9 @@ export async function updateBeatMediaState(
     updateData.image_synced_at = null;
   }
   if ('imageGallery' in patch) {
-    updateData.image_gallery = (patch.imageGallery ?? []).map((entry) => ({
-      url: normalizeStorageUrl(entry.url, 'story-assets'),
-      storage_key: entry.storageKey,
-      uploaded_at: entry.uploadedAt,
-      ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
-    }));
+    updateData.image_gallery = serializeGalleryRows(patch.imageGallery, (url) =>
+      normalizeStorageUrl(url, 'story-assets')
+    );
   }
   if ('audioUrl' in patch) {
     updateData.audio_url = patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : null;
@@ -1455,12 +1440,9 @@ export async function updateBeatMediaState(
     ...(patch.imageStatus ? { imageStatus: patch.imageStatus } : {}),
     ...('imageError' in patch ? { imageError: patch.imageError || undefined } : {}),
     ...('imageGallery' in patch ? {
-      imageGallery: (patch.imageGallery ?? []).map((entry) => ({
-        url: normalizeStorageUrl(entry.url, 'story-assets'),
-        storageKey: entry.storageKey,
-        uploadedAt: entry.uploadedAt,
-        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
-      })),
+      imageGallery: sanitizeGalleryForBlob(patch.imageGallery, (url) =>
+        normalizeStorageUrl(url, 'story-assets')
+      ),
     } : {}),
     ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),
     ...('audioUrl' in patch && !('storyboardNarrationTiming' in patch) ? { storyboardNarrationTiming: undefined } : {}),

@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { StoryBeat, StoryMap, StoryNode } from '../types/story';
+import { Character, StoryBeat, StoryMap, StoryNode } from '../types/story';
 
 export function createStoryMap(rootBeat: StoryBeat, preGeneratedId?: string): StoryMap {
   const id = preGeneratedId || uuidv4();
@@ -100,4 +100,75 @@ export function getChoiceHistoryToNode(map: StoryMap, nodeId: string): string[] 
 
 export function getCurrentNode(map: StoryMap): StoryNode {
   return map.nodes[map.currentNodeId];
+}
+
+/**
+ * All descendant node ids of a node (children, grandchildren, ...), breadth
+ * first. The node itself is not included.
+ */
+export function getDescendantNodeIds(map: StoryMap, nodeId: string): string[] {
+  const start = map.nodes[nodeId];
+  if (!start) return [];
+  const result: string[] = [];
+  const queue = [...start.children];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const node = map.nodes[id];
+    if (!node) continue;
+    result.push(id);
+    queue.push(...node.children);
+  }
+  return result;
+}
+
+export function hasActiveDescendants(map: StoryMap, nodeId: string): boolean {
+  return getDescendantNodeIds(map, nodeId).length > 0;
+}
+
+/**
+ * Timeline lock: a beat is locked for story-changing edits (text, options)
+ * while later beats exist anywhere below it. Visual regeneration is never
+ * blocked by this lock.
+ */
+export function isBeatLockedForStoryEdit(map: StoryMap, nodeId: string): boolean {
+  return hasActiveDescendants(map, nodeId);
+}
+
+/**
+ * Remove the whole subtree below a node (the node itself stays). Returns a
+ * new map with the surviving nodes, the source node's children cleared, and
+ * currentNodeId repointed to the source node.
+ */
+export function removeSubtree(map: StoryMap, nodeId: string): StoryMap {
+  const source = map.nodes[nodeId];
+  if (!source) return map;
+  const removed = new Set(getDescendantNodeIds(map, nodeId));
+  if (removed.size === 0 && map.currentNodeId === nodeId) return map;
+  const nodes: StoryMap['nodes'] = {};
+  for (const [id, node] of Object.entries(map.nodes)) {
+    if (removed.has(id)) continue;
+    nodes[id] = id === nodeId ? { ...node, children: [] } : node;
+  }
+  return {
+    ...map,
+    nodes,
+    currentNodeId: nodeId,
+  };
+}
+
+/**
+ * Named characters available at a node: the union of the characters that
+ * appear on the path from the root to the node, deduplicated by lowercased
+ * name (later beats win so the freshest appearance data is kept).
+ */
+export function collectNamedCharactersForNode(map: StoryMap, nodeId: string): Character[] {
+  const byName = new Map<string, Character>();
+  for (const node of getPathToNode(map, nodeId)) {
+    for (const character of node.data.characters ?? []) {
+      const name = character?.name?.trim();
+      if (!name) continue;
+      byName.set(name.toLowerCase(), character);
+    }
+  }
+  return Array.from(byName.values());
 }
