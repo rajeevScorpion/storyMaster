@@ -271,6 +271,17 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [narrationVoiceConfig, setNarrationVoiceConfig] = useState<NarrationVoiceClientConfig | null>(
     initialLandingData.narrationVoiceConfig
   );
+  const [narrationVoiceConfigLoading, setNarrationVoiceConfigLoading] = useState(false);
+  // Cache per-language configs so re-selecting a language is instant (no repeat
+  // round-trip). Plan-based accent gating is stable within a session, so a
+  // cached per-language payload stays valid for the life of this component.
+  const narrationVoiceConfigCacheRef = useRef<Map<StoryLanguage, NarrationVoiceClientConfig>>(
+    new Map(
+      initialLandingData.narrationVoiceConfig
+        ? [['english', initialLandingData.narrationVoiceConfig]]
+        : []
+    )
+  );
   const [narrationVoiceSelection, setNarrationVoiceSelection] = useState<{
     genderBucket: NarrationGenderBucket;
     voiceId: string;
@@ -419,35 +430,55 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
 
   useEffect(() => {
     let cancelled = false;
+
+    const applyConfig = (config: NarrationVoiceClientConfig) => {
+      setNarrationVoiceConfig(config);
+      setNarrationVoiceSelection((current) => {
+        // Keep the accent valid for the (possibly language-changed) config.
+        const accentIds = config.accentEnabled ? config.accentOptions.map((option) => option.id) : [];
+        const nextAccent = config.accentEnabled
+          ? (current.accent && accentIds.includes(current.accent)
+              ? current.accent
+              : (accentIds.includes(config.defaultAccent) ? config.defaultAccent : accentIds[0] || ''))
+          : '';
+        if (!config.enabled) {
+          return { ...current, accent: nextAccent };
+        }
+        const list = current.genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
+        const configuredDefault = current.genderBucket === 'male' ? config.defaultMaleVoice : config.defaultFemaleVoice;
+        if (current.voiceId && list.includes(current.voiceId)) {
+          return { ...current, accent: nextAccent };
+        }
+        return {
+          genderBucket: current.genderBucket,
+          voiceId: list.includes(configuredDefault) ? configuredDefault : list[0] || '',
+          accent: nextAccent,
+        };
+      });
+    };
+
+    const cached = narrationVoiceConfigCacheRef.current.get(language);
+    if (cached) {
+      // Apply synchronously — no loading flash, no round-trip.
+      setNarrationVoiceConfigLoading(false);
+      applyConfig(cached);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setNarrationVoiceConfigLoading(true);
     getNarrationVoiceSelectionConfig(language)
       .then((config) => {
+        narrationVoiceConfigCacheRef.current.set(language, config);
         if (cancelled) return;
-        setNarrationVoiceConfig(config);
-        setNarrationVoiceSelection((current) => {
-          // Keep the accent valid for the (possibly language-changed) config.
-          const accentIds = config.accentEnabled ? config.accentOptions.map((option) => option.id) : [];
-          const nextAccent = config.accentEnabled
-            ? (current.accent && accentIds.includes(current.accent)
-                ? current.accent
-                : (accentIds.includes(config.defaultAccent) ? config.defaultAccent : accentIds[0] || ''))
-            : '';
-          if (!config.enabled) {
-            return { ...current, accent: nextAccent };
-          }
-          const list = current.genderBucket === 'male' ? config.maleVoiceList : config.femaleVoiceList;
-          const configuredDefault = current.genderBucket === 'male' ? config.defaultMaleVoice : config.defaultFemaleVoice;
-          if (current.voiceId && list.includes(current.voiceId)) {
-            return { ...current, accent: nextAccent };
-          }
-          return {
-            genderBucket: current.genderBucket,
-            voiceId: list.includes(configuredDefault) ? configuredDefault : list[0] || '',
-            accent: nextAccent,
-          };
-        });
+        applyConfig(config);
+        setNarrationVoiceConfigLoading(false);
       })
       .catch(() => {
-        if (!cancelled) setNarrationVoiceConfig(null);
+        if (cancelled) return;
+        setNarrationVoiceConfig(null);
+        setNarrationVoiceConfigLoading(false);
       });
 
     return () => {
@@ -1504,6 +1535,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   clearSeedPreview();
                 }}
                 narrationVoiceConfig={narrationVoiceConfig}
+                narrationVoiceConfigLoading={narrationVoiceConfigLoading}
                 narrationVoiceSelection={narrationVoiceSelection}
                 onNarrationVoiceSelectionChange={setNarrationVoiceSelection}
               />
