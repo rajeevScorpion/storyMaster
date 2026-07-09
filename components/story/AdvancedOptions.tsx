@@ -13,10 +13,11 @@ import {
   VISUAL_PRESET_OPTIONS,
 } from '@/lib/ai/story-config';
 import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
+import { resolveStoryNarrationLanguage } from '@/lib/ai/narration-voices';
 import { motion } from 'motion/react';
 import FilterDropdown, { type FilterDropdownOption } from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
-import { Coins, ImageIcon, Monitor, Smartphone, Volume2 } from 'lucide-react';
+import { Coins, ImageIcon, Loader2, Monitor, Smartphone, Square, Volume2 } from 'lucide-react';
 import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
@@ -136,6 +137,8 @@ interface AdvancedOptionsProps {
   isVerticalStory?: boolean;
   onVerticalStoryChange?: (value: boolean) => void;
   narrationVoiceConfig?: NarrationVoiceClientConfig | null;
+  /** True while the per-language config is being (re)fetched after a language change. */
+  narrationVoiceConfigLoading?: boolean;
   narrationVoiceSelection?: {
     genderBucket: NarrationGenderBucket;
     voiceId: string;
@@ -189,6 +192,7 @@ export default function AdvancedOptions({
   isVerticalStory = false,
   onVerticalStoryChange,
   narrationVoiceConfig = null,
+  narrationVoiceConfigLoading = false,
   narrationVoiceSelection,
   onNarrationVoiceSelectionChange,
 }: AdvancedOptionsProps) {
@@ -198,7 +202,9 @@ export default function AdvancedOptions({
       ? languageOptions.map((option) => ({ value: option.value, label: option.label }))
       : LANGUAGE_OPTIONS;
   const [playingSampleVoice, setPlayingSampleVoice] = useState<string | null>(null);
+  const [sampleBuffering, setSampleBuffering] = useState(false);
   const sampleAudioCacheRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const playingAudioRef = useRef<HTMLAudioElement | null>(null);
   const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
   const planLabel = `${currentPlanLabel.charAt(0).toUpperCase()}${currentPlanLabel.slice(1)} plan limit`;
   const voiceGender = narrationVoiceSelection?.genderBucket || 'female';
@@ -245,8 +251,19 @@ export default function AdvancedOptions({
   const orientationLabel = isVerticalStory ? 'Portrait' : 'Landscape';
   const visualPresetDescription = VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description || 'Choose the illustration style Kissago should use for storyboards.';
   const sourceFidelityDescription = SOURCE_FIDELITY_OPTIONS.find((option) => option.value === sourceFidelity)?.description || 'Choose how closely Kissago should preserve the source material.';
+  // Guard against a stale config: after a language change the parent refetches
+  // asynchronously, so the still-mounted config can belong to the *previous*
+  // language (whose English samples are ready with a real audioUrl). Only trust
+  // samples once the loaded config's languageCode matches the selected language —
+  // otherwise a wrong-language sample could play under a non-English selection.
+  const expectedNarrationLanguageCode = resolveStoryNarrationLanguage(language).languageCode;
+  const configMatchesLanguage = narrationVoiceConfig?.languageCode === expectedNarrationLanguageCode;
+  const samplesLoading = Boolean(narrationVoiceConfigLoading) || !configMatchesLanguage;
   const selectedVoiceSample = narrationVoiceConfig?.samples.find((candidate) => candidate.voiceId === selectedVoice);
-  const selectedVoiceSampleReady = selectedVoiceSample?.status === 'ready' && Boolean(selectedVoiceSample.audioUrl);
+  const selectedVoiceSampleReady =
+    configMatchesLanguage && selectedVoiceSample?.status === 'ready' && Boolean(selectedVoiceSample.audioUrl);
+  const selectedLanguageLabel =
+    effectiveLanguageOptions.find((option) => option.value === language)?.label || 'this language';
 
   const setVisualSetting = <K extends keyof VisualSettings,>(key: K, value: VisualSettings[K]) => {
     onVisualSettingsChange({
@@ -255,8 +272,16 @@ export default function AdvancedOptions({
     });
   };
 
+  const stopSelectedVoiceSample = () => {
+    playingAudioRef.current?.pause();
+    playingAudioRef.current = null;
+    setPlayingSampleVoice(null);
+    setSampleBuffering(false);
+  };
+
   const setNarrationVoiceGender = (genderBucket: NarrationGenderBucket) => {
     if (!narrationVoiceConfig || !onNarrationVoiceSelectionChange) return;
+    stopSelectedVoiceSample();
     const nextVoiceList = genderBucket === 'male'
       ? narrationVoiceConfig.maleVoiceList
       : narrationVoiceConfig.femaleVoiceList;
@@ -268,6 +293,7 @@ export default function AdvancedOptions({
   };
 
   const setNarrationVoice = (voiceId: string) => {
+    stopSelectedVoiceSample();
     onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId, accent: selectedAccent });
   };
 
@@ -275,17 +301,24 @@ export default function AdvancedOptions({
     onNarrationVoiceSelectionChange?.({ genderBucket: voiceGender, voiceId: selectedVoice, accent });
   };
 
+  // Preload every ready sample for the current gender's voices (a handful of
+  // small WAVs) so switching voices and pressing play is near-instant. Only runs
+  // once the config actually matches the selected language, so we never preload a
+  // stale/wrong-language sample.
   useEffect(() => {
-    if (!selectedVoiceSampleReady || !selectedVoiceSample?.audioUrl) return;
-
-    const cacheKey = `${selectedVoice}:${selectedVoiceSample.audioUrl}`;
-    if (sampleAudioCacheRef.current.has(cacheKey)) return;
-
-    const audio = new Audio(selectedVoiceSample.audioUrl);
-    audio.preload = 'auto';
-    audio.load();
-    sampleAudioCacheRef.current.set(cacheKey, audio);
-  }, [selectedVoice, selectedVoiceSample?.audioUrl, selectedVoiceSampleReady]);
+    if (!configMatchesLanguage || !narrationVoiceConfig) return;
+    const cache = sampleAudioCacheRef.current;
+    for (const voiceId of voiceList) {
+      const sample = narrationVoiceConfig.samples.find((candidate) => candidate.voiceId === voiceId);
+      if (sample?.status !== 'ready' || !sample.audioUrl) continue;
+      const cacheKey = `${voiceId}:${sample.audioUrl}`;
+      if (cache.has(cacheKey)) continue;
+      const audio = new Audio(sample.audioUrl);
+      audio.preload = 'auto';
+      audio.load();
+      cache.set(cacheKey, audio);
+    }
+  }, [configMatchesLanguage, narrationVoiceConfig, voiceList]);
 
   const playSelectedVoiceSample = async () => {
     if (!selectedVoiceSampleReady || !selectedVoiceSample?.audioUrl || !selectedVoice) return;
@@ -298,15 +331,39 @@ export default function AdvancedOptions({
       sampleAudioCacheRef.current.set(cacheKey, audio);
     }
 
+    playingAudioRef.current?.pause();
+    playingAudioRef.current = audio;
     setPlayingSampleVoice(selectedVoice);
+    // Show a spinner between the click and the first audio frame — first play
+    // fetches the remote WAV, so there is a network gap that would otherwise read
+    // as a dead button.
+    setSampleBuffering(true);
     try {
-      audio.pause();
       audio.currentTime = 0;
-      audio.onended = () => setPlayingSampleVoice((current) => current === selectedVoice ? null : current);
-      audio.onerror = () => setPlayingSampleVoice((current) => current === selectedVoice ? null : current);
+      audio.onplaying = () => {
+        if (playingAudioRef.current === audio) setSampleBuffering(false);
+      };
+      audio.onended = () => {
+        setPlayingSampleVoice((current) => current === selectedVoice ? null : current);
+        if (playingAudioRef.current === audio) {
+          playingAudioRef.current = null;
+          setSampleBuffering(false);
+        }
+      };
+      audio.onerror = () => {
+        setPlayingSampleVoice((current) => current === selectedVoice ? null : current);
+        if (playingAudioRef.current === audio) {
+          playingAudioRef.current = null;
+          setSampleBuffering(false);
+        }
+      };
       await audio.play();
     } catch {
       setPlayingSampleVoice((current) => current === selectedVoice ? null : current);
+      if (playingAudioRef.current === audio) {
+        playingAudioRef.current = null;
+        setSampleBuffering(false);
+      }
     }
   };
 
@@ -323,16 +380,6 @@ export default function AdvancedOptions({
       <div className="mx-auto mt-6 w-full max-w-4xl rounded-[28px] border border-white/10 bg-neutral-900/60 p-5 backdrop-blur-md md:p-6 lg:p-7">
         <div className="grid gap-5 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <div className="space-y-4 text-left">
-            <FilterDropdown
-              value={language}
-              options={effectiveLanguageOptions}
-              onChange={(value) => onLanguageChange(value as StoryLanguage)}
-              fullWidth
-              size="form"
-              mode="inline"
-              ariaLabel="Story language"
-            />
-
             <FilterDropdown
               value={ageGroup}
               options={AGE_GROUP_OPTIONS}
@@ -737,41 +784,49 @@ export default function AdvancedOptions({
               />
             </div>
 
+            <FilterDropdown
+              value={language}
+              options={effectiveLanguageOptions}
+              onChange={(value) => onLanguageChange(value as StoryLanguage)}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Story language"
+            />
+
             {narrationVoiceConfig?.enabled && (
               <div className="space-y-3 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-sm font-sans text-neutral-200">Narration Voice</h4>
-                      <InfoPopover title="Narration voice" ariaLabel="Show narration voice details">
-                        <p>Selected voice will be used for the entire story narration.</p>
-                        {narrationVoiceConfig.fallbackToEnglishSample && (
-                          <p>English sample preview is being used because this story language does not have a stored sample yet.</p>
-                        )}
-                      </InfoPopover>
-                    </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-sm font-sans text-neutral-200">Narration Voice</h4>
+                    <InfoPopover title="Narration voice" ariaLabel="Show narration voice details">
+                      <p>Selected voice will be used for the entire story narration.</p>
+                      {narrationVoiceConfig.fallbackToEnglishSample && (
+                        <p>English sample preview is being used because this story language does not have a stored sample yet.</p>
+                      )}
+                    </InfoPopover>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {(['female', 'male'] as const).map((genderBucket) => (
+                      <button
+                        key={genderBucket}
+                        type="button"
+                        onClick={() => setNarrationVoiceGender(genderBucket)}
+                        className={`min-h-9 rounded-full border px-4 py-1.5 text-sm transition-colors ${
+                          voiceGender === genderBucket
+                            ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+                            : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {genderBucket === 'female' ? 'Female' : 'Male'}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(['female', 'male'] as const).map((genderBucket) => (
-                    <button
-                      key={genderBucket}
-                      type="button"
-                      onClick={() => setNarrationVoiceGender(genderBucket)}
-                      className={`min-h-11 rounded-2xl border px-4 py-2 text-sm transition-colors ${
-                        voiceGender === genderBucket
-                          ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
-                          : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:bg-white/10'
-                      }`}
-                    >
-                      {genderBucket === 'female' ? 'Female' : 'Male'}
-                    </button>
-                  ))}
-                </div>
-
                 {voiceDropdownOptions.length > 0 && (
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 sm:grid-cols-[minmax(0,18rem)_auto]">
+                  <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-start gap-2 sm:grid-cols-[minmax(0,18rem)_auto_auto]">
                     <FilterDropdown
                       value={selectedVoice}
                       options={voiceDropdownOptions}
@@ -784,14 +839,37 @@ export default function AdvancedOptions({
                     <button
                       type="button"
                       onClick={() => void playSelectedVoiceSample()}
-                      disabled={!selectedVoiceSampleReady || playingSampleVoice === selectedVoice}
+                      disabled={samplesLoading || sampleBuffering || !selectedVoiceSampleReady || playingSampleVoice === selectedVoice}
                       className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-neutral-900/70 text-neutral-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
                       aria-label={selectedVoice ? `Play ${selectedVoice} sample` : 'Play selected voice sample'}
                     >
-                      <Volume2 className="h-4 w-4" aria-hidden="true" />
+                      {samplesLoading || sampleBuffering ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Volume2 className="h-4 w-4" aria-hidden="true" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopSelectedVoiceSample}
+                      disabled={playingSampleVoice !== selectedVoice}
+                      className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-neutral-900/70 text-neutral-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={selectedVoice ? `Stop ${selectedVoice} sample` : 'Stop voice sample'}
+                    >
+                      <Square className="h-4 w-4" aria-hidden="true" />
                     </button>
                   </div>
                 )}
+
+                {samplesLoading ? (
+                  <p className="text-xs leading-relaxed text-neutral-500">Loading voice previews…</p>
+                ) : !selectedVoiceSampleReady ? (
+                  <p className="text-xs leading-relaxed text-neutral-500">
+                    {narrationVoiceConfig.fallbackToEnglishSample
+                      ? `Voice previews aren't available in ${selectedLanguageLabel} yet — narration will use an English voice.`
+                      : `Voice preview isn't available in ${selectedLanguageLabel} yet.`}
+                  </p>
+                ) : null}
 
                 {accentEnabled && accentDropdownOptions.length > 0 && (
                   <div className="space-y-2 border-t border-white/10 pt-3">
