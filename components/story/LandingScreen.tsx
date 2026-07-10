@@ -16,7 +16,12 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
-import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import { AgeGroup, Character, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import { getCharacterUniverseRuntimeSettings, listCharacterMasters } from '@/app/actions/character-library';
+import { findCharacterNameConflicts, masterToCharacter } from '@/lib/character-library/mapping';
+import type { CharacterMaster } from '@/lib/types/character-library';
+import { useMentionAutocomplete } from '@/lib/hooks/useMentionAutocomplete';
+import MentionSuggestionList from '@/components/ui/MentionSuggestionList';
 import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
@@ -36,7 +41,7 @@ import {
 } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X, UserRound, AtSign } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
@@ -57,7 +62,11 @@ import type {
 } from '@/lib/ai/narration-voices';
 
 interface LandingScreenProps {
-  onBegin?: (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => void;
+  onBegin?: (
+    prompt: string,
+    config?: StoryConfig,
+    opts?: { autoBuild?: boolean; seedCharacters?: Character[] }
+  ) => void;
   initialData?: LandingInitialData | null;
   initialPricing?: PricingRuntimeContext | null;
 }
@@ -315,6 +324,70 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const selectedReelVisualStyle = reelVisualStyleCards.find((style) => style.id === reelVisualStyleId)
     ?? reelVisualStyleCards.find((style) => !style.isLocked)
     ?? null;
+
+  // Pack 2 character mixing: bring saved library characters into a new story
+  // (picker + @name mentions in the prompt). Fail-closed until the flag
+  // snapshot loads; anonymous users get defaults (all off).
+  const [mixingEnabled, setMixingEnabled] = useState(false);
+  const [libraryCharacters, setLibraryCharacters] = useState<CharacterMaster[]>([]);
+  const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
+  const [showCharacterPicker, setShowCharacterPicker] = useState(false);
+  const [mixError, setMixError] = useState<string | null>(null);
+  const promptInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCharacterUniverseRuntimeSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        const enabled = settings.mixingEnabled && settings.libraryEnabled;
+        setMixingEnabled(enabled);
+        if (enabled) {
+          listCharacterMasters()
+            .then((masters) => {
+              if (!cancelled) setLibraryCharacters(masters);
+            })
+            .catch(() => {
+              /* library unavailable — picker simply stays empty */
+            });
+        }
+      })
+      .catch(() => {
+        /* fail closed */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleLibraryCharacter = (master: CharacterMaster) => {
+    setMixError(null);
+    setSelectedLibraryCharacters((previous) => {
+      const existing = previous.find((character) => character.masterId === master.id);
+      if (existing) {
+        return previous.filter((character) => character.masterId !== master.id);
+      }
+      return [...previous, masterToCharacter(master)];
+    });
+  };
+
+  const promptMentions = useMentionAutocomplete<HTMLInputElement>({
+    names: mixingEnabled ? libraryCharacters.map((master) => master.name) : [],
+    text: prompt,
+    setText: setPrompt,
+    textareaRef: promptInputRef,
+    onSelect: (name) => {
+      const master = libraryCharacters.find(
+        (candidate) => candidate.name.toLowerCase() === name.toLowerCase()
+      );
+      if (!master) return;
+      setSelectedLibraryCharacters((previous) =>
+        previous.some((character) => character.masterId === master.id)
+          ? previous
+          : [...previous, masterToCharacter(master)]
+      );
+    },
+  });
 
   useEffect(() => {
     if (searchParams.get('mode') === 'reel') {
@@ -722,8 +795,31 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
       && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
+    // Pack 2 character mixing: seed selected library characters as local
+    // instances. The auto-build pipeline doesn't support seeding, so surface
+    // that instead of silently dropping the selection.
+    const seedCharacters =
+      !isReelMode && mixingEnabled && selectedLibraryCharacters.length > 0
+        ? selectedLibraryCharacters
+        : undefined;
+    if (seedCharacters) {
+      if (shouldAutoBuild) {
+        setMixError(
+          'Selected characters cannot join an auto-build story yet. Turn off auto-build or clear the selection.'
+        );
+        return;
+      }
+      const conflicts = findCharacterNameConflicts(seedCharacters);
+      if (conflicts.length > 0) {
+        setMixError(
+          `Two selected characters share the name “${conflicts[0].names[0]}”. Remove one or rename it in My Library first.`
+        );
+        return;
+      }
+    }
+
     if (onBegin) {
-      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild });
+      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild, seedCharacters });
       return;
     }
 
@@ -732,7 +828,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       return;
     }
 
-    await startStory(storyPrompt, config);
+    await startStory(storyPrompt, config, seedCharacters ? { seedCharacters } : undefined);
   };
 
   const buildPreviewPricingError = (authorization: Awaited<ReturnType<typeof authorizeCurrentUserBillableAction>>) => {
@@ -989,14 +1085,35 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   {creationMode !== 'seeded' ? (
                     <div className="space-y-3 p-2">
                       {!isReelMode && (
-                        <div className="flex items-center">
+                        <div className="relative flex items-center">
                           <input
+                            ref={promptInputRef}
                             type="text"
                             value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
+                            onChange={(e) => {
+                              setPrompt(e.target.value);
+                              promptMentions.syncMentionState(e.target.value, e.target.selectionStart);
+                            }}
+                            onClick={(e) => promptMentions.syncMentionState(prompt, e.currentTarget.selectionStart)}
+                            onKeyDown={(e) => {
+                              promptMentions.handleKeyDown(e);
+                            }}
                             placeholder="Tell me a story of a monkey and an elephant..."
                             className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
                             disabled={isLoading}
+                          />
+                          <MentionSuggestionList
+                            open={Boolean(promptMentions.mention)}
+                            suggestions={promptMentions.suggestions}
+                            highlightIndex={promptMentions.highlightIndex}
+                            onHighlight={promptMentions.setHighlightIndex}
+                            onSelect={promptMentions.applySuggestion}
+                            avatarUrlByName={Object.fromEntries(
+                              libraryCharacters.map((master) => [
+                                master.name,
+                                master.portraitUrl ?? master.referenceSheetUrl ?? undefined,
+                              ])
+                            )}
                           />
                           <button
                             type="submit"
@@ -1012,6 +1129,113 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                               </>
                             )}
                           </button>
+                        </div>
+                      )}
+                      {!isReelMode && mixingEnabled && (
+                        <div className="px-2 pb-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {selectedLibraryCharacters.map((character) => (
+                              <span
+                                key={character.masterId ?? character.id}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 py-1 pl-1 pr-2 text-xs text-emerald-100"
+                              >
+                                {character.portraitUrl || character.referenceSheetUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={character.portraitUrl ?? character.referenceSheetUrl}
+                                    alt=""
+                                    className="h-5 w-5 rounded-full border border-white/10 object-cover"
+                                  />
+                                ) : (
+                                  <UserRound className="h-3.5 w-3.5 text-emerald-300/70" />
+                                )}
+                                {character.name}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedLibraryCharacters((previous) =>
+                                      previous.filter((entry) => entry.masterId !== character.masterId)
+                                    )
+                                  }
+                                  className="rounded-full p-0.5 text-emerald-300/70 transition-colors hover:bg-white/10 hover:text-emerald-100"
+                                  aria-label={`Remove ${character.name}`}
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ))}
+                            {libraryCharacters.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setShowCharacterPicker((value) => !value)}
+                                aria-expanded={showCharacterPicker}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-white/15 px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-400/30 hover:text-neutral-200"
+                              >
+                                <UserRound className="h-3.5 w-3.5" />
+                                Bring your characters
+                                {showCharacterPicker ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )}
+                              </button>
+                            )}
+                            {libraryCharacters.length > 0 && (
+                              <span className="hidden items-center gap-1 text-[11px] text-neutral-600 sm:flex">
+                                <AtSign className="h-3 w-3" /> or type @name in your idea
+                              </span>
+                            )}
+                          </div>
+                          <AnimatePresence>
+                            {showCharacterPicker && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ duration: 0.15 }}
+                                className="overflow-hidden"
+                              >
+                                <div className="mt-2 flex flex-wrap gap-2 rounded-xl border border-white/10 bg-neutral-950/60 p-3">
+                                  {libraryCharacters.map((master) => {
+                                    const isSelected = selectedLibraryCharacters.some(
+                                      (character) => character.masterId === master.id
+                                    );
+                                    const avatar = master.portraitUrl ?? master.referenceSheetUrl;
+                                    return (
+                                      <button
+                                        key={master.id}
+                                        type="button"
+                                        onClick={() => toggleLibraryCharacter(master)}
+                                        aria-pressed={isSelected}
+                                        className={`inline-flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-xs transition-colors ${
+                                          isSelected
+                                            ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
+                                            : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
+                                        }`}
+                                      >
+                                        {avatar ? (
+                                          // eslint-disable-next-line @next/next/no-img-element
+                                          <img
+                                            src={avatar}
+                                            alt=""
+                                            className="h-6 w-6 rounded-full border border-white/10 object-cover"
+                                          />
+                                        ) : (
+                                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
+                                            <UserRound className="h-3.5 w-3.5 text-neutral-500" />
+                                          </span>
+                                        )}
+                                        {master.name}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                          {mixError && (
+                            <p className="mt-2 text-xs leading-snug text-rose-300">{mixError}</p>
+                          )}
                         </div>
                       )}
                       {isReelMode && (

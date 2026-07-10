@@ -13,7 +13,7 @@ import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import ManagedFooter from '@/components/layout/ManagedFooter';
 import { AnimatePresence } from 'motion/react';
-import type { StoryConfig } from '@/lib/types/story';
+import type { Character, StoryConfig } from '@/lib/types/story';
 import { consumeHomeStoryResetRequest, hasHomeStoryResetRequest } from '@/lib/story/home-navigation';
 import type { LandingInitialData } from '@/lib/story/landing-ui';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
@@ -61,7 +61,11 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
     }
   }, [isConsumingHomeReset, sessionForDisplay, router]);
 
-  const handleBegin = async (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => {
+  const handleBegin = async (
+    prompt: string,
+    config?: StoryConfig,
+    opts?: { autoBuild?: boolean; seedCharacters?: Character[] }
+  ) => {
     if (!user) {
       sessionStorage.setItem('kissago_pending_prompt', prompt);
       if (config) {
@@ -83,7 +87,11 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
     }
 
     const startStory = useStoryStore.getState().startStory;
-    startStory(prompt, config);
+    startStory(
+      prompt,
+      config,
+      opts?.seedCharacters?.length ? { seedCharacters: opts.seedCharacters } : undefined
+    );
   };
 
   const handleLogoClick = () => {

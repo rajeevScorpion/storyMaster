@@ -12,6 +12,9 @@ import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
 import { saveCharacterToLibrary } from '@/app/actions/character-library';
 import type { CharacterMaster } from '@/lib/types/character-library';
+import { getEpisodeNavigation } from '@/app/actions/episodes';
+import type { EpisodeNavigation } from '@/lib/types/episodes';
+import ContinueAsEpisodeDialog from './ContinueAsEpisodeDialog';
 import PublishDialog from './PublishDialog';
 import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
@@ -2166,6 +2169,35 @@ function StoryScreenInner({
       ),
     [savedLibraryCharacterIds, session.characters]
   );
+
+  // Pack 2 episodes: Continue-as-Episode entry point + series navigation
+  // links (previous/next stories on the first and last beats). Nav results are
+  // keyed by story id so switching stories never shows stale links.
+  const [showContinueAsEpisode, setShowContinueAsEpisode] = useState(false);
+  const [episodeNavByStory, setEpisodeNavByStory] = useState<Record<string, EpisodeNavigation>>({});
+  const episodeNav = session.savedStoryId ? episodeNavByStory[session.savedStoryId] ?? null : null;
+  const canContinueAsEpisode =
+    canUseBeatControls &&
+    characterUniverseSettings.episodesEnabled &&
+    session.storyConfig.storyKind !== 'reel';
+
+  useEffect(() => {
+    const storyId = session.savedStoryId;
+    if (!storyId) return;
+    let cancelled = false;
+    getEpisodeNavigation(storyId)
+      .then((nav) => {
+        if (!cancelled && (nav.parent || nav.children.length > 0)) {
+          setEpisodeNavByStory((previous) => ({ ...previous, [storyId]: nav }));
+        }
+      })
+      .catch(() => {
+        /* navigation is decorative — ignore failures */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.savedStoryId]);
 
   const runOptionsRegeneration = useCallback(
     async (confirmTimelineRewrite: boolean) => {
@@ -6344,11 +6376,44 @@ function StoryScreenInner({
                       </div>
                     </div>
                   ) : (
-                    <p className={`transition-colors duration-500 ${
-                      isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
-                    }`}>
-                      {currentBeat.storyText}
-                    </p>
+                    <>
+                      {episodeNav && currentNodeId === session.storyMap.rootNodeId && !isMinimized && (
+                        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-2.5 text-xs font-sans">
+                          {episodeNav.parent && (
+                            <Link
+                              href={`/story/${episodeNav.parent.storyId}`}
+                              className="group flex min-w-0 items-center gap-1.5 text-indigo-200 transition-colors hover:text-indigo-100"
+                            >
+                              <ArrowRight className="h-3.5 w-3.5 shrink-0 rotate-180 transition-transform group-hover:-translate-x-0.5" />
+                              <span className="truncate">
+                                {episodeNav.parent.episodeNumber
+                                  ? `Part ${episodeNav.parent.episodeNumber}: `
+                                  : 'Previous: '}
+                                {episodeNav.parent.title}
+                              </span>
+                            </Link>
+                          )}
+                          {episodeNav.children.map((child) => (
+                            <Link
+                              key={child.storyId}
+                              href={`/story/${child.storyId}`}
+                              className="group flex min-w-0 items-center gap-1.5 text-indigo-200 transition-colors hover:text-indigo-100"
+                            >
+                              <span className="truncate">
+                                {child.episodeNumber ? `Part ${child.episodeNumber}: ` : 'Next: '}
+                                {child.title}
+                              </span>
+                              <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                      <p className={`transition-colors duration-500 ${
+                        isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
+                      }`}>
+                        {currentBeat.storyText}
+                      </p>
+                    </>
                   )}
 
                   {isEnding && !isMinimized && (
@@ -6410,7 +6475,54 @@ function StoryScreenInner({
                         </div>
                       )}
 
+                      {episodeNav?.parent && (
+                        <Link
+                          href={`/story/${episodeNav.parent.storyId}`}
+                          className="group mt-6 flex items-center gap-1.5 text-sm font-sans text-indigo-200 transition-colors hover:text-indigo-100"
+                        >
+                          <ArrowRight className="h-3.5 w-3.5 shrink-0 rotate-180 transition-transform group-hover:-translate-x-0.5" />
+                          <span className="truncate">
+                            {episodeNav.parent.episodeNumber
+                              ? `Back to Part ${episodeNav.parent.episodeNumber}: `
+                              : 'Back to: '}
+                            {episodeNav.parent.title}
+                          </span>
+                        </Link>
+                      )}
+
+                      {episodeNav && episodeNav.children.length > 0 && (
+                        <div className="mt-6 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+                          <p className="text-[11px] font-sans uppercase tracking-[0.18em] text-indigo-300">
+                            This story continues
+                          </p>
+                          <div className="mt-2 flex flex-col gap-1.5">
+                            {episodeNav.children.map((child) => (
+                              <Link
+                                key={child.storyId}
+                                href={`/story/${child.storyId}`}
+                                className="group flex items-center gap-2 text-sm text-indigo-200 transition-colors hover:text-indigo-100"
+                              >
+                                <span className="truncate">
+                                  {child.episodeNumber ? `Part ${child.episodeNumber}: ` : ''}
+                                  {child.title}
+                                </span>
+                                <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+                              </Link>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="mt-8 flex flex-wrap gap-3">
+                        {canContinueAsEpisode && (
+                          <button
+                            onClick={() => setShowContinueAsEpisode(true)}
+                            className="bg-emerald-400 text-neutral-950 px-8 py-4 rounded-2xl font-medium hover:bg-emerald-300 transition-colors flex items-center gap-2"
+                          >
+                            <Clapperboard className="w-4 h-4" />
+                            Continue as Episode
+                          </button>
+                        )}
                         {!lastPublishResult && onSave && canPublishStandardStoryline && (
                           <button
                             onClick={() => setShowPublishDialog(true)}
@@ -7480,6 +7592,14 @@ function StoryScreenInner({
             initialText={normalizedCurrentBeat.storyText}
             onClose={() => setShowEditBeatText(false)}
           />
+          {session.savedStoryId && (
+            <ContinueAsEpisodeDialog
+              open={showContinueAsEpisode}
+              storyId={session.savedStoryId}
+              nodeId={currentNodeId}
+              onClose={() => setShowContinueAsEpisode(false)}
+            />
+          )}
           <RegenerateImageDialog
             open={showRegenerateImage}
             nodeId={currentNodeId}

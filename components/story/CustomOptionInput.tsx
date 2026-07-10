@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
 import { AtSign, Loader2, PenLine, Send, X } from 'lucide-react';
 import { useStoryStore } from '@/lib/store/story-store';
 import { collectNamedCharactersForNode } from '@/lib/utils/story-map';
-import { extractMentionQueryAtCursor } from '@/lib/utils/character-mentions';
+import { useMentionAutocomplete } from '@/lib/hooks/useMentionAutocomplete';
+import MentionSuggestionList from '@/components/ui/MentionSuggestionList';
 
 const MAX_CUSTOM_OPTION_CHARS = 200;
 
@@ -27,8 +27,6 @@ export default function CustomOptionInput({ nodeId, disabled }: CustomOptionInpu
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
-  const [highlightIndex, setHighlightIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const characterNames = useMemo(() => {
@@ -36,45 +34,21 @@ export default function CustomOptionInput({ nodeId, disabled }: CustomOptionInpu
     return collectNamedCharactersForNode(session.storyMap, nodeId).map((character) => character.name);
   }, [session, nodeId]);
 
+  const mentions = useMentionAutocomplete({
+    names: characterNames,
+    text,
+    setText,
+    textareaRef,
+    maxLength: MAX_CUSTOM_OPTION_CHARS,
+  });
+  const { closeMention } = mentions;
+
   useEffect(() => {
     setExpanded(false);
     setText('');
     setError(null);
-    setMention(null);
-  }, [nodeId]);
-
-  const suggestions = useMemo(() => {
-    if (!mention) return [];
-    const query = mention.query.toLowerCase();
-    return characterNames
-      .filter((name) => name.toLowerCase().startsWith(query))
-      .slice(0, 5);
-  }, [mention, characterNames]);
-
-  useEffect(() => {
-    setHighlightIndex(0);
-  }, [suggestions.length, mention?.query]);
-
-  const syncMentionState = (value: string, cursor: number | null) => {
-    setMention(cursor === null ? null : extractMentionQueryAtCursor(value, cursor));
-  };
-
-  const applySuggestion = (name: string) => {
-    if (!mention) return;
-    const before = text.slice(0, mention.start);
-    const after = text.slice(mention.start + 1 + mention.query.length);
-    const next = `${before}@${name}${after}`;
-    setText(next.slice(0, MAX_CUSTOM_OPTION_CHARS));
-    setMention(null);
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current;
-      if (textarea) {
-        const cursor = before.length + name.length + 1;
-        textarea.focus();
-        textarea.setSelectionRange(cursor, cursor);
-      }
-    });
-  };
+    closeMention();
+  }, [nodeId, closeMention]);
 
   const submit = async () => {
     if (submitting || !text.trim()) return;
@@ -130,7 +104,7 @@ export default function CustomOptionInput({ nodeId, disabled }: CustomOptionInpu
           onClick={() => {
             setExpanded(false);
             setError(null);
-            setMention(null);
+            mentions.closeMention();
           }}
           disabled={submitting}
           className="rounded-full p-1 text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200 disabled:opacity-50"
@@ -148,32 +122,11 @@ export default function CustomOptionInput({ nodeId, disabled }: CustomOptionInpu
           placeholder="Write your own next choice. Use @name to reference story characters."
           onChange={(event) => {
             setText(event.target.value.slice(0, MAX_CUSTOM_OPTION_CHARS));
-            syncMentionState(event.target.value, event.target.selectionStart);
+            mentions.syncMentionState(event.target.value, event.target.selectionStart);
           }}
-          onClick={(event) => syncMentionState(text, event.currentTarget.selectionStart)}
+          onClick={(event) => mentions.syncMentionState(text, event.currentTarget.selectionStart)}
           onKeyDown={(event) => {
-            if (suggestions.length > 0 && mention) {
-              if (event.key === 'ArrowDown') {
-                event.preventDefault();
-                setHighlightIndex((index) => (index + 1) % suggestions.length);
-                return;
-              }
-              if (event.key === 'ArrowUp') {
-                event.preventDefault();
-                setHighlightIndex((index) => (index - 1 + suggestions.length) % suggestions.length);
-                return;
-              }
-              if (event.key === 'Enter' || event.key === 'Tab') {
-                event.preventDefault();
-                applySuggestion(suggestions[highlightIndex]);
-                return;
-              }
-              if (event.key === 'Escape') {
-                event.preventDefault();
-                setMention(null);
-                return;
-              }
-            }
+            if (mentions.handleKeyDown(event)) return;
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               void submit();
@@ -182,40 +135,13 @@ export default function CustomOptionInput({ nodeId, disabled }: CustomOptionInpu
           className="w-full resize-none rounded-xl border border-white/10 bg-neutral-950/70 p-3 font-serif text-base text-neutral-100 placeholder:font-sans placeholder:text-sm placeholder:text-neutral-600 focus:border-emerald-400/40 focus:outline-none focus:ring-1 focus:ring-emerald-400/40 disabled:opacity-60"
           aria-label="Custom option text"
         />
-        <AnimatePresence>
-          {mention && suggestions.length > 0 && (
-            <motion.ul
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 4 }}
-              transition={{ duration: 0.12 }}
-              role="listbox"
-              aria-label="Character suggestions"
-              className="absolute bottom-full left-3 z-50 mb-1 w-56 overflow-hidden rounded-xl border border-white/10 bg-neutral-900/95 py-1 shadow-2xl backdrop-blur-md"
-            >
-              {suggestions.map((name, index) => (
-                <li key={name}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={index === highlightIndex}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      applySuggestion(name);
-                    }}
-                    onMouseEnter={() => setHighlightIndex(index)}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                      index === highlightIndex ? 'bg-emerald-400/15 text-emerald-100' : 'text-neutral-200'
-                    }`}
-                  >
-                    <AtSign className="h-3.5 w-3.5 shrink-0 text-emerald-400/70" />
-                    {name}
-                  </button>
-                </li>
-              ))}
-            </motion.ul>
-          )}
-        </AnimatePresence>
+        <MentionSuggestionList
+          open={Boolean(mentions.mention)}
+          suggestions={mentions.suggestions}
+          highlightIndex={mentions.highlightIndex}
+          onHighlight={mentions.setHighlightIndex}
+          onSelect={mentions.applySuggestion}
+        />
       </div>
       {error && <p className="mt-2 text-xs leading-snug text-rose-300">{error}</p>}
       <div className="mt-2 flex items-center justify-between gap-2">
