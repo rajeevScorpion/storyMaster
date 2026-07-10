@@ -81,6 +81,11 @@ import {
   DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
   type BeatControlRuntimeSettings,
 } from '@/lib/beat-control/settings';
+import {
+  DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS,
+  type CharacterUniverseRuntimeSettings,
+} from '@/lib/character-universe/settings';
+import { getCharacterUniverseRuntimeSettings } from '@/app/actions/character-library';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import {
   setCharacterReferenceSheetRecord,
@@ -258,6 +263,8 @@ interface StoryState {
   regenerateImageForNode: (nodeId: string, regenOptions?: BeatImageRegenerationOptions) => Promise<void>;
   beatControlSettings: BeatControlRuntimeSettings;
   loadBeatControlSettings: () => Promise<void>;
+  characterUniverseSettings: CharacterUniverseRuntimeSettings;
+  loadCharacterUniverseSettings: () => Promise<void>;
   applyTimelineRewrite: (nodeId: string, newText: string) => void;
   editBeatTextForNode: (nodeId: string, newText: string, confirmTimelineRewrite?: boolean) => Promise<EditBeatTextResult>;
   regenerateOptionsForNode: (nodeId: string, confirmTimelineRewrite?: boolean) => Promise<RegenerateBeatOptionsResult>;
@@ -2107,6 +2114,7 @@ export const useStoryStore = create<StoryState>()(
       isGeneratingAudio: false,
       isRegeneratingImage: false,
       beatControlSettings: DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
+      characterUniverseSettings: DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS,
       activeImageJobNodeIds: [],
       isSubmittingImageBatch: false,
       imageBatchMessage: null,
@@ -5496,6 +5504,15 @@ export const useStoryStore = create<StoryState>()(
         try {
           const settings = await getBeatControlRuntimeSettings();
           set({ beatControlSettings: settings });
+        } catch {
+          // Fail closed: controls stay hidden with the defaults.
+        }
+      },
+
+      loadCharacterUniverseSettings: async () => {
+        try {
+          const settings = await getCharacterUniverseRuntimeSettings();
+          set({ characterUniverseSettings: settings });
         } catch {
           // Fail closed: controls stay hidden with the defaults.
         }

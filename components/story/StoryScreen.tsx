@@ -6,10 +6,12 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
+import { saveCharacterToLibrary } from '@/app/actions/character-library';
+import type { CharacterMaster } from '@/lib/types/character-library';
 import PublishDialog from './PublishDialog';
 import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
@@ -1724,6 +1726,8 @@ export default function StoryScreen() {
       .catch(() => {/* use defaults */});
     // Pack 1 beat-control flags (fail-closed defaults until this resolves).
     void useStoryStore.getState().loadBeatControlSettings();
+    // Pack 2 character-universe flags (library save, episodes, bible).
+    void useStoryStore.getState().loadCharacterUniverseSettings();
   }, [setSaveRuntimeSettings]);
 
   useEffect(() => {
@@ -2100,6 +2104,68 @@ function StoryScreenInner({
   const beatIsLocked = hasActiveDescendants(session.storyMap, currentNodeId);
   const regenerateOptionsForNode = useStoryStore((state) => state.regenerateOptionsForNode);
   const beatControlSettings = useStoryStore((state) => state.beatControlSettings);
+
+  // Pack 2 character universe: save-to-library affordance in the character
+  // refs panel; owner-only like the beat controls.
+  const characterUniverseSettings = useStoryStore((state) => state.characterUniverseSettings);
+  const canSaveCharactersToLibrary =
+    canUseBeatControls &&
+    characterUniverseSettings.libraryEnabled &&
+    characterUniverseSettings.globalSaveEnabled;
+  const [savingLibraryCharacterId, setSavingLibraryCharacterId] = useState<string | null>(null);
+  const [libraryCharacterNotice, setLibraryCharacterNotice] = useState<string | null>(null);
+  const [libraryCharacterConflict, setLibraryCharacterConflict] = useState<{
+    characterId: string;
+    characterName: string;
+    existingMaster: CharacterMaster;
+  } | null>(null);
+  const [savedLibraryCharacterIds, setSavedLibraryCharacterIds] = useState<Record<string, boolean>>({});
+
+  const handleSaveCharacterToLibrary = useCallback(
+    async (characterId: string, characterName: string, overwriteMasterId?: string) => {
+      if (!session.savedStoryId || savingLibraryCharacterId) return;
+      setSavingLibraryCharacterId(characterId);
+      setLibraryCharacterNotice(null);
+      try {
+        const result = await saveCharacterToLibrary({
+          storyId: session.savedStoryId,
+          characterId,
+          overwriteMasterId,
+        });
+        if (result.status === 'saved') {
+          setSavedLibraryCharacterIds((prev) => ({ ...prev, [characterId]: true }));
+          setLibraryCharacterConflict(null);
+          setLibraryCharacterNotice(`${result.master.name} is now in your library.`);
+          return;
+        }
+        if (result.status === 'conflict') {
+          setLibraryCharacterConflict({
+            characterId,
+            characterName,
+            existingMaster: result.existingMaster,
+          });
+          return;
+        }
+        setLibraryCharacterNotice(result.error);
+      } catch (saveError) {
+        setLibraryCharacterNotice(
+          saveError instanceof Error ? saveError.message : 'Could not save the character.'
+        );
+      } finally {
+        setSavingLibraryCharacterId(null);
+      }
+    },
+    [session.savedStoryId, savingLibraryCharacterId]
+  );
+
+  const isCharacterInLibrary = useCallback(
+    (characterId: string): boolean =>
+      Boolean(
+        savedLibraryCharacterIds[characterId] ||
+          session.characters.find((character) => character.id === characterId)?.masterId
+      ),
+    [savedLibraryCharacterIds, session.characters]
+  );
 
   const runOptionsRegeneration = useCallback(
     async (confirmTimelineRewrite: boolean) => {
@@ -6720,6 +6786,28 @@ function StoryScreenInner({
                                       <ImageIcon className="h-4 w-4" />
                                     </button>
                                   )}
+                                  {canSaveCharactersToLibrary && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSaveCharacterToLibrary(item.characterId, item.characterName)}
+                                      disabled={savingLibraryCharacterId === item.characterId || isCharacterInLibrary(item.characterId)}
+                                      className={`rounded-full border p-2 transition-colors ${
+                                        isCharacterInLibrary(item.characterId)
+                                          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+                                          : 'border-white/10 bg-white/5 text-neutral-200 hover:bg-white/10'
+                                      } disabled:cursor-not-allowed`}
+                                      title={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                      aria-label={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                    >
+                                      {savingLibraryCharacterId === item.characterId ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : isCharacterInLibrary(item.characterId) ? (
+                                        <BookmarkCheck className="h-4 w-4" />
+                                      ) : (
+                                        <BookmarkPlus className="h-4 w-4" />
+                                      )}
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -6747,21 +6835,81 @@ function StoryScreenInner({
                                         : 'No saved sheet'}
                                     </p>
                                   </div>
-                                  {cycleSettings.characterSheetUploadEnabled && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openCharacterSheetUpload(item.characterId, item.characterName)}
-                                      className="rounded-full border border-white/10 bg-white/5 p-2 text-neutral-200 transition-colors hover:bg-white/10"
-                                      title={`Open character sheet tools for ${item.characterName}`}
-                                      aria-label={`Open character sheet tools for ${item.characterName}`}
-                                    >
-                                      <ImageIcon className="h-4 w-4" />
-                                    </button>
-                                  )}
+                                  <div className="flex items-center gap-2">
+                                    {cycleSettings.characterSheetUploadEnabled && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openCharacterSheetUpload(item.characterId, item.characterName)}
+                                        className="rounded-full border border-white/10 bg-white/5 p-2 text-neutral-200 transition-colors hover:bg-white/10"
+                                        title={`Open character sheet tools for ${item.characterName}`}
+                                        aria-label={`Open character sheet tools for ${item.characterName}`}
+                                      >
+                                        <ImageIcon className="h-4 w-4" />
+                                      </button>
+                                    )}
+                                    {canSaveCharactersToLibrary && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleSaveCharacterToLibrary(item.characterId, item.characterName)}
+                                        disabled={savingLibraryCharacterId === item.characterId || isCharacterInLibrary(item.characterId)}
+                                        className={`rounded-full border p-2 transition-colors ${
+                                          isCharacterInLibrary(item.characterId)
+                                            ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+                                            : 'border-white/10 bg-white/5 text-neutral-200 hover:bg-white/10'
+                                        } disabled:cursor-not-allowed`}
+                                        title={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                        aria-label={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                      >
+                                        {savingLibraryCharacterId === item.characterId ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : isCharacterInLibrary(item.characterId) ? (
+                                          <BookmarkCheck className="h-4 w-4" />
+                                        ) : (
+                                          <BookmarkPlus className="h-4 w-4" />
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               ))}
                             </div>
                           </div>
+                        )}
+
+                        {libraryCharacterConflict && (
+                          <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/5 p-4">
+                            <p className="text-sm text-amber-200">
+                              Your library already has a character named{' '}
+                              <span className="font-medium">{libraryCharacterConflict.existingMaster.name}</span>.
+                            </p>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleSaveCharacterToLibrary(
+                                    libraryCharacterConflict.characterId,
+                                    libraryCharacterConflict.characterName,
+                                    libraryCharacterConflict.existingMaster.id
+                                  )
+                                }
+                                disabled={savingLibraryCharacterId !== null}
+                                className="rounded-full bg-amber-400 px-4 py-1.5 text-xs font-semibold text-neutral-950 transition-colors hover:bg-amber-300 disabled:opacity-50"
+                              >
+                                Update the existing character
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setLibraryCharacterConflict(null)}
+                                disabled={savingLibraryCharacterId !== null}
+                                className="rounded-full border border-white/10 px-4 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-white/20 disabled:opacity-50"
+                              >
+                                Keep both — rename it in My Library later
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {libraryCharacterNotice && (
+                          <p className="mt-3 text-xs leading-snug text-emerald-300">{libraryCharacterNotice}</p>
                         )}
                       </div>
                     )}

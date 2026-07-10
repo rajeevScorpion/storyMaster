@@ -3,14 +3,19 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard, UserRound } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
+import { getCharacterUniverseRuntimeSettings } from '@/app/actions/character-library';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import Link from 'next/link';
 import type { SavedStory, SavedStorylineItem, TabId, UserReel } from '@/lib/types/my-stories';
+import type { CharacterMaster } from '@/lib/types/character-library';
 
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
+import CharacterMasterCard from './CharacterMasterCard';
+import CharacterMasterDialog from './CharacterMasterDialog';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 
 interface MyStoriesDrawerProps {
   isOpen: boolean;
@@ -24,23 +29,46 @@ const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
   { id: 'reels', label: 'Reels', icon: Clapperboard },
 ];
 
+const CHARACTERS_TAB: { id: TabId; label: string; icon: typeof BookOpen } = {
+  id: 'characters',
+  label: 'Characters',
+  icon: UserRound,
+};
+
 export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>('my-stories');
   const [actionId, setActionId] = useState<string | null>(null);
   const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
+  const [libraryEnabled, setLibraryEnabled] = useState(false);
+  const [characterFilter, setCharacterFilter] = useState('active');
+  const [openMasterId, setOpenMasterId] = useState<string | null>(null);
 
   const stories = useMyStoriesStore((s) => s.stories);
   const reels = useMyStoriesStore((s) => s.reels);
   const exploredStories = useMyStoriesStore((s) => s.exploredStories);
   const savedStorylines = useMyStoriesStore((s) => s.savedStorylines);
+  const characters = useMyStoriesStore((s) => s.characters);
   const loading = useMyStoriesStore((s) => s.loading);
   const fetchTab = useMyStoriesStore((s) => s.fetchTab);
 
+  const visibleTabs = libraryEnabled ? [...TABS, CHARACTERS_TAB] : TABS;
+  // Fall back if the flag turned off while the characters tab was selected.
+  const effectiveTab: TabId =
+    activeTab === 'characters' && !libraryEnabled ? 'my-stories' : activeTab;
+
   // Fetch current tab data when drawer opens or tab changes (serves cache if fresh)
   useEffect(() => {
-    if (isOpen) fetchTab(activeTab);
-  }, [isOpen, activeTab, fetchTab]);
+    if (isOpen) fetchTab(effectiveTab);
+  }, [isOpen, effectiveTab, fetchTab]);
+
+  // The Characters tab is flag-gated (fail closed until the snapshot loads).
+  useEffect(() => {
+    if (!isOpen) return;
+    getCharacterUniverseRuntimeSettings()
+      .then((settings) => setLibraryEnabled(settings.libraryEnabled))
+      .catch(() => setLibraryEnabled(false));
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -48,7 +76,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     }
   }, [isOpen]);
 
-  const isLoading = loading[activeTab];
+  const isLoading = loading[effectiveTab];
 
   const handleLoadStory = (story: SavedStory) => {
     writeOpenFlowNavMeta({
@@ -466,6 +494,46 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     ));
   };
 
+  const renderCharacters = () => {
+    const filtered = characters.filter((master) =>
+      characterFilter === 'archived'
+        ? Boolean(master.archivedAt)
+        : characterFilter === 'all'
+          ? true
+          : !master.archivedAt
+    );
+    return (
+      <>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-neutral-500">
+            Saved characters can join new stories and future episodes.
+          </p>
+          <FilterDropdown
+            value={characterFilter}
+            onChange={setCharacterFilter}
+            ariaLabel="Filter characters"
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'archived', label: 'Archived' },
+              { value: 'all', label: 'All' },
+            ]}
+          />
+        </div>
+        {filtered.length === 0 ? (
+          renderEmptyState(
+            UserRound,
+            characterFilter === 'archived' ? 'No archived characters' : 'No saved characters yet',
+            'Save a character from one of your stories and it will appear here, ready to reuse.'
+          )
+        ) : (
+          filtered.map((master) => (
+            <CharacterMasterCard key={master.id} master={master} onOpen={(m) => setOpenMasterId(m.id)} />
+          ))
+        )}
+      </>
+    );
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -504,9 +572,9 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
 
             {/* Tabs */}
             <div className="flex border-b border-white/5">
-              {TABS.map((tab) => {
+              {visibleTabs.map((tab) => {
                 const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
+                const isActive = effectiveTab === tab.id;
                 return (
                   <button
                     key={tab.id}
@@ -528,12 +596,14 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {isLoading ? (
                 renderLoadingSkeletons()
-              ) : activeTab === 'my-stories' ? (
+              ) : effectiveTab === 'my-stories' ? (
                 renderMyStories()
-              ) : activeTab === 'explored' ? (
+              ) : effectiveTab === 'explored' ? (
                 renderExploredStories()
-              ) : activeTab === 'reels' ? (
+              ) : effectiveTab === 'reels' ? (
                 renderReels()
+              ) : effectiveTab === 'characters' ? (
+                renderCharacters()
               ) : (
                 renderStorylines()
               )}
@@ -544,6 +614,11 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             isOpen={Boolean(managedStorylineId)}
             storylineId={managedStorylineId}
             onClose={() => setManagedStorylineId(null)}
+          />
+
+          <CharacterMasterDialog
+            master={characters.find((master) => master.id === openMasterId) ?? null}
+            onClose={() => setOpenMasterId(null)}
           />
         </>
       )}
