@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeatImageRegenerationRequest",
+  "type": "object",
+  "required": [
+    "storyId",
+    "beatId",
+    "mode",
+    "preserveStoryMeaning",
+    "preserveCharacterIdentity"
+  ],
+  "properties": {
+    "storyId": {
+      "type": "string"
+    },
+    "beatId": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "refine",
+        "reimagine"
+      ]
+    },
+    "overallSuggestion": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "panelSuggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "panelNumber",
+          "suggestion"
+        ],
+        "properties": {
+          "panelNumber": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "suggestion": {
+            "type": "string",
+            "maxLength": 600
+          }
+        }
+      }
+    },
+    "preserveStoryMeaning": {
+      "type": "boolean",
+      "const": true
+    },
+    "preserveCharacterIdentity": {
+      "type": "boolean",
+      "const": true
+    },
+    "sourceImageVersionId": {
+      "type": "string"
+    },
+    "idempotencyKey": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}
