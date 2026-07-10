@@ -78,8 +78,72 @@ export interface DbStory {
   image_model_key?: string | null;
   image_model_snapshot?: Record<string, unknown> | null;
   visual_profile?: Record<string, unknown> | null;
+  episode_branch_id?: string | null;
+  episode_number?: number | null;
+  parent_story_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface DbCharacterMaster {
+  id: string;
+  user_id: string;
+  name: string;
+  normalized_name: string;
+  type: string;
+  appearance_summary: string;
+  personality_summary: string;
+  role_notes: string | null;
+  portrait_url: string | null;
+  portrait_storage_key: string | null;
+  reference_sheet_url: string | null;
+  reference_sheet_storage_key: string | null;
+  source_type: 'generated_from_story' | 'manual';
+  origin_story_id: string | null;
+  origin_character_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+}
+
+export interface DbEpisodeBranch {
+  id: string;
+  user_id: string;
+  root_story_id: string | null;
+  branch_name: string;
+  status: 'active' | 'archived';
+  latest_story_id: string | null;
+  latest_episode_number: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbStoryBible {
+  id: string;
+  branch_id: string;
+  user_id: string;
+  title: string;
+  bible_text: string;
+  config_snapshot: Record<string, unknown>;
+  generated_model_id: string | null;
+  last_generated_at: string | null;
+  last_edited_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DbEpisodeJournalEvent {
+  id: string;
+  branch_id: string;
+  user_id: string;
+  story_id: string | null;
+  event_type: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  sequence_no: number;
+  created_at: string;
 }
 
 export interface DbStoryline {

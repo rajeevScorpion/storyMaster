@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { listUserStories, listSavedStorylines, listUserReels } from '@/app/actions/persistence';
 import { listExploredStories } from '@/app/actions/exploration';
+import { listCharacterMasters } from '@/app/actions/character-library';
 import type { TabId, SavedStory, UserReel, ExploredStory, SavedStorylineItem } from '@/lib/types/my-stories';
+import type { CharacterMaster } from '@/lib/types/character-library';
 
 const STALE_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -10,6 +12,7 @@ interface MyStoriesState {
   reels: UserReel[];
   exploredStories: ExploredStory[];
   savedStorylines: SavedStorylineItem[];
+  characters: CharacterMaster[];
   loading: Record<TabId, boolean>;
   lastFetched: Record<TabId, number>;
 
@@ -24,6 +27,9 @@ interface MyStoriesState {
   updateReel: (id: string, patch: Partial<UserReel>) => void;
   removeExploredStory: (id: string) => void;
   removeSavedStoryline: (storylineId: string) => void;
+  updateCharacter: (id: string, patch: Partial<CharacterMaster>) => void;
+  removeCharacter: (id: string) => void;
+  invalidateCharacters: () => void;
 }
 
 const initialLastFetched: Record<TabId, number> = {
@@ -31,6 +37,7 @@ const initialLastFetched: Record<TabId, number> = {
   explored: 0,
   storylines: 0,
   reels: 0,
+  characters: 0,
 };
 
 const initialLoading: Record<TabId, boolean> = {
@@ -38,6 +45,7 @@ const initialLoading: Record<TabId, boolean> = {
   explored: false,
   storylines: false,
   reels: false,
+  characters: false,
 };
 
 function isStale(lastFetched: number): boolean {
@@ -49,11 +57,13 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   reels: [],
   exploredStories: [],
   savedStorylines: [],
+  characters: [],
   loading: { ...initialLoading },
   lastFetched: { ...initialLastFetched },
 
   prefetchAll: async () => {
     const state = get();
+    // The characters tab is flag-gated and fetched on demand via fetchTab.
     const tabs: TabId[] = ['my-stories', 'explored', 'storylines', 'reels'];
     const staleTabs = tabs.filter((t) => isStale(state.lastFetched[t]));
     if (staleTabs.length === 0) return;
@@ -116,6 +126,9 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
       } else if (tab === 'reels') {
         const data = await listUserReels();
         set({ reels: data });
+      } else if (tab === 'characters') {
+        const data = await listCharacterMasters({ includeArchived: true });
+        set({ characters: data });
       }
       set((s) => ({
         lastFetched: { ...s.lastFetched, [tab]: Date.now() },
@@ -133,6 +146,7 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
       reels: [],
       exploredStories: [],
       savedStorylines: [],
+      characters: [],
       loading: { ...initialLoading },
       lastFetched: { ...initialLastFetched },
     });
@@ -177,5 +191,23 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
         (item) => item.storyline_id !== storylineId
       ),
     }));
+  },
+
+  updateCharacter: (id: string, patch: Partial<CharacterMaster>) => {
+    set((s) => ({
+      characters: s.characters.map((character) =>
+        character.id === id ? { ...character, ...patch } : character
+      ),
+    }));
+  },
+
+  removeCharacter: (id: string) => {
+    set((s) => ({
+      characters: s.characters.filter((character) => character.id !== id),
+    }));
+  },
+
+  invalidateCharacters: () => {
+    set((s) => ({ lastFetched: { ...s.lastFetched, characters: 0 } }));
   },
 }));

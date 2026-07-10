@@ -40,6 +40,14 @@ export interface Character {
   referenceSheetStorageKey?: string;
   referenceSheetUploadedAt?: string;
   referenceSheetGallery?: CharacterSheetGalleryEntry[];
+  // Pack 2 character universe: characters stay embedded in story JSONB (the
+  // three synchronized stores), so these link fields are additive with no
+  // migration. masterId points at the user's character_masters row this
+  // instance was saved to or created from; sourceStoryId records the story a
+  // carried/imported character originally came from.
+  masterId?: string;
+  sourceStoryId?: string;
+  importedAt?: string;
 }
 
 export interface Option {
@@ -320,6 +328,19 @@ export interface StoryMap {
   currentNodeId: string;
 }
 
+// Pack 2: series context attached to a story that belongs to an episode
+// branch. bibleText/journalSummary are generation-time snapshots injected into
+// the story-state prompt; the editable source of truth lives in story_bibles /
+// episode_journal_events.
+export interface EpisodeSessionContext {
+  branchId: string;
+  episodeNumber: number;
+  parentStoryId?: string;
+  seriesTitle?: string;
+  bibleText?: string;
+  journalSummary?: string;
+}
+
 export interface StorySession {
   storySessionId: string;
   savedStoryId?: string;
@@ -355,4 +376,5 @@ export interface StorySession {
   narrationVoiceGenderBucket?: import('@/lib/ai/narration-voices').NarrationGenderBucket;
   narrationLanguageCode?: import('@/lib/ai/narration-voices').NarrationLanguageCode;
   enableReferenceImages?: boolean;
+  episodeContext?: EpisodeSessionContext;
 }

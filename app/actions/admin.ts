@@ -66,6 +66,10 @@ import {
   normalizeMaxImageVersionsPerBeat,
   type BeatControlFlagKey,
 } from '@/lib/beat-control/settings';
+import {
+  CHARACTER_UNIVERSE_FLAG_KEYS,
+  type CharacterUniverseFlagKey,
+} from '@/lib/character-universe/settings';
 
 // ============================================================
 // Search
@@ -919,6 +923,32 @@ export async function setBeatImageMaxVersionsPerBeat(count: number): Promise<voi
     );
   }
   await setFeatureFlagValue(BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY, String(Math.round(count)));
+}
+
+export interface CharacterUniverseAdminSettings {
+  flags: Record<CharacterUniverseFlagKey, boolean>;
+}
+
+export async function getCharacterUniverseAdminSettings(): Promise<CharacterUniverseAdminSettings> {
+  await verifyAdmin();
+  const values = await Promise.all(
+    CHARACTER_UNIVERSE_FLAG_KEYS.map((key) => getFeatureFlag(key, false))
+  );
+  const flags = Object.fromEntries(
+    CHARACTER_UNIVERSE_FLAG_KEYS.map((key, index) => [key, values[index]])
+  ) as Record<CharacterUniverseFlagKey, boolean>;
+  return { flags };
+}
+
+export async function setCharacterUniverseFlag(
+  key: CharacterUniverseFlagKey,
+  enabled: boolean
+): Promise<void> {
+  await verifyAdmin();
+  if (!CHARACTER_UNIVERSE_FLAG_KEYS.includes(key)) {
+    throw new Error(`Unknown character universe flag: ${key}`);
+  }
+  await setFeatureFlag(key, enabled);
 }
 
 export async function setPreviewSeedPlanPriceCoins(coins: number): Promise<void> {

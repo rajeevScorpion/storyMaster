@@ -1,4 +1,4 @@
-export type TabId = 'explored' | 'my-stories' | 'storylines' | 'reels';
+export type TabId = 'explored' | 'my-stories' | 'storylines' | 'reels' | 'characters';
 
 export interface SavedStory {
   id: string;
@@ -8,6 +8,7 @@ export interface SavedStory {
   updated_at: string;
   user_prompt: string;
   cover_image_url: string | null;
+  episode_number?: number | null;
 }
 
 export interface UserReel {
