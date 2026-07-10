@@ -231,6 +231,11 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             }`}>
               {story.is_archived ? 'archived' : story.status}
             </span>
+            {typeof story.episode_number === 'number' && story.episode_number > 0 && (
+              <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
+                Ep {story.episode_number}
+              </span>
+            )}
             <span className="flex items-center gap-1 text-[10px] text-neutral-600">
               <Clock className="w-3 h-3" />
               {formatDate(story.updated_at)}

@@ -416,6 +416,11 @@ const ADDITIVE_STORY_COLUMNS = [
   'image_model_key',
   'image_model_snapshot',
   'visual_profile',
+  // Migration 075 episode columns — stripped when the migration hasn't been
+  // applied yet so saving keeps working during rollout.
+  'episode_branch_id',
+  'episode_number',
+  'parent_story_id',
 ] as const;
 
 const ADDITIVE_STORYLINE_COLUMNS = [
@@ -856,6 +861,15 @@ export async function saveStory(
       },
     },
     ...reelPersistencePatch,
+    // Pack 2: episode links write only for episode sessions so legacy saves
+    // never clobber columns they don't know about.
+    ...(session.episodeContext
+      ? {
+          episode_branch_id: session.episodeContext.branchId,
+          episode_number: session.episodeContext.episodeNumber,
+          parent_story_id: session.episodeContext.parentStoryId ?? null,
+        }
+      : {}),
     is_vertical_story: storyOrientation.isVerticalStory,
     aspect_ratio: storyOrientation.aspectRatio,
     story_map: cleanMap as unknown as Record<string, unknown>,
@@ -1112,6 +1126,48 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     aspectRatio: story.aspect_ratio,
   });
 
+  // Pack 2: rebuild the episode context for series stories so continuation
+  // beats keep the carried bible/journal canon. Best-effort — a missing bible
+  // (flag off, RLS, un-migrated DB) still yields a valid session.
+  let episodeContext: StorySession['episodeContext'];
+  if (story.episode_branch_id && story.episode_number) {
+    episodeContext = {
+      branchId: story.episode_branch_id,
+      episodeNumber: story.episode_number,
+      parentStoryId: story.parent_story_id ?? undefined,
+    };
+    try {
+      const [{ data: bibleRow }, { data: journalRows }] = await Promise.all([
+        supabase
+          .from('story_bibles')
+          .select('title, bible_text')
+          .eq('branch_id', story.episode_branch_id)
+          .maybeSingle(),
+        supabase
+          .from('episode_journal_events')
+          .select('summary, payload, event_type, story_id')
+          .eq('branch_id', story.episode_branch_id)
+          .eq('event_type', 'episode_summary')
+          .neq('story_id', story.id)
+          .order('sequence_no', { ascending: false })
+          .limit(5),
+      ]);
+      if (bibleRow) {
+        episodeContext.seriesTitle = bibleRow.title || undefined;
+        episodeContext.bibleText = bibleRow.bible_text || undefined;
+      }
+      const summaries = (journalRows ?? [])
+        .map((row) => row.summary as string)
+        .filter(Boolean)
+        .reverse();
+      if (summaries.length > 0) {
+        episodeContext.journalSummary = summaries.join('\n\n');
+      }
+    } catch (episodeError) {
+      console.error('Failed to load episode context (continuing without):', episodeError);
+    }
+  }
+
   return {
     storySessionId: story.id,
     savedStoryId: story.id,
@@ -1139,6 +1195,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     narrationVoiceMode: story.narration_voice_mode === 'user_selected' ? 'user_selected' : 'legacy_auto',
     narrationVoiceGenderBucket: story.narration_voice_gender_bucket === 'male' ? 'male' : story.narration_voice_gender_bucket === 'female' ? 'female' : undefined,
     narrationLanguageCode: story.narration_language_code === 'en-IN' || story.narration_language_code === 'hi-IN' ? story.narration_language_code : undefined,
+    ...(episodeContext ? { episodeContext } : {}),
   };
 }
 
@@ -2001,6 +2058,7 @@ export async function listUserStories(): Promise<Array<{
   updated_at: string;
   user_prompt: string;
   cover_image_url: string | null;
+  episode_number?: number | null;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -2008,13 +2066,23 @@ export async function listUserStories(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
+    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number')
+    .eq('user_id', user.id)
+    .neq('story_kind', 'reel')
+    .order('updated_at', { ascending: false });
+
+  if (!error) return data || [];
+
+  // Pre-075 fallback: episode_number doesn't exist yet.
+  const { data: fallbackData, error: fallbackError } = await supabase
+    .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url')
     .eq('user_id', user.id)
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
-  if (error) throw new Error(`Failed to list stories: ${error.message}`);
-  return data || [];
+  if (fallbackError) throw new Error(`Failed to list stories: ${fallbackError.message}`);
+  return fallbackData || [];
 }
 
 /**

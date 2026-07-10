@@ -31,6 +31,11 @@ interface StoryBible {
   status: string;
   selectedOptionLabel: string;
   authoredPrelude?: string;
+  // Pack 2 episodic continuity: series canon and memory carried from earlier
+  // episodes of the same branch.
+  episodeNumber?: number;
+  seriesBible?: string;
+  seriesJournal?: string;
   worldFacts: {
     language: string;
     ageGroup: string;
@@ -54,6 +59,8 @@ interface StoryBible {
 const CHOICE_HISTORY_LIMIT = 4;
 const OPEN_THREADS_LIMIT = 4;
 const RECENT_BEATS_LIMIT = 3;
+const SERIES_BIBLE_MAX_LENGTH = 2000;
+const SERIES_JOURNAL_MAX_LENGTH = 1200;
 const CHARACTER_APPEARANCE_MAX_LENGTH = 120;
 const CHARACTER_PERSONALITY_MAX_LENGTH = 100;
 const STORY_TEXT_EXCERPT_MAX_LENGTH = 160;
@@ -196,10 +203,15 @@ export function validateGeneratedBeat(
   }
 
   if (!sessionState?.beats || sessionState.beats.length === 0) {
+    // Pack 2: a pre-seeded roster (episode carry / library mixing) populates
+    // existingCharacters before beat 1 — those characters are not "new" and
+    // must not be flagged (the check above already rejects that), so exempt
+    // them here instead of demanding contradictory flags.
     const missingInitialFlags = beat.characters
       .filter((character) => character.name?.trim())
       .map((character) => character.id)
-      .filter((characterId) => !newCharacterIds.includes(characterId));
+      .filter((characterId) => !newCharacterIds.includes(characterId))
+      .filter((characterId) => !existingCharacters.has(characterId));
     if (missingInitialFlags.length > 0) {
       issues.push(`beat 1 must flag all named characters in newCharacterIds: ${missingInitialFlags.join(', ')}`);
     }
@@ -227,12 +239,21 @@ function buildStoryBible(
   const castRegistry = buildCastRegistry(sessionState);
   const openThreads = buildOpenThreads(sessionState, beats);
 
+  const episodeContext = sessionState?.episodeContext;
+
   return {
     currentBeat: sessionState?.currentBeat || 0,
     maxBeats: sessionState?.storyConfig?.maxBeats || sessionState?.maxBeats || 6,
     status: sessionState?.status || 'active',
     selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
     ...(getPreludeText(sessionState?.storyConfig) ? { authoredPrelude: getPreludeText(sessionState?.storyConfig) } : {}),
+    ...(episodeContext ? { episodeNumber: episodeContext.episodeNumber } : {}),
+    ...(episodeContext?.bibleText
+      ? { seriesBible: truncateText(episodeContext.bibleText, SERIES_BIBLE_MAX_LENGTH) }
+      : {}),
+    ...(episodeContext?.journalSummary
+      ? { seriesJournal: truncateText(episodeContext.journalSummary, SERIES_JOURNAL_MAX_LENGTH) }
+      : {}),
     worldFacts: {
       language: sessionState?.storyConfig?.language || 'english',
       ageGroup: sessionState?.storyConfig?.ageGroup || sessionState?.targetAge || 'all_ages',

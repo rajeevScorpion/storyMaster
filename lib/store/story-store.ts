@@ -1,5 +1,8 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type EpisodeSessionContext, type StoryAspectRatio } from '../types/story';
+import type { EpisodeContinuationSeed } from '@/lib/types/episodes';
+import { recordEpisodeStarted } from '@/app/actions/episodes';
+import { appendEpisodeTitleImageInstruction, filterCarriedPortraitTasks } from '@/lib/episodes/continuity';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildFinalStoryboardImagePrompt,
@@ -214,7 +217,8 @@ interface StoryState {
   saveWarning: string | null;
   saveRuntimeSettings: StorySaveRuntimeSettings;
   lastPublishResult: PublishResult | null;
-  startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
+  startStory: (prompt: string, config?: StoryConfig, seed?: StorySeedOptions) => Promise<void>;
+  continueAsEpisode: (premise: string, seed: EpisodeContinuationSeed) => Promise<void>;
   startReel: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
@@ -295,6 +299,13 @@ interface StoryState {
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   clearPublishResult: () => void;
   clearError: () => void;
+}
+
+// Pack 2: optional seed for startStory — pre-carried characters (episodes,
+// library mixing) and the episode series context injected into generation.
+export interface StorySeedOptions {
+  seedCharacters?: Character[];
+  episodeContext?: EpisodeSessionContext;
 }
 
 interface SaveStoryToCloudOptions {
@@ -459,8 +470,18 @@ function mergeCharacterVisualReferences(
   }
 
   const referencesById = new Map(referenceCharacters.map((character) => [character.id, character]));
+  // Pack 2 fallback: seeded characters (episode carry / library mixing) keep
+  // their ids in castRegistry, but the LLM may still mint new ids on beat 1 —
+  // matching by normalized name re-attaches the carried visuals and links.
+  const referencesByName = new Map(
+    referenceCharacters
+      .filter((character) => character.name?.trim())
+      .map((character) => [character.name.trim().toLowerCase(), character])
+  );
   const nextCharacters = beat.characters.map((character) => {
-    const reference = referencesById.get(character.id);
+    const reference =
+      referencesById.get(character.id) ??
+      referencesByName.get(character.name?.trim().toLowerCase() ?? '');
     if (!reference) {
       return character;
     }
@@ -2140,7 +2161,7 @@ export const useStoryStore = create<StoryState>()(
         }));
       },
 
-      startStory: async (prompt: string, config?: StoryConfig) => {
+      startStory: async (prompt: string, config?: StoryConfig, seed?: StorySeedOptions) => {
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
         if (isReelStoryConfig(storyConfig)) {
           return get().startReel(prompt, storyConfig);
@@ -2269,7 +2290,11 @@ export const useStoryStore = create<StoryState>()(
             currentBeat: 0,
             maxBeats: storyConfig.maxBeats,
             status: 'active',
-            characters: [],
+            // Pack 2: carried episode cast / mixed-in library characters seed
+            // the roster so castRegistry + usedCharacterNames see them from
+            // beat 1 and their portraits are reused instead of regenerated.
+            characters: seed?.seedCharacters ?? [],
+            ...(seed?.episodeContext ? { episodeContext: seed.episodeContext } : {}),
             enableReferenceImages: true, // TODO: set from user tier (premium only)
             setting: {
               world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
@@ -2330,7 +2355,7 @@ export const useStoryStore = create<StoryState>()(
 
           const lang = initialSession.storyConfig?.language || 'english';
           setLoadingStage(set, 'start_story', 'visual');
-          const storyboardPlan = await measureAsyncStep(
+          const composedStoryboardPlan = await measureAsyncStep(
             timingSteps,
             'storyboard_plan',
             'Compose storyboard plan',
@@ -2342,8 +2367,22 @@ export const useStoryStore = create<StoryState>()(
               costPhase(baseCostTelemetry, 'storyboard_plan')
             )
           );
+          // Pack 2: carried characters already have portraits/reference sheets
+          // — drop their new_character portrait tasks so identity is reused.
+          const storyboardPlan = seed?.seedCharacters?.length
+            ? filterCarriedPortraitTasks(composedStoryboardPlan, beat.characters)
+            : composedStoryboardPlan;
           beat.storyboardPlan = storyboardPlan;
           beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
+          if (seed?.episodeContext) {
+            // The episode cover must visualize "Episode N" (explicit exception
+            // to the storyboard no-text rules); stored on the beat so both the
+            // server-pipeline and legacy paths, plus regenerations, include it.
+            beat.storyboardPromptText = appendEpisodeTitleImageInstruction(
+              beat.storyboardPromptText,
+              seed.episodeContext.episodeNumber
+            );
+          }
           beat.isStoryboard = true;
           if (isReelStoryConfig(storyConfig)) {
             beat = applyReelBeatMetadata(beat, storyConfig);
@@ -2908,6 +2947,28 @@ export const useStoryStore = create<StoryState>()(
             error: error.message || 'Failed to start story',
             errorAction: null,
           });
+        }
+      },
+
+      // Pack 2: starts Episode N+1 from a prepared continuation seed — the
+      // inherited config recreates the origin universe, carried characters
+      // seed the roster, and the series context flows into generation. The
+      // branch bookkeeping is recorded fire-and-forget once the story saves.
+      continueAsEpisode: async (premise: string, seed: EpisodeContinuationSeed) => {
+        await get().startStory(premise, seed.inheritedConfig, {
+          seedCharacters: seed.carriedCharacters,
+          episodeContext: {
+            branchId: seed.branchId,
+            episodeNumber: seed.nextEpisodeNumber,
+            parentStoryId: seed.parentStoryId,
+            ...(seed.bible?.title ? { seriesTitle: seed.bible.title } : {}),
+            ...(seed.bible?.bibleText ? { bibleText: seed.bible.bibleText } : {}),
+            ...(seed.journalSummary ? { journalSummary: seed.journalSummary } : {}),
+          },
+        });
+        const savedStoryId = get().session?.savedStoryId;
+        if (savedStoryId) {
+          void recordEpisodeStarted({ storyId: savedStoryId });
         }
       },
 

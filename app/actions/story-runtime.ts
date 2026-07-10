@@ -1620,17 +1620,32 @@ function resolveNewCharacterIds(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null
 ): string[] {
+  // Pack 2: the roster can be pre-seeded before beat 1 (episode carry /
+  // library mixing) — seeded characters are never "new", by id or by name,
+  // even on the first beat, so their portraits are reused not regenerated.
+  const seededCharacters = sessionState?.characters || [];
+  const seededIds = new Set(seededCharacters.map((character) => character.id));
+  const seededNames = new Set(
+    seededCharacters
+      .map((character) => character.name?.trim().toLowerCase())
+      .filter((name): name is string => Boolean(name))
+  );
+  const isSeeded = (character: { id: string; name?: string }) =>
+    seededIds.has(character.id) || seededNames.has(character.name?.trim().toLowerCase() ?? '');
+
   if ((beat.newCharacterIds || []).length > 0) {
-    return beat.newCharacterIds || [];
+    return (beat.newCharacterIds || []).filter((characterId) => {
+      const character = beat.characters.find((entry) => entry.id === characterId);
+      return !character || !isSeeded(character);
+    });
   }
 
   if (!sessionState?.beats || sessionState.beats.length === 0) {
-    return beat.characters.map((character) => character.id);
+    return beat.characters.filter((character) => !isSeeded(character)).map((character) => character.id);
   }
 
-  const existingIds = new Set((sessionState.characters || []).map((character) => character.id));
   return beat.characters
-    .filter((character) => !existingIds.has(character.id))
+    .filter((character) => !isSeeded(character))
     .map((character) => character.id);
 }
 

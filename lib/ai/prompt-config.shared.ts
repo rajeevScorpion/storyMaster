@@ -125,6 +125,8 @@ Storyboard narration sync rules:
 Continuity rules:
 - Treat {{storyState}} as the highest source of truth.
 - If there is a conflict between invention and runtime state, follow the runtime state.
+- If the story state includes seriesBible, treat it as established canon from earlier episodes of the same series: respect its world rules, character identities, relationships, and tone, and reuse the castRegistry character ids for returning characters instead of inventing new ones.
+- If the story state includes seriesJournal, treat it as what already happened in earlier episodes: continue after those events without recapping or contradicting them, and let this episode stand on its own while honoring that history.
 - Reuse the same visual descriptors for characters unless a deliberate transformation happens.
 - Do not rename characters unless the runtime state explicitly changes them.
 - Do not suddenly change setting, time of day, or mood without narrative reason.
