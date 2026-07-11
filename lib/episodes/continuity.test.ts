@@ -15,9 +15,9 @@ function makeParentConfig(): StoryConfig {
     settingCountry: 'india',
     maxBeats: 8,
     visualSettings: {
-      preset: 'watercolor_wash',
-      theme: 'mystery',
-      palette: 'jewel',
+      preset: 'watercolor_fable',
+      theme: 'mysterious',
+      palette: 'moody',
       detail: 'lush',
     },
     authoring: {
@@ -60,6 +60,7 @@ function makePlan(portraitTasks: PortraitTask[]): StoryboardPlan {
     topRight: makeFrame('topRight'),
     bottomLeft: makeFrame('bottomLeft'),
     bottomRight: makeFrame('bottomRight'),
+    negativeConstraints: ['no text inside image'],
   };
 }
 
@@ -70,9 +71,9 @@ describe('buildEpisodeConfig', () => {
     expect(config.ageGroup).toBe('kids_8_12');
     expect(config.settingCountry).toBe('india');
     expect(config.maxBeats).toBe(8);
-    expect(config.visualSettings.preset).toBe('watercolor_wash');
-    expect(config.visualSettings.theme).toBe('mystery');
-    expect(config.visualSettings.palette).toBe('jewel');
+    expect(config.visualSettings.preset).toBe('watercolor_fable');
+    expect(config.visualSettings.theme).toBe('mysterious');
+    expect(config.visualSettings.palette).toBe('moody');
     expect(config.visualSettings.detail).toBe('lush');
   });
 
