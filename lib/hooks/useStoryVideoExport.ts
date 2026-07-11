@@ -8,7 +8,11 @@ import { toMediaFetchUrl } from '@/lib/media/client';
 import {
   buildStoryExportFrameSamples,
   buildStoryExportTimeline,
+  getStoryExportFrameState,
+  type StoryExportTimeline,
 } from '@/lib/storyboard/export-timeline';
+import { getActiveStoryOverlayWordIndex } from '@/lib/story-overlay/captions';
+import { storyEffectConfigEnabled } from '@/lib/story-effects/settings';
 import {
   drawStoryExportFrame,
   loadStoryExportImageAssets,
@@ -38,7 +42,7 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { ExportPhase, VideoExportOptions, VideoExportState } from '@/lib/video-export/types';
 
-const STORY_EXPORT_FPS = 24;
+const STORY_EXPORT_FPS = 30;
 const AUDIO_SAMPLE_RATE = 48000;
 const AUDIO_CHANNELS = 2;
 
@@ -71,6 +75,22 @@ function getCanvasSize(options: StoryVideoExportOptions, preset: VideoExportPres
 
 function idleState(error: string | null = null): VideoExportState {
   return { isExporting: false, progress: 0, phase: 'idle', error };
+}
+
+// A stable key for frames whose rendered output cannot differ from the
+// previous frame; null means "always redraw" (transition running, or scene
+// effects/motion animating every frame). Lets the constant-rate loop skip
+// canvas work during static holds.
+function getStoryFrameRenderKey(timeline: StoryExportTimeline, timeMs: number): string | null {
+  const state = getStoryExportFrameState(timeline, timeMs);
+  if (state.transition) return null;
+  const scene = timeline.scenes[Math.min(state.activeIndex, timeline.scenes.length - 1)];
+  if (!scene || storyEffectConfigEnabled(scene.storyEffects)) return null;
+  const wordIndex = getActiveStoryOverlayWordIndex(
+    scene.storyTextOverlayCaption?.wordTimings,
+    state.narrationTimeMs - scene.beatStartMs
+  );
+  return `${state.activeIndex}:${wordIndex ?? -1}`;
 }
 
 function describeError(error: unknown): string {
@@ -226,6 +246,7 @@ export function useStoryVideoExport() {
       setStage('rendering');
       setState({ isExporting: true, progress: 12, phase: 'encoding', error: null });
       const samples = buildStoryExportFrameSamples(timeline, STORY_EXPORT_FPS);
+      let lastFrameKey: string | null = null;
       for (let index = 0; index < samples.length; index += 1) {
         if (cancelledRef.current) {
           await cancelMediaBunnyOutput(output);
@@ -233,11 +254,15 @@ export function useStoryVideoExport() {
           return false;
         }
         const sample = samples[index];
-        drawStoryExportFrame(context, timeline, assets, sample.timeMs, {
-          watermark: options.showWatermark === true,
-          watermarkPreset: preset,
-          storyTextOverlayWordsPerLine: options.storyTextOverlayWordsPerLine,
-        });
+        const frameKey = getStoryFrameRenderKey(timeline, sample.timeMs);
+        if (frameKey === null || frameKey !== lastFrameKey) {
+          drawStoryExportFrame(context, timeline, assets, sample.timeMs, {
+            watermark: options.showWatermark === true,
+            watermarkPreset: preset,
+            storyTextOverlayWordsPerLine: options.storyTextOverlayWordsPerLine,
+          });
+        }
+        lastFrameKey = frameKey;
         await videoSource.add(
           sample.timeMs / 1000,
           sample.durationMs / 1000,

@@ -13,7 +13,16 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 import { toReelFetchUrl } from '@/lib/reel/media';
-import { buildReelFrameSamples, buildReelTimeline, REEL_FINAL_HOLD_MS } from '@/lib/reel/timeline';
+import {
+  buildReelCompatibilityFrameSamples,
+  buildReelFrameSamples,
+  buildReelTimeline,
+  getActiveReelWordIndex,
+  getReelSceneAtTime,
+  getReelTransitionAtTime,
+  REEL_FINAL_HOLD_MS,
+  type ReelTimeline,
+} from '@/lib/reel/timeline';
 import {
   drawReelFrame,
   loadReelImageAssets,
@@ -38,7 +47,7 @@ import {
   type VideoExportReport,
 } from '@/lib/video-export/diagnostics';
 
-const REEL_FPS = 24;
+const REEL_FPS = 30;
 const AUDIO_SAMPLE_RATE = 48000;
 const AUDIO_CHANNELS = 2;
 const AUDIO_BITRATE = '96k';
@@ -138,6 +147,18 @@ function idleState(error: string | null = null): VideoExportState {
   return { isExporting: false, progress: 0, phase: 'idle', error };
 }
 
+// A stable key for frames whose rendered output cannot differ from the
+// previous frame; null means "always redraw" (transition in progress).
+// Lets the constant-rate loop skip canvas work during static holds.
+function getReelFrameRenderKey(timeline: ReelTimeline, timeMs: number): string | null {
+  if (getReelTransitionAtTime(timeline, timeMs)) return null;
+  const scene = getReelSceneAtTime(timeline, timeMs);
+  if (!scene) return null;
+  const narrationEnded = timeMs >= timeline.narrationDurationMs;
+  const wordIndex = narrationEnded ? undefined : getActiveReelWordIndex(scene, timeMs);
+  return `${timeline.scenes.indexOf(scene)}:${wordIndex ?? -1}:${narrationEnded ? 1 : 0}`;
+}
+
 export function useReelVideoExport() {
   const [state, setState] = useState<VideoExportState>(idleState());
   const [engine, setEngine] = useState<ReelExportEngine>('fast');
@@ -222,7 +243,7 @@ export function useReelVideoExport() {
       const renderingStartedAt = performance.now();
       setStage('compatibility-preparing');
       setState({ isExporting: true, progress: 12, phase: 'preparing', error: null });
-      const frameSamples = buildReelFrameSamples(timeline, REEL_FPS);
+      const frameSamples = buildReelCompatibilityFrameSamples(timeline, REEL_FPS);
       for (let frameIndex = 0; frameIndex < frameSamples.length; frameIndex += 1) {
         if (cancelledRef.current) {
           setState(idleState());
@@ -430,6 +451,7 @@ export function useReelVideoExport() {
       setStage('rendering');
       setState({ isExporting: true, progress: 12, phase: 'encoding', error: null });
       const frameSamples = buildReelFrameSamples(timeline, REEL_FPS);
+      let lastFrameKey: string | null = null;
       for (let frameIndex = 0; frameIndex < frameSamples.length; frameIndex += 1) {
         if (cancelledRef.current) {
           await cancelMediaBunnyOutput(output);
@@ -437,14 +459,18 @@ export function useReelVideoExport() {
           return false;
         }
         const sample = frameSamples[frameIndex];
-        drawReelFrame(context, timeline, assets, sample.timeMs, {
-          textOverlayEnabled: options.textOverlayEnabled,
-          textOverlayStyle: options.textOverlayStyle,
-          vignetteEnabled: options.vignetteEnabled,
-          vignetteAmountPercent: options.vignetteAmountPercent,
-          watermark: options.showWatermark === true,
-          watermarkPreset: videoExportPreset,
-        });
+        const frameKey = getReelFrameRenderKey(timeline, sample.timeMs);
+        if (frameKey === null || frameKey !== lastFrameKey) {
+          drawReelFrame(context, timeline, assets, sample.timeMs, {
+            textOverlayEnabled: options.textOverlayEnabled,
+            textOverlayStyle: options.textOverlayStyle,
+            vignetteEnabled: options.vignetteEnabled,
+            vignetteAmountPercent: options.vignetteAmountPercent,
+            watermark: options.showWatermark === true,
+            watermarkPreset: videoExportPreset,
+          });
+        }
+        lastFrameKey = frameKey;
         await videoSource.add(
           sample.timeMs / 1000,
           sample.durationMs / 1000,

@@ -1,4 +1,5 @@
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
+import { buildConstantRateFrameSamples } from '@/lib/video-export/frame-sampling';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
 import {
@@ -128,31 +129,12 @@ export function getStoryExportSceneAtTime(timeline: StoryExportTimeline, timeMs:
   return timeline.scenes[Math.min(state.activeIndex, timeline.scenes.length - 1)];
 }
 
+// Constant-frame-rate grid across the whole timeline. Event-boundary sampling
+// (scene starts/ends + word timings only) undersampled continuous pan/zoom and
+// particle motion, which encoded as long-held frames and made exports stutter.
 export function buildStoryExportFrameSamples(
   timeline: StoryExportTimeline,
   fps: number
 ): StoryExportFrameSample[] {
-  const frameMs = 1000 / Math.max(1, fps);
-  const points = new Set<number>([0, timeline.totalDurationMs]);
-  const add = (value: number) => points.add(Math.max(0, Math.min(timeline.totalDurationMs, Math.round(value * 1000) / 1000)));
-
-  timeline.transitionTimeline.transitions.forEach((transition) => {
-    add(transition.startMs);
-    add(transition.endMs);
-    for (let timeMs = transition.startMs; timeMs < transition.endMs; timeMs += frameMs) add(timeMs);
-  });
-  timeline.scenes.forEach((scene) => {
-    add(scene.startMs);
-    add(scene.endMs);
-    scene.storyTextOverlayCaption?.wordTimings?.forEach((word) => {
-      add(narrationTimeToStoryVisualTime(timeline.transitionTimeline, scene.beatStartMs + word.startMs));
-      add(narrationTimeToStoryVisualTime(timeline.transitionTimeline, scene.beatStartMs + word.endMs));
-    });
-  });
-
-  const sorted = [...points].sort((left, right) => left - right);
-  return sorted.slice(0, -1).map((timeMs, index) => ({
-    timeMs,
-    durationMs: sorted[index + 1] - timeMs,
-  })).filter((sample) => sample.durationMs > 0);
+  return buildConstantRateFrameSamples(timeline.totalDurationMs, fps);
 }
