@@ -28,6 +28,8 @@ import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
+import VideoExportDialog from './VideoExportDialog';
+import type { ResolvedExportPreset } from '@/lib/video-export/presets';
 import StoryNarrationTimingDialog from './StoryNarrationTimingDialog';
 import StoryTextOverlayDialog from './StoryTextOverlayDialog';
 import StoryTransitionDialog from './StoryTransitionDialog';
@@ -4334,7 +4336,8 @@ function StoryScreenInner({
     }
   }, [canOpenPromptTools, closePromptToolsModal, openPromptToolsOverview, promptToolsOpen]);
 
-  const handleExportReelVideo = useCallback(async () => {
+  const [reelExportDialogOpen, setReelExportDialogOpen] = useState(false);
+  const handleExportReelVideo = useCallback(async (enginePreset: ResolvedExportPreset | null = null) => {
     if (!canExportReelVideo || isExporting) return;
 
     const exportTitle = session.title || 'kissago-reel';
@@ -4355,6 +4358,7 @@ function StoryScreenInner({
       const ok = await exportVideo(reelExportBeats, exportTitle, {
         aspectRatio: '9:16',
         videoExportPreset,
+        exportEnginePreset: enginePreset,
         showWatermark: showVideoWatermark,
         textOverlayEnabled: reelOverlayEnabledDraft,
         textOverlayStyle: normalizedReelOverlayDraft,
@@ -4385,6 +4389,7 @@ function StoryScreenInner({
     await exportVideo(reelExportBeats, exportTitle, {
       aspectRatio: '9:16',
       videoExportPreset,
+      exportEnginePreset: enginePreset,
       showWatermark: showVideoWatermark,
       textOverlayEnabled: reelOverlayEnabledDraft,
       textOverlayStyle: normalizedReelOverlayDraft,
@@ -5304,7 +5309,9 @@ function StoryScreenInner({
     canExportReelVideo ? (
       <button
         type="button"
-        onClick={() => void handleExportReelVideo()}
+        onClick={() => {
+          if (!isExporting) setReelExportDialogOpen(true);
+        }}
         disabled={isExporting}
         aria-label={isExporting ? `Exporting reel video, ${exportProgress} percent` : 'Export reel video'}
         title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
@@ -7761,6 +7768,16 @@ function StoryScreenInner({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <VideoExportDialog
+        open={reelExportDialogOpen}
+        onClose={() => setReelExportDialogOpen(false)}
+        coinCost={pricing.actionCosts?.export_video_future ?? null}
+        onSelect={(enginePreset) => {
+          setReelExportDialogOpen(false);
+          void handleExportReelVideo(enginePreset);
+        }}
+      />
 
       <AnimatePresence>
         {isExporting && (
