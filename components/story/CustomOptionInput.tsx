@@ -126,11 +126,11 @@ export default function CustomOptionInput({ nodeId, disabled }: CustomOptionInpu
           }}
           onClick={(event) => mentions.syncMentionState(text, event.currentTarget.selectionStart)}
           onKeyDown={(event) => {
-            if (mentions.handleKeyDown(event)) return;
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault();
-              void submit();
-            }
+            // When the @mention popup is open, ArrowUp/Down cycle and Enter/Tab
+            // accept the highlighted name. Otherwise keys fall through to normal
+            // textarea behavior — "Add choice" submits on click/tap only, never
+            // on Enter, so typing never surprises the user or advances the story.
+            mentions.handleKeyDown(event);
           }}
           className="w-full resize-none rounded-xl border border-white/10 bg-neutral-950/70 p-3 font-serif text-base text-neutral-100 placeholder:font-sans placeholder:text-sm placeholder:text-neutral-600 focus:border-emerald-400/40 focus:outline-none focus:ring-1 focus:ring-emerald-400/40 disabled:opacity-60"
           aria-label="Custom option text"
