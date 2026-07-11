@@ -31,6 +31,12 @@ import {
   loadVerifiedMediaBunny,
   waitForVideoExportFonts,
 } from '@/lib/video-export/mediabunny';
+import {
+  buildVideoExportReport,
+  createStageTimer,
+  logVideoExportReport,
+  type VideoExportReport,
+} from '@/lib/video-export/diagnostics';
 
 const REEL_FPS = 24;
 const AUDIO_SAMPLE_RATE = 48000;
@@ -137,6 +143,7 @@ export function useReelVideoExport() {
   const [engine, setEngine] = useState<ReelExportEngine>('fast');
   const [stage, setStage] = useState<ReelExportStage>('checking');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<VideoExportReport | null>(null);
   const cancelledRef = useRef(false);
   const activeOutputRef = useRef<Output<Mp4OutputFormat, BufferTarget> | null>(null);
   const activeFfmpegRef = useRef<FFmpeg | null>(null);
@@ -354,7 +361,9 @@ export function useReelVideoExport() {
     setEngine('fast');
     setStage('checking');
     setFallbackReason(null);
+    setDiagnostics(null);
     setState({ isExporting: true, progress: 0, phase: 'loading', error: null });
+    const stageTimer = createStageTimer();
 
     try {
       const mediabunny = await loadVerifiedMediaBunny({
@@ -372,6 +381,7 @@ export function useReelVideoExport() {
         QUALITY_HIGH,
       } = mediabunny;
 
+      stageTimer.mark('check');
       const preparationStartedAt = performance.now();
       setStage('preparing');
       setState({ isExporting: true, progress: 5, phase: 'preparing', error: null });
@@ -415,6 +425,7 @@ export function useReelVideoExport() {
       output.addAudioTrack(audioSource);
       await output.start();
 
+      stageTimer.mark('prepare');
       const renderingStartedAt = performance.now();
       setStage('rendering');
       setState({ isExporting: true, progress: 12, phase: 'encoding', error: null });
@@ -448,6 +459,7 @@ export function useReelVideoExport() {
       }
 
       logExportTiming('fast.frames', renderingStartedAt, { frameCount: frameSamples.length });
+      stageTimer.mark('frames');
       const audioStartedAt = performance.now();
       setStage('audio');
       setState((current) => ({ ...current, progress: 88, phase: 'finalizing' }));
@@ -456,6 +468,7 @@ export function useReelVideoExport() {
         channels: soundtrack.numberOfChannels,
         sampleRate: soundtrack.sampleRate,
       });
+      stageTimer.mark('audio');
       const finalizeStartedAt = performance.now();
       setStage('finalizing');
       await output.finalize();
@@ -466,6 +479,29 @@ export function useReelVideoExport() {
         return false;
       }
       if (!target.buffer) throw new Error('The rendered reel file is empty.');
+      stageTimer.mark('finalize');
+      const report = buildVideoExportReport({
+        exportKind: 'reel',
+        engine: 'fast',
+        canvasWidth: canvasSize.width,
+        canvasHeight: canvasSize.height,
+        fps: REEL_FPS,
+        expectedDurationMs: timeline.totalDurationMs,
+        samples: frameSamples,
+        videoCodec: 'avc',
+        audioCodec: 'aac',
+        videoBitrate: 'quality-high',
+        audioBitrate: 'quality-high',
+        audioSampleRate: AUDIO_SAMPLE_RATE,
+        audioChannels: AUDIO_CHANNELS,
+        keyFrameIntervalSeconds: 2,
+        fastStart: 'none',
+        outputBytes: target.buffer.byteLength,
+        startedAtIso: stageTimer.startedAtIso,
+        ...stageTimer.finish(),
+      });
+      logVideoExportReport(report);
+      setDiagnostics(report);
       setState((current) => ({ ...current, progress: 100, phase: 'finalizing' }));
       downloadMp4(target.buffer, title, 'reel');
       logExportTiming('fast.total', fastExportStartedAt, { frameCount: frameSamples.length });
@@ -514,5 +550,6 @@ export function useReelVideoExport() {
     engine,
     stage,
     fallbackReason,
+    diagnostics,
   };
 }

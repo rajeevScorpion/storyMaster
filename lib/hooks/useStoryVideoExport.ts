@@ -24,6 +24,12 @@ import {
   waitForVideoExportFonts,
 } from '@/lib/video-export/mediabunny';
 import {
+  buildVideoExportReport,
+  createStageTimer,
+  logVideoExportReport,
+  type VideoExportReport,
+} from '@/lib/video-export/diagnostics';
+import {
   DEFAULT_VIDEO_EXPORT_PRESET,
   normalizeVideoExportPreset,
   type VideoExportPreset,
@@ -102,6 +108,7 @@ export function useStoryVideoExport() {
   const [engine, setEngine] = useState<StoryExportEngine>('fast');
   const [stage, setStage] = useState<StoryExportStage>('checking');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<VideoExportReport | null>(null);
   const cancelledRef = useRef(false);
   const activeOutputRef = useRef<Output<Mp4OutputFormat, BufferTarget> | null>(null);
   const activeAudioContextRef = useRef<AudioContext | null>(null);
@@ -139,7 +146,9 @@ export function useStoryVideoExport() {
     setEngine('fast');
     setStage('checking');
     setFallbackReason(null);
+    setDiagnostics(null);
     setState({ isExporting: true, progress: 0, phase: 'loading', error: null });
+    const stageTimer = createStageTimer();
 
     const preset = normalizeVideoExportPreset(options.videoExportPreset ?? DEFAULT_VIDEO_EXPORT_PRESET);
     const canvasSize = getCanvasSize(options, preset);
@@ -158,6 +167,7 @@ export function useStoryVideoExport() {
         channels: AUDIO_CHANNELS,
       });
       if (cancelledRef.current) return false;
+      stageTimer.mark('check');
 
       setStage('preparing');
       setState({ isExporting: true, progress: 5, phase: 'preparing', error: null });
@@ -211,6 +221,7 @@ export function useStoryVideoExport() {
       output.addVideoTrack(videoSource, { frameRate: STORY_EXPORT_FPS });
       output.addAudioTrack(audioSource);
       await output.start();
+      stageTimer.mark('prepare');
 
       setStage('rendering');
       setState({ isExporting: true, progress: 12, phase: 'encoding', error: null });
@@ -240,6 +251,7 @@ export function useStoryVideoExport() {
         }
       }
 
+      stageTimer.mark('frames');
       setStage('audio');
       setState((current) => ({ ...current, progress: 82, phase: 'finalizing' }));
       for (let index = 0; index < timeline.scenes.length; index += 1) {
@@ -268,9 +280,33 @@ export function useStoryVideoExport() {
         }));
       }
 
+      stageTimer.mark('audio');
       setStage('finalizing');
       await output.finalize();
       if (!target.buffer) throw new Error('The rendered story file is empty.');
+      stageTimer.mark('finalize');
+      const report = buildVideoExportReport({
+        exportKind: 'story',
+        engine: 'fast',
+        canvasWidth: canvasSize.width,
+        canvasHeight: canvasSize.height,
+        fps: STORY_EXPORT_FPS,
+        expectedDurationMs: timeline.totalDurationMs,
+        samples,
+        videoCodec: 'avc',
+        audioCodec: 'aac',
+        videoBitrate: 'quality-high',
+        audioBitrate: 'quality-high',
+        audioSampleRate: AUDIO_SAMPLE_RATE,
+        audioChannels: AUDIO_CHANNELS,
+        keyFrameIntervalSeconds: 2,
+        fastStart: 'none',
+        outputBytes: target.buffer.byteLength,
+        startedAtIso: stageTimer.startedAtIso,
+        ...stageTimer.finish(),
+      });
+      logVideoExportReport(report);
+      setDiagnostics(report);
       setState((current) => ({ ...current, progress: 100, phase: 'finalizing' }));
       downloadMp4(target.buffer, title, 'story');
       setState(idleState());
@@ -339,5 +375,6 @@ export function useStoryVideoExport() {
     engine,
     stage: engine === 'compatibility' ? compatibilityStage : stage,
     fallbackReason,
+    diagnostics,
   };
 }
