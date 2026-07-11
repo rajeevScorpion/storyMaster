@@ -3,9 +3,8 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard, UserRound } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard, UserRound } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
-import { getCharacterUniverseRuntimeSettings } from '@/app/actions/character-library';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import Link from 'next/link';
@@ -23,7 +22,6 @@ interface MyStoriesDrawerProps {
 }
 
 const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
-  { id: 'explored', label: 'Explored', icon: Compass },
   { id: 'my-stories', label: 'My Stories', icon: BookOpen },
   { id: 'storylines', label: 'Storylines', icon: Library },
   { id: 'reels', label: 'Reels', icon: Clapperboard },
@@ -40,35 +38,36 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   const [activeTab, setActiveTab] = useState<TabId>('my-stories');
   const [actionId, setActionId] = useState<string | null>(null);
   const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
-  const [libraryEnabled, setLibraryEnabled] = useState(false);
   const [characterFilter, setCharacterFilter] = useState('active');
   const [openMasterId, setOpenMasterId] = useState<string | null>(null);
 
   const stories = useMyStoriesStore((s) => s.stories);
   const reels = useMyStoriesStore((s) => s.reels);
-  const exploredStories = useMyStoriesStore((s) => s.exploredStories);
   const savedStorylines = useMyStoriesStore((s) => s.savedStorylines);
   const characters = useMyStoriesStore((s) => s.characters);
+  const characterSettings = useMyStoriesStore((s) => s.characterSettings);
   const loading = useMyStoriesStore((s) => s.loading);
   const fetchTab = useMyStoriesStore((s) => s.fetchTab);
+  const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
 
+  // Flag-gated: fail closed until the snapshot loads. Prefetched on login, so
+  // this is usually already populated by the time the drawer opens.
+  const libraryEnabled = characterSettings?.libraryEnabled ?? false;
   const visibleTabs = libraryEnabled ? [...TABS, CHARACTERS_TAB] : TABS;
   // Fall back if the flag turned off while the characters tab was selected.
   const effectiveTab: TabId =
     activeTab === 'characters' && !libraryEnabled ? 'my-stories' : activeTab;
 
-  // Fetch current tab data when drawer opens or tab changes (serves cache if fresh)
+  // Fetch current tab data when drawer opens or tab changes (serves cache if
+  // fresh). The Characters tab is owned by ensureCharacterUniverse below.
   useEffect(() => {
-    if (isOpen) fetchTab(effectiveTab);
+    if (isOpen && effectiveTab !== 'characters') fetchTab(effectiveTab);
   }, [isOpen, effectiveTab, fetchTab]);
 
-  // The Characters tab is flag-gated (fail closed until the snapshot loads).
+  // Character-universe snapshot + masters (tab visibility + card list).
   useEffect(() => {
-    if (!isOpen) return;
-    getCharacterUniverseRuntimeSettings()
-      .then((settings) => setLibraryEnabled(settings.libraryEnabled))
-      .catch(() => setLibraryEnabled(false));
-  }, [isOpen]);
+    if (isOpen) ensureCharacterUniverse();
+  }, [isOpen, ensureCharacterUniverse]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -111,11 +110,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       beatCount: item.storyline?.beat_count || null,
     });
     onClose();
-  };
-
-  const handleExplore = (storyId: string) => {
-    onClose();
-    router.push(`/explore/${storyId}`);
   };
 
   const handleDeleteStory = async (storyId: string) => {
@@ -371,42 +365,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     ));
   };
 
-  const renderExploredStories = () => {
-    if (exploredStories.length === 0) {
-      return renderEmptyState(Compass, 'No explored stories', 'Stories you explore from the gallery will appear here.');
-    }
-    return exploredStories.map((item) => (
-      <motion.div
-        key={item.id}
-        layout
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
-      >
-        <button
-          onClick={() => handleExplore(item.story_id)}
-          className="w-full text-left p-5"
-        >
-          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-            {item.story?.title || 'Untitled Story'}
-          </h3>
-          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
-            {item.story?.user_prompt || ''}
-          </p>
-          <div className="flex items-center gap-3 mt-3">
-            <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400">
-              explored
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-              <Clock className="w-3 h-3" />
-              {formatDate(item.updated_at)}
-            </span>
-          </div>
-        </button>
-      </motion.div>
-    ));
-  };
-
   const renderStorylines = () => {
     if (savedStorylines.length === 0) {
       return renderEmptyState(Library, 'No saved storylines', 'Completed storylines will appear here automatically.');
@@ -603,8 +561,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
                 renderLoadingSkeletons()
               ) : effectiveTab === 'my-stories' ? (
                 renderMyStories()
-              ) : effectiveTab === 'explored' ? (
-                renderExploredStories()
               ) : effectiveTab === 'reels' ? (
                 renderReels()
               ) : effectiveTab === 'characters' ? (

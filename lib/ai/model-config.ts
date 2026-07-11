@@ -129,6 +129,59 @@ export async function getFeatureFlag(flagKey: string, fallback = false): Promise
   }
 }
 
+/**
+ * Batched sibling of {@link getFeatureFlag}: resolves many flags with a single
+ * `.in()` query for cache misses (instead of one round-trip per flag). Warm
+ * cache hits short-circuit; only real rows are cached, mirroring getFeatureFlag.
+ */
+export async function getFeatureFlags(
+  flagKeys: readonly string[],
+  fallback = false
+): Promise<Record<string, boolean>> {
+  const now = Date.now();
+  const result: Record<string, boolean> = {};
+  const missing: string[] = [];
+
+  for (const key of flagKeys) {
+    const cached = flagCache.get(key);
+    if (cached && now - cached.ts < CACHE_TTL) {
+      result[key] = cached.data;
+    } else {
+      missing.push(key);
+    }
+  }
+  if (missing.length === 0) return result;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('feature_flags')
+      .select('flag_key, enabled')
+      .in('flag_key', missing);
+
+    if (error || !data) {
+      for (const key of missing) result[key] = fallback;
+      return result;
+    }
+
+    const found = new Map(data.map((row) => [row.flag_key, Boolean(row.enabled)]));
+    for (const key of missing) {
+      if (found.has(key)) {
+        const enabled = found.get(key)!;
+        result[key] = enabled;
+        flagCache.set(key, { data: enabled, ts: now });
+      } else {
+        result[key] = fallback;
+      }
+    }
+    return result;
+  } catch (err) {
+    console.error('model-config: getFeatureFlags failed, using fallback:', err);
+    for (const key of missing) if (!(key in result)) result[key] = fallback;
+    return result;
+  }
+}
+
 export async function setFeatureFlag(flagKey: string, enabled: boolean): Promise<void> {
   const supabase = createAdminClient();
   const { error } = await supabase

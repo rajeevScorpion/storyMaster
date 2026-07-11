@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
@@ -16,8 +16,8 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
+import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import { AgeGroup, Character, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
-import { getCharacterUniverseRuntimeSettings, listCharacterMasters } from '@/app/actions/character-library';
 import { findCharacterNameConflicts, masterToCharacter } from '@/lib/character-library/mapping';
 import type { CharacterMaster } from '@/lib/types/character-library';
 import { useMentionAutocomplete } from '@/lib/hooks/useMentionAutocomplete';
@@ -326,39 +326,27 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     ?? null;
 
   // Pack 2 character mixing: bring saved library characters into a new story
-  // (picker + @name mentions in the prompt). Fail-closed until the flag
-  // snapshot loads; anonymous users get defaults (all off).
-  const [mixingEnabled, setMixingEnabled] = useState(false);
-  const [libraryCharacters, setLibraryCharacters] = useState<CharacterMaster[]>([]);
+  // (picker + @name mentions in the prompt). Snapshot + masters come from the
+  // shared my-stories store (prefetched on login, deduped), so this no longer
+  // pays its own settings→masters waterfall. Fail-closed until it loads.
   const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
   const [showCharacterPicker, setShowCharacterPicker] = useState(false);
   const [mixError, setMixError] = useState<string | null>(null);
   const promptInputRef = useRef<HTMLInputElement | null>(null);
 
+  const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
+  const characterSettings = useMyStoriesStore((s) => s.characterSettings);
+  const storeCharacters = useMyStoriesStore((s) => s.characters);
+  const mixingEnabled = Boolean(characterSettings?.mixingEnabled && characterSettings?.libraryEnabled);
+  // Archived characters stay out of the new-story picker.
+  const libraryCharacters = useMemo(
+    () => storeCharacters.filter((master) => !master.archivedAt),
+    [storeCharacters]
+  );
+
   useEffect(() => {
-    let cancelled = false;
-    getCharacterUniverseRuntimeSettings()
-      .then((settings) => {
-        if (cancelled) return;
-        const enabled = settings.mixingEnabled && settings.libraryEnabled;
-        setMixingEnabled(enabled);
-        if (enabled) {
-          listCharacterMasters()
-            .then((masters) => {
-              if (!cancelled) setLibraryCharacters(masters);
-            })
-            .catch(() => {
-              /* library unavailable — picker simply stays empty */
-            });
-        }
-      })
-      .catch(() => {
-        /* fail closed */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    ensureCharacterUniverse();
+  }, [ensureCharacterUniverse]);
 
   const toggleLibraryCharacter = (master: CharacterMaster) => {
     setMixError(null);
@@ -1123,10 +1111,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             {isLoading ? (
                               <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
                             ) : (
-                              <>
-                                <span>Begin</span>
-                                <Sparkles className="w-4 h-4" />
-                              </>
+                              <span>Begin</span>
                             )}
                           </button>
                         </div>

@@ -1,9 +1,13 @@
 import { create } from 'zustand';
 import { listUserStories, listSavedStorylines, listUserReels } from '@/app/actions/persistence';
 import { listExploredStories } from '@/app/actions/exploration';
-import { listCharacterMasters } from '@/app/actions/character-library';
+import {
+  getCharacterUniverseRuntimeSettings,
+  listCharacterMasters,
+} from '@/app/actions/character-library';
 import type { TabId, SavedStory, UserReel, ExploredStory, SavedStorylineItem } from '@/lib/types/my-stories';
 import type { CharacterMaster } from '@/lib/types/character-library';
+import type { CharacterUniverseRuntimeSettings } from '@/lib/character-universe/settings';
 
 const STALE_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -13,11 +17,16 @@ interface MyStoriesState {
   exploredStories: ExploredStory[];
   savedStorylines: SavedStorylineItem[];
   characters: CharacterMaster[];
+  /** Flag-gated runtime snapshot shared by the drawer tab + landing picker. */
+  characterSettings: CharacterUniverseRuntimeSettings | null;
+  characterUniverseLastFetched: number;
   loading: Record<TabId, boolean>;
   lastFetched: Record<TabId, number>;
 
   prefetchAll: () => Promise<void>;
   fetchTab: (tab: TabId) => Promise<void>;
+  /** Loads the character-universe snapshot + masters together (deduped). */
+  ensureCharacterUniverse: (force?: boolean) => Promise<void>;
   clear: () => void;
 
   // Optimistic mutation helpers
@@ -58,15 +67,25 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   exploredStories: [],
   savedStorylines: [],
   characters: [],
+  characterSettings: null,
+  characterUniverseLastFetched: 0,
   loading: { ...initialLoading },
   lastFetched: { ...initialLastFetched },
 
   prefetchAll: async () => {
     const state = get();
-    // The characters tab is flag-gated and fetched on demand via fetchTab.
-    const tabs: TabId[] = ['my-stories', 'explored', 'storylines', 'reels'];
+    // Explored is no longer surfaced in the drawer, so it's not prefetched.
+    const tabs: TabId[] = ['my-stories', 'storylines', 'reels'];
     const staleTabs = tabs.filter((t) => isStale(state.lastFetched[t]));
-    if (staleTabs.length === 0) return;
+
+    // Warm the character universe (tab visibility + masters) on the same login
+    // pass as everything else, so the drawer/landing picker open instantly.
+    const characterPromise = get().ensureCharacterUniverse();
+
+    if (staleTabs.length === 0) {
+      await characterPromise;
+      return;
+    }
 
     // Mark all stale tabs as loading
     set((s) => ({
@@ -81,9 +100,6 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
         if (tab === 'my-stories') {
           const data = await listUserStories();
           set({ stories: data });
-        } else if (tab === 'explored') {
-          const data = await listExploredStories();
-          set({ exploredStories: data });
         } else if (tab === 'storylines') {
           const data = await listSavedStorylines();
           set({ savedStorylines: data });
@@ -103,7 +119,7 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
       }
     });
 
-    await Promise.all(promises);
+    await Promise.all([...promises, characterPromise]);
   },
 
   fetchTab: async (tab: TabId) => {
@@ -140,6 +156,39 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
     }
   },
 
+  ensureCharacterUniverse: async (force = false) => {
+    const state = get();
+    if (!force && state.characterSettings && !isStale(state.characterUniverseLastFetched)) {
+      return;
+    }
+    // Dedupe concurrent callers (drawer + landing picker share this store).
+    if (state.loading.characters) return;
+
+    set((s) => ({ loading: { ...s.loading, characters: true } }));
+    try {
+      // The flag snapshot is one batched query; only hit the masters endpoint
+      // when the library is actually on (skips a wasted call for anonymous /
+      // disabled users on the heavily-trafficked landing page).
+      const settings = await getCharacterUniverseRuntimeSettings();
+      set({ characterSettings: settings });
+
+      if (settings.libraryEnabled) {
+        const masters = await listCharacterMasters({ includeArchived: true });
+        set({ characters: masters });
+      } else {
+        set({ characters: [] });
+      }
+      set((s) => ({
+        characterUniverseLastFetched: Date.now(),
+        lastFetched: { ...s.lastFetched, characters: Date.now() },
+      }));
+    } catch (error) {
+      console.error('Failed to load character universe:', error);
+    } finally {
+      set((s) => ({ loading: { ...s.loading, characters: false } }));
+    }
+  },
+
   clear: () => {
     set({
       stories: [],
@@ -147,6 +196,8 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
       exploredStories: [],
       savedStorylines: [],
       characters: [],
+      characterSettings: null,
+      characterUniverseLastFetched: 0,
       loading: { ...initialLoading },
       lastFetched: { ...initialLastFetched },
     });
@@ -208,6 +259,9 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   },
 
   invalidateCharacters: () => {
-    set((s) => ({ lastFetched: { ...s.lastFetched, characters: 0 } }));
+    set((s) => ({
+      characterUniverseLastFetched: 0,
+      lastFetched: { ...s.lastFetched, characters: 0 },
+    }));
   },
 }));

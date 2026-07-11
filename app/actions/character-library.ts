@@ -8,7 +8,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { getFeatureFlag } from '@/lib/ai/model-config';
+import { getFeatureFlag, getFeatureFlags } from '@/lib/ai/model-config';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import { extractStoragePath, normalizeStorageUrl } from '@/lib/supabase/storage';
 import {
@@ -37,22 +37,16 @@ export async function getCharacterUniverseRuntimeSettings(): Promise<CharacterUn
     return DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS;
   }
 
-  const [
-    libraryEnabled,
-    globalSaveEnabled,
-    mixingEnabled,
-    episodesEnabled,
-    storyBibleEnabled,
-    journalEnabled,
-  ] = await Promise.all(CHARACTER_UNIVERSE_FLAG_KEYS.map((key) => getFeatureFlag(key, false)));
+  // Single `.in()` query for all six flags instead of six separate round-trips.
+  const flags = await getFeatureFlags(CHARACTER_UNIVERSE_FLAG_KEYS, false);
 
   return {
-    libraryEnabled,
-    globalSaveEnabled,
-    mixingEnabled,
-    episodesEnabled,
-    storyBibleEnabled,
-    journalEnabled,
+    libraryEnabled: flags['character_library_enabled'],
+    globalSaveEnabled: flags['character_global_save_enabled'],
+    mixingEnabled: flags['character_mixing_enabled'],
+    episodesEnabled: flags['episodes_enabled'],
+    storyBibleEnabled: flags['story_bible_enabled'],
+    journalEnabled: flags['episode_journal_enabled'],
   };
 }
 
@@ -246,6 +240,61 @@ async function stampMasterIdOnStoryCharacter(
   }
 }
 
+/**
+ * Visual refs (portrait, reference sheet, sheet gallery) can live on a beat
+ * instance without ever being synced back to the story roster. When the
+ * resolved character is missing a portrait or sheet, pull the first available
+ * one from the story_map nodes and beat rows so the saved master still gets a
+ * thumbnail. Identity fields (name/type/summaries) stay from the base instance.
+ */
+async function backfillCharacterVisualRefs(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  storyId: string,
+  characterId: string,
+  base: Character,
+  storyMap: StoryMap | null
+): Promise<Character> {
+  const candidates: Character[] = [];
+
+  for (const node of Object.values(storyMap?.nodes ?? {})) {
+    const match = node.data.characters?.find((entry) => entry.id === characterId);
+    if (match) candidates.push(match);
+  }
+
+  const { data: beatRows } = await supabase
+    .from('beats')
+    .select('characters')
+    .eq('story_id', storyId)
+    .eq('generated_by', userId);
+  for (const row of beatRows ?? []) {
+    const match = (row.characters as Character[] | null)?.find((entry) => entry.id === characterId);
+    if (match) candidates.push(match);
+  }
+
+  let portraitUrl = base.portraitUrl;
+  let referenceSheetUrl = base.referenceSheetUrl;
+  let referenceSheetGallery = base.referenceSheetGallery;
+
+  for (const candidate of candidates) {
+    if (!portraitUrl && candidate.portraitUrl) portraitUrl = candidate.portraitUrl;
+    if (!referenceSheetUrl && candidate.referenceSheetUrl) {
+      referenceSheetUrl = candidate.referenceSheetUrl;
+    }
+    if (!referenceSheetGallery?.length && candidate.referenceSheetGallery?.length) {
+      referenceSheetGallery = candidate.referenceSheetGallery;
+    }
+  }
+
+  // A gallery-only character still has a usable thumbnail; promote its first
+  // entry so the reference sheet is copied to the master.
+  if (!referenceSheetUrl && referenceSheetGallery?.length) {
+    referenceSheetUrl = referenceSheetGallery[0].url;
+  }
+
+  return { ...base, portraitUrl, referenceSheetUrl, referenceSheetGallery };
+}
+
 // ── Library reads ──────────────────────────────────────────────────
 
 export async function listCharacterMasters(options?: {
@@ -294,12 +343,12 @@ export async function saveCharacterToLibrary(input: {
       .single();
     if (error || !story) return { status: 'failed', error: 'Story not found.' };
 
-    // Roster first, story_map nodes as fallback (latest beat wins).
+    // Roster first, story_map nodes as fallback for identity.
+    const storyMap = story.story_map as StoryMap | null;
     let character = ((story.characters ?? []) as Character[]).find(
       (entry) => entry.id === input.characterId
     );
     if (!character) {
-      const storyMap = story.story_map as StoryMap | null;
       for (const node of Object.values(storyMap?.nodes ?? {})) {
         const match = node.data.characters?.find((entry) => entry.id === input.characterId);
         if (match) character = match;
@@ -307,6 +356,19 @@ export async function saveCharacterToLibrary(input: {
     }
     if (!character?.name?.trim()) {
       return { status: 'failed', error: 'Character not found on this story.' };
+    }
+
+    // Visual refs may live only on a beat instance — backfill before copying.
+    const hasSheet = Boolean(character.referenceSheetUrl || character.referenceSheetGallery?.length);
+    if (!character.portraitUrl || !hasSheet) {
+      character = await backfillCharacterVisualRefs(
+        supabase,
+        userId,
+        input.storyId,
+        input.characterId,
+        character,
+        storyMap
+      );
     }
 
     const masterId = input.overwriteMasterId ?? uuidv4();
