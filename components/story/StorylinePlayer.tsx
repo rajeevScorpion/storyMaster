@@ -774,6 +774,10 @@ export default function StorylinePlayer({
               filter: { duration: beatTransitionMotionSeconds, ease: 'easeInOut' },
               scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
             }}
+            // The perpetual ambient scale animates a blur-2xl fullscreen
+            // layer; will-change promotes it so the blur rasterizes once
+            // instead of repainting on every animation frame.
+            style={{ willChange: 'transform' }}
             className={isVerticalStoryline ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
             <div className={isVerticalStoryline ? 'absolute inset-0 md:scale-110 md:blur-2xl' : 'contents'}>

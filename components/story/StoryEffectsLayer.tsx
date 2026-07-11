@@ -18,6 +18,7 @@ export default function StoryEffectsLayer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const elapsedRef = useRef(elapsedMs);
+  const boundsRef = useRef({ width: 0, height: 0 });
 
   useEffect(() => {
     elapsedRef.current = elapsedMs;
@@ -27,6 +28,25 @@ export default function StoryEffectsLayer({
     if (context) drawStoryEffectsOverlay(context, config, elapsedMs, seed);
   }, [config, elapsedMs, playbackState, seed]);
 
+  // Track the canvas size outside the draw loop; getBoundingClientRect inside
+  // requestAnimationFrame forces a layout on every frame.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const bounds = canvas.getBoundingClientRect();
+    boundsRef.current = { width: bounds.width, height: bounds.height };
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (!entry) return;
+      boundsRef.current = {
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      };
+    });
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -35,7 +55,7 @@ export default function StoryEffectsLayer({
     let baseElapsed = elapsedRef.current;
 
     const draw = (now: number) => {
-      const bounds = canvas.getBoundingClientRect();
+      const bounds = boundsRef.current;
       const pixelRatio = Math.min(window.devicePixelRatio || 1, window.innerWidth < 768 ? 1.5 : 2);
       const width = Math.max(1, Math.round(bounds.width * pixelRatio));
       const height = Math.max(1, Math.round(bounds.height * pixelRatio));
