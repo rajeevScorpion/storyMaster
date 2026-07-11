@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { type ComponentType, useEffect, useState } from 'react';
 import MediaProcessingModeCard from '@/components/admin/MediaProcessingModeCard';
+import VideoExportPresetStudio from '@/components/admin/VideoExportPresetStudio';
 import {
   BookOpenText,
   Brush,
@@ -2530,6 +2531,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 }
               }}
             />
+
+            <h2 className="pt-2 text-sm font-medium uppercase tracking-wider text-neutral-500">Export Presets</h2>
+            <VideoExportPresetStudio />
           </div>
           )}
 

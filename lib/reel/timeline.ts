@@ -1,4 +1,5 @@
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
+import { buildConstantRateFrameSamples } from '@/lib/video-export/frame-sampling';
 import type { ReelPanelCaption, StoryBeat } from '@/lib/types/story';
 import { normalizeReelTransitionSettings, type ReelTransitionSettings } from '@/lib/reel/transitions';
 
@@ -174,7 +175,16 @@ export function getActiveReelWordIndex(scene: ReelTimelineScene | undefined, tim
   return index >= 0 ? index : undefined;
 }
 
+// Constant-frame-rate grid for the fast (WebCodecs) export path. Event-only
+// sampling encoded long-held frames and made transitions/word motion stutter.
 export function buildReelFrameSamples(timeline: ReelTimeline, fps: number): ReelFrameSample[] {
+  return buildConstantRateFrameSamples(timeline.totalDurationMs, fps);
+}
+
+// Event-boundary sampling kept for the ffmpeg compatibility fallback, which
+// writes one JPEG per sample into wasm memory — a full constant-rate grid
+// would multiply its memory footprint on exactly the devices that need it.
+export function buildReelCompatibilityFrameSamples(timeline: ReelTimeline, fps: number): ReelFrameSample[] {
   const frameDurationMs = 1000 / Math.max(1, fps);
   const pointSet = new Set<number>([0, timeline.narrationDurationMs, timeline.totalDurationMs]);
   const addPoint = (timeMs: number) => {

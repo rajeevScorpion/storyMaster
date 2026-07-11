@@ -8,7 +8,11 @@ import { toMediaFetchUrl } from '@/lib/media/client';
 import {
   buildStoryExportFrameSamples,
   buildStoryExportTimeline,
+  getStoryExportFrameState,
+  type StoryExportTimeline,
 } from '@/lib/storyboard/export-timeline';
+import { getActiveStoryOverlayWordIndex } from '@/lib/story-overlay/captions';
+import { storyEffectConfigEnabled } from '@/lib/story-effects/settings';
 import {
   drawStoryExportFrame,
   loadStoryExportImageAssets,
@@ -24,6 +28,12 @@ import {
   waitForVideoExportFonts,
 } from '@/lib/video-export/mediabunny';
 import {
+  buildVideoExportReport,
+  createStageTimer,
+  logVideoExportReport,
+  type VideoExportReport,
+} from '@/lib/video-export/diagnostics';
+import {
   DEFAULT_VIDEO_EXPORT_PRESET,
   normalizeVideoExportPreset,
   type VideoExportPreset,
@@ -32,9 +42,10 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { ExportPhase, VideoExportOptions, VideoExportState } from '@/lib/video-export/types';
 
-const STORY_EXPORT_FPS = 24;
+const STORY_EXPORT_FPS = 30;
 const AUDIO_SAMPLE_RATE = 48000;
 const AUDIO_CHANNELS = 2;
+const KEYFRAME_INTERVAL_SECONDS = 2;
 
 export type StoryExportEngine = 'fast' | 'compatibility';
 export type StoryExportStage =
@@ -56,6 +67,13 @@ export interface StoryVideoExportOptions extends VideoExportOptions {
 }
 
 function getCanvasSize(options: StoryVideoExportOptions, preset: VideoExportPreset) {
+  const engine = options.exportEnginePreset;
+  if (engine) {
+    // Engine presets are defined portrait-first; landscape swaps the axes.
+    return options.aspectRatio === '9:16'
+      ? { width: engine.width, height: engine.height }
+      : { width: engine.height, height: engine.width };
+  }
   if (options.aspectRatio === '9:16') {
     const [width, height] = preset.verticalResolution.split('x').map((value) => Number.parseInt(value, 10));
     return { width, height };
@@ -65,6 +83,22 @@ function getCanvasSize(options: StoryVideoExportOptions, preset: VideoExportPres
 
 function idleState(error: string | null = null): VideoExportState {
   return { isExporting: false, progress: 0, phase: 'idle', error };
+}
+
+// A stable key for frames whose rendered output cannot differ from the
+// previous frame; null means "always redraw" (transition running, or scene
+// effects/motion animating every frame). Lets the constant-rate loop skip
+// canvas work during static holds.
+function getStoryFrameRenderKey(timeline: StoryExportTimeline, timeMs: number): string | null {
+  const state = getStoryExportFrameState(timeline, timeMs);
+  if (state.transition) return null;
+  const scene = timeline.scenes[Math.min(state.activeIndex, timeline.scenes.length - 1)];
+  if (!scene || storyEffectConfigEnabled(scene.storyEffects)) return null;
+  const wordIndex = getActiveStoryOverlayWordIndex(
+    scene.storyTextOverlayCaption?.wordTimings,
+    state.narrationTimeMs - scene.beatStartMs
+  );
+  return `${state.activeIndex}:${wordIndex ?? -1}`;
 }
 
 function describeError(error: unknown): string {
@@ -102,6 +136,7 @@ export function useStoryVideoExport() {
   const [engine, setEngine] = useState<StoryExportEngine>('fast');
   const [stage, setStage] = useState<StoryExportStage>('checking');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<VideoExportReport | null>(null);
   const cancelledRef = useRef(false);
   const activeOutputRef = useRef<Output<Mp4OutputFormat, BufferTarget> | null>(null);
   const activeAudioContextRef = useRef<AudioContext | null>(null);
@@ -139,25 +174,31 @@ export function useStoryVideoExport() {
     setEngine('fast');
     setStage('checking');
     setFallbackReason(null);
+    setDiagnostics(null);
     setState({ isExporting: true, progress: 0, phase: 'loading', error: null });
+    const stageTimer = createStageTimer();
 
     const preset = normalizeVideoExportPreset(options.videoExportPreset ?? DEFAULT_VIDEO_EXPORT_PRESET);
+    const enginePreset = options.exportEnginePreset ?? null;
+    const exportFps = enginePreset?.fps ?? STORY_EXPORT_FPS;
+    const audioSampleRate = enginePreset?.audioSampleRate ?? AUDIO_SAMPLE_RATE;
     const canvasSize = getCanvasSize(options, preset);
     let audioContext: AudioContext | null = null;
     let output: Output<Mp4OutputFormat, BufferTarget> | null = null;
     let assets: StoryExportImageAssets | null = null;
 
     try {
-      const exportAudioContext = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE });
+      const exportAudioContext = new AudioContext({ sampleRate: audioSampleRate });
       audioContext = exportAudioContext;
       activeAudioContextRef.current = exportAudioContext;
       const mediabunny = await loadVerifiedMediaBunny({
         ...canvasSize,
-        fps: STORY_EXPORT_FPS,
-        sampleRate: AUDIO_SAMPLE_RATE,
+        fps: exportFps,
+        sampleRate: audioSampleRate,
         channels: AUDIO_CHANNELS,
       });
       if (cancelledRef.current) return false;
+      stageTimer.mark('check');
 
       setStage('preparing');
       setState({ isExporting: true, progress: 5, phase: 'preparing', error: null });
@@ -196,25 +237,30 @@ export function useStoryVideoExport() {
       if (!context) throw new Error('Could not create the story render surface.');
 
       const target = new mediabunny.BufferTarget();
-      output = new mediabunny.Output({ format: new mediabunny.Mp4OutputFormat(), target });
+      output = new mediabunny.Output({
+        format: new mediabunny.Mp4OutputFormat({ fastStart: 'in-memory' }),
+        target,
+      });
       activeOutputRef.current = output;
       const videoSource = new mediabunny.CanvasSource(canvas, {
         codec: 'avc',
-        bitrate: mediabunny.QUALITY_HIGH,
-        keyFrameInterval: 2,
+        bitrate: enginePreset?.videoBitrate ?? mediabunny.QUALITY_HIGH,
+        keyFrameInterval: KEYFRAME_INTERVAL_SECONDS,
         latencyMode: 'quality',
       });
       const audioSource = new mediabunny.AudioBufferSource({
         codec: 'aac',
-        bitrate: mediabunny.QUALITY_HIGH,
+        bitrate: enginePreset?.audioBitrate ?? mediabunny.QUALITY_HIGH,
       });
-      output.addVideoTrack(videoSource, { frameRate: STORY_EXPORT_FPS });
+      output.addVideoTrack(videoSource, { frameRate: exportFps });
       output.addAudioTrack(audioSource);
       await output.start();
+      stageTimer.mark('prepare');
 
       setStage('rendering');
       setState({ isExporting: true, progress: 12, phase: 'encoding', error: null });
-      const samples = buildStoryExportFrameSamples(timeline, STORY_EXPORT_FPS);
+      const samples = buildStoryExportFrameSamples(timeline, exportFps);
+      let lastFrameKey: string | null = null;
       for (let index = 0; index < samples.length; index += 1) {
         if (cancelledRef.current) {
           await cancelMediaBunnyOutput(output);
@@ -222,15 +268,19 @@ export function useStoryVideoExport() {
           return false;
         }
         const sample = samples[index];
-        drawStoryExportFrame(context, timeline, assets, sample.timeMs, {
-          watermark: options.showWatermark === true,
-          watermarkPreset: preset,
-          storyTextOverlayWordsPerLine: options.storyTextOverlayWordsPerLine,
-        });
+        const frameKey = getStoryFrameRenderKey(timeline, sample.timeMs);
+        if (frameKey === null || frameKey !== lastFrameKey) {
+          drawStoryExportFrame(context, timeline, assets, sample.timeMs, {
+            watermark: options.showWatermark === true,
+            watermarkPreset: preset,
+            storyTextOverlayWordsPerLine: options.storyTextOverlayWordsPerLine,
+          });
+        }
+        lastFrameKey = frameKey;
         await videoSource.add(
           sample.timeMs / 1000,
           sample.durationMs / 1000,
-          index % (STORY_EXPORT_FPS * 2) === 0 ? { keyFrame: true } : undefined
+          index % (exportFps * KEYFRAME_INTERVAL_SECONDS) === 0 ? { keyFrame: true } : undefined
         );
         if (index % 4 === 0 || index === samples.length - 1) {
           setState((current) => ({
@@ -240,6 +290,7 @@ export function useStoryVideoExport() {
         }
       }
 
+      stageTimer.mark('frames');
       setStage('audio');
       setState((current) => ({ ...current, progress: 82, phase: 'finalizing' }));
       for (let index = 0; index < timeline.scenes.length; index += 1) {
@@ -253,12 +304,12 @@ export function useStoryVideoExport() {
               scene.narrationStartMs - scene.beatStartMs,
               scene.narrationEndMs - scene.beatStartMs
             )
-          : createSilentAudioBuffer(narrationDurationMs, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS));
+          : createSilentAudioBuffer(narrationDurationMs, audioSampleRate, AUDIO_CHANNELS));
         const transition = timeline.transitionTimeline.transitions.find((item) => item.fromIndex === index);
         if (transition) {
           await audioSource.add(createSilentAudioBuffer(
             transition.endMs - transition.startMs,
-            AUDIO_SAMPLE_RATE,
+            audioSampleRate,
             AUDIO_CHANNELS
           ));
         }
@@ -268,9 +319,35 @@ export function useStoryVideoExport() {
         }));
       }
 
+      stageTimer.mark('audio');
       setStage('finalizing');
       await output.finalize();
       if (!target.buffer) throw new Error('The rendered story file is empty.');
+      stageTimer.mark('finalize');
+      const report = buildVideoExportReport({
+        exportKind: 'story',
+        engine: 'fast',
+        presetId: enginePreset?.id,
+        presetLabel: enginePreset?.label,
+        canvasWidth: canvasSize.width,
+        canvasHeight: canvasSize.height,
+        fps: exportFps,
+        expectedDurationMs: timeline.totalDurationMs,
+        samples,
+        videoCodec: 'avc',
+        audioCodec: 'aac',
+        videoBitrate: enginePreset?.videoBitrate ?? 'quality-high',
+        audioBitrate: enginePreset?.audioBitrate ?? 'quality-high',
+        audioSampleRate,
+        audioChannels: AUDIO_CHANNELS,
+        keyFrameIntervalSeconds: KEYFRAME_INTERVAL_SECONDS,
+        fastStart: 'in-memory',
+        outputBytes: target.buffer.byteLength,
+        startedAtIso: stageTimer.startedAtIso,
+        ...stageTimer.finish(),
+      });
+      logVideoExportReport(report);
+      setDiagnostics(report);
       setState((current) => ({ ...current, progress: 100, phase: 'finalizing' }));
       downloadMp4(target.buffer, title, 'story');
       setState(idleState());
@@ -339,5 +416,6 @@ export function useStoryVideoExport() {
     engine,
     stage: engine === 'compatibility' ? compatibilityStage : stage,
     fallbackReason,
+    diagnostics,
   };
 }

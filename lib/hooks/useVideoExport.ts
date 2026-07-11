@@ -1370,6 +1370,7 @@ export function useVideoExport() {
           '-safe', '0',
           '-i', 'concat.txt',
           '-c', 'copy',
+          '-movflags', '+faststart',
           'output.mp4',
         ]);
 

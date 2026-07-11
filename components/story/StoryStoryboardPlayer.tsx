@@ -173,6 +173,9 @@ export default function StoryStoryboardPlayer({
     const motionFrame = getStoryMotionFrame(normalizedEffects, panelProgress(panelIndex));
     return (
     <div
+      // Keyed so a panel switch mounts a fresh element: the transform
+      // transition below must never animate across the panel cut.
+      key={panelIndex}
       className="absolute inset-0 overflow-hidden"
       style={layer ? transitionLayerStyle(layer) : undefined}
     >
@@ -185,8 +188,14 @@ export default function StoryStoryboardPlayer({
           onLoad={onImageLoad}
           onError={onImageError}
           style={effectsEnabled && normalizedEffects.motion.enabled ? {
-            transform: `translate(${motionFrame.translateXPercent}%, ${motionFrame.translateYPercent}%) scale(${motionFrame.scale})`,
+            // translate3d + will-change keep the pan/zoom on the compositor;
+            // the short linear transition interpolates between the ~50ms
+            // narration clock ticks that drive re-renders, which otherwise
+            // show as stair-stepped motion.
+            transform: `translate3d(${motionFrame.translateXPercent}%, ${motionFrame.translateYPercent}%, 0) scale(${motionFrame.scale})`,
             transformOrigin: 'center',
+            willChange: 'transform',
+            ...(layer ? {} : { transition: 'transform 120ms linear' }),
           } : undefined}
         />
       </div>
