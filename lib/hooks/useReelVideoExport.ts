@@ -320,6 +320,7 @@ export function useReelVideoExport() {
         '-c:a', 'aac',
         '-b:a', AUDIO_BITRATE,
         '-shortest',
+        '-movflags', '+faststart',
         outputFile,
       ]);
       if (exitCode !== 0) throw new Error(`Fallback reel export failed (ffmpeg exit code ${exitCode}).`);
@@ -430,7 +431,10 @@ export function useReelVideoExport() {
       if (!context) throw new Error('Could not create the reel render surface.');
 
       const target = new MediabunnyBufferTarget();
-      output = new MediabunnyOutput({ format: new MediabunnyMp4OutputFormat(), target });
+      output = new MediabunnyOutput({
+        format: new MediabunnyMp4OutputFormat({ fastStart: 'in-memory' }),
+        target,
+      });
       activeOutputRef.current = output;
       const videoSource = new CanvasSource(canvas, {
         codec: 'avc',
@@ -521,7 +525,7 @@ export function useReelVideoExport() {
         audioSampleRate: AUDIO_SAMPLE_RATE,
         audioChannels: AUDIO_CHANNELS,
         keyFrameIntervalSeconds: 2,
-        fastStart: 'none',
+        fastStart: 'in-memory',
         outputBytes: target.buffer.byteLength,
         startedAtIso: stageTimer.startedAtIso,
         ...stageTimer.finish(),

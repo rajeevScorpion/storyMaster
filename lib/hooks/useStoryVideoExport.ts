@@ -226,7 +226,10 @@ export function useStoryVideoExport() {
       if (!context) throw new Error('Could not create the story render surface.');
 
       const target = new mediabunny.BufferTarget();
-      output = new mediabunny.Output({ format: new mediabunny.Mp4OutputFormat(), target });
+      output = new mediabunny.Output({
+        format: new mediabunny.Mp4OutputFormat({ fastStart: 'in-memory' }),
+        target,
+      });
       activeOutputRef.current = output;
       const videoSource = new mediabunny.CanvasSource(canvas, {
         codec: 'avc',
@@ -325,7 +328,7 @@ export function useStoryVideoExport() {
         audioSampleRate: AUDIO_SAMPLE_RATE,
         audioChannels: AUDIO_CHANNELS,
         keyFrameIntervalSeconds: 2,
-        fastStart: 'none',
+        fastStart: 'in-memory',
         outputBytes: target.buffer.byteLength,
         startedAtIso: stageTimer.startedAtIso,
         ...stageTimer.finish(),
