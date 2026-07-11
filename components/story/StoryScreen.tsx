@@ -2558,6 +2558,70 @@ function StoryScreenInner({
     !canPublishStandardStoryline &&
     cycleSettings.audioStorylinePublishEnabled
   );
+
+  // Ending call-to-actions. Rendered compactly (theme-toolbar scale) in two
+  // spots: inline at the bottom of the story card on mobile, and as a right-hand
+  // column on desktop so they're visible without scrolling past the last beat.
+  // `fullWidth` stacks them as a vertical panel for the desktop column.
+  const renderEndingActions = (fullWidth: boolean) => {
+    const fw = fullWidth ? 'w-full justify-center' : '';
+    return (
+      <>
+        {canContinueAsEpisode && (
+          <button
+            onClick={() => setShowContinueAsEpisode(true)}
+            className={`bg-emerald-400 text-neutral-950 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-emerald-300 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Clapperboard className="w-4 h-4" />
+            Continue as Episode
+          </button>
+        )}
+        {!lastPublishResult && onSave && canPublishStandardStoryline && (
+          <button
+            onClick={() => setShowPublishDialog(true)}
+            className={`bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Share2 className="w-4 h-4" />
+            Publish Storyline
+          </button>
+        )}
+        {!lastPublishResult && onSave && canPublishAudioStoryline && (
+          <button
+            onClick={() => setShowPublishDialog(true)}
+            className={`bg-sky-500/20 text-sky-200 border border-sky-500/30 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-sky-500/30 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Share2 className="w-4 h-4" />
+            Publish as Audio Story
+          </button>
+        )}
+        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
+          <div className="max-w-xl rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
+          </div>
+        )}
+        {session.explorationMode && (
+          <button
+            onClick={() => {
+              // Navigate to a branch point to explore more
+              const rootId = session.storyMap.rootNodeId;
+              navigateToNode(rootId);
+            }}
+            className={`bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-500/30 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Compass className="w-4 h-4" />
+            Explore More Branches
+          </button>
+        )}
+        <button
+          onClick={resetStory}
+          className={`bg-white text-black px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2 ${fw}`}
+        >
+          Start a New Story
+        </button>
+      </>
+    );
+  };
+
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
   const pendingStoryModeAutoplayNodeIdRef = useRef<string | null>(null);
   const orderedOptions = currentBeat.canonicalOptionId
@@ -6513,58 +6577,12 @@ function StoryScreenInner({
                         </div>
                       )}
 
-                      <div className="mt-8 flex flex-wrap gap-3">
-                        {canContinueAsEpisode && (
-                          <button
-                            onClick={() => setShowContinueAsEpisode(true)}
-                            className="bg-emerald-400 text-neutral-950 px-8 py-4 rounded-2xl font-medium hover:bg-emerald-300 transition-colors flex items-center gap-2"
-                          >
-                            <Clapperboard className="w-4 h-4" />
-                            Continue as Episode
-                          </button>
-                        )}
-                        {!lastPublishResult && onSave && canPublishStandardStoryline && (
-                          <button
-                            onClick={() => setShowPublishDialog(true)}
-                            className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2"
-                          >
-                            <Share2 className="w-4 h-4" />
-                            Publish Storyline
-                          </button>
-                        )}
-                        {!lastPublishResult && onSave && canPublishAudioStoryline && (
-                          <button
-                            onClick={() => setShowPublishDialog(true)}
-                            className="bg-sky-500/20 text-sky-200 border border-sky-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-sky-500/30 transition-colors flex items-center gap-2"
-                          >
-                            <Share2 className="w-4 h-4" />
-                            Publish as Audio Story
-                          </button>
-                        )}
-                        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
-                          <div className="max-w-xl rounded-2xl border border-amber-500/25 bg-amber-500/10 px-5 py-4 text-sm text-amber-100">
-                            Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
-                          </div>
-                        )}
-                        {session.explorationMode && (
-                          <button
-                            onClick={() => {
-                              // Navigate to a branch point to explore more
-                              const rootId = session.storyMap.rootNodeId;
-                              navigateToNode(rootId);
-                            }}
-                            className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-indigo-500/30 transition-colors flex items-center gap-2"
-                          >
-                            <Compass className="w-4 h-4" />
-                            Explore More Branches
-                          </button>
-                        )}
-                        <button
-                          onClick={resetStory}
-                          className="bg-white text-black px-8 py-4 rounded-2xl font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2"
-                        >
-                          Start a New Story
-                        </button>
+                      {/* Ending actions — inline at card bottom on mobile only.
+                          On desktop these move to the right-hand column (below)
+                          so they're visible without scrolling. Reel stories keep
+                          them inline on every breakpoint (no desktop column). */}
+                      <div className={`mt-8 flex flex-wrap gap-3 ${!isReelStory ? 'md:hidden' : ''}`}>
+                        {renderEndingActions(false)}
                       </div>
                     </div>
                   )}
@@ -6595,6 +6613,28 @@ function StoryScreenInner({
           </div>{/* end card + narration button row */}
 
           </div>
+
+          {/* Ending actions — desktop right column. Mirrors the "What happens
+              next?" slot so the final CTAs sit where readers already look for
+              actions, instead of below the scrolled story text. Mobile keeps
+              them inline in the card (rendered above). */}
+          {isEnding && !isReelStory && !isMinimized && (
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              className="hidden md:col-span-5 md:flex md:flex-col md:justify-end"
+            >
+              <div className="mb-3 px-1">
+                <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
+                  What next?
+                </h3>
+              </div>
+              <div className="flex flex-col gap-3 px-1">
+                {renderEndingActions(true)}
+              </div>
+            </motion.div>
+          )}
 
           {/* Choices Column */}
           {!isEnding && !isReelStory && (
