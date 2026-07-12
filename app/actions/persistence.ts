@@ -3,7 +3,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
-import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls } from '@/lib/media/storage-url-signing';
+import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, signMixedUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
@@ -2047,6 +2047,159 @@ export async function setStoryCoverImage(
 // List / Delete / Archive
 // ============================================================
 
+// Signed thumbnail URLs must outlive the client-side list cache (5 min) by a
+// comfortable margin; matches the gallery cover signing TTL.
+const LIST_THUMBNAIL_SIGN_TTL_SECONDS = 60 * 60 * 24;
+
+type ListThumbnail = { url: string | null; isStoryboard: boolean };
+
+/**
+ * Sign thumbnail URLs in place: private story-assets / R2 references become
+ * signed URLs; public CDN URLs pass through untouched (so they stay cacheable).
+ */
+async function signListThumbnails(
+  supabase: SupabaseClient,
+  thumbnails: Map<string, ListThumbnail>
+): Promise<Map<string, ListThumbnail>> {
+  const urls = Array.from(thumbnails.values())
+    .map((thumb) => thumb.url)
+    .filter((url): url is string => Boolean(url));
+  if (urls.length === 0) return thumbnails;
+
+  try {
+    const signed = await signMixedUrls(supabase, urls, 'story-assets', LIST_THUMBNAIL_SIGN_TTL_SECONDS);
+    for (const [id, thumb] of thumbnails) {
+      const signedUrl = thumb.url ? signed.get(thumb.url) : undefined;
+      if (signedUrl) thumbnails.set(id, { ...thumb, url: signedUrl });
+    }
+  } catch (error) {
+    console.error('Failed to sign list thumbnails:', error);
+  }
+  // An r2:// reference that couldn't be signed is not a fetchable URL — drop it
+  // so the client falls back to the placeholder instead of a broken <Image>.
+  for (const [id, thumb] of thumbnails) {
+    if (thumb.url?.startsWith('r2://')) {
+      thumbnails.set(id, { ...thumb, url: null });
+    }
+  }
+  return thumbnails;
+}
+
+/**
+ * Resolve display thumbnails for story list rows: cover image first, else the
+ * story's root beat (first beat) image via one batched beats query. Covers of
+ * storyboard-mode stories are copied beat grids, so the root beat's
+ * is_storyboard flag decides the first-panel crop even when a cover is used
+ * (client-side auto-detection can't work on thumbnail-sized image variants).
+ * Failures degrade to no thumbnail — the list itself must never break over
+ * covers.
+ */
+async function resolveStoryListThumbnails(
+  supabase: SupabaseClient,
+  rows: Array<{ id: string; cover_image_url: string | null }>
+): Promise<Map<string, ListThumbnail>> {
+  const thumbnails = new Map<string, ListThumbnail>();
+  if (rows.length === 0) return thumbnails;
+
+  for (const row of rows) {
+    const cover = row.cover_image_url?.trim();
+    thumbnails.set(row.id, { url: cover || null, isStoryboard: false });
+  }
+
+  const { data: beatRows, error } = await supabase
+    .from('beats')
+    .select('story_id, image_url, is_storyboard')
+    .in('story_id', rows.map((row) => row.id))
+    .is('parent_node_id', null);
+
+  if (error) {
+    console.error('Failed to fetch story thumbnail beats:', error.message);
+  }
+
+  const rootBeatByStoryId = new Map<string, { image_url: string; isStoryboard: boolean }>();
+  for (const beat of beatRows ?? []) {
+    const imageUrl = typeof beat.image_url === 'string' ? beat.image_url.trim() : '';
+    if (rootBeatByStoryId.has(beat.story_id)) continue;
+    rootBeatByStoryId.set(beat.story_id, {
+      image_url: imageUrl,
+      isStoryboard: beat.is_storyboard === true,
+    });
+  }
+
+  for (const row of rows) {
+    const existing = thumbnails.get(row.id);
+    const rootBeat = rootBeatByStoryId.get(row.id);
+    if (!rootBeat) continue;
+    thumbnails.set(row.id, {
+      url: existing?.url || rootBeat.image_url || null,
+      isStoryboard: rootBeat.isStoryboard,
+    });
+  }
+
+  return signListThumbnails(supabase, thumbnails);
+}
+
+/**
+ * Resolve display thumbnails for saved-storyline rows: storyline cover first,
+ * else the first beat's image. The first beat is looked up through
+ * `storylines.node_path` against the beats table — the storyline_beats
+ * junction is not reliably populated (its insert is non-fatal on publish), so
+ * node_path is the source of truth, same as the gallery cover pipeline. The
+ * beat's is_storyboard flag drives the first-panel crop even for cover images,
+ * since covers derive from beat grids.
+ */
+async function resolveStorylineListThumbnails(
+  supabase: SupabaseClient,
+  rows: Array<{
+    storyline_id: string;
+    story_id: string | null;
+    first_node_id: string | null;
+    cover_image_url: string | null;
+  }>
+): Promise<Map<string, ListThumbnail>> {
+  const thumbnails = new Map<string, ListThumbnail>();
+  if (rows.length === 0) return thumbnails;
+
+  for (const row of rows) {
+    const cover = row.cover_image_url?.trim();
+    thumbnails.set(row.storyline_id, { url: cover || null, isStoryboard: false });
+  }
+
+  const targets = rows.filter(
+    (row): row is typeof row & { story_id: string; first_node_id: string } =>
+      Boolean(row.story_id && row.first_node_id)
+  );
+
+  if (targets.length > 0) {
+    const { data: beatRows, error } = await supabase
+      .from('beats')
+      .select('story_id, node_id, image_url, is_storyboard')
+      .in('story_id', Array.from(new Set(targets.map((t) => t.story_id))))
+      .in('node_id', Array.from(new Set(targets.map((t) => t.first_node_id))));
+
+    if (error) {
+      console.error('Failed to fetch storyline thumbnail beats:', error.message);
+    }
+
+    const beatByStoryAndNode = new Map(
+      (beatRows ?? []).map((beat) => [`${beat.story_id}:${beat.node_id}`, beat])
+    );
+
+    for (const target of targets) {
+      const beat = beatByStoryAndNode.get(`${target.story_id}:${target.first_node_id}`);
+      if (!beat) continue;
+      const existing = thumbnails.get(target.storyline_id);
+      const imageUrl = typeof beat.image_url === 'string' ? beat.image_url.trim() : '';
+      thumbnails.set(target.storyline_id, {
+        url: existing?.url || imageUrl || null,
+        isStoryboard: beat.is_storyboard === true,
+      });
+    }
+  }
+
+  return signListThumbnails(supabase, thumbnails);
+}
+
 /**
  * List the current user's created stories.
  */
@@ -2061,6 +2214,8 @@ export async function listUserStories(): Promise<Array<{
   episode_number?: number | null;
   is_vertical_story?: boolean | null;
   aspect_ratio?: string | null;
+  thumbnail_url: string | null;
+  thumbnail_is_storyboard: boolean;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -2073,18 +2228,39 @@ export async function listUserStories(): Promise<Array<{
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
-  if (!error) return data || [];
+  let rows: Array<{
+    id: string;
+    title: string;
+    status: string;
+    is_archived: boolean;
+    updated_at: string;
+    user_prompt: string;
+    cover_image_url: string | null;
+    episode_number?: number | null;
+    is_vertical_story?: boolean | null;
+    aspect_ratio?: string | null;
+  }> = data || [];
+  if (error) {
+    // Pre-075 fallback: episode_number doesn't exist yet.
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from('stories')
+      .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
+      .eq('user_id', user.id)
+      .neq('story_kind', 'reel')
+      .order('updated_at', { ascending: false });
 
-  // Pre-075 fallback: episode_number doesn't exist yet.
-  const { data: fallbackData, error: fallbackError } = await supabase
-    .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
-    .eq('user_id', user.id)
-    .neq('story_kind', 'reel')
-    .order('updated_at', { ascending: false });
+    if (fallbackError) throw new Error(`Failed to list stories: ${fallbackError.message}`);
+    rows = fallbackData || [];
+  }
 
-  if (fallbackError) throw new Error(`Failed to list stories: ${fallbackError.message}`);
-  return fallbackData || [];
+  const stories = rows;
+  const thumbnails = await resolveStoryListThumbnails(supabase, stories);
+
+  return stories.map((story) => ({
+    ...story,
+    thumbnail_url: thumbnails.get(story.id)?.url ?? null,
+    thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
+  }));
 }
 
 /**
@@ -2100,6 +2276,10 @@ export async function listUserReels(): Promise<Array<{
   story_kind: 'reel';
   beat_count: number;
   cover_image_url: string | null;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
+  thumbnail_url: string | null;
+  thumbnail_is_storyboard: boolean;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -2107,14 +2287,17 @@ export async function listUserReels(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url')
+    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url, is_vertical_story, aspect_ratio')
     .eq('user_id', user.id)
     .eq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
   if (error) throw new Error(`Failed to list reels: ${error.message}`);
 
-  return (data || []).map((story: any) => {
+  const reels = data || [];
+  const thumbnails = await resolveStoryListThumbnails(supabase, reels);
+
+  return reels.map((story: any) => {
     const storyMap = story.story_map && typeof story.story_map === 'object' ? story.story_map : null;
     const nodeCount = storyMap?.nodes && typeof storyMap.nodes === 'object'
       ? Object.keys(storyMap.nodes).length
@@ -2131,6 +2314,10 @@ export async function listUserReels(): Promise<Array<{
       story_kind: 'reel',
       beat_count: nodeCount || (Number.isFinite(configBeatCount) ? configBeatCount : 0),
       cover_image_url: story.cover_image_url,
+      is_vertical_story: story.is_vertical_story,
+      aspect_ratio: story.aspect_ratio,
+      thumbnail_url: thumbnails.get(story.id)?.url ?? null,
+      thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
     };
   });
 }
@@ -2242,6 +2429,8 @@ export async function listSavedStorylines(): Promise<Array<{
     story_id: string;
     is_vertical_story?: boolean | null;
     aspect_ratio?: string | null;
+    thumbnail_url?: string | null;
+    thumbnail_is_storyboard?: boolean;
   };
 }>> {
   const supabase = await createClient();
@@ -2263,7 +2452,8 @@ export async function listSavedStorylines(): Promise<Array<{
         story_id,
         user_id,
         is_vertical_story,
-        aspect_ratio
+        aspect_ratio,
+        node_path
       )
     `)
     .eq('user_id', user.id)
@@ -2271,13 +2461,46 @@ export async function listSavedStorylines(): Promise<Array<{
 
   if (error) throw new Error(`Failed to list saved storylines: ${error.message}`);
 
-  return (data || []).map((row: any) => ({
-    id: row.id,
-    storyline_id: row.storyline_id,
-    saved_at: row.saved_at,
-    is_owner: row.storylines?.user_id === user.id,
-    storyline: row.storylines,
-  }));
+  const rows = data || [];
+  const thumbnails = await resolveStorylineListThumbnails(
+    supabase,
+    rows
+      .filter((row: any) => row.storylines)
+      .map((row: any) => ({
+        storyline_id: row.storyline_id,
+        story_id: row.storylines.story_id ?? null,
+        first_node_id: Array.isArray(row.storylines.node_path)
+          ? row.storylines.node_path[0] ?? null
+          : null,
+        cover_image_url: row.storylines.cover_image_url ?? null,
+      }))
+  );
+
+  return rows.map((row: any) => {
+    if (!row.storylines) {
+      return {
+        id: row.id,
+        storyline_id: row.storyline_id,
+        saved_at: row.saved_at,
+        is_owner: false,
+        storyline: row.storylines,
+      };
+    }
+    // node_path is only needed server-side for the thumbnail lookup.
+    const { node_path, ...storylineFields } = row.storylines;
+    void node_path;
+    return {
+      id: row.id,
+      storyline_id: row.storyline_id,
+      saved_at: row.saved_at,
+      is_owner: row.storylines.user_id === user.id,
+      storyline: {
+        ...storylineFields,
+        thumbnail_url: thumbnails.get(row.storyline_id)?.url ?? null,
+        thumbnail_is_storyboard: thumbnails.get(row.storyline_id)?.isStoryboard === true,
+      },
+    };
+  });
 }
 
 // ============================================================

@@ -14,6 +14,7 @@ import type { CharacterMaster } from '@/lib/types/character-library';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import CharacterMasterCard from './CharacterMasterCard';
 import CharacterMasterDialog from './CharacterMasterDialog';
+import StoryboardThumbnail from './StoryboardThumbnail';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 
 interface MyStoriesDrawerProps {
@@ -175,8 +176,11 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   };
 
   // Same portrait rule the gallery uses: the flag wins, aspect ratio backs it up.
+  const isPortraitRow = (row?: { is_vertical_story?: boolean | null; aspect_ratio?: string | null } | null) =>
+    row?.is_vertical_story === true || row?.aspect_ratio === '9:16';
+
   const renderOrientationBadge = (row: { is_vertical_story?: boolean | null; aspect_ratio?: string | null }) => {
-    const isPortrait = row.is_vertical_story === true || row.aspect_ratio === '9:16';
+    const isPortrait = isPortraitRow(row);
     const Icon = isPortrait ? RectangleVertical : RectangleHorizontal;
     const label = isPortrait ? 'Portrait (9:16)' : 'Landscape (16:9)';
     return (
@@ -185,6 +189,39 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       </span>
     );
   };
+
+  // List thumbnail: server resolves cover → first-beat fallback plus the
+  // storyboard flag; storyboard grids render only their first panel via
+  // StoryboardThumbnail's static crop. The box follows the story orientation
+  // (16:9 landscape / 9:16 portrait).
+  const renderThumbnail = (
+    url: string | null | undefined,
+    isStoryboard: boolean | null | undefined,
+    alt: string,
+    FallbackIcon: typeof BookOpen,
+    isPortrait: boolean
+  ) => (
+    <div
+      className={`relative flex-shrink-0 rounded-lg overflow-hidden bg-neutral-800/60 border border-white/5 ${
+        isPortrait ? 'h-16 aspect-[9/16]' : 'h-14 aspect-video'
+      }`}
+    >
+      {url ? (
+        <StoryboardThumbnail
+          src={url}
+          alt={alt}
+          sizes={isPortrait ? '36px' : '100px'}
+          isPreviewing={false}
+          previewSessionId={0}
+          isStoryboard={isStoryboard === true}
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <FallbackIcon className="w-5 h-5 text-neutral-700" />
+        </div>
+      )}
+    </div>
+  );
 
   const renderLoadingSkeletons = () => (
     <div className="space-y-3">
@@ -221,32 +258,37 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadStory(story)}
-          className="w-full text-left p-5 pr-20"
+          className="w-full text-left p-4 pr-20"
         >
-          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-            {story.title}
-          </h3>
-          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
-          <div className="flex items-center gap-3 mt-3">
-            <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-              story.is_archived
-                ? 'bg-neutral-500/10 text-neutral-500'
-                : story.status === 'completed'
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'bg-amber-500/10 text-amber-400'
-            }`}>
-              {story.is_archived ? 'archived' : story.status}
-            </span>
-            {typeof story.episode_number === 'number' && story.episode_number > 0 && (
-              <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
-                Ep {story.episode_number}
-              </span>
-            )}
-            {renderOrientationBadge(story)}
-            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-              <Clock className="w-3 h-3" />
-              {formatDate(story.updated_at)}
-            </span>
+          <div className="flex items-center gap-3">
+            {renderThumbnail(story.thumbnail_url, story.thumbnail_is_storyboard, story.title, BookOpen, isPortraitRow(story))}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+                {story.title}
+              </h3>
+              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+                  story.is_archived
+                    ? 'bg-neutral-500/10 text-neutral-500'
+                    : story.status === 'completed'
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'bg-amber-500/10 text-amber-400'
+                }`}>
+                  {story.is_archived ? 'archived' : story.status}
+                </span>
+                {typeof story.episode_number === 'number' && story.episode_number > 0 && (
+                  <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
+                    Ep {story.episode_number}
+                  </span>
+                )}
+                {renderOrientationBadge(story)}
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                  <Clock className="w-3 h-3" />
+                  {formatDate(story.updated_at)}
+                </span>
+              </div>
+            </div>
           </div>
         </button>
 
@@ -311,29 +353,34 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadReel(reel)}
-          className="w-full text-left p-5 pr-20"
+          className="w-full text-left p-4 pr-20"
         >
-          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-            {reel.title}
-          </h3>
-          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
-          <div className="flex items-center gap-3 mt-3">
-            <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-              reel.is_archived
-                ? 'bg-neutral-500/10 text-neutral-500'
-                : reel.status === 'completed'
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'bg-cyan-500/10 text-cyan-300'
-            }`}>
-              {reel.is_archived ? 'archived' : reel.status}
-            </span>
-            <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
-              {reel.beat_count} beats
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-              <Clock className="w-3 h-3" />
-              {formatDate(reel.updated_at)}
-            </span>
+          <div className="flex items-center gap-3">
+            {renderThumbnail(reel.thumbnail_url, reel.thumbnail_is_storyboard, reel.title, Clapperboard, isPortraitRow(reel))}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+                {reel.title}
+              </h3>
+              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+                  reel.is_archived
+                    ? 'bg-neutral-500/10 text-neutral-500'
+                    : reel.status === 'completed'
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'bg-cyan-500/10 text-cyan-300'
+                }`}>
+                  {reel.is_archived ? 'archived' : reel.status}
+                </span>
+                <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
+                  {reel.beat_count} beats
+                </span>
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                  <Clock className="w-3 h-3" />
+                  {formatDate(reel.updated_at)}
+                </span>
+              </div>
+            </div>
           </div>
         </button>
 
@@ -390,29 +437,33 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         animate={{ opacity: 1, y: 0 }}
         className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
       >
-        <div className="p-5 pr-32">
+        <div className="p-4 pr-32">
           <Link
             href={`/storyline/${item.storyline_id}`}
             onClick={() => handleOpenStoryline(item)}
-            className="block"
+            className="flex items-center gap-3"
           >
-            <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-              {item.storyline?.title || 'Untitled Storyline'}
-            </h3>
-            <div className="flex items-center gap-3 mt-2">
-              <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
-                {item.storyline?.beat_count || 0} beats
-              </span>
-              {item.storyline && renderOrientationBadge(item.storyline)}
-              {item.storyline?.author_name && (
-                <span className="text-[10px] text-neutral-600">
-                  by {item.storyline.author_name}
+            {renderThumbnail(
+              item.storyline?.thumbnail_url,
+              item.storyline?.thumbnail_is_storyboard,
+              item.storyline?.title || 'Untitled Storyline',
+              Library,
+              isPortraitRow(item.storyline)
+            )}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+                {item.storyline?.title || 'Untitled Storyline'}
+              </h3>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
+                  {item.storyline?.beat_count || 0} beats
                 </span>
-              )}
-              <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-                <Clock className="w-3 h-3" />
-                {formatDate(item.saved_at)}
-              </span>
+                {item.storyline && renderOrientationBadge(item.storyline)}
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                  <Clock className="w-3 h-3" />
+                  {formatDate(item.saved_at)}
+                </span>
+              </div>
             </div>
           </Link>
         </div>

@@ -11,6 +11,10 @@ export interface SavedStory {
   episode_number?: number | null;
   is_vertical_story?: boolean | null;
   aspect_ratio?: string | null;
+  /** Display-ready list thumbnail: cover image, else the first beat's image. */
+  thumbnail_url?: string | null;
+  /** True when the thumbnail is a storyboard grid (render its first panel). */
+  thumbnail_is_storyboard?: boolean;
 }
 
 export interface UserReel {
@@ -23,6 +27,12 @@ export interface UserReel {
   story_kind: 'reel';
   beat_count: number;
   cover_image_url: string | null;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
+  /** Display-ready list thumbnail: cover image, else the first beat's image. */
+  thumbnail_url?: string | null;
+  /** True when the thumbnail is a storyboard grid (render its first panel). */
+  thumbnail_is_storyboard?: boolean;
 }
 
 export interface ExploredStory {
@@ -53,5 +63,9 @@ export interface SavedStorylineItem {
     story_id: string;
     is_vertical_story?: boolean | null;
     aspect_ratio?: string | null;
+    /** Display-ready list thumbnail: cover image, else the first beat's image. */
+    thumbnail_url?: string | null;
+    /** True when the thumbnail is a storyboard grid (render its first panel). */
+    thumbnail_is_storyboard?: boolean;
   };
 }
