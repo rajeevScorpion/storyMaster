@@ -2059,6 +2059,8 @@ export async function listUserStories(): Promise<Array<{
   user_prompt: string;
   cover_image_url: string | null;
   episode_number?: number | null;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -2066,7 +2068,7 @@ export async function listUserStories(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number')
+    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number, is_vertical_story, aspect_ratio')
     .eq('user_id', user.id)
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
@@ -2076,7 +2078,7 @@ export async function listUserStories(): Promise<Array<{
   // Pre-075 fallback: episode_number doesn't exist yet.
   const { data: fallbackData, error: fallbackError } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url')
+    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
     .eq('user_id', user.id)
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
@@ -2238,6 +2240,8 @@ export async function listSavedStorylines(): Promise<Array<{
     cover_image_url: string | null;
     author_name: string | null;
     story_id: string;
+    is_vertical_story?: boolean | null;
+    aspect_ratio?: string | null;
   };
 }>> {
   const supabase = await createClient();
@@ -2257,7 +2261,9 @@ export async function listSavedStorylines(): Promise<Array<{
         cover_image_url,
         author_name,
         story_id,
-        user_id
+        user_id,
+        is_vertical_story,
+        aspect_ratio
       )
     `)
     .eq('user_id', user.id)

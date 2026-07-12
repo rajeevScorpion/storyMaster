@@ -23,7 +23,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
-import HqDownloadButton from './HqDownloadButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
@@ -6096,8 +6095,9 @@ function StoryScreenInner({
               )}
             </div>
 
-          {/* Card + Narration button row */}
-          <div className="flex items-end gap-3 w-full md:gap-5">
+          {/* Card + Narration button row — fully hidden when minimized so only
+              the chrome controls (and the choices column) remain on screen */}
+          <div className={`items-end gap-3 w-full md:gap-5 ${isMinimized ? 'hidden' : 'flex'}`}>
             {/* Narration + Regenerate image buttons — outside card, left side */}
             {!isMinimized && (
               <div className="shrink-0 pb-3 flex flex-col items-center gap-2 md:pb-4">
@@ -6157,9 +6157,6 @@ function StoryScreenInner({
                       )}
                     </AnimatePresence>
                   </div>
-                )}
-                {session.savedStoryId && !isPromptOnlyStory && (
-                  <HqDownloadButton storyId={session.savedStoryId} nodeId={currentNodeId} />
                 )}
                 {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton

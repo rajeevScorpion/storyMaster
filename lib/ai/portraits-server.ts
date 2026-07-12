@@ -1,6 +1,9 @@
 import 'server-only';
 
 import sharp from 'sharp';
+import { createAdminClient } from '@/lib/supabase/admin';
+import { putR2Object } from '@/lib/media/r2-server';
+import { recordMediaAsset } from '@/lib/media/media-assets';
 import { generateSelectedImage } from '@/app/actions/image-generation';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import { normalizePortraitReferenceConfig } from '@/lib/ai/story-config';
@@ -141,6 +144,84 @@ async function compressPortraitDataUrl(dataUrl: string): Promise<string> {
     console.warn('Server portrait compression failed; using original image:', error);
     return dataUrl;
   }
+}
+
+/**
+ * Durable-portrait parity with the client pipeline's `uploadBeatPortraits`
+ * (lib/store/story-store.ts): upload each freshly generated base64 portrait to
+ * private storage and set `portraitUrl`, so character refs survive reloads and
+ * library saves. A character whose upload fails is returned untouched — its
+ * portrait stays session-only, exactly like the pre-upload behavior.
+ */
+export async function persistBeatPortraitsServer(input: {
+  userId: string;
+  storyId: string;
+  nodeId: string;
+  characters: Character[];
+}): Promise<{ characters: Character[]; uploadedCount: number }> {
+  const { userId, storyId, nodeId } = input;
+  let uploadedCount = 0;
+
+  const characters = await Promise.all(
+    input.characters.map(async (character) => {
+      const dataUrl = character.portraitBase64;
+      if (!dataUrl?.startsWith('data:')) return character;
+      const parsed = splitBase64DataUrl(dataUrl);
+      if (!parsed) return character;
+
+      const buffer = Buffer.from(parsed.base64, 'base64');
+      // Same object key the legacy client upload uses, so downstream signing
+      // and cleanup treat both pipelines identically.
+      const objectKey = `stories/${storyId}/beats/${nodeId}/portrait_${character.id}.webp`;
+
+      try {
+        const stored = await putR2Object({
+          access: 'private',
+          objectKey,
+          body: buffer,
+          contentType: parsed.mimeType,
+        });
+        await recordMediaAsset({
+          storyId,
+          nodeId,
+          userId,
+          assetType: 'portrait',
+          storageProvider: 'r2',
+          bucket: stored.bucket,
+          objectKey,
+          mimeType: parsed.mimeType,
+          sizeBytes: buffer.length,
+          isPublic: false,
+          processingMode: 'server_pipeline',
+        });
+        uploadedCount += 1;
+        return { ...character, portraitUrl: stored.urlOrReference };
+      } catch (r2Error) {
+        // Same fallback order as the client uploadAsset helper: R2 first,
+        // Supabase Storage second.
+        try {
+          const admin = createAdminClient();
+          const fallbackPath = `${userId}/${storyId}/${nodeId}/portrait_${character.id}.webp`;
+          const { error } = await admin.storage
+            .from('story-assets')
+            .upload(fallbackPath, buffer, { contentType: parsed.mimeType, upsert: true });
+          if (error) throw new Error(error.message);
+          const { data } = admin.storage.from('story-assets').getPublicUrl(fallbackPath);
+          uploadedCount += 1;
+          return { ...character, portraitUrl: data.publicUrl };
+        } catch (storageError) {
+          console.error(
+            `Failed to persist portrait for character ${character.id}:`,
+            r2Error,
+            storageError
+          );
+          return character;
+        }
+      }
+    })
+  );
+
+  return { characters, uploadedCount };
 }
 
 /**

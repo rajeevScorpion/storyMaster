@@ -9,6 +9,8 @@ export interface SavedStory {
   user_prompt: string;
   cover_image_url: string | null;
   episode_number?: number | null;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
 }
 
 export interface UserReel {
@@ -49,5 +51,7 @@ export interface SavedStorylineItem {
     cover_image_url: string | null;
     author_name: string | null;
     story_id: string;
+    is_vertical_story?: boolean | null;
+    aspect_ratio?: string | null;
   };
 }

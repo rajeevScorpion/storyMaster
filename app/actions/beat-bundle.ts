@@ -5,7 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { resolveEffectiveProcessingMode } from '@/lib/media/processing-mode';
 import { getStoryModelOverrides } from '@/app/actions/admin';
-import { saveBeat, saveStory } from '@/app/actions/persistence';
+import { saveBeat, saveStory, updateBeatMediaState } from '@/app/actions/persistence';
 import { enqueueBeatImageJob } from '@/app/actions/image-jobs';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
 import { authorizeImageModelBillableActionForUser } from '@/lib/pricing/image-aware-authorize';
@@ -23,6 +23,7 @@ import {
   collectCharacterPortraitReferences,
   generatePortraitsForPlanServer,
   mergeServerReferenceImages,
+  persistBeatPortraitsServer,
   type ServerReferenceImage,
 } from '@/lib/ai/portraits-server';
 import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
@@ -355,6 +356,35 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
       message: error instanceof Error ? error.message : 'Failed to save the beat.',
       beat,
     };
+  }
+
+  // Durable portraits: the durable beat above strips base64, so without this
+  // upload the character refs would exist only in the returned beat and vanish
+  // on the next reload (and library saves would copy a null portrait_url).
+  if (beat.characters.some((character) => character.portraitBase64?.startsWith('data:'))) {
+    try {
+      const persisted = await persistBeatPortraitsServer({
+        userId: user.id,
+        storyId,
+        nodeId,
+        characters: beat.characters,
+      });
+      if (persisted.uploadedCount > 0) {
+        // Returned beat keeps portraitBase64 for instant display; the durable
+        // rows get the storage reference only.
+        beat.characters = persisted.characters;
+        await updateBeatMediaState(storyId, nodeId, {
+          characters: persisted.characters.map((character) => ({
+            ...character,
+            portraitBase64: undefined,
+          })),
+        });
+      }
+    } catch (error) {
+      // Non-fatal: beat + image job stay durable; portraits fall back to the
+      // pre-upload session-only behavior.
+      console.error('Failed to persist bundle beat portraits:', error);
+    }
   }
 
   linkCostEventsToBeat({

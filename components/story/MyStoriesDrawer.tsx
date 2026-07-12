@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard, UserRound } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard, UserRound, RectangleHorizontal, RectangleVertical } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
@@ -174,6 +174,18 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     return date.toLocaleDateString();
   };
 
+  // Same portrait rule the gallery uses: the flag wins, aspect ratio backs it up.
+  const renderOrientationBadge = (row: { is_vertical_story?: boolean | null; aspect_ratio?: string | null }) => {
+    const isPortrait = row.is_vertical_story === true || row.aspect_ratio === '9:16';
+    const Icon = isPortrait ? RectangleVertical : RectangleHorizontal;
+    const label = isPortrait ? 'Portrait (9:16)' : 'Landscape (16:9)';
+    return (
+      <span className="flex items-center text-neutral-600" title={label} aria-label={label}>
+        <Icon className="w-3.5 h-3.5" />
+      </span>
+    );
+  };
+
   const renderLoadingSkeletons = () => (
     <div className="space-y-3">
       {[...Array(3)].map((_, i) => (
@@ -230,6 +242,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
                 Ep {story.episode_number}
               </span>
             )}
+            {renderOrientationBadge(story)}
             <span className="flex items-center gap-1 text-[10px] text-neutral-600">
               <Clock className="w-3 h-3" />
               {formatDate(story.updated_at)}
@@ -390,6 +403,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
               <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
                 {item.storyline?.beat_count || 0} beats
               </span>
+              {item.storyline && renderOrientationBadge(item.storyline)}
               {item.storyline?.author_name && (
                 <span className="text-[10px] text-neutral-600">
                   by {item.storyline.author_name}
