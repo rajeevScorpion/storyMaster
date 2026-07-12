@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { PostgrestError } from '@supabase/supabase-js';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { invalidatePricingRuntimeCacheForUser } from '@/lib/pricing/runtime-context-cache';
 import { razorpayUnixToIso, type RazorpaySubscription } from '@/lib/billing/razorpay';
 import type {
   DbBillingOrder,
@@ -116,6 +117,8 @@ export async function syncRazorpaySubscriptionState(input: {
     currencyCode: input.planVersion.currency_code,
   });
 
+  invalidatePricingRuntimeCacheForUser(input.userId);
+
   return {
     billingSubscriptionId,
     grantedCoins: grantedBeats * COINS_PER_BEAT,
@@ -165,6 +168,9 @@ export async function grantTopupIfMissing(input: {
     });
 
   throwIfQueryFailed(error, 'Failed to grant top-up beats');
+
+  invalidatePricingRuntimeCacheForUser(input.billingOrder.user_id);
+
   return input.topupPack.beat_amount * COINS_PER_BEAT;
 }
 

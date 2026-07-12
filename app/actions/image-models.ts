@@ -14,8 +14,8 @@ import {
   saveImageContinuitySettings,
 } from '@/lib/ai/image-continuity-settings';
 import {
+  buildImageModelPickerState,
   listImageModelRegistry,
-  listUserVisibleImageModelOptions,
   resolveImageModelSnapshot,
   saveImageModelRegistryRecord,
 } from '@/lib/ai/image-models';
@@ -37,30 +37,13 @@ async function getCurrentUserId(): Promise<string | null> {
   return data.user?.id ?? null;
 }
 
-function selectDefaultModelKey(records: Array<{ modelKey: string; isDefault: boolean }>): string {
-  return records.find((record) => record.isDefault)?.modelKey ?? records[0]?.modelKey ?? '';
-}
-
 export async function getImageModelPickerState(
   taskKey: ImageTaskKey,
   selection?: ImageModelSelection | null
 ): Promise<ImageModelPickerState> {
   const pricing = await getPricingRuntimeContext().catch(() => null);
   const planKey = pricing?.snapshot.planKey ?? 'free';
-  const options = await listUserVisibleImageModelOptions(taskKey, planKey);
-  const defaultModelKey = selectDefaultModelKey(options);
-  const selectedModelKey = selection?.taskKey && selection.taskKey !== taskKey
-    ? defaultModelKey
-    : options.some((option) => option.modelKey === selection?.modelKey)
-    ? selection!.modelKey
-    : defaultModelKey;
-
-  return {
-    taskKey,
-    options,
-    defaultModelKey,
-    selectedModelKey,
-  };
+  return buildImageModelPickerState(taskKey, selection ?? null, planKey);
 }
 
 export async function getAdminImageModelRegistry(): Promise<ImageModelRegistryRecord[]> {

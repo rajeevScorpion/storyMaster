@@ -3,6 +3,7 @@
 import {
   ensureFreeAllowanceForUser,
   expireStaleReservations,
+  invalidatePricingGlobalsCache,
   reconcileRazorpaySubscription,
   reconcileRazorpayTopup,
 } from '@/lib/pricing/enforcement';
@@ -1228,6 +1229,10 @@ async function insertPricingAudit(supabase: AdminClient, input: InsertAuditInput
   if (error) {
     throw new Error(`Failed to record pricing audit: ${error.message}`);
   }
+
+  // Every pricing-admin mutation records an audit row, so this is the single
+  // choke point to drop the cached plans/versions/flags/action-costs.
+  invalidatePricingGlobalsCache();
 }
 
 function validatePlanDraftInput(input: SavePricingPlanDraftInput): void {

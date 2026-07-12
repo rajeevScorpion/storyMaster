@@ -2,10 +2,9 @@
 
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
+import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
-import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
-import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
+import { getLandingBootstrap } from '@/app/actions/landing-bootstrap';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
 import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
@@ -51,7 +50,6 @@ import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-confi
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
-  DEFAULT_LANDING_SETUP_SETTINGS,
   getDefaultNarrationVoiceSelection,
   normalizeLandingInitialData,
   type LandingInitialData,
@@ -212,6 +210,14 @@ function InfoPopover({
   );
 }
 
+function buildPickerRequestSignature(
+  taskKey: string,
+  selection: ImageModelSelection | undefined,
+  planKey: string
+): string {
+  return `${taskKey}|${selection?.taskKey ?? ''}|${selection?.modelKey ?? ''}|${planKey}`;
+}
+
 export default function LandingScreen({ onBegin, initialData, initialPricing }: LandingScreenProps) {
   const [initialLandingData] = useState(() => normalizeLandingInitialData(initialData ?? DEFAULT_LANDING_INITIAL_DATA));
   const router = useRouter();
@@ -239,11 +245,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [seedPreview, setSeedPreview] = useState<SeedPlan | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
-  const [authoringWordCap, setAuthoringWordCap] = useState(initialLandingData.authoringWordCap);
+  const [authoringWordCap] = useState(initialLandingData.authoringWordCap);
   // Admin-enabled languages offered in the pickers (main story + reel).
   const storyLanguageOptions = initialLandingData.storyLanguageOptions;
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
-  const [setupSettings, setSetupSettings] = useState(initialLandingData.setupSettings);
+  const [setupSettings] = useState(initialLandingData.setupSettings);
   const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
   const [reelLanguage, setReelLanguage] = useState<StoryLanguage>('english');
   const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(DEFAULT_REEL_LANDING_BEAT_COUNT);
@@ -383,11 +389,85 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     }
   }, [searchParams]);
 
+  // Everything the landing screen fetches at mount arrives in one bundled
+  // round-trip (model picker, reel style cards, reel moods) with the pricing
+  // context resolved once server-side. Storyboard/reel setup settings are NOT
+  // refetched here — the SSR initialData already seeds them.
+  const pickerRequestSignatureRef = useRef<string | null>(null);
   useEffect(() => {
+    let cancelled = false;
+    pickerRequestSignatureRef.current = buildPickerRequestSignature(
+      imageTaskKey,
+      imageModelSelection,
+      pricing.snapshot.planKey
+    );
+    getLandingBootstrap({ imageTaskKey, imageModelSelection: imageModelSelection ?? null })
+      .then((bootstrap) => {
+        if (cancelled) return;
+        if (bootstrap.imageModelPicker) {
+          const state = bootstrap.imageModelPicker;
+          // Record the signature the applied state settles into so the
+          // selection update below doesn't re-trigger the sync effect's fetch.
+          pickerRequestSignatureRef.current = buildPickerRequestSignature(
+            state.taskKey,
+            { taskKey: state.taskKey, modelKey: state.selectedModelKey },
+            pricing.snapshot.planKey
+          );
+          setImageModelPicker(state);
+          if (
+            (!imageModelSelection?.modelKey || imageModelSelection.taskKey !== state.taskKey)
+            && state.selectedModelKey
+          ) {
+            setImageModelSelection({
+              taskKey: state.taskKey,
+              modelKey: state.selectedModelKey,
+            });
+          }
+        } else {
+          setImageModelPicker(null);
+        }
+        setReelVisualStyleCards(bootstrap.reelVisualStyleCards);
+        const firstUnlocked = bootstrap.reelVisualStyleCards.find((style) => !style.isLocked)
+          ?? bootstrap.reelVisualStyleCards[0];
+        if (firstUnlocked) {
+          setReelVisualStyleId((current) => current || firstUnlocked.id);
+          setReelVisualStyleKey((current) => current || firstUnlocked.slug);
+        }
+        setPublishedMoods(bootstrap.reelMoods);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        pickerRequestSignatureRef.current = null;
+        setImageModelPicker(null);
+        setReelVisualStyleCards([]);
+        setPublishedMoods([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only: later task/selection/plan changes are handled by the picker
+    // sync effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Change-only picker sync: refetches when the image task, selection, or plan
+  // diverges from what the bootstrap (or a previous sync) already applied.
+  useEffect(() => {
+    const signature = buildPickerRequestSignature(imageTaskKey, imageModelSelection, pricing.snapshot.planKey);
+    if (pickerRequestSignatureRef.current === signature) {
+      return;
+    }
+    pickerRequestSignatureRef.current = signature;
+
     let cancelled = false;
     getImageModelPickerState(imageTaskKey, imageModelSelection)
       .then((state) => {
         if (cancelled) return;
+        pickerRequestSignatureRef.current = buildPickerRequestSignature(
+          state.taskKey,
+          { taskKey: state.taskKey, modelKey: state.selectedModelKey },
+          pricing.snapshot.planKey
+        );
         setImageModelPicker(state);
         if (
           (!imageModelSelection?.modelKey || imageModelSelection.taskKey !== state.taskKey)
@@ -408,86 +488,21 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   }, [imageTaskKey, imageModelSelection, pricing.snapshot.planKey]);
 
   useEffect(() => {
-    getStoryboardSettings()
-      .then(({
-        freePlusCharacterSheetsEnabled,
-        creatorCharacterSheetsEnabled,
-        storyPromptOnlyModeEnabled,
-        verticalStoriesSettingEnabled,
-        authoringWordCap: nextAuthoringWordCap,
-      }) => {
-        setSetupSettings({
-          freePlusCharacterSheetsEnabled,
-          creatorCharacterSheetsEnabled,
-          storyPromptOnlyModeEnabled,
-          verticalStoriesSettingEnabled,
-        });
-        if (!verticalStoriesSettingEnabled) {
-          setIsVerticalStory(false);
-        }
-        setAuthoringWordCap(nextAuthoringWordCap);
-      })
-      .catch(() => {
-        setSetupSettings(DEFAULT_LANDING_SETUP_SETTINGS);
-        setIsVerticalStory(false);
-        setAuthoringWordCap(DEFAULT_LANDING_INITIAL_DATA.authoringWordCap);
-      });
-  }, []);
-
-  useEffect(() => {
     if (initialData?.reelSetup) {
       writeCachedReelSetup(initialLandingData.reelSetup);
       return;
     }
 
+    // No SSR payload — fall back to the cached setup, including the default
+    // selections the removed refetch used to apply.
     const cached = readCachedReelSetup();
     if (cached) {
       setReelSetup(cached);
+      setReelTextLength(cached.settings.defaultTextLength);
+      setReelMoodKey(cached.settings.defaultMood);
+      setReelVisualStyleKey(cached.settings.defaultVisualStyle);
     }
   }, [initialData?.reelSetup, initialLandingData.reelSetup]);
-
-  useEffect(() => {
-    getReelStorySetupSettings()
-      .then((setup) => {
-        writeCachedReelSetup(setup);
-        setReelSetup(setup);
-        setReelBeatCount(DEFAULT_REEL_LANDING_BEAT_COUNT);
-        setReelTextLength(setup.settings.defaultTextLength);
-        setReelMoodKey(setup.settings.defaultMood);
-        setReelVisualStyleKey(setup.settings.defaultVisualStyle);
-      })
-      .catch(() => {
-        setReelSetup((current) => current ?? FALLBACK_REEL_SETUP);
-      });
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    listReelVisualStyleCardsAction()
-      .then((styles) => {
-        if (cancelled) return;
-        setReelVisualStyleCards(styles);
-        const firstUnlocked = styles.find((style) => !style.isLocked) ?? styles[0];
-        if (firstUnlocked) {
-          setReelVisualStyleId((current) => current || firstUnlocked.id);
-          setReelVisualStyleKey((current) => current || firstUnlocked.slug);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setReelVisualStyleCards([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    listPublishedReelMoodsAction()
-      .then((moods) => { if (!cancelled) setPublishedMoods(moods); })
-      .catch(() => { if (!cancelled) setPublishedMoods([]); });
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;

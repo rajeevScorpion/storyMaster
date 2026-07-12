@@ -5,6 +5,7 @@ import { Loader2, ShieldAlert } from 'lucide-react';
 
 import {
   getMediaPipelineAdminState,
+  setBeatBundleEnabled,
   setMediaCanaryUserIds,
   setMediaProcessingMode,
 } from '@/app/actions/admin-media-pipeline';
@@ -42,6 +43,7 @@ export default function MediaProcessingModeCard() {
   const [pendingMode, setPendingMode] = useState<MediaProcessingMode | null>(null);
   const [canaryDraft, setCanaryDraft] = useState('');
   const [canarySaving, setCanarySaving] = useState(false);
+  const [bundleSaving, setBundleSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -87,6 +89,23 @@ export default function MediaProcessingModeCard() {
       return;
     }
     void applyMode(mode);
+  };
+
+  const handleBundleToggle = async () => {
+    if (!state || bundleSaving) return;
+    setBundleSaving(true);
+    setMessage(null);
+    try {
+      const next = await setBeatBundleEnabled(!state.beatBundleEnabled);
+      setState(next);
+      setMessage(next.beatBundleEnabled
+        ? 'Beat bundle flow enabled. New beats from server_pipeline users use the two-call flow immediately.'
+        : 'Beat bundle flow disabled. All beat generation is back on the legacy flow.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to update beat bundle flag');
+    } finally {
+      setBundleSaving(false);
+    }
   };
 
   const handleCanarySave = async () => {
@@ -170,6 +189,36 @@ export default function MediaProcessingModeCard() {
           </span>
         </div>
       )}
+
+      <div className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+        <div>
+          <p className="text-sm font-medium text-neutral-100">Beat bundle flow (two-call generation)</p>
+          <p className="mt-1 text-xs text-neutral-400">
+            Collapses beat generation into two server calls (core text + visuals) with the image delivered by the
+            job worker. Only applies to users whose effective processing mode is server_pipeline — everyone else
+            stays on the legacy flow. Turning this off is the instant kill switch (no redeploy).
+          </p>
+          {state.beatBundleEnabled && state.mode === 'client_legacy' && (
+            <p className="mt-2 text-xs text-amber-300">
+              The active mode is client_legacy, so no user currently qualifies — the flag has no effect until a
+              server-side mode is enabled above.
+            </p>
+          )}
+        </div>
+        <button
+          onClick={() => void handleBundleToggle()}
+          disabled={bundleSaving || (serverDisabled && !state.beatBundleEnabled)}
+          className={`shrink-0 rounded-full border px-4 py-1.5 text-xs font-medium transition-colors ${
+            state.beatBundleEnabled
+              ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+              : 'border-white/10 bg-neutral-800 text-neutral-300 hover:border-white/20'
+          } ${bundleSaving || (serverDisabled && !state.beatBundleEnabled) ? 'cursor-not-allowed opacity-50' : ''}`}
+        >
+          {bundleSaving
+            ? <Loader2 size={12} className="animate-spin" />
+            : state.beatBundleEnabled ? 'Enabled' : 'Disabled'}
+        </button>
+      </div>
 
       {pendingMode && (
         <div className="space-y-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4">

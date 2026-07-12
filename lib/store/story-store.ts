@@ -29,6 +29,11 @@ import {
 } from '@/app/actions/story-narration';
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
+import {
+  generateBeatCore,
+  processBeatVisuals,
+  resolveBeatGenerationModeAction,
+} from '@/app/actions/beat-bundle';
 import { submitStoryImageBatch, submitStoryStatefulVisuals, reconcileStoryBatch } from '@/app/actions/image-batch';
 import {
   enqueueBeatImageJob,
@@ -987,6 +992,55 @@ function syncSaveUiState(
   });
 }
 
+// Admin-tuned model overrides and the image processing mode change rarely and
+// are already cached ~60s server-side; caching them client-side too saves one
+// round-trip per beat. 60s keeps parity with the server cache window.
+const GENERATION_SETTINGS_CACHE_TTL_MS = 60_000;
+
+let cachedModelOverrides: { data: StoryModelOverrides; fetchedAtMs: number } | null = null;
+let cachedImageProcessingMode: { data: 'client_legacy' | 'server_pipeline'; fetchedAtMs: number } | null = null;
+
+async function getStoryModelOverridesCached(): Promise<StoryModelOverrides> {
+  if (cachedModelOverrides && Date.now() - cachedModelOverrides.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cachedModelOverrides.data;
+  }
+
+  const data = await getStoryModelOverrides();
+  cachedModelOverrides = { data, fetchedAtMs: Date.now() };
+  return data;
+}
+
+async function resolveImageProcessingModeCached(): Promise<'client_legacy' | 'server_pipeline'> {
+  if (cachedImageProcessingMode && Date.now() - cachedImageProcessingMode.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cachedImageProcessingMode.data;
+  }
+
+  const data = await resolveImageProcessingModeAction();
+  cachedImageProcessingMode = { data, fetchedAtMs: Date.now() };
+  return data;
+}
+
+let cachedBeatGenerationMode: { data: 'legacy' | 'bundle'; fetchedAtMs: number } | null = null;
+
+async function resolveBeatGenerationModeCached(): Promise<'legacy' | 'bundle'> {
+  if (cachedBeatGenerationMode && Date.now() - cachedBeatGenerationMode.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cachedBeatGenerationMode.data;
+  }
+
+  const data = await resolveBeatGenerationModeAction();
+  cachedBeatGenerationMode = { data, fetchedAtMs: Date.now() };
+  return data;
+}
+
+async function releaseBundleReservation(reservationId: string | null, reason: string): Promise<void> {
+  if (!reservationId) return;
+  try {
+    await releaseCurrentUserBillableAction({ reservationId, reason });
+  } catch (error) {
+    console.error('Failed to release beat-bundle reservation:', error);
+  }
+}
+
 async function resolveCurrentUserId(fallbackUserId?: string): Promise<string | null> {
   if (fallbackUserId) {
     return fallbackUserId;
@@ -994,6 +1048,13 @@ async function resolveCurrentUserId(fallbackUserId?: string): Promise<string | n
 
   try {
     const supabase = createBrowserClient();
+    // The id here only tags recovery/cost rows (server actions re-check auth),
+    // so the locally cached session is enough — avoid the getUser network hop.
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      return session.user.id;
+    }
+
     const { data: { user } } = await supabase.auth.getUser();
     return user?.id ?? null;
   } catch {
@@ -2203,6 +2264,293 @@ export const useStoryStore = create<StoryState>()(
             fallbackText: storyConfig.authoring.preludeText?.trim() || prompt,
           }),
         });
+        // Beat bundle (flag-gated): two server round-trips replace the legacy
+        // authorize → generate → plan → portraits → save → enqueue client
+        // orchestration. Seeded / episode-carry / prompt-only / mock starts
+        // stay on the legacy path, and any 'legacy' answer from the server
+        // falls through to the untouched flow below.
+        if (
+          !seededStory
+          && !promptOnly
+          && !seed?.seedCharacters?.length
+          && !seed?.episodeContext
+          && storyPrompt.toLowerCase() !== 'mock'
+        ) {
+          let bundleMode: 'legacy' | 'bundle' = 'legacy';
+          try {
+            bundleMode = await resolveBeatGenerationModeCached();
+          } catch { /* resolver failure = legacy */ }
+
+          if (bundleMode === 'bundle') {
+            const runStartStoryBundle = async (): Promise<boolean> => {
+              const requestedNarrationVoice = storyConfig.narrationVoice;
+              const initialSession: Partial<StorySession> = {
+                storySessionId: initialSessionId,
+                userPrompt: storyPrompt,
+                genre: 'adventure',
+                tone: 'playful',
+                targetAge: storyConfig.ageGroup,
+                visualStyle,
+                currentBeat: 0,
+                maxBeats: storyConfig.maxBeats,
+                status: 'active',
+                characters: [],
+                enableReferenceImages: true,
+                setting: {
+                  world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
+                  timeOfDay: 'unknown',
+                  mood: 'unknown',
+                },
+                storyConfig,
+                beats: [],
+                choiceHistory: [],
+                openThreads: [],
+                allowedEndings: ['friendship', 'moral', 'comedy', 'discovery', 'rescue', 'bittersweet'],
+                safetyProfile: storyConfig.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
+                narratorVoice: requestedNarrationVoice?.mode === 'user_selected' ? requestedNarrationVoice.voiceId : undefined,
+                narrationVoiceMode: requestedNarrationVoice?.mode,
+                narrationVoiceGenderBucket: requestedNarrationVoice?.genderBucket,
+                narrationLanguageCode: requestedNarrationVoice?.languageCode,
+              };
+
+              // Voice resolves in parallel with the core round-trip.
+              const voicePromise = measureAsyncStep(
+                timingSteps,
+                'voice_resolution',
+                'Resolve narrator voice',
+                () => resolveNarrationVoiceServer({
+                  requestedMode: initialSession.narrationVoiceMode ?? storyConfig.narrationVoice?.mode ?? null,
+                  requestedVoiceId: initialSession.narratorVoice ?? storyConfig.narrationVoice?.voiceId ?? null,
+                  requestedGenderBucket: initialSession.narrationVoiceGenderBucket ?? storyConfig.narrationVoice?.genderBucket ?? null,
+                  requestedAccent: storyConfig.narrationVoice?.accent ?? null,
+                  language: storyConfig.language || 'english',
+                  genre: initialSession.genre!,
+                  tone: initialSession.tone!,
+                  targetAge: initialSession.targetAge!,
+                  costTelemetry: costPhase(baseCostTelemetry, 'voice_selection'),
+                }),
+                { background: true }
+              );
+              voicePromise.catch(() => { /* surfaced where awaited */ });
+
+              setLoadingStage(set, 'start_story', 'beat');
+              const core = await measureAsyncStep(
+                timingSteps,
+                'beat_bundle_core',
+                'Generate opening beat and plan (bundle)',
+                () => generateBeatCore({
+                  userPrompt: storyPrompt,
+                  sessionForPrompt: initialSession,
+                  visualStyle,
+                  authorize: {
+                    actionKey: startStoryActionKey,
+                    idempotencyKey: `start_story:${initialSessionId}`,
+                    storyConfig,
+                    imageCount: 1,
+                    taskKey: getImageTaskKey(storyConfig),
+                    metadata: {
+                      language: storyConfig.language,
+                      ageGroup: storyConfig.ageGroup,
+                      maxBeats: storyConfig.maxBeats,
+                      settingCountry: storyConfig.settingCountry,
+                      authoringMode: storyConfig.authoring.mode,
+                      beatBundle: true,
+                    },
+                  },
+                  storyTelemetry: costPhase(baseCostTelemetry, 'story_generation'),
+                  composerTelemetry: costPhase(baseCostTelemetry, 'storyboard_plan'),
+                })
+              );
+
+              if (core.status === 'legacy') {
+                return false;
+              }
+              if (core.status === 'blocked') {
+                const pricingErrorState = buildPricingErrorState(core.authorization, 'start_story');
+                set({
+                  isLoading: false,
+                  loadingClues: [],
+                  loadingStage: null,
+                  loadingReader: null,
+                  error: pricingErrorState?.error ?? 'Unable to check your wallet right now.',
+                  errorAction: pricingErrorState?.errorAction ?? null,
+                });
+                return true;
+              }
+
+              let beat = enforceReelBeatCap(core.beat, storyConfig);
+              const storyboardPlan = core.storyboardPlan;
+              beat.storyboardPlan = storyboardPlan;
+              beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
+              beat.isStoryboard = true;
+              beat = applyStoryTextOverlayBeatMetadata(beat, storyConfig);
+
+              set((state) => ({
+                loadingClues: beat.clues,
+                loadingReader: updateLoadingReaderWithBeat(state.loadingReader, 'start_story', beat),
+              }));
+              setLoadingStage(set, 'start_story', 'visual');
+
+              const voiceResolution = await voicePromise;
+              const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
+              const storyMap = createStoryMap(beat, rootNodeId);
+              const fullSessionBase = {
+                ...initialSession,
+                title: resolvedTitle,
+                narratorVoice: voiceResolution.voiceId,
+                narrationVoiceMode: voiceResolution.mode,
+                narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                narrationLanguageCode: voiceResolution.languageCode,
+                storyMap,
+              } as StorySession;
+
+              setLoadingStage(set, 'start_story', 'image', { note: IMAGE_JOB_SAFE_TO_LEAVE_NOTE });
+              let visuals: Awaited<ReturnType<typeof processBeatVisuals>>;
+              try {
+                visuals = await measureAsyncStep(
+                  timingSteps,
+                  'beat_bundle_visuals',
+                  'Persist story and queue image (bundle)',
+                  () => processBeatVisuals({
+                    target: { kind: 'new_story', session: fullSessionBase, rootNodeId },
+                    beat,
+                    storyboardPlan,
+                    visualStyle,
+                    storyConfig,
+                    storyAspectRatio,
+                    reservationId: core.reservationId,
+                    narrationVoiceId: voiceResolution.voiceId,
+                    imageContinuityStrategy: storyConfig.imageContinuityStrategy,
+                    storySessionId: initialSessionId,
+                    portraitTelemetry: costPhase(baseCostTelemetry, 'portrait_generation'),
+                    imageTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(storyConfig), { beatBundle: true }),
+                  })
+                );
+              } catch (error: any) {
+                await releaseBundleReservation(core.reservationId, 'beat_bundle_visuals_failed');
+                throw error;
+              }
+
+              if (visuals.status !== 'queued') {
+                await releaseBundleReservation(core.reservationId, `beat_bundle_${visuals.reason}`);
+                throw new Error(visuals.message || "The story couldn't be saved. Please try again.");
+              }
+              const queued = visuals;
+
+              const jobOutcome = await measureAsyncStep(
+                timingSteps,
+                'image_job_wait',
+                'Wait for background image render',
+                () => waitForQueuedBeatImage(queued.storyId, rootNodeId)
+              );
+              const imageStillPending = !jobOutcome;
+              const pendingNodeData = {
+                ...normalizeBeatMediaFields({
+                  ...queued.beat,
+                  imageUrl: undefined,
+                  persistedImageUrl: undefined,
+                  imageStatus: 'pending' as const,
+                  imageError: undefined,
+                  audioStatus: 'not_requested' as const,
+                  audioError: undefined,
+                }),
+                narrationVoiceId: voiceResolution.voiceId,
+              };
+              storyMap.nodes[rootNodeId] = {
+                ...storyMap.nodes[rootNodeId],
+                data: jobOutcome?.imageStatus === 'ready'
+                  ? {
+                      ...pendingNodeData,
+                      imageUrl: jobOutcome.imageUrl,
+                      persistedImageUrl: jobOutcome.imageUrl,
+                      imageStatus: 'ready' as const,
+                      imageError: undefined,
+                    }
+                  : jobOutcome?.imageStatus === 'failed'
+                    ? {
+                        ...pendingNodeData,
+                        imageStatus: 'failed' as const,
+                        imageError: jobOutcome.imageError ?? 'Image generation failed. You can retry it from the story.',
+                      }
+                    : pendingNodeData,
+              };
+
+              const fullSession = deriveSessionFields(
+                {
+                  ...fullSessionBase,
+                  savedStoryId: queued.storyId,
+                  savedByUserId: queued.savedByUserId,
+                } as StorySession,
+                storyMap
+              );
+              set({
+                session: fullSession,
+                isLoading: false,
+                // Beat text + voice are already durably persisted server-side;
+                // the worker owns the image writes — same reasoning as the
+                // legacy server_pipeline branch.
+                saveStatus: 'saved',
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: null,
+                errorAction: null,
+                ...(imageStillPending
+                  ? { activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, rootNodeId])) }
+                  : {}),
+              });
+              if (imageStillPending) {
+                startImageJobPolling(queued.storyId);
+              }
+              dispatchPricingRuntimeRefresh();
+              logGenerationTiming({
+                scope: 'start_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: true,
+                  beatNumber: beat.beatNumber,
+                  storyId: queued.storyId,
+                  promptOnly,
+                  serverPipeline: true,
+                  beatBundle: true,
+                  imageWaitOutcome: jobOutcome?.imageStatus ?? 'pending',
+                },
+              });
+              return true;
+            };
+
+            try {
+              if (await runStartStoryBundle()) {
+                return;
+              }
+              // Server said legacy — continue with the untouched flow below.
+            } catch (error: any) {
+              logGenerationTiming({
+                scope: 'start_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: false,
+                  failureStage: 'beat_bundle',
+                  message: error?.message || 'Story generation failed.',
+                },
+              });
+              set({
+                isLoading: false,
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: error?.message || "The story couldn't start. Please try again.",
+                errorAction: null,
+              });
+              return;
+            }
+          }
+        }
+
+        // Independent of wallet authorization — run both round-trips in parallel.
+        const modelOverridesPromise = getStoryModelOverridesCached().catch(() => undefined);
         try {
           billingAuthorization = await measureAsyncStep(
             timingSteps,
@@ -2265,18 +2613,14 @@ export const useStoryStore = create<StoryState>()(
         const reservationId = getHardReservationId(billingAuthorization);
         let shouldReleaseReservation = Boolean(reservationId);
 
-        // Fetch active model config from DB (falls back to hardcoded defaults on error)
-        let modelOverrides: StoryModelOverrides | undefined;
-        try {
-          modelOverrides = await measureAsyncStep(
-            timingSteps,
-            'model_overrides',
-            'Load model and prompt overrides',
-            () => getStoryModelOverrides()
-          );
-        } catch {
-          // Non-critical: story.ts has hardcoded fallbacks
-        }
+        // Active model config from DB, kicked off before authorization above
+        // (falls back to hardcoded defaults on error)
+        const modelOverrides: StoryModelOverrides | undefined = await measureAsyncStep(
+          timingSteps,
+          'model_overrides',
+          'Load model and prompt overrides',
+          () => modelOverridesPromise
+        );
 
         try {
           const requestedNarrationVoice = storyConfig.narrationVoice;
@@ -2510,7 +2854,7 @@ export const useStoryStore = create<StoryState>()(
           let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
           if (!promptOnly && storyPrompt.toLowerCase() !== 'mock') {
             try {
-              effectiveImageMode = await resolveImageProcessingModeAction();
+              effectiveImageMode = await resolveImageProcessingModeCached();
             } catch {
               // Resolver failure = legacy; the server re-checks on enqueue anyway.
             }
@@ -3057,7 +3401,7 @@ export const useStoryStore = create<StoryState>()(
 
         let modelOverrides: StoryModelOverrides | undefined;
         try {
-          modelOverrides = await getStoryModelOverrides();
+          modelOverrides = await getStoryModelOverridesCached();
         } catch {
           // Non-critical: defaults are used when overrides can't be loaded
         }
@@ -3350,6 +3694,293 @@ export const useStoryStore = create<StoryState>()(
           }),
         });
 
+        // Beat bundle (flag-gated): two server round-trips replace the legacy
+        // authorize → generate → plan → save → enqueue client orchestration.
+        // Seeded-canonical, prompt-only, shared-source, and mock continuations
+        // stay on the legacy path; any 'legacy' answer falls through below.
+        if (
+          !promptOnly
+          && !nextCanonicalSeedBeat
+          && !isSeededStoryConfig(session.storyConfig)
+          && Boolean(session.savedStoryId)
+          && !session.sourceStoryOwnerId
+          && session.userPrompt.toLowerCase() !== 'mock'
+        ) {
+          let bundleMode: 'legacy' | 'bundle' = 'legacy';
+          try {
+            bundleMode = await resolveBeatGenerationModeCached();
+          } catch { /* resolver failure = legacy */ }
+
+          if (bundleMode === 'bundle') {
+            const runContinueStoryBundle = async (): Promise<boolean> => {
+              const savedStoryId = session.savedStoryId!;
+              // Linear-path context, exactly as the legacy flow builds it.
+              const beatsForPrompt = getBeatsToNode(session.storyMap, session.storyMap.currentNodeId);
+              const selectedOptionPrompt = formatSelectedOptionForPrompt(selectedOption);
+              const choiceHistoryForPrompt = [
+                ...getChoiceHistoryToNode(session.storyMap, session.storyMap.currentNodeId),
+                formatChoiceHistoryOption(selectedOption),
+              ];
+              const sessionForPrompt: Partial<StorySession> = {
+                ...session,
+                beats: beatsForPrompt,
+                choiceHistory: choiceHistoryForPrompt,
+              };
+              delete (sessionForPrompt as any).storyMap;
+              delete (sessionForPrompt as any).narratorVoice;
+              delete (sessionForPrompt as any).narrationVoiceMode;
+              delete (sessionForPrompt as any).narrationVoiceGenderBucket;
+              delete (sessionForPrompt as any).narrationLanguageCode;
+
+              // The locked voice resolves in parallel with the core round-trip.
+              const voiceResolutionPromise = resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'));
+              voiceResolutionPromise.catch(() => { /* surfaced where awaited */ });
+
+              setLoadingStage(set, 'continue_story', 'beat');
+              const core = await measureAsyncStep(
+                timingSteps,
+                'beat_bundle_core',
+                'Generate continued beat and plan (bundle)',
+                () => generateBeatCore({
+                  userPrompt: session.userPrompt,
+                  sessionForPrompt,
+                  selectedOptionLabel: selectedOptionPrompt,
+                  visualStyle: session.visualStyle,
+                  authorize: {
+                    actionKey: continueStoryActionKey,
+                    idempotencyKey: `continue_story:${savedStoryId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
+                    relatedStoryId: savedStoryId,
+                    relatedNodeId: session.storyMap.currentNodeId,
+                    storyConfig: session.storyConfig,
+                    imageCount: 1,
+                    taskKey: getImageTaskKey(session.storyConfig),
+                    metadata: {
+                      selectedOptionId: optionId,
+                      selectedOptionLabel: selectedOption.label,
+                      currentBeat: currentNode.data.beatNumber,
+                      beatBundle: true,
+                    },
+                  },
+                  storyTelemetry: costPhase(baseCostTelemetry, 'story_generation'),
+                  composerTelemetry: costPhase(baseCostTelemetry, 'storyboard_plan'),
+                })
+              );
+
+              if (core.status === 'legacy') {
+                return false;
+              }
+              if (core.status === 'blocked') {
+                const pricingErrorState = buildPricingErrorState(core.authorization, 'continue_story');
+                set({
+                  isLoading: false,
+                  loadingClues: [],
+                  loadingStage: null,
+                  loadingReader: null,
+                  error: pricingErrorState?.error ?? 'Unable to check your wallet right now.',
+                  errorAction: pricingErrorState?.errorAction ?? null,
+                });
+                return true;
+              }
+
+              let beat = enforceReelBeatCap(core.beat, session.storyConfig);
+              const storyboardPlan = core.storyboardPlan;
+              beat.storyboardPlan = storyboardPlan;
+              beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
+              beat.isStoryboard = true;
+              beat = applyStoryTextOverlayBeatMetadata(beat, session.storyConfig);
+
+              set((state) => ({
+                loadingClues: beat.clues,
+                loadingReader: updateLoadingReaderWithBeat(state.loadingReader, 'continue_story', beat),
+              }));
+              setLoadingStage(set, 'continue_story', 'visual');
+
+              const voiceResolution = await measureAsyncStep(
+                timingSteps,
+                'voice_resolution',
+                'Resolve locked narrator voice',
+                () => voiceResolutionPromise
+              );
+              const voiceForBeat = voiceResolution.voiceId;
+              const narrationLanguageCode = voiceResolution.languageCode;
+
+              const parentImageContinuityState = extractImageContinuityState(currentNode.data.imageGenerationMetadata);
+              setLoadingStage(set, 'continue_story', 'image', { note: IMAGE_JOB_SAFE_TO_LEAVE_NOTE });
+              let visuals: Awaited<ReturnType<typeof processBeatVisuals>>;
+              try {
+                visuals = await measureAsyncStep(
+                  timingSteps,
+                  'beat_bundle_visuals',
+                  'Persist beat and queue image (bundle)',
+                  () => processBeatVisuals({
+                    target: {
+                      kind: 'existing',
+                      storyId: savedStoryId,
+                      nodeId: newNodeId,
+                      parentNodeId: parentId,
+                      selectedOptionId: optionId,
+                    },
+                    beat,
+                    storyboardPlan,
+                    visualStyle: session.visualStyle,
+                    storyConfig: session.storyConfig,
+                    storyAspectRatio,
+                    reservationId: core.reservationId,
+                    narrationVoiceId: voiceForBeat,
+                    previousImageUrl: currentNode.data.imageUrl ?? null,
+                    parentContinuityState: parentImageContinuityState ?? null,
+                    imageContinuityStrategy: session.storyConfig.imageContinuityStrategy,
+                    storySessionId: session.storySessionId,
+                    portraitTelemetry: costPhase(baseCostTelemetry, 'portrait_generation'),
+                    imageTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), { beatBundle: true }),
+                  })
+                );
+              } catch (error: any) {
+                await releaseBundleReservation(core.reservationId, 'beat_bundle_visuals_failed');
+                throw error;
+              }
+
+              if (visuals.status !== 'queued') {
+                await releaseBundleReservation(core.reservationId, `beat_bundle_${visuals.reason}`);
+                throw new Error(visuals.message || "The next beat couldn't be saved. Please try again.");
+              }
+              const queued = visuals;
+
+              const jobOutcome = await measureAsyncStep(
+                timingSteps,
+                'image_job_wait',
+                'Wait for background image render',
+                () => waitForQueuedBeatImage(savedStoryId, newNodeId)
+              );
+              const imageStillPending = !jobOutcome;
+              const pendingNodeData = {
+                ...normalizeBeatMediaFields({
+                  ...queued.beat,
+                  imageUrl: undefined,
+                  persistedImageUrl: undefined,
+                  imageStatus: 'pending' as const,
+                  imageError: undefined,
+                  audioStatus: 'not_requested' as const,
+                  audioError: undefined,
+                }),
+                narrationVoiceId: voiceForBeat,
+              };
+              const settledNodeData = jobOutcome?.imageStatus === 'ready'
+                ? {
+                    ...pendingNodeData,
+                    imageUrl: jobOutcome.imageUrl,
+                    persistedImageUrl: jobOutcome.imageUrl,
+                    imageStatus: 'ready' as const,
+                    imageError: undefined,
+                  }
+                : jobOutcome?.imageStatus === 'failed'
+                  ? {
+                      ...pendingNodeData,
+                      imageStatus: 'failed' as const,
+                      imageError: jobOutcome.imageError ?? 'Image generation failed. You can retry it from the story.',
+                    }
+                  : pendingNodeData;
+
+              const updatedMap = addChildNode(
+                session.storyMap,
+                session.storyMap.currentNodeId,
+                optionId,
+                settledNodeData,
+                newNodeId
+              );
+              const latestSession = get().session;
+              if (!latestSession) return true;
+              const mergedMap = {
+                ...updatedMap,
+                nodes: {
+                  ...updatedMap.nodes,
+                  ...latestSession.storyMap.nodes,
+                  [parentId]: {
+                    ...(latestSession.storyMap.nodes[parentId] || updatedMap.nodes[parentId]),
+                    children: updatedMap.nodes[parentId].children,
+                  },
+                  [newNodeId]: updatedMap.nodes[newNodeId],
+                },
+              };
+
+              set({
+                session: deriveSessionFields(
+                  {
+                    ...latestSession,
+                    narratorVoice: voiceForBeat,
+                    narrationVoiceMode: voiceResolution.mode,
+                    narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                    narrationLanguageCode,
+                  },
+                  mergedMap
+                ),
+                isLoading: false,
+                // Beat text is already durably persisted server-side and the
+                // worker owns the image writes — same reasoning as the legacy
+                // server_pipeline branch.
+                saveStatus: 'saved',
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: null,
+                errorAction: null,
+                ...(imageStillPending
+                  ? { activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, newNodeId])) }
+                  : {}),
+              });
+              if (imageStillPending) {
+                startImageJobPolling(savedStoryId);
+              }
+              dispatchPricingRuntimeRefresh();
+              logGenerationTiming({
+                scope: 'continue_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: true,
+                  beatNumber: beat.beatNumber,
+                  storyId: queued.storyId,
+                  promptOnly,
+                  serverPipeline: true,
+                  beatBundle: true,
+                  imageWaitOutcome: jobOutcome?.imageStatus ?? 'pending',
+                },
+              });
+              return true;
+            };
+
+            try {
+              if (await runContinueStoryBundle()) {
+                return;
+              }
+              // Server said legacy — continue with the untouched flow below.
+            } catch (error: any) {
+              logGenerationTiming({
+                scope: 'continue_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: false,
+                  failureStage: 'beat_bundle',
+                  optionId,
+                  message: error?.message || 'Beat generation failed.',
+                },
+              });
+              set({
+                isLoading: false,
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: error?.message || "The next beat couldn't be generated. Please try again.",
+                errorAction: null,
+              });
+              return;
+            }
+          }
+        }
+
+        // Independent of wallet authorization — run both round-trips in parallel.
+        const modelOverridesPromise = getStoryModelOverridesCached().catch(() => undefined);
         let billingAuthorization: PricingBillableActionAuthorization;
         try {
           billingAuthorization = await measureAsyncStep(
@@ -3435,16 +4066,19 @@ export const useStoryStore = create<StoryState>()(
           delete (sessionForPrompt as any).narrationVoiceGenderBucket;
           delete (sessionForPrompt as any).narrationLanguageCode;
 
-          // Fetch active model config (non-blocking fallback to defaults)
-          let modelOverrides: StoryModelOverrides | undefined;
-          try {
-            modelOverrides = await measureAsyncStep(
-              timingSteps,
-              'model_overrides',
-              'Load model and prompt overrides',
-              () => getStoryModelOverrides()
-            );
-          } catch { /* falls back to hardcoded defaults */ }
+          // Active model config, kicked off before authorization above
+          // (non-blocking fallback to defaults)
+          const modelOverrides: StoryModelOverrides | undefined = await measureAsyncStep(
+            timingSteps,
+            'model_overrides',
+            'Load model and prompt overrides',
+            () => modelOverridesPromise
+          );
+
+          // The locked voice depends only on session settings, so resolve it in
+          // parallel with beat/image generation (mirrors startStory).
+          const voiceResolutionPromise = resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'));
+          voiceResolutionPromise.catch(() => { /* surfaced where awaited below */ });
 
           setLoadingStage(set, 'continue_story', 'beat');
           let beat = await measureAsyncStep(
@@ -3552,12 +4186,12 @@ export const useStoryStore = create<StoryState>()(
 
           // Narration is on-demand (user clicks the speaker icon on the beat),
           // but the locked voice is still resolved here so the beat records the
-          // voice it will narrate with.
+          // voice it will narrate with. Resolution started before beat generation.
           const voiceResolution = await measureAsyncStep(
             timingSteps,
             'voice_resolution',
             'Resolve locked narrator voice',
-            () => resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'))
+            () => voiceResolutionPromise
           );
           const voiceForBeat = voiceResolution.voiceId;
           const narrationLanguageCode = voiceResolution.languageCode;
@@ -3596,7 +4230,7 @@ export const useStoryStore = create<StoryState>()(
             && session.userPrompt.toLowerCase() !== 'mock'
           ) {
             try {
-              effectiveImageMode = await resolveImageProcessingModeAction();
+              effectiveImageMode = await resolveImageProcessingModeCached();
             } catch {
               // Resolver failure = legacy; the server re-checks on enqueue anyway.
             }
@@ -4209,7 +4843,7 @@ export const useStoryStore = create<StoryState>()(
           const narrationLanguageCode = voiceResolution.languageCode;
           const narrationAccent = voiceResolution.accent;
           const modelOverrides = isReelStoryConfig(session.storyConfig)
-            ? await getStoryModelOverrides().catch(() => undefined)
+            ? await getStoryModelOverridesCached().catch(() => undefined)
             : undefined;
           if (
             session.narratorVoice !== voiceName
@@ -5161,7 +5795,7 @@ export const useStoryStore = create<StoryState>()(
         let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
         if (!promptOnly && session.savedStoryId) {
           try {
-            effectiveImageMode = await resolveImageProcessingModeAction();
+            effectiveImageMode = await resolveImageProcessingModeCached();
           } catch {
             // Resolver failure = legacy; the server re-checks on enqueue anyway.
           }
@@ -5197,7 +5831,7 @@ export const useStoryStore = create<StoryState>()(
 
           let modelOverrides: StoryModelOverrides | undefined;
           try {
-            modelOverrides = await getStoryModelOverrides();
+            modelOverrides = await getStoryModelOverridesCached();
           } catch {
             // Falls back to default prompt and model config inside generateImage.
           }

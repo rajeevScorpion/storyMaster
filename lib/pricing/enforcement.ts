@@ -3,6 +3,7 @@ import 'server-only';
 import { fetchRazorpaySubscription } from '@/lib/billing/razorpay';
 import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
+import { invalidatePricingRuntimeCacheForUser } from '@/lib/pricing/runtime-context-cache';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type {
   DbBeatGrant,
@@ -98,7 +99,7 @@ interface ReconcileRazorpayTopupResult {
   paymentId: string;
 }
 
-interface CachedPricingGlobals {
+export interface CachedPricingGlobals {
   loadedAtMs: number;
   plans: DbPricingPlan[];
   planVersions: DbPricingPlanVersion[];
@@ -106,8 +107,12 @@ interface CachedPricingGlobals {
   actionCosts: DbPricingActionCost[];
 }
 
-const PRICING_GLOBAL_CACHE_TTL_MS = 5_000;
+const PRICING_GLOBAL_CACHE_TTL_MS = 60_000;
 let cachedPricingGlobals: CachedPricingGlobals | null = null;
+
+export function invalidatePricingGlobalsCache(): void {
+  cachedPricingGlobals = null;
+}
 
 function beatsToCoins(value: number): number {
   return Number((value * COINS_PER_BEAT).toFixed(2));
@@ -235,6 +240,8 @@ export async function ensureFreeAllowanceForUser(
     .single();
 
   throwIfQueryFailed(insertResult.error, 'Failed to create free allowance grant');
+
+  invalidatePricingRuntimeCacheForUser(userId);
 
   return {
     granted: true,
@@ -406,6 +413,8 @@ export async function authorizeBillableAction(input: {
         };
       }
 
+      invalidatePricingRuntimeCacheForUser(input.userId);
+
       return {
         status: 'allowed',
         mode: 'hard',
@@ -440,6 +449,8 @@ export async function finalizeBillableAction(input: {
     throw new Error('Reservation finalize did not return a usage event');
   }
 
+  invalidatePricingRuntimeCacheForUser(input.userId);
+
   return {
     reservationId: input.reservationId,
     usageEventId: row.usage_event_id,
@@ -461,6 +472,8 @@ export async function releaseBillableAction(input: {
   });
 
   throwIfQueryFailed(result.error, 'Failed to release reservation');
+
+  invalidatePricingRuntimeCacheForUser(input.userId);
 
   const row = (result.data?.[0] ?? null) as RpcReleaseReservationRow | null;
   return {
@@ -702,7 +715,7 @@ async function loadActionCost(actionKey: PricingActionKey): Promise<DbPricingAct
   }) ?? null;
 }
 
-async function loadCachedPricingGlobals(supabase: AdminClient): Promise<CachedPricingGlobals> {
+export async function loadCachedPricingGlobals(supabase: AdminClient): Promise<CachedPricingGlobals> {
   const now = Date.now();
   if (cachedPricingGlobals && (now - cachedPricingGlobals.loadedAtMs) < PRICING_GLOBAL_CACHE_TTL_MS) {
     return cachedPricingGlobals;
