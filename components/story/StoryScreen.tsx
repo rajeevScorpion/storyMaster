@@ -2382,6 +2382,7 @@ function StoryScreenInner({
   const reelPlayAllNodeIdsRef = useRef<string[]>([]);
   const pendingReelPlayAllNodeIdRef = useRef<string | null>(null);
   const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
+  const isVerticalReaderStory = !isReelStory && isVerticalStory;
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = Boolean(
     normalizedCurrentBeat.imageUrl
@@ -4499,12 +4500,28 @@ function StoryScreenInner({
     }
   }, [isDiscardingReel, isReelStory, resetStory, router, session.savedStoryId]);
 
+  const storyReaderGridClassName = `grid shrink-0 items-end gap-4 ${
+    isVerticalReaderStory
+      ? 'md:grid-cols-[minmax(29rem,32rem)_minmax(20rem,27rem)_22.5rem] md:justify-center md:gap-[30px]'
+      : 'md:grid-cols-12 md:gap-8'
+  }`;
+  const storyTextColumnClassName = isVerticalReaderStory
+    ? 'md:col-span-1 md:col-start-1'
+    : isVerticalStory
+      ? 'md:col-span-4'
+      : 'md:col-span-7';
+  const storyChoicesColumnClassName = isVerticalReaderStory
+    ? 'md:col-span-1 md:col-start-3'
+    : isVerticalStory
+      ? 'md:col-span-4 md:col-start-9'
+      : 'md:col-span-5';
+
   const mainClassName = `relative z-10 flex-1 flex flex-col w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass} ${
     isReelStory
       ? 'justify-start overflow-hidden px-3 pb-2 pt-0 md:justify-center md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
-      // Vertical stories go full-width on desktop so the text/controls and the
-      // choices can sit either side of the centered 9:16 frame (see grid below).
-      : `justify-end px-4 pb-[31px] pt-1 md:p-12 mx-auto ${isVerticalStory ? 'max-w-5xl md:max-w-none' : 'max-w-5xl'}`
+      : isVerticalReaderStory
+        ? 'justify-end px-4 pb-[31px] pt-1 md:px-4 md:py-12 mx-auto max-w-5xl md:max-w-[88rem]'
+        : 'justify-end px-4 pb-[31px] pt-1 md:p-12 mx-auto max-w-5xl'
   }`;
 
   const renderReelPreview = (surface: ReelPreviewSurface) => {
@@ -5742,8 +5759,13 @@ function StoryScreenInner({
             ) : null}
             </div>
             {!isReelStory && isVerticalStory && (displayImageUrl || showResolvingImageState) && (
-              <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
-                <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
+              <div className="absolute inset-0 hidden px-4 pb-[31px] pt-1 md:block md:px-4 md:py-12">
+                <div className={`${storyReaderGridClassName} h-full w-full`}>
+                  <div className="flex h-full min-h-0 items-end justify-center md:col-start-2">
+                    <div
+                      className="relative aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl"
+                      style={{ width: 'min(100%, calc((100dvh - 4rem) * 9 / 16))' }}
+                    >
                   {isStoryboard && resolvedBeatImageUrl ? (
                     <StoryStoryboardPlayer
                       key={`vertical-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
@@ -5808,6 +5830,8 @@ function StoryScreenInner({
                       )}
                     </button>
                   )}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -6066,11 +6090,11 @@ function StoryScreenInner({
           </div>
         )}
 
-        <div className="grid shrink-0 md:grid-cols-12 gap-4 md:gap-8 items-end">
+        <div className={storyReaderGridClassName}>
 
           {/* Story Text Card + Toggle */}
           <div
-            className={`${isVerticalStory ? 'md:col-span-4' : 'md:col-span-7'} flex-col items-center relative ${
+            className={`${storyTextColumnClassName} flex-col items-center relative ${
               isReelStory && isMinimized
                 ? 'hidden'
                 : !isMinimized && visibleReaderPanel === 'story'
@@ -6081,7 +6105,7 @@ function StoryScreenInner({
             onMouseLeave={() => setIsCardHovered(false)}
           >
             {/* Card chrome toggles — minimize + prompt-tools popover */}
-            <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'}`}>
+            <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'} ${!isReelStory ? 'md:pl-[3.75rem]' : ''}`}>
               {/* Storyboard panel dots — desktop only (mobile uses the on-image
                   dots on the framed card, which the backdrop can't provide). */}
               {isStoryboard && resolvedBeatImageUrl && (
@@ -6296,11 +6320,12 @@ function StoryScreenInner({
                     disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
                   />
                 </div>
-                {canUseBeatControls && !isReelStory && !isPromptOnlyStory && (
+                {canUseBeatControls && !isReelStory && (
                   <BeatActionsMenu
                     key={currentNodeId}
                     nodeId={currentNodeId}
                     isLocked={beatIsLocked}
+                    allowImageRegeneration={!isPromptOnlyStory}
                     onEditText={() => setShowEditBeatText(true)}
                     onRegenerateImage={() => setShowRegenerateImage(true)}
                     onRegenerateNarration={() => setShowNarrationRegenConfirm(true)}
@@ -6314,7 +6339,7 @@ function StoryScreenInner({
               </div>
             )}
 
-          <div className="flex w-full flex-col">
+          <div className="flex min-w-0 flex-1 flex-col">
           {/* Batch visuals CTA — sits directly above the card, matching its width (all breakpoints) */}
           <BatchVisualsBanner />
           <motion.div
@@ -6750,7 +6775,7 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className={`hidden md:flex md:flex-col md:justify-end ${isVerticalStory ? 'md:col-span-4 md:col-start-9' : 'md:col-span-5'}`}
+              className={`hidden md:flex md:flex-col md:justify-end ${storyChoicesColumnClassName}`}
             >
               <div className="mb-3 px-1">
                 <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
@@ -6769,7 +6794,7 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className={`flex-col justify-end ${isVerticalStory ? 'md:col-span-4 md:col-start-9' : 'md:col-span-5'} ${
+              className={`flex-col justify-end ${storyChoicesColumnClassName} ${
                 !isMinimized && activeReaderPanel === 'branches' ? 'flex' : 'hidden md:flex'
               }`}
             >
