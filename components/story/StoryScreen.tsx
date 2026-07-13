@@ -4502,7 +4502,9 @@ function StoryScreenInner({
   const mainClassName = `relative z-10 flex-1 flex flex-col w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass} ${
     isReelStory
       ? 'justify-start overflow-hidden px-3 pb-2 pt-0 md:justify-center md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
-      : 'justify-end px-4 pb-[31px] pt-1 md:p-12 max-w-5xl mx-auto'
+      // Vertical stories go full-width on desktop so the text/controls and the
+      // choices can sit either side of the centered 9:16 frame (see grid below).
+      : `justify-end px-4 pb-[31px] pt-1 md:p-12 mx-auto ${isVerticalStory ? 'max-w-5xl md:max-w-none' : 'max-w-5xl'}`
   }`;
 
   const renderReelPreview = (surface: ReelPreviewSurface) => {
@@ -6068,7 +6070,7 @@ function StoryScreenInner({
 
           {/* Story Text Card + Toggle */}
           <div
-            className={`md:col-span-7 flex-col items-center relative ${
+            className={`${isVerticalStory ? 'md:col-span-4' : 'md:col-span-7'} flex-col items-center relative ${
               isReelStory && isMinimized
                 ? 'hidden'
                 : !isMinimized && visibleReaderPanel === 'story'
@@ -6079,7 +6081,38 @@ function StoryScreenInner({
             onMouseLeave={() => setIsCardHovered(false)}
           >
             {/* Card chrome toggles — minimize + prompt-tools popover */}
-            <div className={`relative mb-2 items-center gap-2 self-end ${isReelStory ? 'hidden' : 'flex'}`}>
+            <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'}`}>
+              {/* Storyboard panel dots — desktop only (mobile uses the on-image
+                  dots on the framed card, which the backdrop can't provide). */}
+              {isStoryboard && resolvedBeatImageUrl && (
+                <div
+                  className={`items-center gap-0.5 ${isVerticalStory ? 'flex' : 'hidden md:flex'}`}
+                  role="tablist"
+                  aria-label="Storyboard panels"
+                >
+                  {Array.from({ length: STORYBOARD_PANEL_COUNT }).map((_, panelIndex) => (
+                    <button
+                      key={panelIndex}
+                      type="button"
+                      role="tab"
+                      aria-selected={panelIndex === activeStoryboardPanel}
+                      aria-label={`Show panel ${panelIndex + 1}`}
+                      onClick={() => handleStoryboardPanelSelect(panelIndex)}
+                      className="flex cursor-pointer items-center justify-center p-1.5"
+                      title={`Panel ${panelIndex + 1}`}
+                    >
+                      <span
+                        className={`block h-2 rounded-full transition-all duration-300 ${
+                          panelIndex === activeStoryboardPanel
+                            ? 'w-5 bg-emerald-400'
+                            : 'w-2 bg-white/30 hover:bg-white/60'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="ml-auto flex items-center gap-2">
               <button
                 onClick={() => setIsMinimized(!isMinimized)}
                 className="hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
@@ -6175,6 +6208,7 @@ function StoryScreenInner({
                   </button>
                 </>
               )}
+              </div>
             </div>
 
           {/* Card + Narration button row — fully hidden when minimized so only
@@ -6716,7 +6750,7 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className="hidden md:col-span-5 md:flex md:flex-col md:justify-end"
+              className={`hidden md:flex md:flex-col md:justify-end ${isVerticalStory ? 'md:col-span-4 md:col-start-9' : 'md:col-span-5'}`}
             >
               <div className="mb-3 px-1">
                 <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
@@ -6735,7 +6769,7 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className={`md:col-span-5 flex-col justify-end ${
+              className={`flex-col justify-end ${isVerticalStory ? 'md:col-span-4 md:col-start-9' : 'md:col-span-5'} ${
                 !isMinimized && activeReaderPanel === 'branches' ? 'flex' : 'hidden md:flex'
               }`}
             >
