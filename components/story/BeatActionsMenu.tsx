@@ -17,6 +17,7 @@ export interface BeatActionsMenuProps {
   nodeId: string;
   /** Story-changing edits on this beat require the timeline rewrite flow. */
   isLocked: boolean;
+  allowImageRegeneration?: boolean;
   onEditText: () => void;
   onRegenerateImage: () => void;
   onRegenerateNarration: () => void;
@@ -41,6 +42,7 @@ interface MenuItem {
 export default function BeatActionsMenu({
   nodeId,
   isLocked,
+  allowImageRegeneration = true,
   onEditText,
   onRegenerateImage,
   onRegenerateNarration,
@@ -75,7 +77,7 @@ export default function BeatActionsMenu({
   if (settings.textEditEnabled) {
     items.push({ key: 'edit-text', label: 'Edit story text', icon: PenLine, onSelect: onEditText });
   }
-  if (settings.imageRegenEnabled) {
+  if (allowImageRegeneration && settings.imageRegenEnabled) {
     items.push({ key: 'regen-image', label: 'Regenerate image…', icon: ImageIcon, onSelect: onRegenerateImage });
   }
   if (settings.narrationRegenEnabled) {

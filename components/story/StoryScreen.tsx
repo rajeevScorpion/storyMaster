@@ -47,6 +47,7 @@ import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryTransitionPlayback } from '@/lib/hooks/useStoryTransitionPlayback';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
+import { STORYBOARD_PANEL_COUNT } from '@/lib/storyboard/layout';
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset } from '@/lib/persistence';
 import { saveTreeProgress } from '@/lib/persistence/runtime';
@@ -2381,6 +2382,7 @@ function StoryScreenInner({
   const reelPlayAllNodeIdsRef = useRef<string[]>([]);
   const pendingReelPlayAllNodeIdRef = useRef<string | null>(null);
   const isVerticalStory = session.storyConfig.isVerticalStory || session.storyConfig.aspectRatio === '9:16';
+  const isVerticalReaderStory = !isReelStory && isVerticalStory;
   const hasImpossibleImageState = hasBeatImpossibleImageState(normalizedCurrentBeat);
   const isStoryboard = Boolean(
     normalizedCurrentBeat.imageUrl
@@ -2504,6 +2506,71 @@ function StoryScreenInner({
     play: playAudio,
     seekNarration: seekAudio,
   });
+
+  // --- Interactive storyboard panel browsing --------------------------------
+  // Viewers can swipe / tap the dots to move between storyboard panels. Doing so
+  // pauses narration and hands them manual control, while the displayed panel is
+  // mirrored into the reader text below (scroll-to + highlight). Pressing play
+  // resumes auto-advance from wherever they left off.
+  const [manualStoryboardPanel, setManualStoryboardPanel] = useState<number | null>(null);
+  const [activeStoryboardPanel, setActiveStoryboardPanel] = useState(0);
+  const manualStoryboardPanelRef = useRef<number | null>(null);
+  useEffect(() => {
+    manualStoryboardPanelRef.current = manualStoryboardPanel;
+  }, [manualStoryboardPanel]);
+
+  useEffect(() => {
+    setManualStoryboardPanel(null);
+    setActiveStoryboardPanel(0);
+  }, [currentNodeId]);
+
+  const handleStoryboardPanelSelect = useCallback((panelIndex: number) => {
+    setManualStoryboardPanel(panelIndex);
+    stopAutoScroll();
+    if (playbackState === 'playing') pauseAudio();
+  }, [pauseAudio, playbackState, stopAutoScroll]);
+
+  useEffect(() => {
+    // When narration resumes after manual browsing, jump the audio to the panel
+    // the viewer left off on, then release manual control back to auto-advance.
+    if (playbackState !== 'playing') return;
+    const panel = manualStoryboardPanelRef.current;
+    if (panel == null) return;
+    const boundaryMs = storyPanelBoundariesMs[panel];
+    if (typeof boundaryMs === 'number' && boundaryMs >= 0) seekAudio(boundaryMs);
+    setManualStoryboardPanel(null);
+  }, [playbackState, seekAudio, storyPanelBoundariesMs]);
+
+  // Per-panel slices of the beat text, used to highlight the narration segment
+  // that matches the visible storyboard panel. Only available once overlay
+  // captions exist for the beat; otherwise the reader shows a plain paragraph.
+  const storyReaderSegments = useMemo<string[] | null>(() => {
+    if (isReelStory || !isStoryboard) return null;
+    const captions = normalizedCurrentBeat.storyTextOverlayCaptions;
+    if (!captions?.length) return null;
+    const texts = Array.from({ length: STORYBOARD_PANEL_COUNT }, (_, index) => {
+      const match = captions.find((caption) => caption.panelIndex === index);
+      return match?.text?.trim() ?? '';
+    });
+    // Only segment the reader when every panel has text — a partial partition
+    // would drop part of the story, so fall back to the plain paragraph instead.
+    return texts.every((text) => text.length > 0) ? texts : null;
+  }, [isReelStory, isStoryboard, normalizedCurrentBeat.storyTextOverlayCaptions]);
+
+  const storyboardSegmentRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  useEffect(() => {
+    // Only chase the active segment while the viewer is browsing by hand — during
+    // narration playback the existing auto-scroll owns the scroll position.
+    if (manualStoryboardPanel == null || !storyReaderSegments) return;
+    const container = scrollRef.current;
+    const target = storyboardSegmentRefs.current[activeStoryboardPanel];
+    if (!container || !target) return;
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const delta = (targetRect.top - containerRect.top)
+      - (container.clientHeight / 2 - targetRect.height / 2);
+    container.scrollTo({ top: container.scrollTop + delta, behavior: 'smooth' });
+  }, [activeStoryboardPanel, manualStoryboardPanel, scrollRef, storyReaderSegments]);
   const {
     exportVideo,
     cancel: cancelExport,
@@ -4433,10 +4500,28 @@ function StoryScreenInner({
     }
   }, [isDiscardingReel, isReelStory, resetStory, router, session.savedStoryId]);
 
+  const storyReaderGridClassName = `grid shrink-0 items-end gap-4 ${
+    isVerticalReaderStory
+      ? 'md:grid-cols-[minmax(29rem,32rem)_minmax(20rem,27rem)_22.5rem] md:justify-center md:gap-[30px]'
+      : 'md:grid-cols-12 md:gap-8'
+  }`;
+  const storyTextColumnClassName = isVerticalReaderStory
+    ? 'md:col-span-1 md:col-start-1'
+    : isVerticalStory
+      ? 'md:col-span-4'
+      : 'md:col-span-7';
+  const storyChoicesColumnClassName = isVerticalReaderStory
+    ? 'md:col-span-1 md:col-start-3'
+    : isVerticalStory
+      ? 'md:col-span-4 md:col-start-9'
+      : 'md:col-span-5';
+
   const mainClassName = `relative z-10 flex-1 flex flex-col w-full min-h-0 transition-opacity duration-300 ${chromeVisibilityClass} ${
     isReelStory
       ? 'justify-start overflow-hidden px-3 pb-2 pt-0 md:justify-center md:px-8 md:pb-4 md:pt-8 max-w-6xl mx-auto'
-      : 'justify-end px-4 pb-[31px] pt-1 md:p-12 max-w-5xl mx-auto'
+      : isVerticalReaderStory
+        ? 'justify-end px-4 pb-[31px] pt-1 md:px-4 md:py-12 mx-auto max-w-5xl md:max-w-[88rem]'
+        : 'justify-end px-4 pb-[31px] pt-1 md:p-12 mx-auto max-w-5xl'
   }`;
 
   const renderReelPreview = (surface: ReelPreviewSurface) => {
@@ -5648,6 +5733,12 @@ function StoryScreenInner({
                 activeStoryTransition={!isReelStory ? storyTransitionPlayback.activeTransition : null}
                 storyEffects={!isReelStory ? normalizedCurrentBeat.storyEffects : undefined}
                 effectSeed={currentNodeId}
+                // Full-bleed backdrop sits under <main> (z-0), so its dots can't be
+                // clicked — keep it synced to the panel but non-interactive/dot-less.
+                interactive={false}
+                showIndicators={false}
+                manualPanel={manualStoryboardPanel}
+                onActivePanelChange={setActiveStoryboardPanel}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
               />
@@ -5668,8 +5759,13 @@ function StoryScreenInner({
             ) : null}
             </div>
             {!isReelStory && isVerticalStory && (displayImageUrl || showResolvingImageState) && (
-              <div className="absolute inset-0 hidden items-center justify-center px-8 py-20 md:flex">
-                <div className="relative h-full max-h-[min(78vh,900px)] aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl">
+              <div className="absolute inset-0 hidden px-4 pb-[31px] pt-1 md:block md:px-4 md:py-12">
+                <div className={`${storyReaderGridClassName} h-full w-full`}>
+                  <div className="flex h-full min-h-0 items-end justify-center md:col-start-2">
+                    <div
+                      className="relative aspect-[9/16] overflow-hidden rounded-[28px] border border-white/15 bg-neutral-950/50 shadow-2xl"
+                      style={{ width: 'min(100%, calc((100dvh - 4rem) * 9 / 16))' }}
+                    >
                   {isStoryboard && resolvedBeatImageUrl ? (
                     <StoryStoryboardPlayer
                       key={`vertical-window:${normalizedCurrentBeat.imageUrl}:${normalizedCurrentBeat.audioUrl ?? 'no-audio'}:${cycleSettings.cycleOverride}:${cycleSettings.cycleMs}:${cycleSettings.vignetteEnabled}:${cycleSettings.vignetteAmountPercent}`}
@@ -5696,6 +5792,12 @@ function StoryScreenInner({
                       activeStoryTransition={storyTransitionPlayback.activeTransition}
                       storyEffects={normalizedCurrentBeat.storyEffects}
                       effectSeed={currentNodeId}
+                      // 9:16 window also lives in the z-0 background layer (behind
+                      // <main>), so its dots aren't clickable — sync only.
+                      interactive={false}
+                      showIndicators={false}
+                      manualPanel={manualStoryboardPanel}
+                      onActivePanelChange={setActiveStoryboardPanel}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                     />
@@ -5728,6 +5830,8 @@ function StoryScreenInner({
                       )}
                     </button>
                   )}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -5876,6 +5980,10 @@ function StoryScreenInner({
                   activeStoryTransition={storyTransitionPlayback.activeTransition}
                   storyEffects={normalizedCurrentBeat.storyEffects}
                   effectSeed={currentNodeId}
+                  interactive={!isReelStory}
+                  manualPanel={manualStoryboardPanel}
+                  onPanelSelect={handleStoryboardPanelSelect}
+                  onActivePanelChange={setActiveStoryboardPanel}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                 />
@@ -5982,11 +6090,11 @@ function StoryScreenInner({
           </div>
         )}
 
-        <div className="grid shrink-0 md:grid-cols-12 gap-4 md:gap-8 items-end">
+        <div className={storyReaderGridClassName}>
 
           {/* Story Text Card + Toggle */}
           <div
-            className={`md:col-span-7 flex-col items-center relative ${
+            className={`${storyTextColumnClassName} flex-col items-center relative ${
               isReelStory && isMinimized
                 ? 'hidden'
                 : !isMinimized && visibleReaderPanel === 'story'
@@ -5997,7 +6105,38 @@ function StoryScreenInner({
             onMouseLeave={() => setIsCardHovered(false)}
           >
             {/* Card chrome toggles — minimize + prompt-tools popover */}
-            <div className={`relative mb-2 items-center gap-2 self-end ${isReelStory ? 'hidden' : 'flex'}`}>
+            <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'} ${!isReelStory ? 'md:pl-[3.75rem]' : ''}`}>
+              {/* Storyboard panel dots — desktop only (mobile uses the on-image
+                  dots on the framed card, which the backdrop can't provide). */}
+              {isStoryboard && resolvedBeatImageUrl && (
+                <div
+                  className={`items-center gap-0.5 ${isVerticalStory ? 'flex' : 'hidden md:flex'}`}
+                  role="tablist"
+                  aria-label="Storyboard panels"
+                >
+                  {Array.from({ length: STORYBOARD_PANEL_COUNT }).map((_, panelIndex) => (
+                    <button
+                      key={panelIndex}
+                      type="button"
+                      role="tab"
+                      aria-selected={panelIndex === activeStoryboardPanel}
+                      aria-label={`Show panel ${panelIndex + 1}`}
+                      onClick={() => handleStoryboardPanelSelect(panelIndex)}
+                      className="flex cursor-pointer items-center justify-center p-1.5"
+                      title={`Panel ${panelIndex + 1}`}
+                    >
+                      <span
+                        className={`block h-2 rounded-full transition-all duration-300 ${
+                          panelIndex === activeStoryboardPanel
+                            ? 'w-5 bg-emerald-400'
+                            : 'w-2 bg-white/30 hover:bg-white/60'
+                        }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="ml-auto flex items-center gap-2">
               <button
                 onClick={() => setIsMinimized(!isMinimized)}
                 className="hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
@@ -6093,6 +6232,7 @@ function StoryScreenInner({
                   </button>
                 </>
               )}
+              </div>
             </div>
 
           {/* Card + Narration button row — fully hidden when minimized so only
@@ -6180,11 +6320,12 @@ function StoryScreenInner({
                     disabledReason={narrationIsResolving ? 'Preparing narration...' : 'Save panel text before generating narration'}
                   />
                 </div>
-                {canUseBeatControls && !isReelStory && !isPromptOnlyStory && (
+                {canUseBeatControls && !isReelStory && (
                   <BeatActionsMenu
                     key={currentNodeId}
                     nodeId={currentNodeId}
                     isLocked={beatIsLocked}
+                    allowImageRegeneration={!isPromptOnlyStory}
                     onEditText={() => setShowEditBeatText(true)}
                     onRegenerateImage={() => setShowRegenerateImage(true)}
                     onRegenerateNarration={() => setShowNarrationRegenConfirm(true)}
@@ -6198,7 +6339,7 @@ function StoryScreenInner({
               </div>
             )}
 
-          <div className="flex w-full flex-col">
+          <div className="flex min-w-0 flex-1 flex-col">
           {/* Batch visuals CTA — sits directly above the card, matching its width (all breakpoints) */}
           <BatchVisualsBanner />
           <motion.div
@@ -6459,11 +6600,35 @@ function StoryScreenInner({
                           ))}
                         </div>
                       )}
-                      <p className={`transition-colors duration-500 ${
-                        isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
-                      }`}>
-                        {currentBeat.storyText}
-                      </p>
+                      {storyReaderSegments && !isMinimized ? (
+                        <p className="text-neutral-300">
+                          {storyReaderSegments.map((segment, index) => {
+                            if (!segment) return null;
+                            const isActiveSegment = index === activeStoryboardPanel;
+                            return (
+                              <span key={index}>
+                                <span
+                                  ref={(node) => { storyboardSegmentRefs.current[index] = node; }}
+                                  className={`rounded px-1 transition-colors duration-500 [box-decoration-break:clone] [-webkit-box-decoration-break:clone] ${
+                                    isActiveSegment
+                                      ? 'bg-emerald-500/45 text-white'
+                                      : 'text-neutral-300'
+                                  }`}
+                                >
+                                  {segment}
+                                </span>
+                                {index < storyReaderSegments.length - 1 ? ' ' : ''}
+                              </span>
+                            );
+                          })}
+                        </p>
+                      ) : (
+                        <p className={`transition-colors duration-500 ${
+                          isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
+                        }`}>
+                          {currentBeat.storyText}
+                        </p>
+                      )}
                     </>
                   )}
 
@@ -6610,7 +6775,7 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className="hidden md:col-span-5 md:flex md:flex-col md:justify-end"
+              className={`hidden md:flex md:flex-col md:justify-end ${storyChoicesColumnClassName}`}
             >
               <div className="mb-3 px-1">
                 <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
@@ -6629,7 +6794,7 @@ function StoryScreenInner({
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
-              className={`md:col-span-5 flex-col justify-end ${
+              className={`flex-col justify-end ${storyChoicesColumnClassName} ${
                 !isMinimized && activeReaderPanel === 'branches' ? 'flex' : 'hidden md:flex'
               }`}
             >
