@@ -6593,6 +6593,11 @@ export const useStoryStore = create<StoryState>()(
           });
           if (session.savedStoryId) {
             void retryPendingBeatAssetSyncInternal(session.savedStoryId);
+            // Self-heal a narration batch job that stalled (e.g. a dropped worker
+            // re-kick left a beat stuck 'pending'). Fire-and-forget: it only acts
+            // on an in-flight job whose heartbeat has gone stale, so it can't fight
+            // a worker that's actively running.
+            void reconcileStoryNarration(session.savedStoryId).catch(() => {});
           }
           if (persistenceUserId) {
             void saveTreeStoryAndPrefetch({ readerKind: 'story', session: fullSession, userId: persistenceUserId });
