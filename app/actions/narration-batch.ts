@@ -73,6 +73,22 @@ function beatNeedsNarration(node: StoryNode): boolean {
   return Boolean(beat.storyText && beat.storyText.trim().length > 0);
 }
 
+// True when a write failed only because narration_batch_jobs.accent is absent —
+// i.e. migration 069_narration_accent has not been applied to this database yet.
+// Mirrors isMissingNarrationColumnError() in narration.ts: PostgREST surfaces an
+// unknown insert column as PGRST204 ("...column of ... in the schema cache"),
+// Postgres as 42703 ("column ... does not exist"). We degrade rather than 500 so
+// narration still generates (accent only steers English TTS); apply 069 to restore it.
+function isMissingAccentColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
+  if (!error?.message || !/accent/i.test(error.message)) return false;
+  return (
+    error.code === 'PGRST204'
+    || error.code === '42703'
+    || /schema cache/i.test(error.message)
+    || /column .*accent.* does not exist/i.test(error.message)
+  );
+}
+
 function narrationBaseUrl(): string {
   const raw = process.env.APP_URL
     || process.env.NEXT_PUBLIC_APP_URL
@@ -161,25 +177,46 @@ export async function submitStoryNarrationBatch(input: {
   });
 
   const nodeIds = targetNodes.map((node) => node.id);
-  const { data: jobRow, error: jobError } = await admin
+  const jobInsert = {
+    user_id: user.id,
+    story_id: story.id,
+    scope: 'current_path',
+    status: 'running',
+    node_ids: nodeIds,
+    voice_id: voice.voiceId,
+    voice_mode: voice.mode,
+    voice_gender_bucket: voice.genderBucket,
+    language_code: voice.languageCode,
+    accent: voice.accent,
+    item_count: nodeIds.length,
+    submitted_at: new Date().toISOString(),
+  };
+  let { data: jobRow, error: jobError } = await admin
     .from('narration_batch_jobs')
-    .insert({
-      user_id: user.id,
-      story_id: story.id,
-      scope: 'current_path',
-      status: 'running',
-      node_ids: nodeIds,
-      voice_id: voice.voiceId,
-      voice_mode: voice.mode,
-      voice_gender_bucket: voice.genderBucket,
-      language_code: voice.languageCode,
-      accent: voice.accent,
-      item_count: nodeIds.length,
-      submitted_at: new Date().toISOString(),
-    })
+    .insert(jobInsert)
     .select('id')
     .single();
-  if (jobError || !jobRow) throw new Error(`Failed to create narration job: ${jobError?.message}`);
+
+  // Databases where migration 069 hasn't been applied lack the accent column, so
+  // the insert is rejected before the job is ever created (the old behaviour: an
+  // opaque 500 with no narration). Retry once without accent so narration still
+  // runs on those databases — apply 069_narration_accent to restore accent locking.
+  if (jobError && isMissingAccentColumnError(jobError)) {
+    console.warn('[narration:batch] narration_batch_jobs.accent missing; retrying insert without accent. Apply migration 069_narration_accent.');
+    const { accent: _omitAccent, ...jobInsertWithoutAccent } = jobInsert;
+    ({ data: jobRow, error: jobError } = await admin
+      .from('narration_batch_jobs')
+      .insert(jobInsertWithoutAccent)
+      .select('id')
+      .single());
+  }
+
+  if (jobError || !jobRow) {
+    // Surface the real Postgres/PostgREST error server-side; Next.js masks server
+    // action messages in production, so without this the cause is invisible.
+    console.error('[narration:batch] Failed to create narration job:', jobError);
+    throw new Error(`Failed to create narration job: ${jobError?.message}`);
+  }
   const jobId = jobRow.id as string;
 
   // Reflect pending state on the beats so the client shows "generating".
