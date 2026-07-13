@@ -290,7 +290,17 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
     }
     const node = map.nodes[nodeId];
     const storyText = node?.data.storyText?.trim();
-    if (!node || !storyText) continue;
+    if (!node || !storyText) {
+      // This beat can never be narrated from this job — its node is gone from the
+      // story map, or it has no story text. Mark it failed (not skipped) so it
+      // counts toward the rollup and the job reaches a terminal state instead of
+      // leaving `remaining > 0` and self-re-kicking forever.
+      await admin.from('beats')
+        .update({ audio_status: 'failed', audio_error: 'No story text to narrate.' })
+        .eq('story_id', job.story_id)
+        .eq('node_id', nodeId);
+      continue;
+    }
 
     const costTelemetry: CostTelemetryContext = {
       activityKey: 'regenerate_narration',
