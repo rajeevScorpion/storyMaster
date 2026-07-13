@@ -47,6 +47,7 @@ import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryTransitionPlayback } from '@/lib/hooks/useStoryTransitionPlayback';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
+import { STORYBOARD_PANEL_COUNT } from '@/lib/storyboard/layout';
 import { useResolvedStoryMediaState } from '@/lib/hooks/useResolvedStoryMedia';
 import { getStableMediaIdentity, getStoryPersistence, type StoryMediaAsset } from '@/lib/persistence';
 import { saveTreeProgress } from '@/lib/persistence/runtime';
@@ -2504,6 +2505,71 @@ function StoryScreenInner({
     play: playAudio,
     seekNarration: seekAudio,
   });
+
+  // --- Interactive storyboard panel browsing --------------------------------
+  // Viewers can swipe / tap the dots to move between storyboard panels. Doing so
+  // pauses narration and hands them manual control, while the displayed panel is
+  // mirrored into the reader text below (scroll-to + highlight). Pressing play
+  // resumes auto-advance from wherever they left off.
+  const [manualStoryboardPanel, setManualStoryboardPanel] = useState<number | null>(null);
+  const [activeStoryboardPanel, setActiveStoryboardPanel] = useState(0);
+  const manualStoryboardPanelRef = useRef<number | null>(null);
+  useEffect(() => {
+    manualStoryboardPanelRef.current = manualStoryboardPanel;
+  }, [manualStoryboardPanel]);
+
+  useEffect(() => {
+    setManualStoryboardPanel(null);
+    setActiveStoryboardPanel(0);
+  }, [currentNodeId]);
+
+  const handleStoryboardPanelSelect = useCallback((panelIndex: number) => {
+    setManualStoryboardPanel(panelIndex);
+    stopAutoScroll();
+    if (playbackState === 'playing') pauseAudio();
+  }, [pauseAudio, playbackState, stopAutoScroll]);
+
+  useEffect(() => {
+    // When narration resumes after manual browsing, jump the audio to the panel
+    // the viewer left off on, then release manual control back to auto-advance.
+    if (playbackState !== 'playing') return;
+    const panel = manualStoryboardPanelRef.current;
+    if (panel == null) return;
+    const boundaryMs = storyPanelBoundariesMs[panel];
+    if (typeof boundaryMs === 'number' && boundaryMs >= 0) seekAudio(boundaryMs);
+    setManualStoryboardPanel(null);
+  }, [playbackState, seekAudio, storyPanelBoundariesMs]);
+
+  // Per-panel slices of the beat text, used to highlight the narration segment
+  // that matches the visible storyboard panel. Only available once overlay
+  // captions exist for the beat; otherwise the reader shows a plain paragraph.
+  const storyReaderSegments = useMemo<string[] | null>(() => {
+    if (isReelStory || !isStoryboard) return null;
+    const captions = normalizedCurrentBeat.storyTextOverlayCaptions;
+    if (!captions?.length) return null;
+    const texts = Array.from({ length: STORYBOARD_PANEL_COUNT }, (_, index) => {
+      const match = captions.find((caption) => caption.panelIndex === index);
+      return match?.text?.trim() ?? '';
+    });
+    // Only segment the reader when every panel has text — a partial partition
+    // would drop part of the story, so fall back to the plain paragraph instead.
+    return texts.every((text) => text.length > 0) ? texts : null;
+  }, [isReelStory, isStoryboard, normalizedCurrentBeat.storyTextOverlayCaptions]);
+
+  const storyboardSegmentRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  useEffect(() => {
+    // Only chase the active segment while the viewer is browsing by hand — during
+    // narration playback the existing auto-scroll owns the scroll position.
+    if (manualStoryboardPanel == null || !storyReaderSegments) return;
+    const container = scrollRef.current;
+    const target = storyboardSegmentRefs.current[activeStoryboardPanel];
+    if (!container || !target) return;
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const delta = (targetRect.top - containerRect.top)
+      - (container.clientHeight / 2 - targetRect.height / 2);
+    container.scrollTo({ top: container.scrollTop + delta, behavior: 'smooth' });
+  }, [activeStoryboardPanel, manualStoryboardPanel, scrollRef, storyReaderSegments]);
   const {
     exportVideo,
     cancel: cancelExport,
@@ -5648,6 +5714,12 @@ function StoryScreenInner({
                 activeStoryTransition={!isReelStory ? storyTransitionPlayback.activeTransition : null}
                 storyEffects={!isReelStory ? normalizedCurrentBeat.storyEffects : undefined}
                 effectSeed={currentNodeId}
+                // Full-bleed backdrop sits under <main> (z-0), so its dots can't be
+                // clicked — keep it synced to the panel but non-interactive/dot-less.
+                interactive={false}
+                showIndicators={false}
+                manualPanel={manualStoryboardPanel}
+                onActivePanelChange={setActiveStoryboardPanel}
                 onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                 onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
               />
@@ -5696,6 +5768,12 @@ function StoryScreenInner({
                       activeStoryTransition={storyTransitionPlayback.activeTransition}
                       storyEffects={normalizedCurrentBeat.storyEffects}
                       effectSeed={currentNodeId}
+                      // 9:16 window also lives in the z-0 background layer (behind
+                      // <main>), so its dots aren't clickable — sync only.
+                      interactive={false}
+                      showIndicators={false}
+                      manualPanel={manualStoryboardPanel}
+                      onActivePanelChange={setActiveStoryboardPanel}
                       onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                       onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                     />
@@ -5876,6 +5954,10 @@ function StoryScreenInner({
                   activeStoryTransition={storyTransitionPlayback.activeTransition}
                   storyEffects={normalizedCurrentBeat.storyEffects}
                   effectSeed={currentNodeId}
+                  interactive={!isReelStory}
+                  manualPanel={manualStoryboardPanel}
+                  onPanelSelect={handleStoryboardPanelSelect}
+                  onActivePanelChange={setActiveStoryboardPanel}
                   onImageLoad={() => setFailedImageUrl((prev) => (prev === resolvedBeatImageUrl ? null : prev))}
                   onImageError={() => setFailedImageUrl(resolvedBeatImageUrl!)}
                 />
@@ -6459,11 +6541,35 @@ function StoryScreenInner({
                           ))}
                         </div>
                       )}
-                      <p className={`transition-colors duration-500 ${
-                        isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
-                      }`}>
-                        {currentBeat.storyText}
-                      </p>
+                      {storyReaderSegments && !isMinimized ? (
+                        <p className="text-neutral-300">
+                          {storyReaderSegments.map((segment, index) => {
+                            if (!segment) return null;
+                            const isActiveSegment = index === activeStoryboardPanel;
+                            return (
+                              <span key={index}>
+                                <span
+                                  ref={(node) => { storyboardSegmentRefs.current[index] = node; }}
+                                  className={`rounded px-1 transition-colors duration-500 [box-decoration-break:clone] [-webkit-box-decoration-break:clone] ${
+                                    isActiveSegment
+                                      ? 'bg-emerald-500/45 text-white'
+                                      : 'text-neutral-300'
+                                  }`}
+                                >
+                                  {segment}
+                                </span>
+                                {index < storyReaderSegments.length - 1 ? ' ' : ''}
+                              </span>
+                            );
+                          })}
+                        </p>
+                      ) : (
+                        <p className={`transition-colors duration-500 ${
+                          isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
+                        }`}>
+                          {currentBeat.storyText}
+                        </p>
+                      )}
                     </>
                   )}
 

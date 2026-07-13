@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { probeStoryAudioDurationMs } from '@/lib/storyboard/audio-duration';
@@ -55,7 +56,28 @@ interface StoryStoryboardPlayerProps {
   activeStoryTransition?: ActiveStoryTransition | null;
   storyEffects?: StoryEffectConfig;
   effectSeed?: string;
+  /**
+   * Reader-only opt-in: enables swipe + tappable dots + sliding transition so
+   * the viewer can browse storyboard panels by hand. Left off for the reel /
+   * export render paths, which stay purely auto-advancing.
+   */
+  interactive?: boolean;
+  /** Controlled manual panel override (from the parent). `null` = auto-advance. */
+  manualPanel?: number | null;
+  /** Fired when the viewer swipes or taps a dot to a new panel. */
+  onPanelSelect?: (panelIndex: number) => void;
+  /** Fired whenever the displayed panel changes (auto or manual) so the reader text can sync. */
+  onActivePanelChange?: (panelIndex: number) => void;
 }
+
+const SWIPE_THRESHOLD_PX = 40;
+const SWIPE_HINT_STORAGE_KEY = 'kissago:storyboard-swipe-hint-seen';
+
+const slideVariants = {
+  enter: (direction: number) => ({ x: direction >= 0 ? '100%' : '-100%' }),
+  center: { x: '0%' },
+  exit: (direction: number) => ({ x: direction >= 0 ? '-100%' : '100%' }),
+};
 
 export default function StoryStoryboardPlayer({
   gridUrl,
@@ -86,6 +108,10 @@ export default function StoryStoryboardPlayer({
   activeStoryTransition = null,
   storyEffects,
   effectSeed = gridUrl,
+  interactive = false,
+  manualPanel = null,
+  onPanelSelect,
+  onActivePanelChange,
 }: StoryStoryboardPlayerProps) {
   const [intervalPanel, setIntervalPanel] = useState(0);
   const [ambientElapsedMs, setAmbientElapsedMs] = useState(0);
@@ -112,18 +138,26 @@ export default function StoryStoryboardPlayer({
     return () => controller.abort();
   }, [audioDurationMs, audioUrl]);
 
+  const panelCount = STORYBOARD_PANEL_SEQUENCE.length;
+  // Honour the parent's manual panel on every instance (even non-interactive
+  // ones) so the blurred backdrop stays in sync with the surface the viewer is
+  // actually driving. `interactive` only gates input (swipe / tappable dots).
+  const isManuallyControlled = manualPanel != null;
+
   useEffect(() => {
     if (useNarrationTimeline) return;
+    // While the viewer is browsing panels by hand, freeze the auto-cycle.
+    if (isManuallyControlled) return;
     const shouldCycle = !hasAudio || playbackState === 'playing';
     if (!shouldCycle) return;
     const id = window.setInterval(
-      () => setIntervalPanel((panel) => Math.min(panel + 1, 3)),
+      () => setIntervalPanel((panel) => Math.min(panel + 1, panelCount - 1)),
       panelDurationMs
     );
     return () => window.clearInterval(id);
-  }, [hasAudio, panelDurationMs, playbackState, useNarrationTimeline]);
+  }, [hasAudio, isManuallyControlled, panelCount, panelDurationMs, playbackState, useNarrationTimeline]);
 
-  const activePanel = useNarrationTimeline
+  const autoPanel = useNarrationTimeline
     ? validNarrationTiming
       ? getStoryboardPanelFromNarrationTiming(
           audioElapsedMs,
@@ -132,6 +166,79 @@ export default function StoryStoryboardPlayer({
         )
       : getEqualSplitStoryboardPanel(audioElapsedMs, resolvedAudioDurationMs)
     : intervalPanel;
+  const activePanel = isManuallyControlled
+    ? Math.max(0, Math.min(panelCount - 1, Math.floor(manualPanel as number)))
+    : autoPanel;
+
+  // Slide direction for the interactive transition: +1 forward, -1 back. Manual
+  // swipes/taps set it synchronously; auto-advance is monotonic forward, so when
+  // there's no manual override we simply treat it as forward.
+  const [manualSlideDirection, setManualSlideDirection] = useState(1);
+  const slideDirection = isManuallyControlled ? manualSlideDirection : 1;
+
+  // Keep the parent (reader text) in sync with the displayed panel.
+  useEffect(() => {
+    onActivePanelChange?.(activePanel);
+  }, [activePanel, onActivePanelChange]);
+
+  const [showSwipeHint, setShowSwipeHint] = useState(false);
+  const dismissSwipeHint = () => {
+    setShowSwipeHint(false);
+    try {
+      window.localStorage.setItem(SWIPE_HINT_STORAGE_KEY, '1');
+    } catch {
+      /* ignore storage errors */
+    }
+  };
+
+  useEffect(() => {
+    if (!interactive || !showIndicators || panelCount <= 1) return;
+    let seen = false;
+    try {
+      seen = window.localStorage.getItem(SWIPE_HINT_STORAGE_KEY) === '1';
+    } catch {
+      seen = false;
+    }
+    if (seen) return;
+    // Defer the reveal into a timer callback (a gentle fade-in) so we never call
+    // setState synchronously inside the effect body.
+    const showTimer = window.setTimeout(() => setShowSwipeHint(true), 400);
+    const hideTimer = window.setTimeout(() => setShowSwipeHint(false), 5400);
+    return () => {
+      window.clearTimeout(showTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [interactive, panelCount, showIndicators]);
+
+  const goToPanel = (panelIndex: number) => {
+    dismissSwipeHint();
+    const clamped = Math.max(0, Math.min(panelCount - 1, panelIndex));
+    if (clamped === activePanel) return;
+    // Set direction synchronously so the manual slide animates the right way.
+    setManualSlideDirection(clamped > activePanel ? 1 : -1);
+    onPanelSelect?.(clamped);
+  };
+
+  // Pointer-based swipe (works for touch + mouse drag) on the image area.
+  const swipeOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const handlePointerDown = (event: ReactPointerEvent) => {
+    if (!interactive) return;
+    swipeOriginRef.current = { x: event.clientX, y: event.clientY };
+  };
+  const handlePointerEnd = (event: ReactPointerEvent) => {
+    if (!interactive) return;
+    const origin = swipeOriginRef.current;
+    swipeOriginRef.current = null;
+    if (!origin) return;
+    const dx = event.clientX - origin.x;
+    const dy = event.clientY - origin.y;
+    // Require a clearly horizontal drag past the threshold.
+    if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) <= Math.abs(dy)) return;
+    goToPanel(activePanel + (dx < 0 ? 1 : -1));
+  };
+
+  const useInteractiveSlide = interactive && !activeStoryTransition && panelCount > 1;
+
   const activeCaptionObj = textOverlayEnabled
     ? captions?.find((caption) => caption.panelIndex === activePanel)
     : undefined;
@@ -224,13 +331,33 @@ export default function StoryStoryboardPlayer({
   };
 
   return (
-    <div className="absolute inset-0 overflow-hidden">
+    <div
+      className={`absolute inset-0 overflow-hidden ${interactive ? 'touch-pan-y select-none' : ''}`}
+      onPointerDown={interactive ? handlePointerDown : undefined}
+      onPointerUp={interactive ? handlePointerEnd : undefined}
+      onPointerCancel={interactive ? () => { swipeOriginRef.current = null; } : undefined}
+    >
       <div className={`absolute inset-0 overflow-hidden ${imageClassName ?? ''}`}>
         {activeStoryTransition ? (
           <>
             {renderPanel(activeStoryTransition.fromIndex, 'from')}
             {renderPanel(activeStoryTransition.toIndex, 'to')}
           </>
+        ) : useInteractiveSlide ? (
+          <AnimatePresence initial={false} custom={slideDirection}>
+            <motion.div
+              key={activePanel}
+              custom={slideDirection}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ x: { duration: 0.42, ease: [0.22, 1, 0.36, 1] } }}
+              className="absolute inset-0 overflow-hidden"
+            >
+              {renderPanel(activePanel)}
+            </motion.div>
+          </AnimatePresence>
         ) : useLegacyPanelFade ? (
           <AnimatePresence mode="wait">
             <motion.div
@@ -276,15 +403,56 @@ export default function StoryStoryboardPlayer({
           />
         </ReelCaptionOverlay>
       )}
+      {interactive && showIndicators && (
+        <AnimatePresence>
+          {showSwipeHint && (
+            <motion.div
+              key="swipe-hint"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.35 }}
+              className="pointer-events-none absolute bottom-9 left-1/2 z-30 -translate-x-1/2"
+            >
+              <div className="flex items-center gap-1.5 rounded-full border border-white/15 bg-black/45 px-3 py-1 text-[11px] font-sans tracking-wide text-white/85 shadow-lg backdrop-blur-sm">
+                <ChevronLeft className="h-3.5 w-3.5 animate-pulse" />
+                <span>swipe</span>
+                <ChevronRight className="h-3.5 w-3.5 animate-pulse" />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
       {showIndicators && (
-        <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-1.5">
+        <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1">
           {STORYBOARD_PANEL_SEQUENCE.map((_, panelIndex) => (
-            <div
-              key={panelIndex}
-              className={`h-1.5 w-1.5 rounded-full transition-all duration-300 ${
-                panelIndex === activePanel ? 'scale-125 bg-white/70' : 'bg-white/25'
-              }`}
-            />
+            interactive ? (
+              // Small dot, generous invisible hit area (~28px) so it's easy to tap.
+              <button
+                key={panelIndex}
+                type="button"
+                aria-label={`Show panel ${panelIndex + 1}`}
+                aria-current={panelIndex === activePanel}
+                onClick={() => goToPanel(panelIndex)}
+                onPointerDown={(event) => event.stopPropagation()}
+                className="pointer-events-auto flex cursor-pointer items-center justify-center px-1.5 py-2.5"
+              >
+                <span
+                  className={`block h-2 rounded-full transition-all duration-300 ${
+                    panelIndex === activePanel
+                      ? 'w-5 bg-white/90'
+                      : 'w-2 bg-white/40 hover:bg-white/70'
+                  }`}
+                />
+              </button>
+            ) : (
+              <div
+                key={panelIndex}
+                className={`mx-0.5 mb-2 h-1.5 w-1.5 rounded-full transition-all duration-300 ${
+                  panelIndex === activePanel ? 'scale-125 bg-white/70' : 'bg-white/25'
+                }`}
+              />
+            )
           ))}
         </div>
       )}
