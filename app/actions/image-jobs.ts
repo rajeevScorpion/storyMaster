@@ -6,6 +6,7 @@ import { resolveEffectiveProcessingMode, getConfiguredProcessingMode, getMediaPi
 import { putR2Object } from '@/lib/media/r2-server';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 import type { ReferenceImage } from '@/app/actions/story-runtime';
 import type {
   BeatImageJobReference,
@@ -68,6 +69,21 @@ export async function enqueueBeatImageJob(input: EnqueueBeatImageJobInput): Prom
   const effectiveMode = await resolveEffectiveProcessingMode(user.id);
   if (effectiveMode !== 'server_pipeline') return { status: 'legacy_mode' };
   const requestedMode = await getConfiguredProcessingMode();
+
+  // Pack 1 flag enforcement: user-driven regenerations are rejected when the
+  // feature is disabled, and panel suggestions are stripped when their flag
+  // is off. UI gating alone is never trusted.
+  if (input.payload.regeneration) {
+    if (!(await getFeatureFlag('beat_image_regen_enabled', false))) {
+      return { status: 'error', message: 'Image regeneration is currently disabled.' };
+    }
+    if (
+      input.payload.regeneration.panelSuggestions &&
+      !(await getFeatureFlag('beat_panel_suggestions_enabled', false))
+    ) {
+      input.payload.regeneration = { ...input.payload.regeneration, panelSuggestions: undefined };
+    }
+  }
 
   const admin = createAdminClient();
   const { data: story, error: storyError } = await admin

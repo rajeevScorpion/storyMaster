@@ -7,8 +7,21 @@ import { finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enf
 import { deleteR2Object, getR2ObjectBuffer, r2ObjectExists } from '@/lib/media/r2-server';
 import { parseR2Reference } from '@/lib/media/r2-reference';
 import { processAndStoreImageVariants, R2PipelineUnavailableError } from '@/lib/media/variant-pipeline';
+import {
+  appendImageVersion,
+  ensureActiveImageInGallery,
+  nextVersionNumber,
+  parseGalleryRows,
+  serializeGalleryRows,
+  truncatePromptSnapshot,
+} from '@/lib/media/image-versions';
+import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import {
+  BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY,
+  normalizeMaxImageVersionsPerBeat,
+} from '@/lib/beat-control/settings';
 import type { BeatImageJobRequestPayload, ImageGenerationJobRow } from '@/lib/types/image-jobs';
-import type { StoryMap } from '@/lib/types/story';
+import type { BeatImageGalleryEntry, StoryMap } from '@/lib/types/story';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -177,7 +190,8 @@ async function applyReadyImageToStoryMap(
   nodeId: string,
   displayReference: string,
   finalPromptText: string | undefined,
-  generationMetadata: Record<string, unknown> | undefined
+  generationMetadata: Record<string, unknown> | undefined,
+  imageGallery: BeatImageGalleryEntry[] | undefined
 ): Promise<void> {
   const { data, error } = await admin.from('stories').select('story_map').eq('id', storyId).single();
   if (error || !data?.story_map) return;
@@ -190,6 +204,7 @@ async function applyReadyImageToStoryMap(
     imageStatus: 'ready',
     imageError: undefined,
     ...(finalPromptText ? { finalImagePromptText: finalPromptText } : {}),
+    ...(imageGallery ? { imageGallery } : {}),
     ...(generationMetadata
       ? {
           imageGenerationMetadata: {
@@ -200,6 +215,52 @@ async function applyReadyImageToStoryMap(
       : {}),
   };
   await admin.from('stories').update({ story_map: map }).eq('id', storyId);
+}
+
+/**
+ * Pack 1 version history: every completed generation becomes a gallery
+ * version entry. The pre-existing active image is backfilled as version 1 the
+ * first time a regeneration lands, so the original stays restorable.
+ */
+async function buildUpdatedGallery(
+  admin: AdminClient,
+  job: ImageGenerationJobRow,
+  displayReference: string
+): Promise<BeatImageGalleryEntry[] | null> {
+  const { data: beatRow, error } = await admin
+    .from('beats')
+    .select('image_url, image_gallery')
+    .eq('story_id', job.story_id)
+    .eq('node_id', job.node_id)
+    .maybeSingle();
+  if (error || !beatRow) return null;
+
+  const payload = job.request_payload_json;
+  const nowIso = new Date().toISOString();
+  const cap = normalizeMaxImageVersionsPerBeat(
+    await getFeatureFlagValue(BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY).catch(() => null)
+  );
+
+  let gallery = parseGalleryRows(beatRow.image_gallery);
+  gallery = ensureActiveImageInGallery(gallery, beatRow.image_url, nowIso);
+  const entry: BeatImageGalleryEntry = {
+    url: displayReference,
+    storageKey: displayReference,
+    uploadedAt: nowIso,
+    mode: payload.regeneration?.mode ?? 'initial',
+    ...(payload.regeneration?.overallSuggestion
+      ? { overallSuggestion: payload.regeneration.overallSuggestion }
+      : {}),
+    ...(payload.regeneration?.panelSuggestions
+      ? { panelSuggestions: payload.regeneration.panelSuggestions }
+      : {}),
+    ...(truncatePromptSnapshot(payload.finalPrompt)
+      ? { promptSnapshot: truncatePromptSnapshot(payload.finalPrompt) }
+      : {}),
+    source: payload.regeneration ? 'user' : 'system',
+    versionNumber: nextVersionNumber(gallery),
+  };
+  return appendImageVersion(gallery, entry, cap, displayReference);
 }
 
 /** Idempotency resume: if a previous attempt already stored the original for
@@ -288,6 +349,14 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
     mediaGroupId,
   });
 
+  const updatedGallery = await buildUpdatedGallery(admin, job, variants.displayReference).catch(
+    (error) => {
+      // Version bookkeeping must never block the image landing.
+      console.error('Image job gallery version append failed:', error);
+      return null;
+    }
+  );
+
   // Beats table first (durable source of truth), story_map second.
   await admin
     .from('beats')
@@ -296,6 +365,7 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
       image_status: 'ready',
       image_error: null,
       image_synced_at: new Date().toISOString(),
+      ...(updatedGallery ? { image_gallery: serializeGalleryRows(updatedGallery) } : {}),
     })
     .eq('story_id', job.story_id)
     .eq('node_id', job.node_id);
@@ -306,7 +376,8 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
     job.node_id,
     variants.displayReference,
     finalPromptText,
-    generationMetadata
+    generationMetadata,
+    updatedGallery ?? undefined
   );
 
   // Terminal transition guarded on status so a concurrent duplicate run can

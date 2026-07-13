@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeatTextEditRequest",
+  "type": "object",
+  "required": [
+    "storyId",
+    "beatId",
+    "newText",
+    "confirmTimelineRewrite"
+  ],
+  "properties": {
+    "storyId": {
+      "type": "string"
+    },
+    "beatId": {
+      "type": "string"
+    },
+    "newText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000
+    },
+    "confirmTimelineRewrite": {
+      "type": "boolean"
+    },
+    "clientKnownBeatVersion": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false
+}

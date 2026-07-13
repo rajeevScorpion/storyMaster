@@ -34,7 +34,13 @@ export async function loadVerifiedMediaBunny(config: MediaBunnyConfig) {
     canvas.width = config.width;
     canvas.height = config.height;
     const target = new mediabunny.BufferTarget();
-    const output = new mediabunny.Output({ format: new mediabunny.Mp4OutputFormat(), target });
+    // fastStart keeps the moov atom at the front (required by YouTube and
+    // some native players). Explicit rather than relying on the
+    // target-dependent library default.
+    const output = new mediabunny.Output({
+      format: new mediabunny.Mp4OutputFormat({ fastStart: 'in-memory' }),
+      target,
+    });
     const videoSource = new mediabunny.CanvasSource(canvas, {
       codec: 'avc',
       bitrate: mediabunny.QUALITY_HIGH,

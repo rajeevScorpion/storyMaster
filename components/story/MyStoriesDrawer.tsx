@@ -3,14 +3,19 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, BookOpen, Trash2, Loader2, Clock, Compass, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard } from 'lucide-react';
+import { X, BookOpen, Trash2, Loader2, Clock, Library, Archive, ArchiveRestore, Play, Share2, ImageIcon, Clapperboard, UserRound, RectangleHorizontal, RectangleVertical } from 'lucide-react';
 import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/app/actions/persistence';
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import Link from 'next/link';
 import type { SavedStory, SavedStorylineItem, TabId, UserReel } from '@/lib/types/my-stories';
+import type { CharacterMaster } from '@/lib/types/character-library';
 
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
+import CharacterMasterCard from './CharacterMasterCard';
+import CharacterMasterDialog from './CharacterMasterDialog';
+import StoryboardThumbnail from './StoryboardThumbnail';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 
 interface MyStoriesDrawerProps {
   isOpen: boolean;
@@ -18,29 +23,52 @@ interface MyStoriesDrawerProps {
 }
 
 const TABS: { id: TabId; label: string; icon: typeof BookOpen }[] = [
-  { id: 'explored', label: 'Explored', icon: Compass },
   { id: 'my-stories', label: 'My Stories', icon: BookOpen },
   { id: 'storylines', label: 'Storylines', icon: Library },
   { id: 'reels', label: 'Reels', icon: Clapperboard },
 ];
+
+const CHARACTERS_TAB: { id: TabId; label: string; icon: typeof BookOpen } = {
+  id: 'characters',
+  label: 'Characters',
+  icon: UserRound,
+};
 
 export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>('my-stories');
   const [actionId, setActionId] = useState<string | null>(null);
   const [managedStorylineId, setManagedStorylineId] = useState<string | null>(null);
+  const [characterFilter, setCharacterFilter] = useState('active');
+  const [openMasterId, setOpenMasterId] = useState<string | null>(null);
 
   const stories = useMyStoriesStore((s) => s.stories);
   const reels = useMyStoriesStore((s) => s.reels);
-  const exploredStories = useMyStoriesStore((s) => s.exploredStories);
   const savedStorylines = useMyStoriesStore((s) => s.savedStorylines);
+  const characters = useMyStoriesStore((s) => s.characters);
+  const characterSettings = useMyStoriesStore((s) => s.characterSettings);
   const loading = useMyStoriesStore((s) => s.loading);
   const fetchTab = useMyStoriesStore((s) => s.fetchTab);
+  const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
 
-  // Fetch current tab data when drawer opens or tab changes (serves cache if fresh)
+  // Flag-gated: fail closed until the snapshot loads. Prefetched on login, so
+  // this is usually already populated by the time the drawer opens.
+  const libraryEnabled = characterSettings?.libraryEnabled ?? false;
+  const visibleTabs = libraryEnabled ? [...TABS, CHARACTERS_TAB] : TABS;
+  // Fall back if the flag turned off while the characters tab was selected.
+  const effectiveTab: TabId =
+    activeTab === 'characters' && !libraryEnabled ? 'my-stories' : activeTab;
+
+  // Fetch current tab data when drawer opens or tab changes (serves cache if
+  // fresh). The Characters tab is owned by ensureCharacterUniverse below.
   useEffect(() => {
-    if (isOpen) fetchTab(activeTab);
-  }, [isOpen, activeTab, fetchTab]);
+    if (isOpen && effectiveTab !== 'characters') fetchTab(effectiveTab);
+  }, [isOpen, effectiveTab, fetchTab]);
+
+  // Character-universe snapshot + masters (tab visibility + card list).
+  useEffect(() => {
+    if (isOpen) ensureCharacterUniverse();
+  }, [isOpen, ensureCharacterUniverse]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -48,7 +76,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     }
   }, [isOpen]);
 
-  const isLoading = loading[activeTab];
+  const isLoading = loading[effectiveTab];
 
   const handleLoadStory = (story: SavedStory) => {
     writeOpenFlowNavMeta({
@@ -83,11 +111,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       beatCount: item.storyline?.beat_count || null,
     });
     onClose();
-  };
-
-  const handleExplore = (storyId: string) => {
-    onClose();
-    router.push(`/explore/${storyId}`);
   };
 
   const handleDeleteStory = async (storyId: string) => {
@@ -152,6 +175,54 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     return date.toLocaleDateString();
   };
 
+  // Same portrait rule the gallery uses: the flag wins, aspect ratio backs it up.
+  const isPortraitRow = (row?: { is_vertical_story?: boolean | null; aspect_ratio?: string | null } | null) =>
+    row?.is_vertical_story === true || row?.aspect_ratio === '9:16';
+
+  const renderOrientationBadge = (row: { is_vertical_story?: boolean | null; aspect_ratio?: string | null }) => {
+    const isPortrait = isPortraitRow(row);
+    const Icon = isPortrait ? RectangleVertical : RectangleHorizontal;
+    const label = isPortrait ? 'Portrait (9:16)' : 'Landscape (16:9)';
+    return (
+      <span className="flex items-center text-neutral-600" title={label} aria-label={label}>
+        <Icon className="w-3.5 h-3.5" />
+      </span>
+    );
+  };
+
+  // List thumbnail: server resolves cover → first-beat fallback plus the
+  // storyboard flag; storyboard grids render only their first panel via
+  // StoryboardThumbnail's static crop. The box follows the story orientation
+  // (16:9 landscape / 9:16 portrait).
+  const renderThumbnail = (
+    url: string | null | undefined,
+    isStoryboard: boolean | null | undefined,
+    alt: string,
+    FallbackIcon: typeof BookOpen,
+    isPortrait: boolean
+  ) => (
+    <div
+      className={`relative flex-shrink-0 rounded-lg overflow-hidden bg-neutral-800/60 border border-white/5 ${
+        isPortrait ? 'h-16 aspect-[9/16]' : 'h-14 aspect-video'
+      }`}
+    >
+      {url ? (
+        <StoryboardThumbnail
+          src={url}
+          alt={alt}
+          sizes={isPortrait ? '36px' : '100px'}
+          isPreviewing={false}
+          previewSessionId={0}
+          isStoryboard={isStoryboard === true}
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <FallbackIcon className="w-5 h-5 text-neutral-700" />
+        </div>
+      )}
+    </div>
+  );
+
   const renderLoadingSkeletons = () => (
     <div className="space-y-3">
       {[...Array(3)].map((_, i) => (
@@ -187,26 +258,37 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadStory(story)}
-          className="w-full text-left p-5 pr-20"
+          className="w-full text-left p-4 pr-20"
         >
-          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-            {story.title}
-          </h3>
-          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
-          <div className="flex items-center gap-3 mt-3">
-            <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-              story.is_archived
-                ? 'bg-neutral-500/10 text-neutral-500'
-                : story.status === 'completed'
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'bg-amber-500/10 text-amber-400'
-            }`}>
-              {story.is_archived ? 'archived' : story.status}
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-              <Clock className="w-3 h-3" />
-              {formatDate(story.updated_at)}
-            </span>
+          <div className="flex items-center gap-3">
+            {renderThumbnail(story.thumbnail_url, story.thumbnail_is_storyboard, story.title, BookOpen, isPortraitRow(story))}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+                {story.title}
+              </h3>
+              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+                  story.is_archived
+                    ? 'bg-neutral-500/10 text-neutral-500'
+                    : story.status === 'completed'
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'bg-amber-500/10 text-amber-400'
+                }`}>
+                  {story.is_archived ? 'archived' : story.status}
+                </span>
+                {typeof story.episode_number === 'number' && story.episode_number > 0 && (
+                  <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
+                    Ep {story.episode_number}
+                  </span>
+                )}
+                {renderOrientationBadge(story)}
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                  <Clock className="w-3 h-3" />
+                  {formatDate(story.updated_at)}
+                </span>
+              </div>
+            </div>
           </div>
         </button>
 
@@ -271,29 +353,34 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadReel(reel)}
-          className="w-full text-left p-5 pr-20"
+          className="w-full text-left p-4 pr-20"
         >
-          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-            {reel.title}
-          </h3>
-          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
-          <div className="flex items-center gap-3 mt-3">
-            <span className={`text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-              reel.is_archived
-                ? 'bg-neutral-500/10 text-neutral-500'
-                : reel.status === 'completed'
-                  ? 'bg-emerald-500/10 text-emerald-400'
-                  : 'bg-cyan-500/10 text-cyan-300'
-            }`}>
-              {reel.is_archived ? 'archived' : reel.status}
-            </span>
-            <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
-              {reel.beat_count} beats
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-              <Clock className="w-3 h-3" />
-              {formatDate(reel.updated_at)}
-            </span>
+          <div className="flex items-center gap-3">
+            {renderThumbnail(reel.thumbnail_url, reel.thumbnail_is_storyboard, reel.title, Clapperboard, isPortraitRow(reel))}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+                {reel.title}
+              </h3>
+              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+                  reel.is_archived
+                    ? 'bg-neutral-500/10 text-neutral-500'
+                    : reel.status === 'completed'
+                      ? 'bg-emerald-500/10 text-emerald-400'
+                      : 'bg-cyan-500/10 text-cyan-300'
+                }`}>
+                  {reel.is_archived ? 'archived' : reel.status}
+                </span>
+                <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
+                  {reel.beat_count} beats
+                </span>
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                  <Clock className="w-3 h-3" />
+                  {formatDate(reel.updated_at)}
+                </span>
+              </div>
+            </div>
           </div>
         </button>
 
@@ -338,42 +425,6 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     ));
   };
 
-  const renderExploredStories = () => {
-    if (exploredStories.length === 0) {
-      return renderEmptyState(Compass, 'No explored stories', 'Stories you explore from the gallery will appear here.');
-    }
-    return exploredStories.map((item) => (
-      <motion.div
-        key={item.id}
-        layout
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
-      >
-        <button
-          onClick={() => handleExplore(item.story_id)}
-          className="w-full text-left p-5"
-        >
-          <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-            {item.story?.title || 'Untitled Story'}
-          </h3>
-          <p className="text-xs text-neutral-500 mt-1 line-clamp-1">
-            {item.story?.user_prompt || ''}
-          </p>
-          <div className="flex items-center gap-3 mt-3">
-            <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400">
-              explored
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-              <Clock className="w-3 h-3" />
-              {formatDate(item.updated_at)}
-            </span>
-          </div>
-        </button>
-      </motion.div>
-    ));
-  };
-
   const renderStorylines = () => {
     if (savedStorylines.length === 0) {
       return renderEmptyState(Library, 'No saved storylines', 'Completed storylines will appear here automatically.');
@@ -386,28 +437,33 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         animate={{ opacity: 1, y: 0 }}
         className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
       >
-        <div className="p-5 pr-32">
+        <div className="p-4 pr-32">
           <Link
             href={`/storyline/${item.storyline_id}`}
             onClick={() => handleOpenStoryline(item)}
-            className="block"
+            className="flex items-center gap-3"
           >
-            <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-              {item.storyline?.title || 'Untitled Storyline'}
-            </h3>
-            <div className="flex items-center gap-3 mt-2">
-              <span className="text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
-                {item.storyline?.beat_count || 0} beats
-              </span>
-              {item.storyline?.author_name && (
-                <span className="text-[10px] text-neutral-600">
-                  by {item.storyline.author_name}
+            {renderThumbnail(
+              item.storyline?.thumbnail_url,
+              item.storyline?.thumbnail_is_storyboard,
+              item.storyline?.title || 'Untitled Storyline',
+              Library,
+              isPortraitRow(item.storyline)
+            )}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+                {item.storyline?.title || 'Untitled Storyline'}
+              </h3>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
+                  {item.storyline?.beat_count || 0} beats
                 </span>
-              )}
-              <span className="flex items-center gap-1 text-[10px] text-neutral-600">
-                <Clock className="w-3 h-3" />
-                {formatDate(item.saved_at)}
-              </span>
+                {item.storyline && renderOrientationBadge(item.storyline)}
+                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                  <Clock className="w-3 h-3" />
+                  {formatDate(item.saved_at)}
+                </span>
+              </div>
             </div>
           </Link>
         </div>
@@ -466,6 +522,46 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     ));
   };
 
+  const renderCharacters = () => {
+    const filtered = characters.filter((master) =>
+      characterFilter === 'archived'
+        ? Boolean(master.archivedAt)
+        : characterFilter === 'all'
+          ? true
+          : !master.archivedAt
+    );
+    return (
+      <>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-neutral-500">
+            Saved characters can join new stories and future episodes.
+          </p>
+          <FilterDropdown
+            value={characterFilter}
+            onChange={setCharacterFilter}
+            ariaLabel="Filter characters"
+            options={[
+              { value: 'active', label: 'Active' },
+              { value: 'archived', label: 'Archived' },
+              { value: 'all', label: 'All' },
+            ]}
+          />
+        </div>
+        {filtered.length === 0 ? (
+          renderEmptyState(
+            UserRound,
+            characterFilter === 'archived' ? 'No archived characters' : 'No saved characters yet',
+            'Save a character from one of your stories and it will appear here, ready to reuse.'
+          )
+        ) : (
+          filtered.map((master) => (
+            <CharacterMasterCard key={master.id} master={master} onOpen={(m) => setOpenMasterId(m.id)} />
+          ))
+        )}
+      </>
+    );
+  };
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -504,9 +600,9 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
 
             {/* Tabs */}
             <div className="flex border-b border-white/5">
-              {TABS.map((tab) => {
+              {visibleTabs.map((tab) => {
                 const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
+                const isActive = effectiveTab === tab.id;
                 return (
                   <button
                     key={tab.id}
@@ -528,12 +624,12 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {isLoading ? (
                 renderLoadingSkeletons()
-              ) : activeTab === 'my-stories' ? (
+              ) : effectiveTab === 'my-stories' ? (
                 renderMyStories()
-              ) : activeTab === 'explored' ? (
-                renderExploredStories()
-              ) : activeTab === 'reels' ? (
+              ) : effectiveTab === 'reels' ? (
                 renderReels()
+              ) : effectiveTab === 'characters' ? (
+                renderCharacters()
               ) : (
                 renderStorylines()
               )}
@@ -544,6 +640,11 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             isOpen={Boolean(managedStorylineId)}
             storylineId={managedStorylineId}
             onClose={() => setManagedStorylineId(null)}
+          />
+
+          <CharacterMasterDialog
+            master={characters.find((master) => master.id === openMasterId) ?? null}
+            onClose={() => setOpenMasterId(null)}
           />
         </>
       )}

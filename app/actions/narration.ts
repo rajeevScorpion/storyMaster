@@ -10,7 +10,7 @@ import {
   resolvePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
-import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import { estimateElevenLabsModelCostUsd } from '@/lib/ai/provider-costs';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
@@ -1470,6 +1470,21 @@ export async function generateAndPersistNarration(
       voiceName,
     },
     async () => {
+      // Pack 1: interactive re-narration of a beat that already has audio is a
+      // user-facing regeneration and must respect the feature flag. First-time
+      // generation and background workers (serverAuth) are unaffected.
+      if (!options.serverAuth) {
+        const { data: existingBeat } = await createAdminClient()
+          .from('beats')
+          .select('audio_url')
+          .eq('story_id', savedStoryId)
+          .eq('node_id', nodeId)
+          .maybeSingle();
+        if (existingBeat?.audio_url && !(await getFeatureFlag('beat_narration_regen_enabled', false))) {
+          throw new Error('Narration regeneration is currently disabled.');
+        }
+      }
+
       const audioPayload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, options);
 
       const supabase = options.serverAuth ? createAdminClient() : await createClient();

@@ -5,6 +5,7 @@ export type TaskKey =
   | 'reel_story_generation'
   | 'seed_plan_generation'
   | 'seeded_beat_materialization'
+  | 'story_bible_generation'
   | 'visual_prompt'
   | 'reel_visual_prompt'
   | 'image_generation'
@@ -36,6 +37,7 @@ export const TASK_DEFINITIONS: {
   { key: 'reel_story_generation', label: 'Reel Story Generation', description: 'Generates short-form reel beats capped at 1-3 beats' },
   { key: 'seed_plan_generation', label: 'Seed Plan Generation', description: 'Turns user-authored source material into a structured canonical beat plan preview' },
   { key: 'seeded_beat_materialization', label: 'Seeded Beat Materialization', description: 'Turns one confirmed seed-plan beat into a full runtime story beat while preserving the authored path' },
+  { key: 'story_bible_generation', label: 'Story Bible Writer', description: 'Condenses a finished episode into an updated series bible plus a journal summary for episodic continuity' },
   { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Builds structured 4-frame storyboard plans and portrait tasks from each story beat' },
   { key: 'reel_visual_prompt', label: 'Reel Visual Composer', description: 'Builds 4-frame storyboard plans optimized for vertical reel pacing' },
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
@@ -53,6 +55,7 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   reel_story_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.7 },
   seed_plan_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
   seeded_beat_materialization: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.4 },
+  story_bible_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.35 },
   visual_prompt: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.7 },
   reel_visual_prompt: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.5 },
   image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },

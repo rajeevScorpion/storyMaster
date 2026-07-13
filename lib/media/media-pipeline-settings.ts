@@ -41,6 +41,8 @@ export interface MediaPipelineAdminState {
   /** True when R2 env + storage flags allow the server pipeline to run at all. */
   serverPipelineAvailable: boolean;
   serverPipelineUnavailableReason: string | null;
+  /** Two-call beat generation flow; only applies to users whose effective processing mode is server_pipeline. */
+  beatBundleEnabled: boolean;
 }
 
 export const DEFAULT_MEDIA_PIPELINE_SETTINGS: MediaPipelineSettings = {

@@ -3,7 +3,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
-import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls } from '@/lib/media/storage-url-signing';
+import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, signMixedUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
@@ -33,6 +33,11 @@ import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+import {
+  parseGalleryRows,
+  sanitizeGalleryForBlob,
+  serializeGalleryRows,
+} from '@/lib/media/image-versions';
 import { resolveValidatedPublishQuality } from '@/lib/story/publish-quality';
 import {
   generateShareToken,
@@ -51,14 +56,9 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
     const existingBeat = existingStoryMap?.nodes?.[id]?.data;
     const persistedImageUrl = resolvePersistedImageUrlForSave(node.data, existingBeat);
     const persistedAudioUrl = resolvePersistedAudioUrlForSave(node.data, existingBeat);
-    const cleanedGallery = (node.data.imageGallery ?? [])
-      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
-      .map((entry) => ({
-        url: normalizeStorageUrl(entry.url, 'story-assets'),
-        storageKey: entry.storageKey,
-        uploadedAt: entry.uploadedAt,
-        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
-      }));
+    const cleanedGallery = sanitizeGalleryForBlob(node.data.imageGallery, (url) =>
+      normalizeStorageUrl(url, 'story-assets')
+    );
     nodes[id] = {
       ...node,
       data: {
@@ -416,6 +416,11 @@ const ADDITIVE_STORY_COLUMNS = [
   'image_model_key',
   'image_model_snapshot',
   'visual_profile',
+  // Migration 075 episode columns — stripped when the migration hasn't been
+  // applied yet so saving keeps working during rollout.
+  'episode_branch_id',
+  'episode_number',
+  'parent_story_id',
 ] as const;
 
 const ADDITIVE_STORYLINE_COLUMNS = [
@@ -621,12 +626,9 @@ function nodeToBeatRow(
     row.story_effects = normalizeStoryEffectConfig(normalizedBeat.storyEffects) as unknown as Record<string, unknown>;
   }
 
-  row.image_gallery = (normalizedBeat.imageGallery ?? []).map((entry) => ({
-    url: normalizeStorageUrl(entry.url, 'story-assets'),
-    storage_key: entry.storageKey,
-    uploaded_at: entry.uploadedAt,
-    ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
-  }));
+  row.image_gallery = serializeGalleryRows(normalizedBeat.imageGallery, (url) =>
+    normalizeStorageUrl(url, 'story-assets')
+  );
 
   return row;
 }
@@ -655,16 +657,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageProviderKey: beat.image_provider_key || undefined,
     imageModelKey: beat.image_model_key || undefined,
     imageGenerationMetadata: beat.image_generation_metadata || undefined,
-    imageGallery: Array.isArray(beat.image_gallery)
-      ? beat.image_gallery.map((entry) => ({
-          url: entry.url,
-          storageKey: entry.storage_key,
-          uploadedAt: entry.uploaded_at,
-          ...(entry.optimization_metadata ? {
-            optimizationMetadata: entry.optimization_metadata as unknown as import('@/lib/media/imageUploadOptimization').ImageCompressionMetadata,
-          } : {}),
-        }))
-      : [],
+    imageGallery: parseGalleryRows(beat.image_gallery),
     audioUrl: beat.audio_url || undefined,
     audioVersion: beat.audio_synced_at || undefined,
     audioStatus: beat.audio_status,
@@ -868,6 +861,15 @@ export async function saveStory(
       },
     },
     ...reelPersistencePatch,
+    // Pack 2: episode links write only for episode sessions so legacy saves
+    // never clobber columns they don't know about.
+    ...(session.episodeContext
+      ? {
+          episode_branch_id: session.episodeContext.branchId,
+          episode_number: session.episodeContext.episodeNumber,
+          parent_story_id: session.episodeContext.parentStoryId ?? null,
+        }
+      : {}),
     is_vertical_story: storyOrientation.isVerticalStory,
     aspect_ratio: storyOrientation.aspectRatio,
     story_map: cleanMap as unknown as Record<string, unknown>,
@@ -1124,6 +1126,48 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     aspectRatio: story.aspect_ratio,
   });
 
+  // Pack 2: rebuild the episode context for series stories so continuation
+  // beats keep the carried bible/journal canon. Best-effort — a missing bible
+  // (flag off, RLS, un-migrated DB) still yields a valid session.
+  let episodeContext: StorySession['episodeContext'];
+  if (story.episode_branch_id && story.episode_number) {
+    episodeContext = {
+      branchId: story.episode_branch_id,
+      episodeNumber: story.episode_number,
+      parentStoryId: story.parent_story_id ?? undefined,
+    };
+    try {
+      const [{ data: bibleRow }, { data: journalRows }] = await Promise.all([
+        supabase
+          .from('story_bibles')
+          .select('title, bible_text')
+          .eq('branch_id', story.episode_branch_id)
+          .maybeSingle(),
+        supabase
+          .from('episode_journal_events')
+          .select('summary, payload, event_type, story_id')
+          .eq('branch_id', story.episode_branch_id)
+          .eq('event_type', 'episode_summary')
+          .neq('story_id', story.id)
+          .order('sequence_no', { ascending: false })
+          .limit(5),
+      ]);
+      if (bibleRow) {
+        episodeContext.seriesTitle = bibleRow.title || undefined;
+        episodeContext.bibleText = bibleRow.bible_text || undefined;
+      }
+      const summaries = (journalRows ?? [])
+        .map((row) => row.summary as string)
+        .filter(Boolean)
+        .reverse();
+      if (summaries.length > 0) {
+        episodeContext.journalSummary = summaries.join('\n\n');
+      }
+    } catch (episodeError) {
+      console.error('Failed to load episode context (continuing without):', episodeError);
+    }
+  }
+
   return {
     storySessionId: story.id,
     savedStoryId: story.id,
@@ -1151,6 +1195,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     narrationVoiceMode: story.narration_voice_mode === 'user_selected' ? 'user_selected' : 'legacy_auto',
     narrationVoiceGenderBucket: story.narration_voice_gender_bucket === 'male' ? 'male' : story.narration_voice_gender_bucket === 'female' ? 'female' : undefined,
     narrationLanguageCode: story.narration_language_code === 'en-IN' || story.narration_language_code === 'hi-IN' ? story.narration_language_code : undefined,
+    ...(episodeContext ? { episodeContext } : {}),
   };
 }
 
@@ -1332,12 +1377,9 @@ export async function updateBeatMediaState(
     updateData.image_synced_at = null;
   }
   if ('imageGallery' in patch) {
-    updateData.image_gallery = (patch.imageGallery ?? []).map((entry) => ({
-      url: normalizeStorageUrl(entry.url, 'story-assets'),
-      storage_key: entry.storageKey,
-      uploaded_at: entry.uploadedAt,
-      ...(entry.optimizationMetadata ? { optimization_metadata: entry.optimizationMetadata as unknown as Record<string, unknown> } : {}),
-    }));
+    updateData.image_gallery = serializeGalleryRows(patch.imageGallery, (url) =>
+      normalizeStorageUrl(url, 'story-assets')
+    );
   }
   if ('audioUrl' in patch) {
     updateData.audio_url = patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : null;
@@ -1455,12 +1497,9 @@ export async function updateBeatMediaState(
     ...(patch.imageStatus ? { imageStatus: patch.imageStatus } : {}),
     ...('imageError' in patch ? { imageError: patch.imageError || undefined } : {}),
     ...('imageGallery' in patch ? {
-      imageGallery: (patch.imageGallery ?? []).map((entry) => ({
-        url: normalizeStorageUrl(entry.url, 'story-assets'),
-        storageKey: entry.storageKey,
-        uploadedAt: entry.uploadedAt,
-        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
-      })),
+      imageGallery: sanitizeGalleryForBlob(patch.imageGallery, (url) =>
+        normalizeStorageUrl(url, 'story-assets')
+      ),
     } : {}),
     ...('audioUrl' in patch ? { audioUrl: patch.audioUrl ? normalizeStorageUrl(patch.audioUrl, 'story-assets') : undefined } : {}),
     ...('audioUrl' in patch && !('storyboardNarrationTiming' in patch) ? { storyboardNarrationTiming: undefined } : {}),
@@ -2008,6 +2047,159 @@ export async function setStoryCoverImage(
 // List / Delete / Archive
 // ============================================================
 
+// Signed thumbnail URLs must outlive the client-side list cache (5 min) by a
+// comfortable margin; matches the gallery cover signing TTL.
+const LIST_THUMBNAIL_SIGN_TTL_SECONDS = 60 * 60 * 24;
+
+type ListThumbnail = { url: string | null; isStoryboard: boolean };
+
+/**
+ * Sign thumbnail URLs in place: private story-assets / R2 references become
+ * signed URLs; public CDN URLs pass through untouched (so they stay cacheable).
+ */
+async function signListThumbnails(
+  supabase: SupabaseClient,
+  thumbnails: Map<string, ListThumbnail>
+): Promise<Map<string, ListThumbnail>> {
+  const urls = Array.from(thumbnails.values())
+    .map((thumb) => thumb.url)
+    .filter((url): url is string => Boolean(url));
+  if (urls.length === 0) return thumbnails;
+
+  try {
+    const signed = await signMixedUrls(supabase, urls, 'story-assets', LIST_THUMBNAIL_SIGN_TTL_SECONDS);
+    for (const [id, thumb] of thumbnails) {
+      const signedUrl = thumb.url ? signed.get(thumb.url) : undefined;
+      if (signedUrl) thumbnails.set(id, { ...thumb, url: signedUrl });
+    }
+  } catch (error) {
+    console.error('Failed to sign list thumbnails:', error);
+  }
+  // An r2:// reference that couldn't be signed is not a fetchable URL — drop it
+  // so the client falls back to the placeholder instead of a broken <Image>.
+  for (const [id, thumb] of thumbnails) {
+    if (thumb.url?.startsWith('r2://')) {
+      thumbnails.set(id, { ...thumb, url: null });
+    }
+  }
+  return thumbnails;
+}
+
+/**
+ * Resolve display thumbnails for story list rows: cover image first, else the
+ * story's root beat (first beat) image via one batched beats query. Covers of
+ * storyboard-mode stories are copied beat grids, so the root beat's
+ * is_storyboard flag decides the first-panel crop even when a cover is used
+ * (client-side auto-detection can't work on thumbnail-sized image variants).
+ * Failures degrade to no thumbnail — the list itself must never break over
+ * covers.
+ */
+async function resolveStoryListThumbnails(
+  supabase: SupabaseClient,
+  rows: Array<{ id: string; cover_image_url: string | null }>
+): Promise<Map<string, ListThumbnail>> {
+  const thumbnails = new Map<string, ListThumbnail>();
+  if (rows.length === 0) return thumbnails;
+
+  for (const row of rows) {
+    const cover = row.cover_image_url?.trim();
+    thumbnails.set(row.id, { url: cover || null, isStoryboard: false });
+  }
+
+  const { data: beatRows, error } = await supabase
+    .from('beats')
+    .select('story_id, image_url, is_storyboard')
+    .in('story_id', rows.map((row) => row.id))
+    .is('parent_node_id', null);
+
+  if (error) {
+    console.error('Failed to fetch story thumbnail beats:', error.message);
+  }
+
+  const rootBeatByStoryId = new Map<string, { image_url: string; isStoryboard: boolean }>();
+  for (const beat of beatRows ?? []) {
+    const imageUrl = typeof beat.image_url === 'string' ? beat.image_url.trim() : '';
+    if (rootBeatByStoryId.has(beat.story_id)) continue;
+    rootBeatByStoryId.set(beat.story_id, {
+      image_url: imageUrl,
+      isStoryboard: beat.is_storyboard === true,
+    });
+  }
+
+  for (const row of rows) {
+    const existing = thumbnails.get(row.id);
+    const rootBeat = rootBeatByStoryId.get(row.id);
+    if (!rootBeat) continue;
+    thumbnails.set(row.id, {
+      url: existing?.url || rootBeat.image_url || null,
+      isStoryboard: rootBeat.isStoryboard,
+    });
+  }
+
+  return signListThumbnails(supabase, thumbnails);
+}
+
+/**
+ * Resolve display thumbnails for saved-storyline rows: storyline cover first,
+ * else the first beat's image. The first beat is looked up through
+ * `storylines.node_path` against the beats table — the storyline_beats
+ * junction is not reliably populated (its insert is non-fatal on publish), so
+ * node_path is the source of truth, same as the gallery cover pipeline. The
+ * beat's is_storyboard flag drives the first-panel crop even for cover images,
+ * since covers derive from beat grids.
+ */
+async function resolveStorylineListThumbnails(
+  supabase: SupabaseClient,
+  rows: Array<{
+    storyline_id: string;
+    story_id: string | null;
+    first_node_id: string | null;
+    cover_image_url: string | null;
+  }>
+): Promise<Map<string, ListThumbnail>> {
+  const thumbnails = new Map<string, ListThumbnail>();
+  if (rows.length === 0) return thumbnails;
+
+  for (const row of rows) {
+    const cover = row.cover_image_url?.trim();
+    thumbnails.set(row.storyline_id, { url: cover || null, isStoryboard: false });
+  }
+
+  const targets = rows.filter(
+    (row): row is typeof row & { story_id: string; first_node_id: string } =>
+      Boolean(row.story_id && row.first_node_id)
+  );
+
+  if (targets.length > 0) {
+    const { data: beatRows, error } = await supabase
+      .from('beats')
+      .select('story_id, node_id, image_url, is_storyboard')
+      .in('story_id', Array.from(new Set(targets.map((t) => t.story_id))))
+      .in('node_id', Array.from(new Set(targets.map((t) => t.first_node_id))));
+
+    if (error) {
+      console.error('Failed to fetch storyline thumbnail beats:', error.message);
+    }
+
+    const beatByStoryAndNode = new Map(
+      (beatRows ?? []).map((beat) => [`${beat.story_id}:${beat.node_id}`, beat])
+    );
+
+    for (const target of targets) {
+      const beat = beatByStoryAndNode.get(`${target.story_id}:${target.first_node_id}`);
+      if (!beat) continue;
+      const existing = thumbnails.get(target.storyline_id);
+      const imageUrl = typeof beat.image_url === 'string' ? beat.image_url.trim() : '';
+      thumbnails.set(target.storyline_id, {
+        url: existing?.url || imageUrl || null,
+        isStoryboard: beat.is_storyboard === true,
+      });
+    }
+  }
+
+  return signListThumbnails(supabase, thumbnails);
+}
+
 /**
  * List the current user's created stories.
  */
@@ -2019,6 +2211,11 @@ export async function listUserStories(): Promise<Array<{
   updated_at: string;
   user_prompt: string;
   cover_image_url: string | null;
+  episode_number?: number | null;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
+  thumbnail_url: string | null;
+  thumbnail_is_storyboard: boolean;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -2026,13 +2223,44 @@ export async function listUserStories(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url')
+    .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number, is_vertical_story, aspect_ratio')
     .eq('user_id', user.id)
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
-  if (error) throw new Error(`Failed to list stories: ${error.message}`);
-  return data || [];
+  let rows: Array<{
+    id: string;
+    title: string;
+    status: string;
+    is_archived: boolean;
+    updated_at: string;
+    user_prompt: string;
+    cover_image_url: string | null;
+    episode_number?: number | null;
+    is_vertical_story?: boolean | null;
+    aspect_ratio?: string | null;
+  }> = data || [];
+  if (error) {
+    // Pre-075 fallback: episode_number doesn't exist yet.
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from('stories')
+      .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
+      .eq('user_id', user.id)
+      .neq('story_kind', 'reel')
+      .order('updated_at', { ascending: false });
+
+    if (fallbackError) throw new Error(`Failed to list stories: ${fallbackError.message}`);
+    rows = fallbackData || [];
+  }
+
+  const stories = rows;
+  const thumbnails = await resolveStoryListThumbnails(supabase, stories);
+
+  return stories.map((story) => ({
+    ...story,
+    thumbnail_url: thumbnails.get(story.id)?.url ?? null,
+    thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
+  }));
 }
 
 /**
@@ -2048,6 +2276,10 @@ export async function listUserReels(): Promise<Array<{
   story_kind: 'reel';
   beat_count: number;
   cover_image_url: string | null;
+  is_vertical_story?: boolean | null;
+  aspect_ratio?: string | null;
+  thumbnail_url: string | null;
+  thumbnail_is_storyboard: boolean;
 }>> {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
@@ -2055,14 +2287,17 @@ export async function listUserReels(): Promise<Array<{
 
   const { data, error } = await supabase
     .from('stories')
-    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url')
+    .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url, is_vertical_story, aspect_ratio')
     .eq('user_id', user.id)
     .eq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
   if (error) throw new Error(`Failed to list reels: ${error.message}`);
 
-  return (data || []).map((story: any) => {
+  const reels = data || [];
+  const thumbnails = await resolveStoryListThumbnails(supabase, reels);
+
+  return reels.map((story: any) => {
     const storyMap = story.story_map && typeof story.story_map === 'object' ? story.story_map : null;
     const nodeCount = storyMap?.nodes && typeof storyMap.nodes === 'object'
       ? Object.keys(storyMap.nodes).length
@@ -2079,6 +2314,10 @@ export async function listUserReels(): Promise<Array<{
       story_kind: 'reel',
       beat_count: nodeCount || (Number.isFinite(configBeatCount) ? configBeatCount : 0),
       cover_image_url: story.cover_image_url,
+      is_vertical_story: story.is_vertical_story,
+      aspect_ratio: story.aspect_ratio,
+      thumbnail_url: thumbnails.get(story.id)?.url ?? null,
+      thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
     };
   });
 }
@@ -2188,6 +2427,10 @@ export async function listSavedStorylines(): Promise<Array<{
     cover_image_url: string | null;
     author_name: string | null;
     story_id: string;
+    is_vertical_story?: boolean | null;
+    aspect_ratio?: string | null;
+    thumbnail_url?: string | null;
+    thumbnail_is_storyboard?: boolean;
   };
 }>> {
   const supabase = await createClient();
@@ -2207,7 +2450,10 @@ export async function listSavedStorylines(): Promise<Array<{
         cover_image_url,
         author_name,
         story_id,
-        user_id
+        user_id,
+        is_vertical_story,
+        aspect_ratio,
+        node_path
       )
     `)
     .eq('user_id', user.id)
@@ -2215,13 +2461,46 @@ export async function listSavedStorylines(): Promise<Array<{
 
   if (error) throw new Error(`Failed to list saved storylines: ${error.message}`);
 
-  return (data || []).map((row: any) => ({
-    id: row.id,
-    storyline_id: row.storyline_id,
-    saved_at: row.saved_at,
-    is_owner: row.storylines?.user_id === user.id,
-    storyline: row.storylines,
-  }));
+  const rows = data || [];
+  const thumbnails = await resolveStorylineListThumbnails(
+    supabase,
+    rows
+      .filter((row: any) => row.storylines)
+      .map((row: any) => ({
+        storyline_id: row.storyline_id,
+        story_id: row.storylines.story_id ?? null,
+        first_node_id: Array.isArray(row.storylines.node_path)
+          ? row.storylines.node_path[0] ?? null
+          : null,
+        cover_image_url: row.storylines.cover_image_url ?? null,
+      }))
+  );
+
+  return rows.map((row: any) => {
+    if (!row.storylines) {
+      return {
+        id: row.id,
+        storyline_id: row.storyline_id,
+        saved_at: row.saved_at,
+        is_owner: false,
+        storyline: row.storylines,
+      };
+    }
+    // node_path is only needed server-side for the thumbnail lookup.
+    const { node_path, ...storylineFields } = row.storylines;
+    void node_path;
+    return {
+      id: row.id,
+      storyline_id: row.storyline_id,
+      saved_at: row.saved_at,
+      is_owner: row.storylines.user_id === user.id,
+      storyline: {
+        ...storylineFields,
+        thumbnail_url: thumbnails.get(row.storyline_id)?.url ?? null,
+        thumbnail_is_storyboard: thumbnails.get(row.storyline_id)?.isStoryboard === true,
+      },
+    };
+  });
 }
 
 // ============================================================

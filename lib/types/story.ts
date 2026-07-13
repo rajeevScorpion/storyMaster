@@ -40,12 +40,25 @@ export interface Character {
   referenceSheetStorageKey?: string;
   referenceSheetUploadedAt?: string;
   referenceSheetGallery?: CharacterSheetGalleryEntry[];
+  // Pack 2 character universe: characters stay embedded in story JSONB (the
+  // three synchronized stores), so these link fields are additive with no
+  // migration. masterId points at the user's character_masters row this
+  // instance was saved to or created from; sourceStoryId records the story a
+  // carried/imported character originally came from.
+  masterId?: string;
+  sourceStoryId?: string;
+  importedAt?: string;
 }
 
 export interface Option {
   id: string;
   label: string;
   intent: string;
+  // Pack 1 beat control: options live in beats.options JSONB, so these fields
+  // are additive with no migration. Absent source means legacy AI-generated.
+  source?: 'ai' | 'user_custom';
+  characterMentions?: string[];
+  createdByUserId?: string;
 }
 
 export interface SeedPlanOption {
@@ -127,11 +140,21 @@ export interface StoryboardNarrationTiming {
 
 export type StoryTextParts = [string, string, string, string];
 
+export type BeatImageVersionMode = 'initial' | 'refine' | 'reimagine' | 'restore' | 'upload';
+
 export interface BeatImageGalleryEntry {
   url: string;
   storageKey: string;
   uploadedAt: string;
   optimizationMetadata?: ImageCompressionMetadata;
+  // Pack 1 image version history. Entries without `mode` are legacy
+  // prompt-only uploads and keep their original prune/cap behavior.
+  mode?: BeatImageVersionMode;
+  overallSuggestion?: string;
+  panelSuggestions?: Record<string, string>;
+  promptSnapshot?: string;
+  source?: 'system' | 'user';
+  versionNumber?: number;
 }
 
 export interface StoryBeat {
@@ -305,6 +328,19 @@ export interface StoryMap {
   currentNodeId: string;
 }
 
+// Pack 2: series context attached to a story that belongs to an episode
+// branch. bibleText/journalSummary are generation-time snapshots injected into
+// the story-state prompt; the editable source of truth lives in story_bibles /
+// episode_journal_events.
+export interface EpisodeSessionContext {
+  branchId: string;
+  episodeNumber: number;
+  parentStoryId?: string;
+  seriesTitle?: string;
+  bibleText?: string;
+  journalSummary?: string;
+}
+
 export interface StorySession {
   storySessionId: string;
   savedStoryId?: string;
@@ -340,4 +376,5 @@ export interface StorySession {
   narrationVoiceGenderBucket?: import('@/lib/ai/narration-voices').NarrationGenderBucket;
   narrationLanguageCode?: import('@/lib/ai/narration-voices').NarrationLanguageCode;
   enableReferenceImages?: boolean;
+  episodeContext?: EpisodeSessionContext;
 }

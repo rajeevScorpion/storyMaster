@@ -13,7 +13,16 @@ import type { StoryBeat } from '@/lib/types/story';
 import type { ReelTextOverlayStyle } from '@/lib/reel/styles';
 import type { ReelTransitionSettings } from '@/lib/reel/transitions';
 import { toReelFetchUrl } from '@/lib/reel/media';
-import { buildReelFrameSamples, buildReelTimeline, REEL_FINAL_HOLD_MS } from '@/lib/reel/timeline';
+import {
+  buildReelCompatibilityFrameSamples,
+  buildReelFrameSamples,
+  buildReelTimeline,
+  getActiveReelWordIndex,
+  getReelSceneAtTime,
+  getReelTransitionAtTime,
+  REEL_FINAL_HOLD_MS,
+  type ReelTimeline,
+} from '@/lib/reel/timeline';
 import {
   drawReelFrame,
   loadReelImageAssets,
@@ -31,12 +40,19 @@ import {
   loadVerifiedMediaBunny,
   waitForVideoExportFonts,
 } from '@/lib/video-export/mediabunny';
+import {
+  buildVideoExportReport,
+  createStageTimer,
+  logVideoExportReport,
+  type VideoExportReport,
+} from '@/lib/video-export/diagnostics';
 
-const REEL_FPS = 24;
+const REEL_FPS = 30;
 const AUDIO_SAMPLE_RATE = 48000;
 const AUDIO_CHANNELS = 2;
 const AUDIO_BITRATE = '96k';
 const EXPORT_IMAGE_QUALITY = 0.92;
+const KEYFRAME_INTERVAL_SECONDS = 2;
 
 let reelFallbackFfmpegInstance: FFmpeg | null = null;
 
@@ -60,7 +76,9 @@ export interface ReelVideoExportOptions extends VideoExportOptions {
   vignetteAmountPercent?: number;
 }
 
-function getReelCanvasSize(preset: VideoExportPreset) {
+function getReelCanvasSize(preset: VideoExportPreset, options?: ReelVideoExportOptions) {
+  const engine = options?.exportEnginePreset;
+  if (engine) return { width: engine.width, height: engine.height };
   const [width, height] = preset.verticalResolution
     .split('x')
     .map((value) => Number.parseInt(value, 10));
@@ -86,11 +104,11 @@ async function decodeAudioBuffer(context: AudioContext, url: string): Promise<Au
   return context.decodeAudioData(await response.arrayBuffer());
 }
 
-async function buildReelSoundtrack(audioBuffers: AudioBuffer[]): Promise<AudioBuffer> {
+async function buildReelSoundtrack(audioBuffers: AudioBuffer[], sampleRate: number): Promise<AudioBuffer> {
   const audioDurationSeconds = audioBuffers.reduce((sum, audioBuffer) => sum + audioBuffer.duration, 0);
   const totalDurationSeconds = audioDurationSeconds + REEL_FINAL_HOLD_MS / 1000;
-  const frameCount = Math.max(1, Math.ceil(totalDurationSeconds * AUDIO_SAMPLE_RATE));
-  const offlineContext = new OfflineAudioContext(AUDIO_CHANNELS, frameCount, AUDIO_SAMPLE_RATE);
+  const frameCount = Math.max(1, Math.ceil(totalDurationSeconds * sampleRate));
+  const offlineContext = new OfflineAudioContext(AUDIO_CHANNELS, frameCount, sampleRate);
   let cursorSeconds = 0;
 
   audioBuffers.forEach((audioBuffer) => {
@@ -132,11 +150,24 @@ function idleState(error: string | null = null): VideoExportState {
   return { isExporting: false, progress: 0, phase: 'idle', error };
 }
 
+// A stable key for frames whose rendered output cannot differ from the
+// previous frame; null means "always redraw" (transition in progress).
+// Lets the constant-rate loop skip canvas work during static holds.
+function getReelFrameRenderKey(timeline: ReelTimeline, timeMs: number): string | null {
+  if (getReelTransitionAtTime(timeline, timeMs)) return null;
+  const scene = getReelSceneAtTime(timeline, timeMs);
+  if (!scene) return null;
+  const narrationEnded = timeMs >= timeline.narrationDurationMs;
+  const wordIndex = narrationEnded ? undefined : getActiveReelWordIndex(scene, timeMs);
+  return `${timeline.scenes.indexOf(scene)}:${wordIndex ?? -1}:${narrationEnded ? 1 : 0}`;
+}
+
 export function useReelVideoExport() {
   const [state, setState] = useState<VideoExportState>(idleState());
   const [engine, setEngine] = useState<ReelExportEngine>('fast');
   const [stage, setStage] = useState<ReelExportStage>('checking');
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<VideoExportReport | null>(null);
   const cancelledRef = useRef(false);
   const activeOutputRef = useRef<Output<Mp4OutputFormat, BufferTarget> | null>(null);
   const activeFfmpegRef = useRef<FFmpeg | null>(null);
@@ -204,7 +235,7 @@ export function useReelVideoExport() {
       }));
       assets = await loadReelImageAssets(preparedBeats.map((beat) => beat.imageUrl));
       const timeline = buildReelTimeline(preparedBeats, options.transitionSettings, REEL_FINAL_HOLD_MS);
-      const canvasSize = getReelCanvasSize(videoExportPreset);
+      const canvasSize = getReelCanvasSize(videoExportPreset, options);
       const canvas = document.createElement('canvas');
       canvas.width = canvasSize.width;
       canvas.height = canvasSize.height;
@@ -215,7 +246,7 @@ export function useReelVideoExport() {
       const renderingStartedAt = performance.now();
       setStage('compatibility-preparing');
       setState({ isExporting: true, progress: 12, phase: 'preparing', error: null });
-      const frameSamples = buildReelFrameSamples(timeline, REEL_FPS);
+      const frameSamples = buildReelCompatibilityFrameSamples(timeline, REEL_FPS);
       for (let frameIndex = 0; frameIndex < frameSamples.length; frameIndex += 1) {
         if (cancelledRef.current) {
           setState(idleState());
@@ -292,6 +323,7 @@ export function useReelVideoExport() {
         '-c:a', 'aac',
         '-b:a', AUDIO_BITRATE,
         '-shortest',
+        '-movflags', '+faststart',
         outputFile,
       ]);
       if (exitCode !== 0) throw new Error(`Fallback reel export failed (ffmpeg exit code ${exitCode}).`);
@@ -344,8 +376,11 @@ export function useReelVideoExport() {
     const videoExportPreset = normalizeVideoExportPreset(
       options.videoExportPreset ?? DEFAULT_VIDEO_EXPORT_PRESET
     );
-    const canvasSize = getReelCanvasSize(videoExportPreset);
-    const audioContext = new AudioContext({ sampleRate: AUDIO_SAMPLE_RATE });
+    const enginePreset = options.exportEnginePreset ?? null;
+    const exportFps = enginePreset?.fps ?? REEL_FPS;
+    const audioSampleRate = enginePreset?.audioSampleRate ?? AUDIO_SAMPLE_RATE;
+    const canvasSize = getReelCanvasSize(videoExportPreset, options);
+    const audioContext = new AudioContext({ sampleRate: audioSampleRate });
     let assets: ReelImageAssets | null = null;
     let output: Output<Mp4OutputFormat, BufferTarget> | null = null;
     const fastExportStartedAt = performance.now();
@@ -354,13 +389,15 @@ export function useReelVideoExport() {
     setEngine('fast');
     setStage('checking');
     setFallbackReason(null);
+    setDiagnostics(null);
     setState({ isExporting: true, progress: 0, phase: 'loading', error: null });
+    const stageTimer = createStageTimer();
 
     try {
       const mediabunny = await loadVerifiedMediaBunny({
         ...canvasSize,
-        fps: REEL_FPS,
-        sampleRate: AUDIO_SAMPLE_RATE,
+        fps: exportFps,
+        sampleRate: audioSampleRate,
         channels: AUDIO_CHANNELS,
       });
       const {
@@ -372,13 +409,14 @@ export function useReelVideoExport() {
         QUALITY_HIGH,
       } = mediabunny;
 
+      stageTimer.mark('check');
       const preparationStartedAt = performance.now();
       setStage('preparing');
       setState({ isExporting: true, progress: 5, phase: 'preparing', error: null });
       activeAudioContextRef.current = audioContext;
       await waitForVideoExportFonts();
       const audioBuffers = await Promise.all(videoBeats.map((beat) => decodeAudioBuffer(audioContext, beat.audioUrl!)));
-      const soundtrack = await buildReelSoundtrack(audioBuffers);
+      const soundtrack = await buildReelSoundtrack(audioBuffers, audioSampleRate);
       if (cancelledRef.current) {
         setState(idleState());
         return false;
@@ -399,26 +437,31 @@ export function useReelVideoExport() {
       if (!context) throw new Error('Could not create the reel render surface.');
 
       const target = new MediabunnyBufferTarget();
-      output = new MediabunnyOutput({ format: new MediabunnyMp4OutputFormat(), target });
+      output = new MediabunnyOutput({
+        format: new MediabunnyMp4OutputFormat({ fastStart: 'in-memory' }),
+        target,
+      });
       activeOutputRef.current = output;
       const videoSource = new CanvasSource(canvas, {
         codec: 'avc',
-        bitrate: QUALITY_HIGH,
-        keyFrameInterval: 2,
+        bitrate: enginePreset?.videoBitrate ?? QUALITY_HIGH,
+        keyFrameInterval: KEYFRAME_INTERVAL_SECONDS,
         latencyMode: 'quality',
       });
       const audioSource = new AudioBufferSource({
         codec: 'aac',
-        bitrate: QUALITY_HIGH,
+        bitrate: enginePreset?.audioBitrate ?? QUALITY_HIGH,
       });
-      output.addVideoTrack(videoSource, { frameRate: REEL_FPS });
+      output.addVideoTrack(videoSource, { frameRate: exportFps });
       output.addAudioTrack(audioSource);
       await output.start();
 
+      stageTimer.mark('prepare');
       const renderingStartedAt = performance.now();
       setStage('rendering');
       setState({ isExporting: true, progress: 12, phase: 'encoding', error: null });
-      const frameSamples = buildReelFrameSamples(timeline, REEL_FPS);
+      const frameSamples = buildReelFrameSamples(timeline, exportFps);
+      let lastFrameKey: string | null = null;
       for (let frameIndex = 0; frameIndex < frameSamples.length; frameIndex += 1) {
         if (cancelledRef.current) {
           await cancelMediaBunnyOutput(output);
@@ -426,18 +469,22 @@ export function useReelVideoExport() {
           return false;
         }
         const sample = frameSamples[frameIndex];
-        drawReelFrame(context, timeline, assets, sample.timeMs, {
-          textOverlayEnabled: options.textOverlayEnabled,
-          textOverlayStyle: options.textOverlayStyle,
-          vignetteEnabled: options.vignetteEnabled,
-          vignetteAmountPercent: options.vignetteAmountPercent,
-          watermark: options.showWatermark === true,
-          watermarkPreset: videoExportPreset,
-        });
+        const frameKey = getReelFrameRenderKey(timeline, sample.timeMs);
+        if (frameKey === null || frameKey !== lastFrameKey) {
+          drawReelFrame(context, timeline, assets, sample.timeMs, {
+            textOverlayEnabled: options.textOverlayEnabled,
+            textOverlayStyle: options.textOverlayStyle,
+            vignetteEnabled: options.vignetteEnabled,
+            vignetteAmountPercent: options.vignetteAmountPercent,
+            watermark: options.showWatermark === true,
+            watermarkPreset: videoExportPreset,
+          });
+        }
+        lastFrameKey = frameKey;
         await videoSource.add(
           sample.timeMs / 1000,
           sample.durationMs / 1000,
-          frameIndex % (REEL_FPS * 2) === 0 ? { keyFrame: true } : undefined
+          frameIndex % (exportFps * KEYFRAME_INTERVAL_SECONDS) === 0 ? { keyFrame: true } : undefined
         );
         if (frameIndex % 4 === 0 || frameIndex === frameSamples.length - 1) {
           setState((current) => ({
@@ -448,6 +495,7 @@ export function useReelVideoExport() {
       }
 
       logExportTiming('fast.frames', renderingStartedAt, { frameCount: frameSamples.length });
+      stageTimer.mark('frames');
       const audioStartedAt = performance.now();
       setStage('audio');
       setState((current) => ({ ...current, progress: 88, phase: 'finalizing' }));
@@ -456,6 +504,7 @@ export function useReelVideoExport() {
         channels: soundtrack.numberOfChannels,
         sampleRate: soundtrack.sampleRate,
       });
+      stageTimer.mark('audio');
       const finalizeStartedAt = performance.now();
       setStage('finalizing');
       await output.finalize();
@@ -466,6 +515,31 @@ export function useReelVideoExport() {
         return false;
       }
       if (!target.buffer) throw new Error('The rendered reel file is empty.');
+      stageTimer.mark('finalize');
+      const report = buildVideoExportReport({
+        exportKind: 'reel',
+        engine: 'fast',
+        presetId: enginePreset?.id,
+        presetLabel: enginePreset?.label,
+        canvasWidth: canvasSize.width,
+        canvasHeight: canvasSize.height,
+        fps: exportFps,
+        expectedDurationMs: timeline.totalDurationMs,
+        samples: frameSamples,
+        videoCodec: 'avc',
+        audioCodec: 'aac',
+        videoBitrate: enginePreset?.videoBitrate ?? 'quality-high',
+        audioBitrate: enginePreset?.audioBitrate ?? 'quality-high',
+        audioSampleRate,
+        audioChannels: AUDIO_CHANNELS,
+        keyFrameIntervalSeconds: KEYFRAME_INTERVAL_SECONDS,
+        fastStart: 'in-memory',
+        outputBytes: target.buffer.byteLength,
+        startedAtIso: stageTimer.startedAtIso,
+        ...stageTimer.finish(),
+      });
+      logVideoExportReport(report);
+      setDiagnostics(report);
       setState((current) => ({ ...current, progress: 100, phase: 'finalizing' }));
       downloadMp4(target.buffer, title, 'reel');
       logExportTiming('fast.total', fastExportStartedAt, { frameCount: frameSamples.length });
@@ -514,5 +588,6 @@ export function useReelVideoExport() {
     engine,
     stage,
     fallbackReason,
+    diagnostics,
   };
 }

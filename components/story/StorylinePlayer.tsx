@@ -54,6 +54,8 @@ import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
 import AutoScrollButton from './AutoScrollButton';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
+import VideoExportDialog from './VideoExportDialog';
+import type { ResolvedExportPreset } from '@/lib/video-export/presets';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { getStoryboardPanelBoundariesMs } from '@/lib/storyboard/narration-timing';
 import {
@@ -220,6 +222,7 @@ export default function StorylinePlayer({
     stage: exportStage,
     fallbackReason: exportFallbackReason,
   } = useStoryVideoExport();
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const { isFullscreen, showRotateHint, toggle: toggleFullscreen, dismissHint } = useFullscreenLandscape(containerRef);
 
   useEffect(() => {
@@ -774,6 +777,10 @@ export default function StorylinePlayer({
               filter: { duration: beatTransitionMotionSeconds, ease: 'easeInOut' },
               scale: { duration: 20, ease: 'easeInOut', repeat: Infinity, repeatType: 'reverse' },
             }}
+            // The perpetual ambient scale animates a blur-2xl fullscreen
+            // layer; will-change promotes it so the blur rasterizes once
+            // instead of repainting on every animation frame.
+            style={{ willChange: 'transform' }}
             className={isVerticalStoryline ? 'absolute inset-0' : 'absolute inset-0 scale-110 blur-2xl md:scale-100 md:blur-none'}
           >
             <div className={isVerticalStoryline ? 'absolute inset-0 md:scale-110 md:blur-2xl' : 'contents'}>
@@ -966,46 +973,8 @@ export default function StorylinePlayer({
           {videoDownloadGlobalOn && (
             canDownload ? (
               <button
-                onClick={async () => {
-                  if (isExporting) return;
-                  // Admin bypass skips billing; regular users go through beat authorization
-                  if (!adminBypassed) {
-                    const auth = await authorizeCurrentUserBillableAction({
-                      actionKey: 'export_video_future',
-                      idempotencyKey: `export-${storylineId}-${Date.now()}`,
-                      relatedStorylineId: storylineId,
-                    });
-                    if (auth.status === 'denied') {
-                      window.open('/wallet', '_blank');
-                      return;
-                    }
-                    const ok = await exportVideo(currentBeats, title, {
-                      aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
-                      videoExportPreset,
-                      showWatermark: showVideoWatermark,
-                      cycleOverride: cycleSettings.cycleOverride,
-                      cycleMs: cycleSettings.cycleMs,
-                      storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
-                      storyTransition: normalizedStoryTransition,
-                    });
-                    if (auth.status === 'allowed' && auth.reservationId) {
-                      if (ok) {
-                        await finalizeCurrentUserBillableAction({ reservationId: auth.reservationId, storylineId });
-                      } else {
-                        await releaseCurrentUserBillableAction({ reservationId: auth.reservationId, reason: 'export_failed' });
-                      }
-                    }
-                  } else {
-                    await exportVideo(currentBeats, title, {
-                      aspectRatio: isVerticalStoryline ? '9:16' : '16:9',
-                      videoExportPreset,
-                      showWatermark: showVideoWatermark,
-                      cycleOverride: cycleSettings.cycleOverride,
-                      cycleMs: cycleSettings.cycleMs,
-                      storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
-                      storyTransition: normalizedStoryTransition,
-                    });
-                  }
+                onClick={() => {
+                  if (!isExporting) setExportDialogOpen(true);
                 }}
                 disabled={isExporting}
                 className={`flex items-center gap-1.5 rounded-full p-2 text-xs font-sans uppercase tracking-widest transition-all duration-300 [&>span]:hidden md:px-2.5 md:py-1.5 md:[&>span]:inline ${
@@ -1057,6 +1026,47 @@ export default function StorylinePlayer({
               <AlertTriangle className="w-3.5 h-3.5 inline" />
             </span>
           )}
+          <VideoExportDialog
+            open={exportDialogOpen}
+            onClose={() => setExportDialogOpen(false)}
+            coinCost={pricing.actionCosts?.export_video_future ?? null}
+            onSelect={async (enginePreset: ResolvedExportPreset) => {
+              setExportDialogOpen(false);
+              if (isExporting) return;
+              const exportOptions = {
+                aspectRatio: (isVerticalStoryline ? '9:16' : '16:9') as '9:16' | '16:9',
+                videoExportPreset,
+                exportEnginePreset: enginePreset,
+                showWatermark: showVideoWatermark,
+                cycleOverride: cycleSettings.cycleOverride,
+                cycleMs: cycleSettings.cycleMs,
+                storyTextOverlayWordsPerLine: cycleSettings.storyTextOverlayWordsPerLine,
+                storyTransition: normalizedStoryTransition,
+              };
+              // Admin bypass skips billing; regular users go through beat authorization
+              if (!adminBypassed) {
+                const auth = await authorizeCurrentUserBillableAction({
+                  actionKey: 'export_video_future',
+                  idempotencyKey: `export-${storylineId}-${Date.now()}`,
+                  relatedStorylineId: storylineId,
+                });
+                if (auth.status === 'denied') {
+                  window.open('/wallet', '_blank');
+                  return;
+                }
+                const ok = await exportVideo(currentBeats, title, exportOptions);
+                if (auth.status === 'allowed' && auth.reservationId) {
+                  if (ok) {
+                    await finalizeCurrentUserBillableAction({ reservationId: auth.reservationId, storylineId });
+                  } else {
+                    await releaseCurrentUserBillableAction({ reservationId: auth.reservationId, reason: 'export_failed' });
+                  }
+                }
+              } else {
+                await exportVideo(currentBeats, title, exportOptions);
+              }
+            }}
+          />
 
           {/* Explore full story tree — logged-in only */}
           {isLoggedIn && (

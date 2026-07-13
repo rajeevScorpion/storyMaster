@@ -187,6 +187,15 @@ const DEFAULT_INPUTS: Record<PromptTaskKey, Record<string, string>> = {
       ],
     }, null, 2),
   },
+  story_bible_generation: {
+    language: 'english',
+    storyConfig: '- Language: english\n- Age Group: all_ages\n- Setting/Country: generic\n- Maximum Beats: 6\n- Style Preset: storybook_illustration\n- Theme: whimsical\n- Palette: warm\n- Detail: balanced',
+    storyDigest: 'Beat 1 — Lanterns in the Orchard: Pip finds a trail of floating lanterns beyond the village fence and follows them into the orchard.\nBeat 2 — The Hidden Map Case: Pip and Barnaby discover a brass map case in an old apple tree; Pip chooses to trust Barnaby and they open it together.\nBeat 3 — The Orchard Keeper (ending): The map leads them to the orchard keeper, who reveals the lanterns were guiding them toward a forgotten friendship promise between their families. Pip and Barnaby renew the promise as the lanterns settle into the branches.',
+    characters: DEFAULT_CHARACTER_ANCHORS,
+    previousBible: '',
+    previousJournal: '',
+    episodeNumber: '1',
+  },
   visual_prompt: {
     storyText: 'Pip steps into Mr. Huckle\'s antique shop to escape the rain, discovers a strange indigo umbrella between a grandfather clock and dusty globe, turns the brass sun dial, and watches golden light flood the room.',
     storyTextParts: JSON.stringify([

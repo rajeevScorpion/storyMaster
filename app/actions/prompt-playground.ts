@@ -14,7 +14,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { beatSchema, reelDraftSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, reelDraftSchema, seedPlanSchema, storyBibleGenerationSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
 import {
   getPromptPlaygroundState,
   getPublishedPrompt,
@@ -157,6 +157,8 @@ async function executeTaskTest(
       return runSeedPlanGenerationTest(ai, modelId, temperature ?? 0.3, inputs, promptBody!);
     case 'seeded_beat_materialization':
       return runSeededBeatMaterializationTest(ai, modelId, temperature ?? 0.4, inputs, promptBody!);
+    case 'story_bible_generation':
+      return runStoryBibleGenerationTest(ai, modelId, temperature ?? 0.35, inputs, promptBody!);
     case 'visual_prompt':
       return runVisualPromptTest(ai, modelId, temperature ?? 0.7, inputs, promptBody!);
     case 'reel_visual_prompt':
@@ -234,6 +236,38 @@ async function runSeededBeatMaterializationTest(
       systemInstruction: LOCKED_PROMPT_GUARDRAILS.seeded_beat_materialization,
       responseMimeType: 'application/json',
       responseSchema: beatSchema,
+      temperature,
+    },
+  });
+  const latencyMs = Date.now() - start;
+  return buildResult(response.text || '', 'json', latencyMs, response.usageMetadata, modelId);
+}
+
+async function runStoryBibleGenerationTest(
+  ai: GoogleGenAI,
+  modelId: string,
+  temperature: number,
+  inputs: Record<string, string>,
+  promptBody: string
+): Promise<TestResult> {
+  const prompt = resolvePromptTemplate(promptBody, {
+    language: inputs.language || 'english',
+    storyConfig: inputs.storyConfig || '{}',
+    storyDigest: inputs.storyDigest || '',
+    characters: inputs.characters || '[]',
+    previousBible: inputs.previousBible || '',
+    previousJournal: inputs.previousJournal || '',
+    episodeNumber: inputs.episodeNumber || '1',
+  });
+
+  const start = Date.now();
+  const response = await ai.models.generateContent({
+    model: modelId,
+    contents: prompt,
+    config: {
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.story_bible_generation,
+      responseMimeType: 'application/json',
+      responseSchema: storyBibleGenerationSchema,
       temperature,
     },
   });

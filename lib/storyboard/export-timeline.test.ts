@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildStoryExportFrameSamples,
   buildStoryExportTimeline,
   getStoryExportFrameState,
   getStoryExportSceneAtTime,
@@ -65,6 +66,22 @@ describe('story export transition timeline', () => {
     expect(timeline.transitionTimeline.transitionSettings.type).toBe('fast-cut');
     expect(timeline.transitionTimeline.transitions).toHaveLength(0);
     expect(timeline.totalDurationMs).toBe(4000);
+  });
+
+  it('samples a strictly monotonic constant-fps grid across the exported duration', () => {
+    const timeline = buildStoryExportTimeline([
+      { beat: storyboardBeat(1), imageUrl: 'one.jpg', durationMs: 4000, hasAudio: true },
+      { beat: storyboardBeat(2), imageUrl: 'two.jpg', durationMs: 4000, hasAudio: true },
+    ], false, 2500, { type: 'opacity-blend', durationMs: 500 });
+    const samples = buildStoryExportFrameSamples(timeline, 30);
+
+    expect(samples).toHaveLength(Math.ceil((timeline.totalDurationMs / 1000) * 30));
+    for (let index = 1; index < samples.length; index += 1) {
+      expect(samples[index].timeMs).toBeGreaterThan(samples[index - 1].timeMs);
+      expect(samples[index].timeMs - samples[index - 1].timeMs).toBeCloseTo(1000 / 30, 6);
+    }
+    const encodedMs = samples.reduce((sum, sample) => sum + sample.durationMs, 0);
+    expect(encodedMs).toBeCloseTo(timeline.totalDurationMs, 6);
   });
 
   it('carries the normalized beat effect assignment into every panel scene', () => {

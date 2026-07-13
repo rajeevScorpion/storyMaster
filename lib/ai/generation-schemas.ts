@@ -1,5 +1,65 @@
 import { Type } from '@google/genai';
 
+// Pack 2: the Story Bible Writer condenses a completed episode into an updated
+// series bible plus a journal episode summary for episodic continuity.
+export const storyBibleGenerationSchema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    worldSummary: { type: Type.STRING },
+    toneRules: { type: Type.STRING },
+    styleRules: { type: Type.STRING },
+    characterRules: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    relationshipRules: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    settingRules: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    openThreads: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
+    episodeSummary: { type: Type.STRING },
+  },
+  required: [
+    'title',
+    'worldSummary',
+    'toneRules',
+    'styleRules',
+    'characterRules',
+    'relationshipRules',
+    'settingRules',
+    'openThreads',
+    'episodeSummary',
+  ],
+};
+
+// Pack 1: options-only regeneration returns just fresh choices for the
+// current beat (no story text, characters, or continuity fields).
+export const optionsRegenerationSchema = {
+  type: Type.OBJECT,
+  properties: {
+    options: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          label: { type: Type.STRING },
+          intent: { type: Type.STRING },
+        },
+        required: ['label', 'intent'],
+      },
+    },
+  },
+  required: ['options'],
+};
+
 export const beatSchema = {
   type: Type.OBJECT,
   properties: {

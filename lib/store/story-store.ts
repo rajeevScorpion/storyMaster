@@ -1,5 +1,8 @@
 import { create } from 'zustand';
-import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type StoryAspectRatio } from '../types/story';
+import { StorySession, StoryBeat, StoryConfig, StoryMap, StoryNode, Character, CharacterSheetGalleryEntry, StoryboardPlan, PortraitReferenceConfig, PortraitTask, SeedBeatOutline, Option, type EpisodeSessionContext, type StoryAspectRatio } from '../types/story';
+import type { EpisodeContinuationSeed } from '@/lib/types/episodes';
+import { recordEpisodeStarted } from '@/app/actions/episodes';
+import { appendEpisodeTitleImageInstruction, filterCarriedPortraitTasks } from '@/lib/episodes/continuity';
 import { v4 as uuidv4 } from 'uuid';
 import {
   buildFinalStoryboardImagePrompt,
@@ -26,6 +29,11 @@ import {
 } from '@/app/actions/story-narration';
 import { clearReelNarrationForBeatAction, saveReelNarrationSettingsAction } from '@/app/actions/reel-narration';
 import { linkCostEventsToBeat } from '@/app/actions/cost-tracking';
+import {
+  generateBeatCore,
+  processBeatVisuals,
+  resolveBeatGenerationModeAction,
+} from '@/app/actions/beat-bundle';
 import { submitStoryImageBatch, submitStoryStatefulVisuals, reconcileStoryBatch } from '@/app/actions/image-batch';
 import {
   enqueueBeatImageJob,
@@ -61,6 +69,31 @@ import { copyStoryEffectConfig, normalizeStoryEffectConfig, type StoryEffectConf
 import { applyStoryEffectsToMap } from '@/lib/story-effects/story-map';
 import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/lib/reel/narration';
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
+import {
+  addCustomOption as addCustomOptionAction,
+  editBeatText as editBeatTextAction,
+  getBeatControlRuntimeSettings,
+  regenerateBeatOptions as regenerateBeatOptionsAction,
+  restoreBeatImageVersion as restoreBeatImageVersionAction,
+  type AddCustomOptionResult,
+  type EditBeatTextResult,
+  type RegenerateBeatOptionsResult,
+  type RestoreBeatImageVersionResult,
+} from '@/app/actions/beat-control';
+import {
+  buildRegenerationInstructionBlock,
+  cleanPanelSuggestions,
+  type BeatImageRegenerationOptions,
+} from '@/lib/ai/image-regeneration.shared';
+import {
+  DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
+  type BeatControlRuntimeSettings,
+} from '@/lib/beat-control/settings';
+import {
+  DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS,
+  type CharacterUniverseRuntimeSettings,
+} from '@/lib/character-universe/settings';
+import { getCharacterUniverseRuntimeSettings } from '@/app/actions/character-library';
 import { saveStory as saveStoryAction, loadStory as loadStoryAction, saveBeat as saveBeatAction, autoPublishStoryline, copyCoverToPublicBucket, setStoryCoverImage, updateBeatMediaState } from '@/app/actions/persistence';
 import {
   setCharacterReferenceSheetRecord,
@@ -111,6 +144,7 @@ import {
   getBeatsToNode,
   getChoiceHistoryToNode,
   getCurrentNode,
+  removeSubtree,
 } from '../utils/story-map';
 import {
   getLocalSessionUserId,
@@ -188,7 +222,8 @@ interface StoryState {
   saveWarning: string | null;
   saveRuntimeSettings: StorySaveRuntimeSettings;
   lastPublishResult: PublishResult | null;
-  startStory: (prompt: string, config?: StoryConfig) => Promise<void>;
+  startStory: (prompt: string, config?: StoryConfig, seed?: StorySeedOptions) => Promise<void>;
+  continueAsEpisode: (premise: string, seed: EpisodeContinuationSeed) => Promise<void>;
   startReel: (prompt: string, config?: StoryConfig) => Promise<void>;
   continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
@@ -234,7 +269,16 @@ interface StoryState {
     }
   ) => Promise<StoryTextOverlayStoryGenerationResult>;
   updateReelTransitionSettings: (settings: ReelTransitionSettings) => Promise<void>;
-  regenerateImageForNode: (nodeId: string) => Promise<void>;
+  regenerateImageForNode: (nodeId: string, regenOptions?: BeatImageRegenerationOptions) => Promise<void>;
+  beatControlSettings: BeatControlRuntimeSettings;
+  loadBeatControlSettings: () => Promise<void>;
+  characterUniverseSettings: CharacterUniverseRuntimeSettings;
+  loadCharacterUniverseSettings: () => Promise<void>;
+  applyTimelineRewrite: (nodeId: string, newText: string) => void;
+  editBeatTextForNode: (nodeId: string, newText: string, confirmTimelineRewrite?: boolean) => Promise<EditBeatTextResult>;
+  regenerateOptionsForNode: (nodeId: string, confirmTimelineRewrite?: boolean) => Promise<RegenerateBeatOptionsResult>;
+  addCustomOptionForNode: (nodeId: string, optionText: string) => Promise<AddCustomOptionResult>;
+  restoreImageVersionForNode: (nodeId: string, storageKey: string) => Promise<RestoreBeatImageVersionResult>;
   submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
   submitStatefulVisuals: (scope?: ImageBatchScope) => Promise<void>;
   generateNarrationBatch: () => Promise<void>;
@@ -260,6 +304,13 @@ interface StoryState {
   permanentlyDeleteCharacterReferenceSheet: (characterId: string, storageKey: string) => Promise<void>;
   clearPublishResult: () => void;
   clearError: () => void;
+}
+
+// Pack 2: optional seed for startStory — pre-carried characters (episodes,
+// library mixing) and the episode series context injected into generation.
+export interface StorySeedOptions {
+  seedCharacters?: Character[];
+  episodeContext?: EpisodeSessionContext;
 }
 
 interface SaveStoryToCloudOptions {
@@ -424,8 +475,18 @@ function mergeCharacterVisualReferences(
   }
 
   const referencesById = new Map(referenceCharacters.map((character) => [character.id, character]));
+  // Pack 2 fallback: seeded characters (episode carry / library mixing) keep
+  // their ids in castRegistry, but the LLM may still mint new ids on beat 1 —
+  // matching by normalized name re-attaches the carried visuals and links.
+  const referencesByName = new Map(
+    referenceCharacters
+      .filter((character) => character.name?.trim())
+      .map((character) => [character.name.trim().toLowerCase(), character])
+  );
   const nextCharacters = beat.characters.map((character) => {
-    const reference = referencesById.get(character.id);
+    const reference =
+      referencesById.get(character.id) ??
+      referencesByName.get(character.name?.trim().toLowerCase() ?? '');
     if (!reference) {
       return character;
     }
@@ -931,6 +992,55 @@ function syncSaveUiState(
   });
 }
 
+// Admin-tuned model overrides and the image processing mode change rarely and
+// are already cached ~60s server-side; caching them client-side too saves one
+// round-trip per beat. 60s keeps parity with the server cache window.
+const GENERATION_SETTINGS_CACHE_TTL_MS = 60_000;
+
+let cachedModelOverrides: { data: StoryModelOverrides; fetchedAtMs: number } | null = null;
+let cachedImageProcessingMode: { data: 'client_legacy' | 'server_pipeline'; fetchedAtMs: number } | null = null;
+
+async function getStoryModelOverridesCached(): Promise<StoryModelOverrides> {
+  if (cachedModelOverrides && Date.now() - cachedModelOverrides.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cachedModelOverrides.data;
+  }
+
+  const data = await getStoryModelOverrides();
+  cachedModelOverrides = { data, fetchedAtMs: Date.now() };
+  return data;
+}
+
+async function resolveImageProcessingModeCached(): Promise<'client_legacy' | 'server_pipeline'> {
+  if (cachedImageProcessingMode && Date.now() - cachedImageProcessingMode.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cachedImageProcessingMode.data;
+  }
+
+  const data = await resolveImageProcessingModeAction();
+  cachedImageProcessingMode = { data, fetchedAtMs: Date.now() };
+  return data;
+}
+
+let cachedBeatGenerationMode: { data: 'legacy' | 'bundle'; fetchedAtMs: number } | null = null;
+
+async function resolveBeatGenerationModeCached(): Promise<'legacy' | 'bundle'> {
+  if (cachedBeatGenerationMode && Date.now() - cachedBeatGenerationMode.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cachedBeatGenerationMode.data;
+  }
+
+  const data = await resolveBeatGenerationModeAction();
+  cachedBeatGenerationMode = { data, fetchedAtMs: Date.now() };
+  return data;
+}
+
+async function releaseBundleReservation(reservationId: string | null, reason: string): Promise<void> {
+  if (!reservationId) return;
+  try {
+    await releaseCurrentUserBillableAction({ reservationId, reason });
+  } catch (error) {
+    console.error('Failed to release beat-bundle reservation:', error);
+  }
+}
+
 async function resolveCurrentUserId(fallbackUserId?: string): Promise<string | null> {
   if (fallbackUserId) {
     return fallbackUserId;
@@ -938,6 +1048,13 @@ async function resolveCurrentUserId(fallbackUserId?: string): Promise<string | n
 
   try {
     const supabase = createBrowserClient();
+    // The id here only tags recovery/cost rows (server actions re-check auth),
+    // so the locally cached session is enough — avoid the getUser network hop.
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      return session.user.id;
+    }
+
     const { data: { user } } = await supabase.auth.getUser();
     return user?.id ?? null;
   } catch {
@@ -2078,6 +2195,8 @@ export const useStoryStore = create<StoryState>()(
       errorAction: null,
       isGeneratingAudio: false,
       isRegeneratingImage: false,
+      beatControlSettings: DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
+      characterUniverseSettings: DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS,
       activeImageJobNodeIds: [],
       isSubmittingImageBatch: false,
       imageBatchMessage: null,
@@ -2103,7 +2222,7 @@ export const useStoryStore = create<StoryState>()(
         }));
       },
 
-      startStory: async (prompt: string, config?: StoryConfig) => {
+      startStory: async (prompt: string, config?: StoryConfig, seed?: StorySeedOptions) => {
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
         if (isReelStoryConfig(storyConfig)) {
           return get().startReel(prompt, storyConfig);
@@ -2145,6 +2264,293 @@ export const useStoryStore = create<StoryState>()(
             fallbackText: storyConfig.authoring.preludeText?.trim() || prompt,
           }),
         });
+        // Beat bundle (flag-gated): two server round-trips replace the legacy
+        // authorize → generate → plan → portraits → save → enqueue client
+        // orchestration. Seeded / episode-carry / prompt-only / mock starts
+        // stay on the legacy path, and any 'legacy' answer from the server
+        // falls through to the untouched flow below.
+        if (
+          !seededStory
+          && !promptOnly
+          && !seed?.seedCharacters?.length
+          && !seed?.episodeContext
+          && storyPrompt.toLowerCase() !== 'mock'
+        ) {
+          let bundleMode: 'legacy' | 'bundle' = 'legacy';
+          try {
+            bundleMode = await resolveBeatGenerationModeCached();
+          } catch { /* resolver failure = legacy */ }
+
+          if (bundleMode === 'bundle') {
+            const runStartStoryBundle = async (): Promise<boolean> => {
+              const requestedNarrationVoice = storyConfig.narrationVoice;
+              const initialSession: Partial<StorySession> = {
+                storySessionId: initialSessionId,
+                userPrompt: storyPrompt,
+                genre: 'adventure',
+                tone: 'playful',
+                targetAge: storyConfig.ageGroup,
+                visualStyle,
+                currentBeat: 0,
+                maxBeats: storyConfig.maxBeats,
+                status: 'active',
+                characters: [],
+                enableReferenceImages: true,
+                setting: {
+                  world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
+                  timeOfDay: 'unknown',
+                  mood: 'unknown',
+                },
+                storyConfig,
+                beats: [],
+                choiceHistory: [],
+                openThreads: [],
+                allowedEndings: ['friendship', 'moral', 'comedy', 'discovery', 'rescue', 'bittersweet'],
+                safetyProfile: storyConfig.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
+                narratorVoice: requestedNarrationVoice?.mode === 'user_selected' ? requestedNarrationVoice.voiceId : undefined,
+                narrationVoiceMode: requestedNarrationVoice?.mode,
+                narrationVoiceGenderBucket: requestedNarrationVoice?.genderBucket,
+                narrationLanguageCode: requestedNarrationVoice?.languageCode,
+              };
+
+              // Voice resolves in parallel with the core round-trip.
+              const voicePromise = measureAsyncStep(
+                timingSteps,
+                'voice_resolution',
+                'Resolve narrator voice',
+                () => resolveNarrationVoiceServer({
+                  requestedMode: initialSession.narrationVoiceMode ?? storyConfig.narrationVoice?.mode ?? null,
+                  requestedVoiceId: initialSession.narratorVoice ?? storyConfig.narrationVoice?.voiceId ?? null,
+                  requestedGenderBucket: initialSession.narrationVoiceGenderBucket ?? storyConfig.narrationVoice?.genderBucket ?? null,
+                  requestedAccent: storyConfig.narrationVoice?.accent ?? null,
+                  language: storyConfig.language || 'english',
+                  genre: initialSession.genre!,
+                  tone: initialSession.tone!,
+                  targetAge: initialSession.targetAge!,
+                  costTelemetry: costPhase(baseCostTelemetry, 'voice_selection'),
+                }),
+                { background: true }
+              );
+              voicePromise.catch(() => { /* surfaced where awaited */ });
+
+              setLoadingStage(set, 'start_story', 'beat');
+              const core = await measureAsyncStep(
+                timingSteps,
+                'beat_bundle_core',
+                'Generate opening beat and plan (bundle)',
+                () => generateBeatCore({
+                  userPrompt: storyPrompt,
+                  sessionForPrompt: initialSession,
+                  visualStyle,
+                  authorize: {
+                    actionKey: startStoryActionKey,
+                    idempotencyKey: `start_story:${initialSessionId}`,
+                    storyConfig,
+                    imageCount: 1,
+                    taskKey: getImageTaskKey(storyConfig),
+                    metadata: {
+                      language: storyConfig.language,
+                      ageGroup: storyConfig.ageGroup,
+                      maxBeats: storyConfig.maxBeats,
+                      settingCountry: storyConfig.settingCountry,
+                      authoringMode: storyConfig.authoring.mode,
+                      beatBundle: true,
+                    },
+                  },
+                  storyTelemetry: costPhase(baseCostTelemetry, 'story_generation'),
+                  composerTelemetry: costPhase(baseCostTelemetry, 'storyboard_plan'),
+                })
+              );
+
+              if (core.status === 'legacy') {
+                return false;
+              }
+              if (core.status === 'blocked') {
+                const pricingErrorState = buildPricingErrorState(core.authorization, 'start_story');
+                set({
+                  isLoading: false,
+                  loadingClues: [],
+                  loadingStage: null,
+                  loadingReader: null,
+                  error: pricingErrorState?.error ?? 'Unable to check your wallet right now.',
+                  errorAction: pricingErrorState?.errorAction ?? null,
+                });
+                return true;
+              }
+
+              let beat = enforceReelBeatCap(core.beat, storyConfig);
+              const storyboardPlan = core.storyboardPlan;
+              beat.storyboardPlan = storyboardPlan;
+              beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
+              beat.isStoryboard = true;
+              beat = applyStoryTextOverlayBeatMetadata(beat, storyConfig);
+
+              set((state) => ({
+                loadingClues: beat.clues,
+                loadingReader: updateLoadingReaderWithBeat(state.loadingReader, 'start_story', beat),
+              }));
+              setLoadingStage(set, 'start_story', 'visual');
+
+              const voiceResolution = await voicePromise;
+              const resolvedTitle = storyConfig.authoring.workingTitle?.trim() || beat.title;
+              const storyMap = createStoryMap(beat, rootNodeId);
+              const fullSessionBase = {
+                ...initialSession,
+                title: resolvedTitle,
+                narratorVoice: voiceResolution.voiceId,
+                narrationVoiceMode: voiceResolution.mode,
+                narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                narrationLanguageCode: voiceResolution.languageCode,
+                storyMap,
+              } as StorySession;
+
+              setLoadingStage(set, 'start_story', 'image', { note: IMAGE_JOB_SAFE_TO_LEAVE_NOTE });
+              let visuals: Awaited<ReturnType<typeof processBeatVisuals>>;
+              try {
+                visuals = await measureAsyncStep(
+                  timingSteps,
+                  'beat_bundle_visuals',
+                  'Persist story and queue image (bundle)',
+                  () => processBeatVisuals({
+                    target: { kind: 'new_story', session: fullSessionBase, rootNodeId },
+                    beat,
+                    storyboardPlan,
+                    visualStyle,
+                    storyConfig,
+                    storyAspectRatio,
+                    reservationId: core.reservationId,
+                    narrationVoiceId: voiceResolution.voiceId,
+                    imageContinuityStrategy: storyConfig.imageContinuityStrategy,
+                    storySessionId: initialSessionId,
+                    portraitTelemetry: costPhase(baseCostTelemetry, 'portrait_generation'),
+                    imageTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(storyConfig), { beatBundle: true }),
+                  })
+                );
+              } catch (error: any) {
+                await releaseBundleReservation(core.reservationId, 'beat_bundle_visuals_failed');
+                throw error;
+              }
+
+              if (visuals.status !== 'queued') {
+                await releaseBundleReservation(core.reservationId, `beat_bundle_${visuals.reason}`);
+                throw new Error(visuals.message || "The story couldn't be saved. Please try again.");
+              }
+              const queued = visuals;
+
+              const jobOutcome = await measureAsyncStep(
+                timingSteps,
+                'image_job_wait',
+                'Wait for background image render',
+                () => waitForQueuedBeatImage(queued.storyId, rootNodeId)
+              );
+              const imageStillPending = !jobOutcome;
+              const pendingNodeData = {
+                ...normalizeBeatMediaFields({
+                  ...queued.beat,
+                  imageUrl: undefined,
+                  persistedImageUrl: undefined,
+                  imageStatus: 'pending' as const,
+                  imageError: undefined,
+                  audioStatus: 'not_requested' as const,
+                  audioError: undefined,
+                }),
+                narrationVoiceId: voiceResolution.voiceId,
+              };
+              storyMap.nodes[rootNodeId] = {
+                ...storyMap.nodes[rootNodeId],
+                data: jobOutcome?.imageStatus === 'ready'
+                  ? {
+                      ...pendingNodeData,
+                      imageUrl: jobOutcome.imageUrl,
+                      persistedImageUrl: jobOutcome.imageUrl,
+                      imageStatus: 'ready' as const,
+                      imageError: undefined,
+                    }
+                  : jobOutcome?.imageStatus === 'failed'
+                    ? {
+                        ...pendingNodeData,
+                        imageStatus: 'failed' as const,
+                        imageError: jobOutcome.imageError ?? 'Image generation failed. You can retry it from the story.',
+                      }
+                    : pendingNodeData,
+              };
+
+              const fullSession = deriveSessionFields(
+                {
+                  ...fullSessionBase,
+                  savedStoryId: queued.storyId,
+                  savedByUserId: queued.savedByUserId,
+                } as StorySession,
+                storyMap
+              );
+              set({
+                session: fullSession,
+                isLoading: false,
+                // Beat text + voice are already durably persisted server-side;
+                // the worker owns the image writes — same reasoning as the
+                // legacy server_pipeline branch.
+                saveStatus: 'saved',
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: null,
+                errorAction: null,
+                ...(imageStillPending
+                  ? { activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, rootNodeId])) }
+                  : {}),
+              });
+              if (imageStillPending) {
+                startImageJobPolling(queued.storyId);
+              }
+              dispatchPricingRuntimeRefresh();
+              logGenerationTiming({
+                scope: 'start_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: true,
+                  beatNumber: beat.beatNumber,
+                  storyId: queued.storyId,
+                  promptOnly,
+                  serverPipeline: true,
+                  beatBundle: true,
+                  imageWaitOutcome: jobOutcome?.imageStatus ?? 'pending',
+                },
+              });
+              return true;
+            };
+
+            try {
+              if (await runStartStoryBundle()) {
+                return;
+              }
+              // Server said legacy — continue with the untouched flow below.
+            } catch (error: any) {
+              logGenerationTiming({
+                scope: 'start_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: false,
+                  failureStage: 'beat_bundle',
+                  message: error?.message || 'Story generation failed.',
+                },
+              });
+              set({
+                isLoading: false,
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: error?.message || "The story couldn't start. Please try again.",
+                errorAction: null,
+              });
+              return;
+            }
+          }
+        }
+
+        // Independent of wallet authorization — run both round-trips in parallel.
+        const modelOverridesPromise = getStoryModelOverridesCached().catch(() => undefined);
         try {
           billingAuthorization = await measureAsyncStep(
             timingSteps,
@@ -2207,18 +2613,14 @@ export const useStoryStore = create<StoryState>()(
         const reservationId = getHardReservationId(billingAuthorization);
         let shouldReleaseReservation = Boolean(reservationId);
 
-        // Fetch active model config from DB (falls back to hardcoded defaults on error)
-        let modelOverrides: StoryModelOverrides | undefined;
-        try {
-          modelOverrides = await measureAsyncStep(
-            timingSteps,
-            'model_overrides',
-            'Load model and prompt overrides',
-            () => getStoryModelOverrides()
-          );
-        } catch {
-          // Non-critical: story.ts has hardcoded fallbacks
-        }
+        // Active model config from DB, kicked off before authorization above
+        // (falls back to hardcoded defaults on error)
+        const modelOverrides: StoryModelOverrides | undefined = await measureAsyncStep(
+          timingSteps,
+          'model_overrides',
+          'Load model and prompt overrides',
+          () => modelOverridesPromise
+        );
 
         try {
           const requestedNarrationVoice = storyConfig.narrationVoice;
@@ -2232,7 +2634,11 @@ export const useStoryStore = create<StoryState>()(
             currentBeat: 0,
             maxBeats: storyConfig.maxBeats,
             status: 'active',
-            characters: [],
+            // Pack 2: carried episode cast / mixed-in library characters seed
+            // the roster so castRegistry + usedCharacterNames see them from
+            // beat 1 and their portraits are reused instead of regenerated.
+            characters: seed?.seedCharacters ?? [],
+            ...(seed?.episodeContext ? { episodeContext: seed.episodeContext } : {}),
             enableReferenceImages: true, // TODO: set from user tier (premium only)
             setting: {
               world: storyConfig.settingCountry !== 'generic' ? storyConfig.settingCountry : 'unknown',
@@ -2293,7 +2699,7 @@ export const useStoryStore = create<StoryState>()(
 
           const lang = initialSession.storyConfig?.language || 'english';
           setLoadingStage(set, 'start_story', 'visual');
-          const storyboardPlan = await measureAsyncStep(
+          const composedStoryboardPlan = await measureAsyncStep(
             timingSteps,
             'storyboard_plan',
             'Compose storyboard plan',
@@ -2305,8 +2711,22 @@ export const useStoryStore = create<StoryState>()(
               costPhase(baseCostTelemetry, 'storyboard_plan')
             )
           );
+          // Pack 2: carried characters already have portraits/reference sheets
+          // — drop their new_character portrait tasks so identity is reused.
+          const storyboardPlan = seed?.seedCharacters?.length
+            ? filterCarriedPortraitTasks(composedStoryboardPlan, beat.characters)
+            : composedStoryboardPlan;
           beat.storyboardPlan = storyboardPlan;
           beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
+          if (seed?.episodeContext) {
+            // The episode cover must visualize "Episode N" (explicit exception
+            // to the storyboard no-text rules); stored on the beat so both the
+            // server-pipeline and legacy paths, plus regenerations, include it.
+            beat.storyboardPromptText = appendEpisodeTitleImageInstruction(
+              beat.storyboardPromptText,
+              seed.episodeContext.episodeNumber
+            );
+          }
           beat.isStoryboard = true;
           if (isReelStoryConfig(storyConfig)) {
             beat = applyReelBeatMetadata(beat, storyConfig);
@@ -2434,7 +2854,7 @@ export const useStoryStore = create<StoryState>()(
           let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
           if (!promptOnly && storyPrompt.toLowerCase() !== 'mock') {
             try {
-              effectiveImageMode = await resolveImageProcessingModeAction();
+              effectiveImageMode = await resolveImageProcessingModeCached();
             } catch {
               // Resolver failure = legacy; the server re-checks on enqueue anyway.
             }
@@ -2874,6 +3294,28 @@ export const useStoryStore = create<StoryState>()(
         }
       },
 
+      // Pack 2: starts Episode N+1 from a prepared continuation seed — the
+      // inherited config recreates the origin universe, carried characters
+      // seed the roster, and the series context flows into generation. The
+      // branch bookkeeping is recorded fire-and-forget once the story saves.
+      continueAsEpisode: async (premise: string, seed: EpisodeContinuationSeed) => {
+        await get().startStory(premise, seed.inheritedConfig, {
+          seedCharacters: seed.carriedCharacters,
+          episodeContext: {
+            branchId: seed.branchId,
+            episodeNumber: seed.nextEpisodeNumber,
+            parentStoryId: seed.parentStoryId,
+            ...(seed.bible?.title ? { seriesTitle: seed.bible.title } : {}),
+            ...(seed.bible?.bibleText ? { bibleText: seed.bible.bibleText } : {}),
+            ...(seed.journalSummary ? { journalSummary: seed.journalSummary } : {}),
+          },
+        });
+        const savedStoryId = get().session?.savedStoryId;
+        if (savedStoryId) {
+          void recordEpisodeStarted({ storyId: savedStoryId });
+        }
+      },
+
       startReel: async (prompt: string, config?: StoryConfig) => {
         const storyConfig = normalizeStoryConfig(config || DEFAULT_STORY_CONFIG);
         if (!isReelStoryConfig(storyConfig)) {
@@ -2959,7 +3401,7 @@ export const useStoryStore = create<StoryState>()(
 
         let modelOverrides: StoryModelOverrides | undefined;
         try {
-          modelOverrides = await getStoryModelOverrides();
+          modelOverrides = await getStoryModelOverridesCached();
         } catch {
           // Non-critical: defaults are used when overrides can't be loaded
         }
@@ -3252,6 +3694,293 @@ export const useStoryStore = create<StoryState>()(
           }),
         });
 
+        // Beat bundle (flag-gated): two server round-trips replace the legacy
+        // authorize → generate → plan → save → enqueue client orchestration.
+        // Seeded-canonical, prompt-only, shared-source, and mock continuations
+        // stay on the legacy path; any 'legacy' answer falls through below.
+        if (
+          !promptOnly
+          && !nextCanonicalSeedBeat
+          && !isSeededStoryConfig(session.storyConfig)
+          && Boolean(session.savedStoryId)
+          && !session.sourceStoryOwnerId
+          && session.userPrompt.toLowerCase() !== 'mock'
+        ) {
+          let bundleMode: 'legacy' | 'bundle' = 'legacy';
+          try {
+            bundleMode = await resolveBeatGenerationModeCached();
+          } catch { /* resolver failure = legacy */ }
+
+          if (bundleMode === 'bundle') {
+            const runContinueStoryBundle = async (): Promise<boolean> => {
+              const savedStoryId = session.savedStoryId!;
+              // Linear-path context, exactly as the legacy flow builds it.
+              const beatsForPrompt = getBeatsToNode(session.storyMap, session.storyMap.currentNodeId);
+              const selectedOptionPrompt = formatSelectedOptionForPrompt(selectedOption);
+              const choiceHistoryForPrompt = [
+                ...getChoiceHistoryToNode(session.storyMap, session.storyMap.currentNodeId),
+                formatChoiceHistoryOption(selectedOption),
+              ];
+              const sessionForPrompt: Partial<StorySession> = {
+                ...session,
+                beats: beatsForPrompt,
+                choiceHistory: choiceHistoryForPrompt,
+              };
+              delete (sessionForPrompt as any).storyMap;
+              delete (sessionForPrompt as any).narratorVoice;
+              delete (sessionForPrompt as any).narrationVoiceMode;
+              delete (sessionForPrompt as any).narrationVoiceGenderBucket;
+              delete (sessionForPrompt as any).narrationLanguageCode;
+
+              // The locked voice resolves in parallel with the core round-trip.
+              const voiceResolutionPromise = resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'));
+              voiceResolutionPromise.catch(() => { /* surfaced where awaited */ });
+
+              setLoadingStage(set, 'continue_story', 'beat');
+              const core = await measureAsyncStep(
+                timingSteps,
+                'beat_bundle_core',
+                'Generate continued beat and plan (bundle)',
+                () => generateBeatCore({
+                  userPrompt: session.userPrompt,
+                  sessionForPrompt,
+                  selectedOptionLabel: selectedOptionPrompt,
+                  visualStyle: session.visualStyle,
+                  authorize: {
+                    actionKey: continueStoryActionKey,
+                    idempotencyKey: `continue_story:${savedStoryId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
+                    relatedStoryId: savedStoryId,
+                    relatedNodeId: session.storyMap.currentNodeId,
+                    storyConfig: session.storyConfig,
+                    imageCount: 1,
+                    taskKey: getImageTaskKey(session.storyConfig),
+                    metadata: {
+                      selectedOptionId: optionId,
+                      selectedOptionLabel: selectedOption.label,
+                      currentBeat: currentNode.data.beatNumber,
+                      beatBundle: true,
+                    },
+                  },
+                  storyTelemetry: costPhase(baseCostTelemetry, 'story_generation'),
+                  composerTelemetry: costPhase(baseCostTelemetry, 'storyboard_plan'),
+                })
+              );
+
+              if (core.status === 'legacy') {
+                return false;
+              }
+              if (core.status === 'blocked') {
+                const pricingErrorState = buildPricingErrorState(core.authorization, 'continue_story');
+                set({
+                  isLoading: false,
+                  loadingClues: [],
+                  loadingStage: null,
+                  loadingReader: null,
+                  error: pricingErrorState?.error ?? 'Unable to check your wallet right now.',
+                  errorAction: pricingErrorState?.errorAction ?? null,
+                });
+                return true;
+              }
+
+              let beat = enforceReelBeatCap(core.beat, session.storyConfig);
+              const storyboardPlan = core.storyboardPlan;
+              beat.storyboardPlan = storyboardPlan;
+              beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
+              beat.isStoryboard = true;
+              beat = applyStoryTextOverlayBeatMetadata(beat, session.storyConfig);
+
+              set((state) => ({
+                loadingClues: beat.clues,
+                loadingReader: updateLoadingReaderWithBeat(state.loadingReader, 'continue_story', beat),
+              }));
+              setLoadingStage(set, 'continue_story', 'visual');
+
+              const voiceResolution = await measureAsyncStep(
+                timingSteps,
+                'voice_resolution',
+                'Resolve locked narrator voice',
+                () => voiceResolutionPromise
+              );
+              const voiceForBeat = voiceResolution.voiceId;
+              const narrationLanguageCode = voiceResolution.languageCode;
+
+              const parentImageContinuityState = extractImageContinuityState(currentNode.data.imageGenerationMetadata);
+              setLoadingStage(set, 'continue_story', 'image', { note: IMAGE_JOB_SAFE_TO_LEAVE_NOTE });
+              let visuals: Awaited<ReturnType<typeof processBeatVisuals>>;
+              try {
+                visuals = await measureAsyncStep(
+                  timingSteps,
+                  'beat_bundle_visuals',
+                  'Persist beat and queue image (bundle)',
+                  () => processBeatVisuals({
+                    target: {
+                      kind: 'existing',
+                      storyId: savedStoryId,
+                      nodeId: newNodeId,
+                      parentNodeId: parentId,
+                      selectedOptionId: optionId,
+                    },
+                    beat,
+                    storyboardPlan,
+                    visualStyle: session.visualStyle,
+                    storyConfig: session.storyConfig,
+                    storyAspectRatio,
+                    reservationId: core.reservationId,
+                    narrationVoiceId: voiceForBeat,
+                    previousImageUrl: currentNode.data.imageUrl ?? null,
+                    parentContinuityState: parentImageContinuityState ?? null,
+                    imageContinuityStrategy: session.storyConfig.imageContinuityStrategy,
+                    storySessionId: session.storySessionId,
+                    portraitTelemetry: costPhase(baseCostTelemetry, 'portrait_generation'),
+                    imageTelemetry: costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), { beatBundle: true }),
+                  })
+                );
+              } catch (error: any) {
+                await releaseBundleReservation(core.reservationId, 'beat_bundle_visuals_failed');
+                throw error;
+              }
+
+              if (visuals.status !== 'queued') {
+                await releaseBundleReservation(core.reservationId, `beat_bundle_${visuals.reason}`);
+                throw new Error(visuals.message || "The next beat couldn't be saved. Please try again.");
+              }
+              const queued = visuals;
+
+              const jobOutcome = await measureAsyncStep(
+                timingSteps,
+                'image_job_wait',
+                'Wait for background image render',
+                () => waitForQueuedBeatImage(savedStoryId, newNodeId)
+              );
+              const imageStillPending = !jobOutcome;
+              const pendingNodeData = {
+                ...normalizeBeatMediaFields({
+                  ...queued.beat,
+                  imageUrl: undefined,
+                  persistedImageUrl: undefined,
+                  imageStatus: 'pending' as const,
+                  imageError: undefined,
+                  audioStatus: 'not_requested' as const,
+                  audioError: undefined,
+                }),
+                narrationVoiceId: voiceForBeat,
+              };
+              const settledNodeData = jobOutcome?.imageStatus === 'ready'
+                ? {
+                    ...pendingNodeData,
+                    imageUrl: jobOutcome.imageUrl,
+                    persistedImageUrl: jobOutcome.imageUrl,
+                    imageStatus: 'ready' as const,
+                    imageError: undefined,
+                  }
+                : jobOutcome?.imageStatus === 'failed'
+                  ? {
+                      ...pendingNodeData,
+                      imageStatus: 'failed' as const,
+                      imageError: jobOutcome.imageError ?? 'Image generation failed. You can retry it from the story.',
+                    }
+                  : pendingNodeData;
+
+              const updatedMap = addChildNode(
+                session.storyMap,
+                session.storyMap.currentNodeId,
+                optionId,
+                settledNodeData,
+                newNodeId
+              );
+              const latestSession = get().session;
+              if (!latestSession) return true;
+              const mergedMap = {
+                ...updatedMap,
+                nodes: {
+                  ...updatedMap.nodes,
+                  ...latestSession.storyMap.nodes,
+                  [parentId]: {
+                    ...(latestSession.storyMap.nodes[parentId] || updatedMap.nodes[parentId]),
+                    children: updatedMap.nodes[parentId].children,
+                  },
+                  [newNodeId]: updatedMap.nodes[newNodeId],
+                },
+              };
+
+              set({
+                session: deriveSessionFields(
+                  {
+                    ...latestSession,
+                    narratorVoice: voiceForBeat,
+                    narrationVoiceMode: voiceResolution.mode,
+                    narrationVoiceGenderBucket: voiceResolution.genderBucket ?? undefined,
+                    narrationLanguageCode,
+                  },
+                  mergedMap
+                ),
+                isLoading: false,
+                // Beat text is already durably persisted server-side and the
+                // worker owns the image writes — same reasoning as the legacy
+                // server_pipeline branch.
+                saveStatus: 'saved',
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: null,
+                errorAction: null,
+                ...(imageStillPending
+                  ? { activeImageJobNodeIds: Array.from(new Set([...get().activeImageJobNodeIds, newNodeId])) }
+                  : {}),
+              });
+              if (imageStillPending) {
+                startImageJobPolling(savedStoryId);
+              }
+              dispatchPricingRuntimeRefresh();
+              logGenerationTiming({
+                scope: 'continue_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: true,
+                  beatNumber: beat.beatNumber,
+                  storyId: queued.storyId,
+                  promptOnly,
+                  serverPipeline: true,
+                  beatBundle: true,
+                  imageWaitOutcome: jobOutcome?.imageStatus ?? 'pending',
+                },
+              });
+              return true;
+            };
+
+            try {
+              if (await runContinueStoryBundle()) {
+                return;
+              }
+              // Server said legacy — continue with the untouched flow below.
+            } catch (error: any) {
+              logGenerationTiming({
+                scope: 'continue_story',
+                totalMs: Math.round(nowMs() - generationStartedAt),
+                steps: timingSteps,
+                meta: {
+                  success: false,
+                  failureStage: 'beat_bundle',
+                  optionId,
+                  message: error?.message || 'Beat generation failed.',
+                },
+              });
+              set({
+                isLoading: false,
+                loadingClues: [],
+                loadingStage: null,
+                loadingReader: null,
+                error: error?.message || "The next beat couldn't be generated. Please try again.",
+                errorAction: null,
+              });
+              return;
+            }
+          }
+        }
+
+        // Independent of wallet authorization — run both round-trips in parallel.
+        const modelOverridesPromise = getStoryModelOverridesCached().catch(() => undefined);
         let billingAuthorization: PricingBillableActionAuthorization;
         try {
           billingAuthorization = await measureAsyncStep(
@@ -3337,16 +4066,19 @@ export const useStoryStore = create<StoryState>()(
           delete (sessionForPrompt as any).narrationVoiceGenderBucket;
           delete (sessionForPrompt as any).narrationLanguageCode;
 
-          // Fetch active model config (non-blocking fallback to defaults)
-          let modelOverrides: StoryModelOverrides | undefined;
-          try {
-            modelOverrides = await measureAsyncStep(
-              timingSteps,
-              'model_overrides',
-              'Load model and prompt overrides',
-              () => getStoryModelOverrides()
-            );
-          } catch { /* falls back to hardcoded defaults */ }
+          // Active model config, kicked off before authorization above
+          // (non-blocking fallback to defaults)
+          const modelOverrides: StoryModelOverrides | undefined = await measureAsyncStep(
+            timingSteps,
+            'model_overrides',
+            'Load model and prompt overrides',
+            () => modelOverridesPromise
+          );
+
+          // The locked voice depends only on session settings, so resolve it in
+          // parallel with beat/image generation (mirrors startStory).
+          const voiceResolutionPromise = resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'));
+          voiceResolutionPromise.catch(() => { /* surfaced where awaited below */ });
 
           setLoadingStage(set, 'continue_story', 'beat');
           let beat = await measureAsyncStep(
@@ -3454,12 +4186,12 @@ export const useStoryStore = create<StoryState>()(
 
           // Narration is on-demand (user clicks the speaker icon on the beat),
           // but the locked voice is still resolved here so the beat records the
-          // voice it will narrate with.
+          // voice it will narrate with. Resolution started before beat generation.
           const voiceResolution = await measureAsyncStep(
             timingSteps,
             'voice_resolution',
             'Resolve locked narrator voice',
-            () => resolveNarratorVoice(session, costPhase(baseCostTelemetry, 'voice_selection'))
+            () => voiceResolutionPromise
           );
           const voiceForBeat = voiceResolution.voiceId;
           const narrationLanguageCode = voiceResolution.languageCode;
@@ -3498,7 +4230,7 @@ export const useStoryStore = create<StoryState>()(
             && session.userPrompt.toLowerCase() !== 'mock'
           ) {
             try {
-              effectiveImageMode = await resolveImageProcessingModeAction();
+              effectiveImageMode = await resolveImageProcessingModeCached();
             } catch {
               // Resolver failure = legacy; the server re-checks on enqueue anyway.
             }
@@ -4111,7 +4843,7 @@ export const useStoryStore = create<StoryState>()(
           const narrationLanguageCode = voiceResolution.languageCode;
           const narrationAccent = voiceResolution.accent;
           const modelOverrides = isReelStoryConfig(session.storyConfig)
-            ? await getStoryModelOverrides().catch(() => undefined)
+            ? await getStoryModelOverridesCached().catch(() => undefined)
             : undefined;
           if (
             session.narratorVoice !== voiceName
@@ -5033,12 +5765,15 @@ export const useStoryStore = create<StoryState>()(
         }
       },
 
-      regenerateImageForNode: async (nodeId: string) => {
+      regenerateImageForNode: async (nodeId: string, regenOptions?: BeatImageRegenerationOptions) => {
         const { session } = get();
         if (!session) return;
 
         const node = session.storyMap.nodes[nodeId];
         if (!node) return;
+
+        const regenPanelSuggestions = cleanPanelSuggestions(regenOptions?.panelSuggestions);
+        const regenOverallSuggestion = regenOptions?.overallSuggestion?.trim() || undefined;
         const baseCostTelemetry: CostTelemetryContext = {
           activityKey: 'regenerate_image',
           storySessionId: session.storySessionId,
@@ -5060,7 +5795,7 @@ export const useStoryStore = create<StoryState>()(
         let effectiveImageMode: 'client_legacy' | 'server_pipeline' = 'client_legacy';
         if (!promptOnly && session.savedStoryId) {
           try {
-            effectiveImageMode = await resolveImageProcessingModeAction();
+            effectiveImageMode = await resolveImageProcessingModeCached();
           } catch {
             // Resolver failure = legacy; the server re-checks on enqueue anyway.
           }
@@ -5096,7 +5831,7 @@ export const useStoryStore = create<StoryState>()(
 
           let modelOverrides: StoryModelOverrides | undefined;
           try {
-            modelOverrides = await getStoryModelOverrides();
+            modelOverrides = await getStoryModelOverridesCached();
           } catch {
             // Falls back to default prompt and model config inside generateImage.
           }
@@ -5170,9 +5905,32 @@ export const useStoryStore = create<StoryState>()(
             parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
             portraitReferences
           );
+          // Refine mode stays visually anchored to the current image by
+          // sending it as an extra scene reference; reimagine deliberately
+          // does not, so the provider can re-stage the scene.
+          if (regenOptions?.mode === 'refine') {
+            const currentImage = node.data.imageUrl || getBeatPersistedImageUrl(node.data) || undefined;
+            if (currentImage && !currentImage.startsWith('r2://')) {
+              referenceImages.unshift(
+                currentImage.startsWith('data:')
+                  ? { type: 'scene', dataUrl: currentImage }
+                  : { type: 'scene', url: currentImage }
+              );
+            }
+          }
           const regenerationContinuityStrategy =
             regenerationContinuityState ? undefined : 'resend_refs';
-          const storyboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
+          const baseStoryboardPrompt = beatForRender.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
+          // Pack 1: append the user's regeneration directions (mode behavior,
+          // overall + per-panel suggestions, strict continuity rules).
+          const storyboardPrompt = regenOptions
+            ? `${baseStoryboardPrompt}\n\n${buildRegenerationInstructionBlock({
+                mode: regenOptions.mode,
+                overallSuggestion: regenOverallSuggestion,
+                panelSuggestions: regenPanelSuggestions,
+                isStoryboard: true,
+              })}`
+            : baseStoryboardPrompt;
 
           if (effectiveImageMode === 'server_pipeline' && !promptOnly && session.savedStoryId) {
             // The worker replays generateSelectedImage with this exact final
@@ -5211,6 +5969,14 @@ export const useStoryStore = create<StoryState>()(
                   referenceCount: referenceImages.length,
                 }),
                 references: referenceImages,
+                regeneration: regenOptions
+                  ? {
+                      mode: regenOptions.mode,
+                      ...(regenOverallSuggestion ? { overallSuggestion: regenOverallSuggestion } : {}),
+                      ...(regenPanelSuggestions ? { panelSuggestions: regenPanelSuggestions } : {}),
+                      source: 'user',
+                    }
+                  : null,
               },
             });
 
@@ -5427,6 +6193,210 @@ export const useStoryStore = create<StoryState>()(
           }
           set({ isRegeneratingImage: false });
         }
+      },
+
+      loadBeatControlSettings: async () => {
+        try {
+          const settings = await getBeatControlRuntimeSettings();
+          set({ beatControlSettings: settings });
+        } catch {
+          // Fail closed: controls stay hidden with the defaults.
+        }
+      },
+
+      loadCharacterUniverseSettings: async () => {
+        try {
+          const settings = await getCharacterUniverseRuntimeSettings();
+          set({ characterUniverseSettings: settings });
+        } catch {
+          // Fail closed: controls stay hidden with the defaults.
+        }
+      },
+
+      // Applies a server-confirmed timeline rewrite to the local session:
+      // removes the descendant subtree, optionally applies the new beat text,
+      // and recomputes the flat session fields from the pruned tree. The
+      // server already wrote both persistence halves, so no client re-save.
+      applyTimelineRewrite: (nodeId: string, newText: string) => {
+        const { session } = get();
+        if (!session) return;
+        const source = session.storyMap.nodes[nodeId];
+        if (!source) return;
+
+        const prunedMap = removeSubtree(session.storyMap, nodeId);
+        const patchedMap: StoryMap = {
+          ...prunedMap,
+          nodes: {
+            ...prunedMap.nodes,
+            [nodeId]: {
+              ...prunedMap.nodes[nodeId],
+              data: {
+                ...prunedMap.nodes[nodeId].data,
+                ...(newText
+                  ? {
+                      storyText: newText,
+                      storyTextParts: undefined,
+                      storyTextOverlayCaptions: undefined,
+                      storyTextOverlayAlignment: undefined,
+                    }
+                  : {}),
+              },
+            },
+          },
+        };
+        const survivingNodeIds = new Set(Object.keys(patchedMap.nodes));
+        const updatedSession = deriveSessionFields(session, patchedMap);
+        set({
+          session: updatedSession,
+          activeImageJobNodeIds: get().activeImageJobNodeIds.filter((id) => survivingNodeIds.has(id)),
+          audioReadyNodeId:
+            get().audioReadyNodeId && survivingNodeIds.has(get().audioReadyNodeId!)
+              ? get().audioReadyNodeId
+              : null,
+          saveStatus: 'saved',
+          error: null,
+          errorAction: null,
+        });
+      },
+
+      editBeatTextForNode: async (nodeId: string, newText: string, confirmTimelineRewrite?: boolean) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before editing beats.' } as EditBeatTextResult;
+        }
+        const result = await editBeatTextAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          newText,
+          confirmTimelineRewrite,
+        });
+        if (result.status === 'updated') {
+          if (result.wipedNodeIds && result.wipedNodeIds.length > 0) {
+            get().applyTimelineRewrite(nodeId, newText.trim());
+          } else {
+            const latest = get().session;
+            const node = latest?.storyMap.nodes[nodeId];
+            if (latest && node) {
+              const patchedMap: StoryMap = {
+                ...latest.storyMap,
+                nodes: {
+                  ...latest.storyMap.nodes,
+                  [nodeId]: {
+                    ...node,
+                    data: {
+                      ...node.data,
+                      storyText: newText.trim(),
+                      storyTextParts: undefined,
+                      storyTextOverlayCaptions: undefined,
+                      storyTextOverlayAlignment: undefined,
+                    },
+                  },
+                },
+              };
+              set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+            }
+          }
+        }
+        return result;
+      },
+
+      regenerateOptionsForNode: async (nodeId: string, confirmTimelineRewrite?: boolean) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before regenerating options.' } as RegenerateBeatOptionsResult;
+        }
+        const result = await regenerateBeatOptionsAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          confirmTimelineRewrite,
+        });
+        if (result.status === 'updated') {
+          // A confirmed regeneration on a beat with downstream content wiped
+          // that content server-side; mirror it locally before patching options.
+          if (confirmTimelineRewrite) {
+            get().applyTimelineRewrite(nodeId, '');
+          }
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: { ...node, data: { ...node.data, options: result.options } },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
+      },
+
+      addCustomOptionForNode: async (nodeId: string, optionText: string) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before adding your own option.' } as AddCustomOptionResult;
+        }
+        const result = await addCustomOptionAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          optionText,
+        });
+        if (result.status === 'added') {
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: {
+                  ...node,
+                  data: { ...node.data, options: [...(node.data.options ?? []), result.option] },
+                },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
+      },
+
+      restoreImageVersionForNode: async (nodeId: string, storageKey: string) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return { status: 'failed', error: 'Save the story before restoring image versions.' } as RestoreBeatImageVersionResult;
+        }
+        const result = await restoreBeatImageVersionAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          storageKey,
+        });
+        if (result.status === 'restored') {
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: {
+                  ...node,
+                  data: normalizeBeatMediaFields({
+                    ...node.data,
+                    imageUrl: result.displayUrl,
+                    persistedImageUrl: result.imageUrl,
+                    imageStatus: 'ready',
+                    imageError: undefined,
+                    imageVersion: new Date().toISOString(),
+                  }),
+                },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
       },
 
       clearAudioReady: () => {

@@ -6,10 +6,15 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, type LucideIcon } from 'lucide-react';
+import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { deleteStory } from '@/app/actions/persistence';
+import { saveCharacterToLibrary } from '@/app/actions/character-library';
+import type { CharacterMaster } from '@/lib/types/character-library';
+import { getEpisodeNavigation } from '@/app/actions/episodes';
+import type { EpisodeNavigation } from '@/lib/types/episodes';
+import ContinueAsEpisodeDialog from './ContinueAsEpisodeDialog';
 import PublishDialog from './PublishDialog';
 import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
@@ -18,17 +23,25 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
-import HqDownloadButton from './HqDownloadButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import ReelCanvasPreview from './ReelCanvasPreview';
 import StoryStoryboardPlayer from './StoryStoryboardPlayer';
+import VideoExportDialog from './VideoExportDialog';
+import type { ResolvedExportPreset } from '@/lib/video-export/presets';
 import StoryNarrationTimingDialog from './StoryNarrationTimingDialog';
 import StoryTextOverlayDialog from './StoryTextOverlayDialog';
 import StoryTransitionDialog from './StoryTransitionDialog';
 import StoryEffectsDialog from './StoryEffectsDialog';
+import BeatActionsMenu from './BeatActionsMenu';
+import EditBeatTextDialog from './EditBeatTextDialog';
+import RegenerateImageDialog from './RegenerateImageDialog';
+import ImageVersionHistoryDialog from './ImageVersionHistoryDialog';
+import CustomOptionInput from './CustomOptionInput';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
-import { findChildForOption, getCurrentNode, getNodesByBeatNumber } from '@/lib/utils/story-map';
+import { findChildForOption, getCurrentNode, getNodesByBeatNumber, hasActiveDescendants } from '@/lib/utils/story-map';
+import type { TimelineImpact } from '@/app/actions/beat-control';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { useKeyboardNavigation } from '@/lib/hooks/useKeyboardNavigation';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
@@ -1715,6 +1728,10 @@ export default function StoryScreen() {
         });
       })
       .catch(() => {/* use defaults */});
+    // Pack 1 beat-control flags (fail-closed defaults until this resolves).
+    void useStoryStore.getState().loadBeatControlSettings();
+    // Pack 2 character-universe flags (library save, episodes, bible).
+    void useStoryStore.getState().loadCharacterUniverseSettings();
   }, [setSaveRuntimeSettings]);
 
   useEffect(() => {
@@ -2072,6 +2089,138 @@ function StoryScreenInner({
   const [showStoryTextOverlay, setShowStoryTextOverlay] = useState(false);
   const [showStoryTransitions, setShowStoryTransitions] = useState(false);
   const [showStoryEffects, setShowStoryEffects] = useState(false);
+  // Pack 1 beat-control dialogs
+  const [showEditBeatText, setShowEditBeatText] = useState(false);
+  const [showRegenerateImage, setShowRegenerateImage] = useState(false);
+  const [showImageVersions, setShowImageVersions] = useState(false);
+  const [showNarrationRegenConfirm, setShowNarrationRegenConfirm] = useState(false);
+  const [optionsRegenState, setOptionsRegenState] = useState<
+    | { step: 'confirm' }
+    | { step: 'rewrite_confirm'; impact: TimelineImpact; message: string }
+    | { step: 'running' }
+    | null
+  >(null);
+  const [optionsRegenError, setOptionsRegenError] = useState<string | null>(null);
+
+  // Pack 1 beat controls: owner-only, saved stories only, never in exploration.
+  const canUseBeatControls =
+    !session.explorationMode && !session.sourceStoryOwnerId && Boolean(session.savedStoryId);
+  const beatIsLocked = hasActiveDescendants(session.storyMap, currentNodeId);
+  const regenerateOptionsForNode = useStoryStore((state) => state.regenerateOptionsForNode);
+  const beatControlSettings = useStoryStore((state) => state.beatControlSettings);
+
+  // Pack 2 character universe: save-to-library affordance in the character
+  // refs panel; owner-only like the beat controls.
+  const characterUniverseSettings = useStoryStore((state) => state.characterUniverseSettings);
+  const canSaveCharactersToLibrary =
+    canUseBeatControls &&
+    characterUniverseSettings.libraryEnabled &&
+    characterUniverseSettings.globalSaveEnabled;
+  const [savingLibraryCharacterId, setSavingLibraryCharacterId] = useState<string | null>(null);
+  const [libraryCharacterNotice, setLibraryCharacterNotice] = useState<string | null>(null);
+  const [libraryCharacterConflict, setLibraryCharacterConflict] = useState<{
+    characterId: string;
+    characterName: string;
+    existingMaster: CharacterMaster;
+  } | null>(null);
+  const [savedLibraryCharacterIds, setSavedLibraryCharacterIds] = useState<Record<string, boolean>>({});
+
+  const handleSaveCharacterToLibrary = useCallback(
+    async (characterId: string, characterName: string, overwriteMasterId?: string) => {
+      if (!session.savedStoryId || savingLibraryCharacterId) return;
+      setSavingLibraryCharacterId(characterId);
+      setLibraryCharacterNotice(null);
+      try {
+        const result = await saveCharacterToLibrary({
+          storyId: session.savedStoryId,
+          characterId,
+          overwriteMasterId,
+        });
+        if (result.status === 'saved') {
+          setSavedLibraryCharacterIds((prev) => ({ ...prev, [characterId]: true }));
+          setLibraryCharacterConflict(null);
+          setLibraryCharacterNotice(`${result.master.name} is now in your library.`);
+          return;
+        }
+        if (result.status === 'conflict') {
+          setLibraryCharacterConflict({
+            characterId,
+            characterName,
+            existingMaster: result.existingMaster,
+          });
+          return;
+        }
+        setLibraryCharacterNotice(result.error);
+      } catch (saveError) {
+        setLibraryCharacterNotice(
+          saveError instanceof Error ? saveError.message : 'Could not save the character.'
+        );
+      } finally {
+        setSavingLibraryCharacterId(null);
+      }
+    },
+    [session.savedStoryId, savingLibraryCharacterId]
+  );
+
+  const isCharacterInLibrary = useCallback(
+    (characterId: string): boolean =>
+      Boolean(
+        savedLibraryCharacterIds[characterId] ||
+          session.characters.find((character) => character.id === characterId)?.masterId
+      ),
+    [savedLibraryCharacterIds, session.characters]
+  );
+
+  // Pack 2 episodes: Continue-as-Episode entry point + series navigation
+  // links (previous/next stories on the first and last beats). Nav results are
+  // keyed by story id so switching stories never shows stale links.
+  const [showContinueAsEpisode, setShowContinueAsEpisode] = useState(false);
+  const [episodeNavByStory, setEpisodeNavByStory] = useState<Record<string, EpisodeNavigation>>({});
+  const episodeNav = session.savedStoryId ? episodeNavByStory[session.savedStoryId] ?? null : null;
+  const canContinueAsEpisode =
+    canUseBeatControls &&
+    characterUniverseSettings.episodesEnabled &&
+    session.storyConfig.storyKind !== 'reel';
+
+  useEffect(() => {
+    const storyId = session.savedStoryId;
+    if (!storyId) return;
+    let cancelled = false;
+    getEpisodeNavigation(storyId)
+      .then((nav) => {
+        if (!cancelled && (nav.parent || nav.children.length > 0)) {
+          setEpisodeNavByStory((previous) => ({ ...previous, [storyId]: nav }));
+        }
+      })
+      .catch(() => {
+        /* navigation is decorative — ignore failures */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session.savedStoryId]);
+
+  const runOptionsRegeneration = useCallback(
+    async (confirmTimelineRewrite: boolean) => {
+      setOptionsRegenState({ step: 'running' });
+      setOptionsRegenError(null);
+      try {
+        const result = await regenerateOptionsForNode(currentNodeId, confirmTimelineRewrite);
+        if (result.status === 'requires_confirmation') {
+          setOptionsRegenState({ step: 'rewrite_confirm', impact: result.impact, message: result.message });
+          return;
+        }
+        if (result.status === 'failed') {
+          setOptionsRegenError(result.error);
+        }
+        setOptionsRegenState(null);
+      } catch (error) {
+        setOptionsRegenError(error instanceof Error ? error.message : 'Failed to regenerate options.');
+        setOptionsRegenState(null);
+      }
+    },
+    [currentNodeId, regenerateOptionsForNode]
+  );
   const [showDiscardReelDialog, setShowDiscardReelDialog] = useState(false);
   const [isDiscardingReel, setIsDiscardingReel] = useState(false);
   const [discardReelError, setDiscardReelError] = useState<string | null>(null);
@@ -2410,6 +2559,70 @@ function StoryScreenInner({
     !canPublishStandardStoryline &&
     cycleSettings.audioStorylinePublishEnabled
   );
+
+  // Ending call-to-actions. Rendered compactly (theme-toolbar scale) in two
+  // spots: inline at the bottom of the story card on mobile, and as a right-hand
+  // column on desktop so they're visible without scrolling past the last beat.
+  // `fullWidth` stacks them as a vertical panel for the desktop column.
+  const renderEndingActions = (fullWidth: boolean) => {
+    const fw = fullWidth ? 'w-full justify-center' : '';
+    return (
+      <>
+        {canContinueAsEpisode && (
+          <button
+            onClick={() => setShowContinueAsEpisode(true)}
+            className={`bg-emerald-400 text-neutral-950 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-emerald-300 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Clapperboard className="w-4 h-4" />
+            Continue as Episode
+          </button>
+        )}
+        {!lastPublishResult && onSave && canPublishStandardStoryline && (
+          <button
+            onClick={() => setShowPublishDialog(true)}
+            className={`bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Share2 className="w-4 h-4" />
+            Publish Storyline
+          </button>
+        )}
+        {!lastPublishResult && onSave && canPublishAudioStoryline && (
+          <button
+            onClick={() => setShowPublishDialog(true)}
+            className={`bg-sky-500/20 text-sky-200 border border-sky-500/30 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-sky-500/30 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Share2 className="w-4 h-4" />
+            Publish as Audio Story
+          </button>
+        )}
+        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
+          <div className="max-w-xl rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
+          </div>
+        )}
+        {session.explorationMode && (
+          <button
+            onClick={() => {
+              // Navigate to a branch point to explore more
+              const rootId = session.storyMap.rootNodeId;
+              navigateToNode(rootId);
+            }}
+            className={`bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-indigo-500/30 transition-colors flex items-center gap-2 ${fw}`}
+          >
+            <Compass className="w-4 h-4" />
+            Explore More Branches
+          </button>
+        )}
+        <button
+          onClick={resetStory}
+          className={`bg-white text-black px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2 ${fw}`}
+        >
+          Start a New Story
+        </button>
+      </>
+    );
+  };
+
   const prevNodeIdForAutoplay = useRef<string | undefined>(undefined);
   const pendingStoryModeAutoplayNodeIdRef = useRef<string | null>(null);
   const orderedOptions = currentBeat.canonicalOptionId
@@ -4122,7 +4335,8 @@ function StoryScreenInner({
     }
   }, [canOpenPromptTools, closePromptToolsModal, openPromptToolsOverview, promptToolsOpen]);
 
-  const handleExportReelVideo = useCallback(async () => {
+  const [reelExportDialogOpen, setReelExportDialogOpen] = useState(false);
+  const handleExportReelVideo = useCallback(async (enginePreset: ResolvedExportPreset | null = null) => {
     if (!canExportReelVideo || isExporting) return;
 
     const exportTitle = session.title || 'kissago-reel';
@@ -4143,6 +4357,7 @@ function StoryScreenInner({
       const ok = await exportVideo(reelExportBeats, exportTitle, {
         aspectRatio: '9:16',
         videoExportPreset,
+        exportEnginePreset: enginePreset,
         showWatermark: showVideoWatermark,
         textOverlayEnabled: reelOverlayEnabledDraft,
         textOverlayStyle: normalizedReelOverlayDraft,
@@ -4173,6 +4388,7 @@ function StoryScreenInner({
     await exportVideo(reelExportBeats, exportTitle, {
       aspectRatio: '9:16',
       videoExportPreset,
+      exportEnginePreset: enginePreset,
       showWatermark: showVideoWatermark,
       textOverlayEnabled: reelOverlayEnabledDraft,
       textOverlayStyle: normalizedReelOverlayDraft,
@@ -5092,7 +5308,9 @@ function StoryScreenInner({
     canExportReelVideo ? (
       <button
         type="button"
-        onClick={() => void handleExportReelVideo()}
+        onClick={() => {
+          if (!isExporting) setReelExportDialogOpen(true);
+        }}
         disabled={isExporting}
         aria-label={isExporting ? `Exporting reel video, ${exportProgress} percent` : 'Export reel video'}
         title={isExporting ? `Exporting... ${exportProgress}%` : 'Export reel video'}
@@ -5877,8 +6095,9 @@ function StoryScreenInner({
               )}
             </div>
 
-          {/* Card + Narration button row */}
-          <div className="flex items-end gap-3 w-full md:gap-5">
+          {/* Card + Narration button row — fully hidden when minimized so only
+              the chrome controls (and the choices column) remain on screen */}
+          <div className={`items-end gap-3 w-full md:gap-5 ${isMinimized ? 'hidden' : 'flex'}`}>
             {/* Narration + Regenerate image buttons — outside card, left side */}
             {!isMinimized && (
               <div className="shrink-0 pb-3 flex flex-col items-center gap-2 md:pb-4">
@@ -5939,9 +6158,6 @@ function StoryScreenInner({
                     </AnimatePresence>
                   </div>
                 )}
-                {session.savedStoryId && !isPromptOnlyStory && (
-                  <HqDownloadButton storyId={session.savedStoryId} nodeId={currentNodeId} />
-                )}
                 {!isReelStory && cycleSettings.storyUiAutoScrollEnabled && (
                   <AutoScrollButton
                     active={isAutoScrolling}
@@ -5981,6 +6197,21 @@ function StoryScreenInner({
                     )}
                   </AnimatePresence>
                 </div>
+                {canUseBeatControls && !isReelStory && !isPromptOnlyStory && (
+                  <BeatActionsMenu
+                    key={currentNodeId}
+                    nodeId={currentNodeId}
+                    isLocked={beatIsLocked}
+                    onEditText={() => setShowEditBeatText(true)}
+                    onRegenerateImage={() => setShowRegenerateImage(true)}
+                    onRegenerateNarration={() => setShowNarrationRegenConfirm(true)}
+                    onRegenerateOptions={() => {
+                      setOptionsRegenError(null);
+                      setOptionsRegenState({ step: 'confirm' });
+                    }}
+                    onViewVersions={() => setShowImageVersions(true)}
+                  />
+                )}
               </div>
             )}
 
@@ -6213,11 +6444,44 @@ function StoryScreenInner({
                       </div>
                     </div>
                   ) : (
-                    <p className={`transition-colors duration-500 ${
-                      isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
-                    }`}>
-                      {currentBeat.storyText}
-                    </p>
+                    <>
+                      {episodeNav && currentNodeId === session.storyMap.rootNodeId && !isMinimized && (
+                        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 px-4 py-2.5 text-xs font-sans">
+                          {episodeNav.parent && (
+                            <Link
+                              href={`/story/${episodeNav.parent.storyId}`}
+                              className="group flex min-w-0 items-center gap-1.5 text-indigo-200 transition-colors hover:text-indigo-100"
+                            >
+                              <ArrowRight className="h-3.5 w-3.5 shrink-0 rotate-180 transition-transform group-hover:-translate-x-0.5" />
+                              <span className="truncate">
+                                {episodeNav.parent.episodeNumber
+                                  ? `Part ${episodeNav.parent.episodeNumber}: `
+                                  : 'Previous: '}
+                                {episodeNav.parent.title}
+                              </span>
+                            </Link>
+                          )}
+                          {episodeNav.children.map((child) => (
+                            <Link
+                              key={child.storyId}
+                              href={`/story/${child.storyId}`}
+                              className="group flex min-w-0 items-center gap-1.5 text-indigo-200 transition-colors hover:text-indigo-100"
+                            >
+                              <span className="truncate">
+                                {child.episodeNumber ? `Part ${child.episodeNumber}: ` : 'Next: '}
+                                {child.title}
+                              </span>
+                              <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                      <p className={`transition-colors duration-500 ${
+                        isMinimized ? 'text-neutral-500 line-clamp-2' : 'text-neutral-300'
+                      }`}>
+                        {currentBeat.storyText}
+                      </p>
+                    </>
                   )}
 
                   {isEnding && !isMinimized && (
@@ -6279,49 +6543,50 @@ function StoryScreenInner({
                         </div>
                       )}
 
-                      <div className="mt-8 flex flex-wrap gap-3">
-                        {!lastPublishResult && onSave && canPublishStandardStoryline && (
-                          <button
-                            onClick={() => setShowPublishDialog(true)}
-                            className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-emerald-500/30 transition-colors flex items-center gap-2"
-                          >
-                            <Share2 className="w-4 h-4" />
-                            Publish Storyline
-                          </button>
-                        )}
-                        {!lastPublishResult && onSave && canPublishAudioStoryline && (
-                          <button
-                            onClick={() => setShowPublishDialog(true)}
-                            className="bg-sky-500/20 text-sky-200 border border-sky-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-sky-500/30 transition-colors flex items-center gap-2"
-                          >
-                            <Share2 className="w-4 h-4" />
-                            Publish as Audio Story
-                          </button>
-                        )}
-                        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
-                          <div className="max-w-xl rounded-2xl border border-amber-500/25 bg-amber-500/10 px-5 py-4 text-sm text-amber-100">
-                            Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
-                          </div>
-                        )}
-                        {session.explorationMode && (
-                          <button
-                            onClick={() => {
-                              // Navigate to a branch point to explore more
-                              const rootId = session.storyMap.rootNodeId;
-                              navigateToNode(rootId);
-                            }}
-                            className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-6 py-3 rounded-2xl font-medium hover:bg-indigo-500/30 transition-colors flex items-center gap-2"
-                          >
-                            <Compass className="w-4 h-4" />
-                            Explore More Branches
-                          </button>
-                        )}
-                        <button
-                          onClick={resetStory}
-                          className="bg-white text-black px-8 py-4 rounded-2xl font-medium hover:bg-neutral-200 transition-colors flex items-center gap-2"
+                      {episodeNav?.parent && (
+                        <Link
+                          href={`/story/${episodeNav.parent.storyId}`}
+                          className="group mt-6 flex items-center gap-1.5 text-sm font-sans text-indigo-200 transition-colors hover:text-indigo-100"
                         >
-                          Start a New Story
-                        </button>
+                          <ArrowRight className="h-3.5 w-3.5 shrink-0 rotate-180 transition-transform group-hover:-translate-x-0.5" />
+                          <span className="truncate">
+                            {episodeNav.parent.episodeNumber
+                              ? `Back to Part ${episodeNav.parent.episodeNumber}: `
+                              : 'Back to: '}
+                            {episodeNav.parent.title}
+                          </span>
+                        </Link>
+                      )}
+
+                      {episodeNav && episodeNav.children.length > 0 && (
+                        <div className="mt-6 rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4">
+                          <p className="text-[11px] font-sans uppercase tracking-[0.18em] text-indigo-300">
+                            This story continues
+                          </p>
+                          <div className="mt-2 flex flex-col gap-1.5">
+                            {episodeNav.children.map((child) => (
+                              <Link
+                                key={child.storyId}
+                                href={`/story/${child.storyId}`}
+                                className="group flex items-center gap-2 text-sm text-indigo-200 transition-colors hover:text-indigo-100"
+                              >
+                                <span className="truncate">
+                                  {child.episodeNumber ? `Part ${child.episodeNumber}: ` : ''}
+                                  {child.title}
+                                </span>
+                                <ArrowRight className="h-3.5 w-3.5 shrink-0 transition-transform group-hover:translate-x-0.5" />
+                              </Link>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Ending actions — inline at card bottom on mobile only.
+                          On desktop these move to the right-hand column (below)
+                          so they're visible without scrolling. Reel stories keep
+                          them inline on every breakpoint (no desktop column). */}
+                      <div className={`mt-8 flex flex-wrap gap-3 ${!isReelStory ? 'md:hidden' : ''}`}>
+                        {renderEndingActions(false)}
                       </div>
                     </div>
                   )}
@@ -6352,6 +6617,28 @@ function StoryScreenInner({
           </div>{/* end card + narration button row */}
 
           </div>
+
+          {/* Ending actions — desktop right column. Mirrors the "What happens
+              next?" slot so the final CTAs sit where readers already look for
+              actions, instead of below the scrolled story text. Mobile keeps
+              them inline in the card (rendered above). */}
+          {isEnding && !isReelStory && !isMinimized && (
+            <motion.div
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, delay: 0.2 }}
+              className="hidden md:col-span-5 md:flex md:flex-col md:justify-end"
+            >
+              <div className="mb-3 px-1">
+                <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
+                  What next?
+                </h3>
+              </div>
+              <div className="flex flex-col gap-3 px-1">
+                {renderEndingActions(true)}
+              </div>
+            </motion.div>
+          )}
 
           {/* Choices Column */}
           {!isEnding && !isReelStory && (
@@ -6444,6 +6731,11 @@ function StoryScreenInner({
                                     Original path
                                   </span>
                                 )}
+                                {option.source === 'user_custom' && (
+                                  <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-sky-300">
+                                    Yours
+                                  </span>
+                                )}
                               </div>
                               <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider line-clamp-2">
                                 {option.intent}
@@ -6457,6 +6749,12 @@ function StoryScreenInner({
                           </motion.button>
                         );
                       })}
+                      {optionsRegenError && (
+                        <p className="px-1 text-xs leading-snug text-rose-300">{optionsRegenError}</p>
+                      )}
+                      {canUseBeatControls && !isReelStory && beatControlSettings.customOptionsEnabled && (
+                        <CustomOptionInput nodeId={currentNodeId} disabled={isLoading} />
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -6644,6 +6942,28 @@ function StoryScreenInner({
                                       <ImageIcon className="h-4 w-4" />
                                     </button>
                                   )}
+                                  {canSaveCharactersToLibrary && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleSaveCharacterToLibrary(item.characterId, item.characterName)}
+                                      disabled={savingLibraryCharacterId === item.characterId || isCharacterInLibrary(item.characterId)}
+                                      className={`rounded-full border p-2 transition-colors ${
+                                        isCharacterInLibrary(item.characterId)
+                                          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+                                          : 'border-white/10 bg-white/5 text-neutral-200 hover:bg-white/10'
+                                      } disabled:cursor-not-allowed`}
+                                      title={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                      aria-label={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                    >
+                                      {savingLibraryCharacterId === item.characterId ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                      ) : isCharacterInLibrary(item.characterId) ? (
+                                        <BookmarkCheck className="h-4 w-4" />
+                                      ) : (
+                                        <BookmarkPlus className="h-4 w-4" />
+                                      )}
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             ))}
@@ -6671,21 +6991,81 @@ function StoryScreenInner({
                                         : 'No saved sheet'}
                                     </p>
                                   </div>
-                                  {cycleSettings.characterSheetUploadEnabled && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openCharacterSheetUpload(item.characterId, item.characterName)}
-                                      className="rounded-full border border-white/10 bg-white/5 p-2 text-neutral-200 transition-colors hover:bg-white/10"
-                                      title={`Open character sheet tools for ${item.characterName}`}
-                                      aria-label={`Open character sheet tools for ${item.characterName}`}
-                                    >
-                                      <ImageIcon className="h-4 w-4" />
-                                    </button>
-                                  )}
+                                  <div className="flex items-center gap-2">
+                                    {cycleSettings.characterSheetUploadEnabled && (
+                                      <button
+                                        type="button"
+                                        onClick={() => openCharacterSheetUpload(item.characterId, item.characterName)}
+                                        className="rounded-full border border-white/10 bg-white/5 p-2 text-neutral-200 transition-colors hover:bg-white/10"
+                                        title={`Open character sheet tools for ${item.characterName}`}
+                                        aria-label={`Open character sheet tools for ${item.characterName}`}
+                                      >
+                                        <ImageIcon className="h-4 w-4" />
+                                      </button>
+                                    )}
+                                    {canSaveCharactersToLibrary && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleSaveCharacterToLibrary(item.characterId, item.characterName)}
+                                        disabled={savingLibraryCharacterId === item.characterId || isCharacterInLibrary(item.characterId)}
+                                        className={`rounded-full border p-2 transition-colors ${
+                                          isCharacterInLibrary(item.characterId)
+                                            ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+                                            : 'border-white/10 bg-white/5 text-neutral-200 hover:bg-white/10'
+                                        } disabled:cursor-not-allowed`}
+                                        title={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                        aria-label={isCharacterInLibrary(item.characterId) ? `${item.characterName} is in your library` : `Save ${item.characterName} to My Library`}
+                                      >
+                                        {savingLibraryCharacterId === item.characterId ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : isCharacterInLibrary(item.characterId) ? (
+                                          <BookmarkCheck className="h-4 w-4" />
+                                        ) : (
+                                          <BookmarkPlus className="h-4 w-4" />
+                                        )}
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                               ))}
                             </div>
                           </div>
+                        )}
+
+                        {libraryCharacterConflict && (
+                          <div className="mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/5 p-4">
+                            <p className="text-sm text-amber-200">
+                              Your library already has a character named{' '}
+                              <span className="font-medium">{libraryCharacterConflict.existingMaster.name}</span>.
+                            </p>
+                            <div className="mt-3 flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleSaveCharacterToLibrary(
+                                    libraryCharacterConflict.characterId,
+                                    libraryCharacterConflict.characterName,
+                                    libraryCharacterConflict.existingMaster.id
+                                  )
+                                }
+                                disabled={savingLibraryCharacterId !== null}
+                                className="rounded-full bg-amber-400 px-4 py-1.5 text-xs font-semibold text-neutral-950 transition-colors hover:bg-amber-300 disabled:opacity-50"
+                              >
+                                Update the existing character
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setLibraryCharacterConflict(null)}
+                                disabled={savingLibraryCharacterId !== null}
+                                className="rounded-full border border-white/10 px-4 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-white/20 disabled:opacity-50"
+                              >
+                                Keep both — rename it in My Library later
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {libraryCharacterNotice && (
+                          <p className="mt-3 text-xs leading-snug text-emerald-300">{libraryCharacterNotice}</p>
                         )}
                       </div>
                     )}
@@ -7247,6 +7627,77 @@ function StoryScreenInner({
         onApplyAll={applyStoryEffectsToAll}
       />
 
+      {/* Pack 1 beat-control dialogs */}
+      {canUseBeatControls && (
+        <>
+          <EditBeatTextDialog
+            open={showEditBeatText}
+            nodeId={currentNodeId}
+            initialText={normalizedCurrentBeat.storyText}
+            onClose={() => setShowEditBeatText(false)}
+          />
+          {session.savedStoryId && (
+            <ContinueAsEpisodeDialog
+              open={showContinueAsEpisode}
+              storyId={session.savedStoryId}
+              nodeId={currentNodeId}
+              onClose={() => setShowContinueAsEpisode(false)}
+            />
+          )}
+          <RegenerateImageDialog
+            open={showRegenerateImage}
+            nodeId={currentNodeId}
+            isStoryboard={isStoryboardBeat(normalizedCurrentBeat)}
+            onClose={() => setShowRegenerateImage(false)}
+          />
+          <ImageVersionHistoryDialog
+            open={showImageVersions}
+            nodeId={currentNodeId}
+            onClose={() => setShowImageVersions(false)}
+          />
+          <ConfirmDialog
+            open={showNarrationRegenConfirm}
+            title="Regenerate narration?"
+            message="This will regenerate narration for this beat only. Story text and image will not change."
+            confirmLabel="Regenerate narration"
+            onConfirm={() => {
+              setShowNarrationRegenConfirm(false);
+              void handleGenerateNarration();
+            }}
+            onCancel={() => setShowNarrationRegenConfirm(false)}
+          />
+          <ConfirmDialog
+            open={optionsRegenState?.step === 'confirm'}
+            title="Regenerate options?"
+            message="This will replace the current generated options for this beat. Story text and image will not change. Options you wrote yourself are kept."
+            confirmLabel="Regenerate options"
+            busy={false}
+            onConfirm={() => void runOptionsRegeneration(false)}
+            onCancel={() => setOptionsRegenState(null)}
+          />
+          <ConfirmDialog
+            open={optionsRegenState?.step === 'rewrite_confirm'}
+            title="Rewrite the story from this beat?"
+            message={
+              <span>
+                Options for this beat already shaped the later story. Regenerating them will remove all later beats,
+                generated images, narration, and options after this beat.
+                {optionsRegenState?.step === 'rewrite_confirm' && (
+                  <span className="mt-2 block text-xs text-neutral-500">
+                    This will remove {optionsRegenState.impact.affectedBeatCount} later beat
+                    {optionsRegenState.impact.affectedBeatCount === 1 ? '' : 's'}.
+                  </span>
+                )}
+              </span>
+            }
+            confirmLabel="Rewrite from this beat"
+            tone="danger"
+            onConfirm={() => void runOptionsRegeneration(true)}
+            onCancel={() => setOptionsRegenState(null)}
+          />
+        </>
+      )}
+
       <AnimatePresence>
         {showDiscardReelDialog && (
           <motion.div
@@ -7314,6 +7765,16 @@ function StoryScreenInner({
           </motion.div>
         )}
       </AnimatePresence>
+
+      <VideoExportDialog
+        open={reelExportDialogOpen}
+        onClose={() => setReelExportDialogOpen(false)}
+        coinCost={pricing.actionCosts?.export_video_future ?? null}
+        onSelect={(enginePreset) => {
+          setReelExportDialogOpen(false);
+          void handleExportReelVideo(enginePreset);
+        }}
+      />
 
       <AnimatePresence>
         {isExporting && (

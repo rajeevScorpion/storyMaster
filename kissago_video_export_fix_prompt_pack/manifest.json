@@ -1,0 +1,29 @@
+{
+  "name": "kissago_video_export_fix_prompt_pack",
+  "version": "1.0",
+  "created_for": "Kissago/Kissago video export smoothness, MP4 compatibility, admin preset settings, tiered SD/HD export dialog",
+  "phases": [
+    "Phase 1: Diagnose current FPS/timestamps/export settings",
+    "Phase 1: Smooth output with minimal export-time impact",
+    "Phase 1: MP4 compatibility for native players/VLC/YouTube",
+    "Phase 2: Admin settings for export engine presets",
+    "Phase 2: Tiered SD/HD export dialog"
+  ],
+  "do_not_duplicate": [
+    "pan intensity",
+    "zoom intensity",
+    "particle creative controls",
+    "dust/rain/snowfall creative controls",
+    "environment/volumetric creative controls",
+    "story transitions",
+    "text overlay timing if already implemented"
+  ],
+  "references": [
+    "https://mediabunny.dev/guide/introduction",
+    "https://mediabunny.dev/guide/writing-media-files",
+    "https://mediabunny.dev/guide/output-formats",
+    "https://developer.mozilla.org/en-US/docs/Web/API/WebCodecs_API",
+    "https://developer.mozilla.org/en-US/docs/Web/API/VideoEncoder/configure",
+    "https://support.google.com/youtube/answer/1722171"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "pack_name": "Kissago Pack 1 - Beat Control, Continuity Lock & Visual Regeneration",
+  "version": "1.0.0",
+  "created_for": "Kissago implementation handoff",
+  "scope": "Pack 1 only",
+  "excludes": [
+    "global character library",
+    "episodic branching",
+    "story bible",
+    "journal",
+    "cross-story character mixing"
+  ],
+  "recommended_implementation_order": [
+    "Discovery first",
+    "Feature flags",
+    "Data model/versioning",
+    "Backend services",
+    "Prompt contracts",
+    "Frontend UX",
+    "QA",
+    "Rollout"
+  ],
+  "files": [
+    "00_SINGLE_COPY_PASTE_PROMPT.md",
+    "01_PRODUCT_INTENT_AND_SCOPE.md",
+    "02_DISCOVERY_FIRST_INSTRUCTIONS.md",
+    "03_IMPLEMENTATION_SEQUENCE.md",
+    "04_DATA_MODEL_AND_MIGRATIONS.md",
+    "05_BACKEND_API_AND_JOBS.md",
+    "06_FRONTEND_UX_FLOWS.md",
+    "07_PROMPT_CONTRACTS.md",
+    "08_CONTINUITY_LOCK_AND_VERSIONING.md",
+    "09_FEATURE_FLAGS_ADMIN_TOGGLES.md",
+    "10_QA_ACCEPTANCE_TESTS.md",
+    "11_ROLLOUT_ROLLBACK.md",
+    "12_CODER_REPORT_TEMPLATE.md",
+    "README.md",
+    "checklists/manual_qa_checklist.md",
+    "prompts/image_regeneration_prompt_template.md",
+    "prompts/narration_regeneration_prompt_template.md",
+    "prompts/options_regeneration_prompt_template.md",
+    "schemas/beat_image_regeneration_request.schema.json",
+    "schemas/beat_text_edit_request.schema.json",
+    "schemas/custom_option_request.schema.json",
+    "schemas/image_version.schema.json"
+  ]
+}

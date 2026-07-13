@@ -1,11 +1,10 @@
 'use client';
 
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getReelStorySetupSettings, getStoryboardSettings, getStoryModelOverrides } from '@/app/actions/admin';
+import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
-import { listReelVisualStyleCardsAction } from '@/app/actions/reel-styles';
-import { listPublishedReelMoodsAction } from '@/app/actions/reel-moods';
+import { getLandingBootstrap } from '@/app/actions/landing-bootstrap';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
 import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
@@ -16,7 +15,12 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { useStoryStore } from '@/lib/store/story-store';
-import { AgeGroup, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import { useMyStoriesStore } from '@/lib/store/my-stories-store';
+import { AgeGroup, Character, SeedPlan, StoryConfig, StoryLanguage, VisualSettings, SourceFidelity } from '@/lib/types/story';
+import { findCharacterNameConflicts, masterToCharacter } from '@/lib/character-library/mapping';
+import type { CharacterMaster } from '@/lib/types/character-library';
+import { useMentionAutocomplete } from '@/lib/hooks/useMentionAutocomplete';
+import MentionSuggestionList from '@/components/ui/MentionSuggestionList';
 import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
@@ -36,7 +40,7 @@ import {
 } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X, UserRound, AtSign } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
@@ -46,7 +50,6 @@ import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-confi
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
-  DEFAULT_LANDING_SETUP_SETTINGS,
   getDefaultNarrationVoiceSelection,
   normalizeLandingInitialData,
   type LandingInitialData,
@@ -57,7 +60,11 @@ import type {
 } from '@/lib/ai/narration-voices';
 
 interface LandingScreenProps {
-  onBegin?: (prompt: string, config?: StoryConfig, opts?: { autoBuild?: boolean }) => void;
+  onBegin?: (
+    prompt: string,
+    config?: StoryConfig,
+    opts?: { autoBuild?: boolean; seedCharacters?: Character[] }
+  ) => void;
   initialData?: LandingInitialData | null;
   initialPricing?: PricingRuntimeContext | null;
 }
@@ -203,6 +210,14 @@ function InfoPopover({
   );
 }
 
+function buildPickerRequestSignature(
+  taskKey: string,
+  selection: ImageModelSelection | undefined,
+  planKey: string
+): string {
+  return `${taskKey}|${selection?.taskKey ?? ''}|${selection?.modelKey ?? ''}|${planKey}`;
+}
+
 export default function LandingScreen({ onBegin, initialData, initialPricing }: LandingScreenProps) {
   const [initialLandingData] = useState(() => normalizeLandingInitialData(initialData ?? DEFAULT_LANDING_INITIAL_DATA));
   const router = useRouter();
@@ -230,11 +245,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [seedPreview, setSeedPreview] = useState<SeedPlan | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
-  const [authoringWordCap, setAuthoringWordCap] = useState(initialLandingData.authoringWordCap);
+  const [authoringWordCap] = useState(initialLandingData.authoringWordCap);
   // Admin-enabled languages offered in the pickers (main story + reel).
   const storyLanguageOptions = initialLandingData.storyLanguageOptions;
   const [useCreatorOneKCharacterSheet, setUseCreatorOneKCharacterSheet] = useState(false);
-  const [setupSettings, setSetupSettings] = useState(initialLandingData.setupSettings);
+  const [setupSettings] = useState(initialLandingData.setupSettings);
   const [reelSetup, setReelSetup] = useState<ReelStorySetupSettings>(initialLandingData.reelSetup);
   const [reelLanguage, setReelLanguage] = useState<StoryLanguage>('english');
   const [reelBeatCount, setReelBeatCount] = useState<1 | 2 | 3>(DEFAULT_REEL_LANDING_BEAT_COUNT);
@@ -316,17 +331,143 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     ?? reelVisualStyleCards.find((style) => !style.isLocked)
     ?? null;
 
+  // Pack 2 character mixing: bring saved library characters into a new story
+  // (picker + @name mentions in the prompt). Snapshot + masters come from the
+  // shared my-stories store (prefetched on login, deduped), so this no longer
+  // pays its own settings→masters waterfall. Fail-closed until it loads.
+  const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
+  const [showCharacterPicker, setShowCharacterPicker] = useState(false);
+  const [mixError, setMixError] = useState<string | null>(null);
+  const promptInputRef = useRef<HTMLInputElement | null>(null);
+
+  const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
+  const characterSettings = useMyStoriesStore((s) => s.characterSettings);
+  const storeCharacters = useMyStoriesStore((s) => s.characters);
+  const mixingEnabled = Boolean(characterSettings?.mixingEnabled && characterSettings?.libraryEnabled);
+  // Archived characters stay out of the new-story picker.
+  const libraryCharacters = useMemo(
+    () => storeCharacters.filter((master) => !master.archivedAt),
+    [storeCharacters]
+  );
+
+  useEffect(() => {
+    ensureCharacterUniverse();
+  }, [ensureCharacterUniverse]);
+
+  const toggleLibraryCharacter = (master: CharacterMaster) => {
+    setMixError(null);
+    setSelectedLibraryCharacters((previous) => {
+      const existing = previous.find((character) => character.masterId === master.id);
+      if (existing) {
+        return previous.filter((character) => character.masterId !== master.id);
+      }
+      return [...previous, masterToCharacter(master)];
+    });
+  };
+
+  const promptMentions = useMentionAutocomplete<HTMLInputElement>({
+    names: mixingEnabled ? libraryCharacters.map((master) => master.name) : [],
+    text: prompt,
+    setText: setPrompt,
+    textareaRef: promptInputRef,
+    onSelect: (name) => {
+      const master = libraryCharacters.find(
+        (candidate) => candidate.name.toLowerCase() === name.toLowerCase()
+      );
+      if (!master) return;
+      setSelectedLibraryCharacters((previous) =>
+        previous.some((character) => character.masterId === master.id)
+          ? previous
+          : [...previous, masterToCharacter(master)]
+      );
+    },
+  });
+
   useEffect(() => {
     if (searchParams.get('mode') === 'reel') {
       setCreationMode('reel');
     }
   }, [searchParams]);
 
+  // Everything the landing screen fetches at mount arrives in one bundled
+  // round-trip (model picker, reel style cards, reel moods) with the pricing
+  // context resolved once server-side. Storyboard/reel setup settings are NOT
+  // refetched here — the SSR initialData already seeds them.
+  const pickerRequestSignatureRef = useRef<string | null>(null);
   useEffect(() => {
+    let cancelled = false;
+    pickerRequestSignatureRef.current = buildPickerRequestSignature(
+      imageTaskKey,
+      imageModelSelection,
+      pricing.snapshot.planKey
+    );
+    getLandingBootstrap({ imageTaskKey, imageModelSelection: imageModelSelection ?? null })
+      .then((bootstrap) => {
+        if (cancelled) return;
+        if (bootstrap.imageModelPicker) {
+          const state = bootstrap.imageModelPicker;
+          // Record the signature the applied state settles into so the
+          // selection update below doesn't re-trigger the sync effect's fetch.
+          pickerRequestSignatureRef.current = buildPickerRequestSignature(
+            state.taskKey,
+            { taskKey: state.taskKey, modelKey: state.selectedModelKey },
+            pricing.snapshot.planKey
+          );
+          setImageModelPicker(state);
+          if (
+            (!imageModelSelection?.modelKey || imageModelSelection.taskKey !== state.taskKey)
+            && state.selectedModelKey
+          ) {
+            setImageModelSelection({
+              taskKey: state.taskKey,
+              modelKey: state.selectedModelKey,
+            });
+          }
+        } else {
+          setImageModelPicker(null);
+        }
+        setReelVisualStyleCards(bootstrap.reelVisualStyleCards);
+        const firstUnlocked = bootstrap.reelVisualStyleCards.find((style) => !style.isLocked)
+          ?? bootstrap.reelVisualStyleCards[0];
+        if (firstUnlocked) {
+          setReelVisualStyleId((current) => current || firstUnlocked.id);
+          setReelVisualStyleKey((current) => current || firstUnlocked.slug);
+        }
+        setPublishedMoods(bootstrap.reelMoods);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        pickerRequestSignatureRef.current = null;
+        setImageModelPicker(null);
+        setReelVisualStyleCards([]);
+        setPublishedMoods([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only: later task/selection/plan changes are handled by the picker
+    // sync effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Change-only picker sync: refetches when the image task, selection, or plan
+  // diverges from what the bootstrap (or a previous sync) already applied.
+  useEffect(() => {
+    const signature = buildPickerRequestSignature(imageTaskKey, imageModelSelection, pricing.snapshot.planKey);
+    if (pickerRequestSignatureRef.current === signature) {
+      return;
+    }
+    pickerRequestSignatureRef.current = signature;
+
     let cancelled = false;
     getImageModelPickerState(imageTaskKey, imageModelSelection)
       .then((state) => {
         if (cancelled) return;
+        pickerRequestSignatureRef.current = buildPickerRequestSignature(
+          state.taskKey,
+          { taskKey: state.taskKey, modelKey: state.selectedModelKey },
+          pricing.snapshot.planKey
+        );
         setImageModelPicker(state);
         if (
           (!imageModelSelection?.modelKey || imageModelSelection.taskKey !== state.taskKey)
@@ -347,86 +488,21 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   }, [imageTaskKey, imageModelSelection, pricing.snapshot.planKey]);
 
   useEffect(() => {
-    getStoryboardSettings()
-      .then(({
-        freePlusCharacterSheetsEnabled,
-        creatorCharacterSheetsEnabled,
-        storyPromptOnlyModeEnabled,
-        verticalStoriesSettingEnabled,
-        authoringWordCap: nextAuthoringWordCap,
-      }) => {
-        setSetupSettings({
-          freePlusCharacterSheetsEnabled,
-          creatorCharacterSheetsEnabled,
-          storyPromptOnlyModeEnabled,
-          verticalStoriesSettingEnabled,
-        });
-        if (!verticalStoriesSettingEnabled) {
-          setIsVerticalStory(false);
-        }
-        setAuthoringWordCap(nextAuthoringWordCap);
-      })
-      .catch(() => {
-        setSetupSettings(DEFAULT_LANDING_SETUP_SETTINGS);
-        setIsVerticalStory(false);
-        setAuthoringWordCap(DEFAULT_LANDING_INITIAL_DATA.authoringWordCap);
-      });
-  }, []);
-
-  useEffect(() => {
     if (initialData?.reelSetup) {
       writeCachedReelSetup(initialLandingData.reelSetup);
       return;
     }
 
+    // No SSR payload — fall back to the cached setup, including the default
+    // selections the removed refetch used to apply.
     const cached = readCachedReelSetup();
     if (cached) {
       setReelSetup(cached);
+      setReelTextLength(cached.settings.defaultTextLength);
+      setReelMoodKey(cached.settings.defaultMood);
+      setReelVisualStyleKey(cached.settings.defaultVisualStyle);
     }
   }, [initialData?.reelSetup, initialLandingData.reelSetup]);
-
-  useEffect(() => {
-    getReelStorySetupSettings()
-      .then((setup) => {
-        writeCachedReelSetup(setup);
-        setReelSetup(setup);
-        setReelBeatCount(DEFAULT_REEL_LANDING_BEAT_COUNT);
-        setReelTextLength(setup.settings.defaultTextLength);
-        setReelMoodKey(setup.settings.defaultMood);
-        setReelVisualStyleKey(setup.settings.defaultVisualStyle);
-      })
-      .catch(() => {
-        setReelSetup((current) => current ?? FALLBACK_REEL_SETUP);
-      });
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    listReelVisualStyleCardsAction()
-      .then((styles) => {
-        if (cancelled) return;
-        setReelVisualStyleCards(styles);
-        const firstUnlocked = styles.find((style) => !style.isLocked) ?? styles[0];
-        if (firstUnlocked) {
-          setReelVisualStyleId((current) => current || firstUnlocked.id);
-          setReelVisualStyleKey((current) => current || firstUnlocked.slug);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setReelVisualStyleCards([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    listPublishedReelMoodsAction()
-      .then((moods) => { if (!cancelled) setPublishedMoods(moods); })
-      .catch(() => { if (!cancelled) setPublishedMoods([]); });
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -722,8 +798,31 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
       && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
+    // Pack 2 character mixing: seed selected library characters as local
+    // instances. The auto-build pipeline doesn't support seeding, so surface
+    // that instead of silently dropping the selection.
+    const seedCharacters =
+      !isReelMode && mixingEnabled && selectedLibraryCharacters.length > 0
+        ? selectedLibraryCharacters
+        : undefined;
+    if (seedCharacters) {
+      if (shouldAutoBuild) {
+        setMixError(
+          'Selected characters cannot join an auto-build story yet. Turn off auto-build or clear the selection.'
+        );
+        return;
+      }
+      const conflicts = findCharacterNameConflicts(seedCharacters);
+      if (conflicts.length > 0) {
+        setMixError(
+          `Two selected characters share the name “${conflicts[0].names[0]}”. Remove one or rename it in My Library first.`
+        );
+        return;
+      }
+    }
+
     if (onBegin) {
-      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild });
+      onBegin(storyPrompt, config, { autoBuild: shouldAutoBuild, seedCharacters });
       return;
     }
 
@@ -732,7 +831,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       return;
     }
 
-    await startStory(storyPrompt, config);
+    await startStory(storyPrompt, config, seedCharacters ? { seedCharacters } : undefined);
   };
 
   const buildPreviewPricingError = (authorization: Awaited<ReturnType<typeof authorizeCurrentUserBillableAction>>) => {
@@ -989,14 +1088,35 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   {creationMode !== 'seeded' ? (
                     <div className="space-y-3 p-2">
                       {!isReelMode && (
-                        <div className="flex items-center">
+                        <div className="relative flex items-center">
                           <input
+                            ref={promptInputRef}
                             type="text"
                             value={prompt}
-                            onChange={(e) => setPrompt(e.target.value)}
+                            onChange={(e) => {
+                              setPrompt(e.target.value);
+                              promptMentions.syncMentionState(e.target.value, e.target.selectionStart);
+                            }}
+                            onClick={(e) => promptMentions.syncMentionState(prompt, e.currentTarget.selectionStart)}
+                            onKeyDown={(e) => {
+                              promptMentions.handleKeyDown(e);
+                            }}
                             placeholder="Tell me a story of a monkey and an elephant..."
                             className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
                             disabled={isLoading}
+                          />
+                          <MentionSuggestionList
+                            open={Boolean(promptMentions.mention)}
+                            suggestions={promptMentions.suggestions}
+                            highlightIndex={promptMentions.highlightIndex}
+                            onHighlight={promptMentions.setHighlightIndex}
+                            onSelect={promptMentions.applySuggestion}
+                            avatarUrlByName={Object.fromEntries(
+                              libraryCharacters.map((master) => [
+                                master.name,
+                                master.portraitUrl ?? master.referenceSheetUrl ?? undefined,
+                              ])
+                            )}
                           />
                           <button
                             type="submit"
@@ -1006,12 +1126,116 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             {isLoading ? (
                               <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
                             ) : (
-                              <>
-                                <span>Begin</span>
-                                <Sparkles className="w-4 h-4" />
-                              </>
+                              <span>Begin</span>
                             )}
                           </button>
+                        </div>
+                      )}
+                      {!isReelMode && mixingEnabled && (
+                        <div className="px-2 pb-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            {selectedLibraryCharacters.map((character) => (
+                              <span
+                                key={character.masterId ?? character.id}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 py-1 pl-1 pr-2 text-xs text-emerald-100"
+                              >
+                                {character.portraitUrl || character.referenceSheetUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={character.portraitUrl ?? character.referenceSheetUrl}
+                                    alt=""
+                                    className="h-5 w-5 rounded-full border border-white/10 object-cover"
+                                  />
+                                ) : (
+                                  <UserRound className="h-3.5 w-3.5 text-emerald-300/70" />
+                                )}
+                                {character.name}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedLibraryCharacters((previous) =>
+                                      previous.filter((entry) => entry.masterId !== character.masterId)
+                                    )
+                                  }
+                                  className="rounded-full p-0.5 text-emerald-300/70 transition-colors hover:bg-white/10 hover:text-emerald-100"
+                                  aria-label={`Remove ${character.name}`}
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ))}
+                            {libraryCharacters.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setShowCharacterPicker((value) => !value)}
+                                aria-expanded={showCharacterPicker}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-white/15 px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-400/30 hover:text-neutral-200"
+                              >
+                                <UserRound className="h-3.5 w-3.5" />
+                                Bring your characters
+                                {showCharacterPicker ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )}
+                              </button>
+                            )}
+                            {libraryCharacters.length > 0 && (
+                              <span className="hidden items-center gap-1 text-[11px] text-neutral-600 sm:flex">
+                                <AtSign className="h-3 w-3" /> or type @name in your idea
+                              </span>
+                            )}
+                          </div>
+                          <AnimatePresence>
+                            {showCharacterPicker && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ duration: 0.15 }}
+                                className="overflow-hidden"
+                              >
+                                <div className="mt-2 flex flex-wrap gap-2 rounded-xl border border-white/10 bg-neutral-950/60 p-3">
+                                  {libraryCharacters.map((master) => {
+                                    const isSelected = selectedLibraryCharacters.some(
+                                      (character) => character.masterId === master.id
+                                    );
+                                    const avatar = master.portraitUrl ?? master.referenceSheetUrl;
+                                    return (
+                                      <button
+                                        key={master.id}
+                                        type="button"
+                                        onClick={() => toggleLibraryCharacter(master)}
+                                        aria-pressed={isSelected}
+                                        className={`inline-flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-xs transition-colors ${
+                                          isSelected
+                                            ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
+                                            : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
+                                        }`}
+                                      >
+                                        {avatar ? (
+                                          // eslint-disable-next-line @next/next/no-img-element
+                                          <img
+                                            src={avatar}
+                                            alt=""
+                                            className="h-6 w-6 rounded-full border border-white/10 object-cover"
+                                          />
+                                        ) : (
+                                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
+                                            <UserRound className="h-3.5 w-3.5 text-neutral-500" />
+                                          </span>
+                                        )}
+                                        {master.name}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                          {mixError && (
+                            <p className="mt-2 text-xs leading-snug text-rose-300">{mixError}</p>
+                          )}
                         </div>
                       )}
                       {isReelMode && (

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { type ComponentType, useEffect, useState } from 'react';
 import MediaProcessingModeCard from '@/components/admin/MediaProcessingModeCard';
+import VideoExportPresetStudio from '@/components/admin/VideoExportPresetStudio';
 import {
   BookOpenText,
   Brush,
@@ -113,6 +114,8 @@ export type GlobalSettingsSection =
   | 'characters'
   | 'media'
   | 'media-pipeline'
+  | 'beat-control'
+  | 'character-universe'
   | 'video-export'
   | 'generation'
   | 'pages';
@@ -190,6 +193,20 @@ const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
     href: '/admin/settings/media-pipeline',
     description: 'Server-side processing mode, HQ retention, variants, cleanup, publishing gates, and job monitoring.',
     icon: ImageIcon,
+  },
+  {
+    section: 'beat-control',
+    label: 'Beat control',
+    href: '/admin/settings/beat-control',
+    description: 'Beat text editing, timeline rewrite, image/narration/options regeneration, custom options, and version history.',
+    icon: WandSparkles,
+  },
+  {
+    section: 'character-universe',
+    label: 'Characters & episodes',
+    href: '/admin/settings/character-universe',
+    description: 'Character library, save-to-library, character mixing, episodic branching, story bible, and journal.',
+    icon: UserRound,
   },
   {
     section: 'video-export',
@@ -1019,6 +1036,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
     'media-pipeline': 'Server-side processing mode, HQ retention, variants, cleanup, and job monitoring',
+    'beat-control': 'Beat editing, timeline rewrite, regeneration controls, custom options, and version history',
+    'character-universe': 'Character library, mixing, episodic branching, story bible, and journal',
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
     pages: 'Managed rollout pages, footer controls, and route guards',
@@ -2512,6 +2531,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 }
               }}
             />
+
+            <h2 className="pt-2 text-sm font-medium uppercase tracking-wider text-neutral-500">Export Presets</h2>
+            <VideoExportPresetStudio />
           </div>
           )}
 

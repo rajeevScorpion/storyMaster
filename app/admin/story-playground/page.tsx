@@ -4,6 +4,7 @@ const STORY_TASK_KEYS = [
   'story_generation',
   'seed_plan_generation',
   'seeded_beat_materialization',
+  'story_bible_generation',
   'visual_prompt',
   'image_generation',
   'portrait_generation',

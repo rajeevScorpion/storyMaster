@@ -1,6 +1,11 @@
 'use server';
 
-import { ensureFreeAllowanceForUser, expireStaleReservations } from '@/lib/pricing/enforcement';
+import { ensureFreeAllowanceForUser, expireStaleReservations, loadCachedPricingGlobals } from '@/lib/pricing/enforcement';
+import {
+  buildPricingRuntimeCacheKey,
+  getCachedPricingRuntimeContext,
+  setCachedPricingRuntimeContext,
+} from '@/lib/pricing/runtime-context-cache';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -25,41 +30,39 @@ import type {
   PricingPlanOfferCard,
   PricingTopupOfferCard,
 } from '@/lib/types/pricing';
-import { COINS_PER_BEAT, PRICING_RUNTIME_SETTING_DEFINITIONS, normalizeVideoExportPreset } from '@/lib/types/pricing';
-
-interface RuntimeFlagRow {
-  flag_key: string;
-  enabled: boolean;
-  value: string | null;
-}
+import { COINS_PER_BEAT, normalizeVideoExportPreset } from '@/lib/types/pricing';
 
 export interface GetPricingRuntimeContextInput {
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
+  forceRefresh?: boolean;
 }
 
 export async function getPricingRuntimeContext(
   input: GetPricingRuntimeContextInput = {}
 ): Promise<PricingRuntimeContext> {
   const userId = await getCurrentUserId();
-  const supabase = createAdminClient();
+  const cacheKey = buildPricingRuntimeCacheKey(
+    userId,
+    input.pricingMarketKey ?? null,
+    input.countryCode ?? null
+  );
 
-  if (userId) {
-    await expireStaleReservations({ supabase });
+  if (!input.forceRefresh) {
+    const cached = getCachedPricingRuntimeContext(cacheKey);
+    if (cached) {
+      return cached;
+    }
   }
 
-  const [plansResult, versionsResult, runtimeFlagsResult] = await Promise.all([
-    supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }),
-    supabase.from('pricing_plan_versions').select('*').order('created_at', { ascending: false }),
-    supabase
-      .from('feature_flags')
-      .select('flag_key, enabled, value')
-      .in('flag_key', PRICING_RUNTIME_SETTING_DEFINITIONS.map((definition) => definition.key)),
-  ]);
+  const supabase = createAdminClient();
 
-  throwIfQueryFailed(plansResult.error, 'Failed to load pricing plans');
-  throwIfQueryFailed(versionsResult.error, 'Failed to load pricing plan versions');
-  throwIfQueryFailed(runtimeFlagsResult.error, 'Failed to load pricing runtime flags');
+  // Reservation expiry must land before the user-row reads below (pending
+  // holds count against the balance), but it has no bearing on the globals.
+  const [globals] = await Promise.all([
+    loadCachedPricingGlobals(supabase),
+    userId ? expireStaleReservations({ supabase }) : Promise.resolve(0),
+  ]);
 
   let billingCustomers: DbBillingCustomer[] = [];
   let billingSubscriptions: DbBillingSubscription[] = [];
@@ -103,9 +106,9 @@ export async function getPricingRuntimeContext(
     const withWalletBase = buildPricingRuntimeContextData({
       pricingMarketKey: input.pricingMarketKey ?? null,
       countryCode: input.countryCode ?? null,
-      plans: (plansResult.data ?? []) as DbPricingPlan[],
-      planVersions: (versionsResult.data ?? []) as DbPricingPlanVersion[],
-      featureFlags: (runtimeFlagsResult.data ?? []) as RuntimeFlagRow[],
+      plans: globals.plans,
+      planVersions: globals.planVersions,
+      featureFlags: globals.featureFlags,
       billingCustomers,
       billingSubscriptions,
       beatGrants,
@@ -148,23 +151,25 @@ export async function getPricingRuntimeContext(
   const { controls, snapshot } = buildPricingRuntimeContextData({
     pricingMarketKey: input.pricingMarketKey ?? null,
     countryCode: input.countryCode ?? null,
-    plans: (plansResult.data ?? []) as DbPricingPlan[],
-    planVersions: (versionsResult.data ?? []) as DbPricingPlanVersion[],
-    featureFlags: (runtimeFlagsResult.data ?? []) as RuntimeFlagRow[],
+    plans: globals.plans,
+    planVersions: globals.planVersions,
+    featureFlags: globals.featureFlags,
     billingCustomers,
     billingSubscriptions,
     beatGrants,
     beatReservations,
   });
 
-  const actionCosts = await loadActionCosts(supabase);
-
-  return {
+  const context: PricingRuntimeContext = {
     userId,
     controls,
     snapshot,
-    actionCosts,
+    actionCosts: buildActionCostMap(globals.actionCosts),
   };
+
+  setCachedPricingRuntimeContext(cacheKey, context);
+
+  return context;
 }
 
 export interface GetPricingWalletPageDataInput {
@@ -441,18 +446,7 @@ function asBeatAmount(value: number | string | null | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function loadActionCosts(
-  supabase: ReturnType<typeof createAdminClient>
-): Promise<Record<string, number>> {
-  const result = await supabase
-    .from('pricing_action_costs')
-    .select('*')
-    .eq('is_active', true)
-    .order('effective_from', { ascending: false });
-
-  throwIfQueryFailed(result.error, 'Failed to load active pricing action costs');
-
-  const rows = (result.data ?? []) as DbPricingActionCost[];
+function buildActionCostMap(rows: DbPricingActionCost[]): Record<string, number> {
   const now = Date.now();
   const costs = new Map<string, number>();
 

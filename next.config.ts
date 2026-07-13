@@ -2,6 +2,11 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Pin server-action requests to the deployment that served the page, so open
+  // tabs from an older build don't 404 with "Failed to find Server Action"
+  // after a new deploy. On Vercel this pairs with Skew Protection; the env var
+  // is injected automatically and is simply undefined elsewhere (dev/self-host).
+  deploymentId: process.env.VERCEL_DEPLOYMENT_ID,
   // Required for ffmpeg.wasm — enables SharedArrayBuffer via COOP/COEP headers.
   // Using 'credentialless' for COEP to avoid breaking external resources (fonts, images)
   // that lack Cross-Origin-Resource-Policy headers.

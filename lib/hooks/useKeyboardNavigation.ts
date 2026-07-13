@@ -21,6 +21,25 @@ interface UseKeyboardNavigationResult {
   focusMode: FocusMode;
 }
 
+// The story-level keyboard shortcuts (arrows to navigate beats / cycle options,
+// Enter to select, `m`/`p` for panel + narration) live on a global window
+// listener. They must stay out of the way whenever the user is typing or a
+// modal is open — otherwise `p` never reaches a text field, arrows fight the
+// @mention popup, and Enter selects an option instead of accepting a mention.
+function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== 'string') return false;
+  const tag = el.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable) return true;
+  return el.getAttribute?.('role') === 'textbox';
+}
+
+function isModalOpen(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.querySelector('[role="dialog"], [aria-modal="true"]') !== null;
+}
+
 export function useKeyboardNavigation({
   storyMap,
   options,
@@ -47,6 +66,8 @@ export function useKeyboardNavigation({
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (isLoading) return;
+      // Keep every key free while the user types or a dialog is open.
+      if (isEditableTarget(e.target) || isModalOpen()) return;
 
       const path = timelineNodes ?? getPathToNode(storyMap, storyMap.currentNodeId);
       const currentIndex = path.findIndex((n) => n.id === storyMap.currentNodeId);

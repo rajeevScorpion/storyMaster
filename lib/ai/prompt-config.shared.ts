@@ -125,6 +125,8 @@ Storyboard narration sync rules:
 Continuity rules:
 - Treat {{storyState}} as the highest source of truth.
 - If there is a conflict between invention and runtime state, follow the runtime state.
+- If the story state includes seriesBible, treat it as established canon from earlier episodes of the same series: respect its world rules, character identities, relationships, and tone, and reuse the castRegistry character ids for returning characters instead of inventing new ones.
+- If the story state includes seriesJournal, treat it as what already happened in earlier episodes: continue after those events without recapping or contradicting them, and let this episode stand on its own while honoring that history.
 - Reuse the same visual descriptors for characters unless a deliberate transformation happens.
 - Do not rename characters unless the runtime state explicitly changes them.
 - Do not suddenly change setting, time of day, or mood without narrative reason.
@@ -349,6 +351,43 @@ Seed Beat Outline:
 {{seedBeat}}
 
 Materialize the beat now.`;
+
+export const STORY_BIBLE_GENERATION_PROMPT_DEFAULT = `You are Kissago's Story Bible Writer, the continuity keeper for episodic story series.
+
+Episode {{episodeNumber}} of a series has just been completed. Produce two things in one JSON response:
+1. An updated series bible — the stable canon that every future episode must respect.
+2. A compact journal summary of what actually happened in this episode.
+
+Core rules:
+1. Merge, do not replace: when a previous bible exists, carry its established canon forward and update it only where this episode clearly changed the facts.
+2. Never invent characters, places, relationships, or world rules that are not present in the inputs.
+3. Keep every field compact — the bible is injected into future generation prompts, so brevity keeps it useful.
+4. worldSummary: 3 to 6 sentences describing the world, setting, and period as canon.
+5. toneRules and styleRules: short imperative rules (tone of storytelling; visual/prose style) derived from the story configuration and the episode itself.
+6. characterRules: one entry per named character — identity, stable appearance anchors, temperament, and their status at the end of this episode.
+7. relationshipRules: one entry per meaningful relationship, stating how the characters relate as of the end of this episode.
+8. settingRules: stable locations, world logic, and recurring objects the series must keep consistent.
+9. openThreads: unresolved plot threads the next episode may pick up. Return an empty array when everything is resolved.
+10. episodeSummary: 4 to 8 sentences of what happened in this episode, in chronological order, ending with the final state. This becomes the series journal memory — record events, not marketing copy.
+11. title: a short series-level title (reuse the previous bible's title when one exists).
+12. Write worldSummary, characterRules, relationshipRules, settingRules, openThreads, and episodeSummary in {{language}}. Keep toneRules and styleRules in English for internal consistency.
+
+Story configuration (the Advanced settings the series inherits):
+{{storyConfig}}
+
+Completed episode digest (beats in order):
+{{storyDigest}}
+
+Named characters and their identity prompts:
+{{characters}}
+
+Previous series bible (empty on the first episode):
+{{previousBible}}
+
+Recent journal entries from earlier episodes (may be empty):
+{{previousJournal}}
+
+Write the updated bible and episode summary now.`;
 
 export const VISUAL_PROMPT_DEFAULT = `You are Visual Prompt Composer.
 
@@ -665,6 +704,7 @@ export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the reel draft schema { beatCount, beats: [...] } exactly: produce all beats in one response. Each beat carries only beatIndex, title, storyText, sceneSummary, imagePrompt. Do not return options, characters, continuityNotes, clues, or any branching fields. Reels are linear inspirational quote sequences, not stories.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration.',
+  story_bible_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve established canon from the previous bible; never invent characters, places, or rules absent from the inputs. Keep every field compact enough to reuse as prompt context.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only. Align topLeft, topRight, bottomLeft, and bottomRight to storyTextParts 1, 2, 3, and 4 when provided.',
   reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly. Optimize the four frames for vertical reel pacing as abstract/symbolic visuals that complement an inspirational quote. portraitTasks MUST be an empty array — reels have no recurring characters.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
@@ -864,6 +904,21 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
     description: 'Analyzes a reference image and returns a concise plain-text visual style description (≤150 words) for the Graphic Style Studio.',
     placeholders: [],
     defaultPrompt: GRAPHIC_STYLE_EXTRACTION_PROMPT_DEFAULT,
+  },
+  story_bible_generation: {
+    key: 'story_bible_generation',
+    label: 'Story Bible Writer',
+    description: 'Condenses a completed episode into an updated series bible plus a journal episode summary for episodic continuity.',
+    placeholders: [
+      { key: 'language', label: 'Language', description: 'Language for user-facing bible and summary text.', required: true },
+      { key: 'storyConfig', label: 'Story Config', description: 'The origin story configuration (Advanced settings) the series inherits.', required: true },
+      { key: 'storyDigest', label: 'Episode Digest', description: 'Condensed beats of the completed episode, in order.', required: true },
+      { key: 'characters', label: 'Characters', description: 'Named characters with their identity prompts as JSON.', required: true },
+      { key: 'previousBible', label: 'Previous Bible', description: 'The series bible carried from earlier episodes, empty on the first.', required: false },
+      { key: 'previousJournal', label: 'Previous Journal', description: 'Recent journal entries from earlier episodes.', required: false },
+      { key: 'episodeNumber', label: 'Episode Number', description: 'The completed episode number in the series.', required: true },
+    ],
+    defaultPrompt: STORY_BIBLE_GENERATION_PROMPT_DEFAULT,
   },
 };
 

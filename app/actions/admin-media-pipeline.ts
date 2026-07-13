@@ -1,7 +1,7 @@
 'use server';
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
-import { getFeatureFlagValue, setFeatureFlagValue } from '@/lib/ai/model-config';
+import { getFeatureFlag, getFeatureFlagValue, setFeatureFlag, setFeatureFlagValue } from '@/lib/ai/model-config';
 import {
   MEDIA_PIPELINE_FLAG_KEYS,
   normalizeMediaPipelineSettings,
@@ -20,11 +20,12 @@ import { cleanupExpiredOriginals, MEDIA_CLEANUP_LAST_RUN_FLAG, type CleanupResul
 
 export async function getMediaPipelineAdminState(): Promise<MediaPipelineAdminState> {
   await verifyAdmin();
-  const [mode, canaryUserIds, settings, availability] = await Promise.all([
+  const [mode, canaryUserIds, settings, availability, beatBundleEnabled] = await Promise.all([
     getConfiguredProcessingMode(),
     getMediaCanaryUserIds(),
     getMediaPipelineSettings(),
     getServerPipelineAvailability(),
+    getFeatureFlag('beat_bundle_enabled', false),
   ]);
   return {
     mode,
@@ -32,6 +33,7 @@ export async function getMediaPipelineAdminState(): Promise<MediaPipelineAdminSt
     settings,
     serverPipelineAvailable: availability.available,
     serverPipelineUnavailableReason: availability.reason,
+    beatBundleEnabled,
   };
 }
 
@@ -47,6 +49,20 @@ export async function setMediaProcessingMode(mode: MediaProcessingMode): Promise
     }
   }
   await setFeatureFlagValue(MEDIA_PIPELINE_FLAG_KEYS.processingMode, normalized);
+  return getMediaPipelineAdminState();
+}
+
+export async function setBeatBundleEnabled(enabled: boolean): Promise<MediaPipelineAdminState> {
+  await verifyAdmin();
+  if (enabled) {
+    const availability = await getServerPipelineAvailability();
+    if (!availability.available) {
+      throw new Error(
+        `Cannot enable the beat bundle flow: ${availability.reason ?? 'server pipeline unavailable'}`
+      );
+    }
+  }
+  await setFeatureFlag('beat_bundle_enabled', enabled);
   return getMediaPipelineAdminState();
 }
 

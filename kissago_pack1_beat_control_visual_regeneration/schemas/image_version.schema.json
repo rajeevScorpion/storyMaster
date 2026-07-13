@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeatImageVersion",
+  "type": "object",
+  "required": [
+    "id",
+    "storyId",
+    "beatId",
+    "versionNumber",
+    "imageUrl",
+    "panelCount",
+    "isActive",
+    "createdAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "storyId": {
+      "type": "string"
+    },
+    "beatId": {
+      "type": "string"
+    },
+    "versionNumber": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "imageUrl": {
+      "type": "string"
+    },
+    "storageKey": {
+      "type": "string"
+    },
+    "thumbnailUrl": {
+      "type": "string"
+    },
+    "promptSnapshot": {
+      "type": "object"
+    },
+    "regenerationMode": {
+      "type": "string",
+      "enum": [
+        "initial",
+        "refine",
+        "reimagine",
+        "restore"
+      ]
+    },
+    "overallSuggestion": {
+      "type": "string"
+    },
+    "panelSuggestions": {
+      "type": "array"
+    },
+    "panelCount": {
+      "type": "integer",
+      "enum": [
+        1,
+        2,
+        4
+      ]
+    },
+    "sourceImageVersionId": {
+      "type": "string"
+    },
+    "isActive": {
+      "type": "boolean"
+    },
+    "createdByUserId": {
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": true
+}

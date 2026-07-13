@@ -2,14 +2,16 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
-import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { putR2Object } from '@/lib/media/r2-server';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { recordMediaAsset } from '@/lib/media/media-assets';
-import { parseReelStorySettingsValue } from '@/lib/reel/settings';
 import {
-  canUseReelVisualStyle,
+  buildReelVisualStyleCards,
+  listReelStyleRows,
+  type ReelStyleRow,
+} from '@/lib/reel/style-cards';
+import {
   mapReelVisualStyleRow,
   normalizePlanKey,
   normalizeReelTextOverlayStyle,
@@ -23,8 +25,6 @@ import type { PlanKey } from '@/lib/types/pricing';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { callGeminiVisionText, callGeminiImage } from '@/app/actions/gemini-proxy';
 import { getModelConfig } from '@/lib/ai/model-config';
-
-type ReelStyleRow = Record<string, unknown>;
 
 export interface SaveReelVisualStyleInput {
   name: string;
@@ -79,78 +79,19 @@ async function getCurrentUserId(): Promise<string | null> {
   return user?.id ?? null;
 }
 
-async function listStyleRows(status?: ReelVisualStyleStatus): Promise<ReelStyleRow[]> {
-  const admin = createAdminClient();
-  let query = admin
-    .from('reel_visual_styles')
-    .select('*')
-    .order('sort_order', { ascending: true })
-    .order('name', { ascending: true });
-
-  if (status) {
-    query = query.eq('status', status);
-  }
-
-  const { data, error } = await query;
-  if (error) {
-    if (error.message.includes('reel_visual_styles')) return [];
-    throw new Error(`Failed to load reel visual styles: ${error.message}`);
-  }
-  return (data ?? []) as ReelStyleRow[];
-}
-
-async function buildSettingsFallbackStyles(): Promise<ReelVisualStyleCard[]> {
-  const settings = parseReelStorySettingsValue(await getFeatureFlagValue('reel_story_settings'));
-  return settings.visualStyles.map((style, index) => {
-    const record: ReelVisualStyleRecord = {
-      id: `settings:${style.key}`,
-      name: style.label,
-      slug: style.key,
-      status: 'published',
-      minPlan: 'free',
-      promptDefiner: style.prompt,
-      sampleImageUrl: null,
-      sampleR2ObjectKey: null,
-      sampleR2Bucket: null,
-      thumbnailUrl: null,
-      thumbnailR2ObjectKey: null,
-      thumbnailR2Bucket: null,
-      textOverlayStyle: normalizeReelTextOverlayStyle(null),
-      noFaceDefault: true,
-      sortOrder: index,
-      createdAt: '',
-      updatedAt: '',
-      publishedAt: null,
-    };
-    return { ...record, isLocked: false };
-  });
-}
-
 export async function listReelVisualStylesForAdminAction(): Promise<ReelVisualStyleRecord[]> {
   await verifyAdmin();
-  const rows = await listStyleRows();
+  const rows = await listReelStyleRows();
   return rows.map(mapReelVisualStyleRow);
 }
 
 export async function listReelVisualStyleCardsAction(): Promise<ReelVisualStyleCard[]> {
-  const rows = await listStyleRows('published');
-  if (rows.length === 0) {
-    return buildSettingsFallbackStyles();
-  }
-
   const pricing = await getPricingRuntimeContext().catch(() => null);
-  const userPlan = normalizePlanKey(pricing?.snapshot.planKey);
-  return rows.map((row) => {
-    const record = mapReelVisualStyleRow(row);
-    return {
-      ...record,
-      isLocked: !canUseReelVisualStyle(userPlan, record.minPlan),
-    };
-  });
+  return buildReelVisualStyleCards(pricing?.snapshot.planKey);
 }
 
 export async function getPublishedReelVisualStylesForRuntime(): Promise<ReelVisualStyleRuntime[]> {
-  const rows = await listStyleRows('published');
+  const rows = await listReelStyleRows('published');
   return rows.map((row) => {
     const record = mapReelVisualStyleRow(row);
     return {

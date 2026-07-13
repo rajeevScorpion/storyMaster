@@ -6,6 +6,7 @@ import {
   isStoryboardImageTask,
   type ImageModelCapabilities,
   type ImageModelOption,
+  type ImageModelPickerState,
   type ImageModelRegistryRecord,
   type ImageModelSelection,
   type ImageModelSnapshot,
@@ -160,6 +161,27 @@ export async function listUserVisibleImageModelOptions(
   );
   const available = options.filter((record) => record.isAvailableToCurrentPlan);
   return sortImageModels((available.length > 0 ? available : options).map(stripAdminFields));
+}
+
+export async function buildImageModelPickerState(
+  taskKey: ImageTaskKey,
+  selection: ImageModelSelection | null | undefined,
+  currentPlanKey: PlanKey
+): Promise<ImageModelPickerState> {
+  const options = await listUserVisibleImageModelOptions(taskKey, currentPlanKey);
+  const defaultModelKey = options.find((option) => option.isDefault)?.modelKey ?? options[0]?.modelKey ?? '';
+  const selectedModelKey = selection?.taskKey && selection.taskKey !== taskKey
+    ? defaultModelKey
+    : options.some((option) => option.modelKey === selection?.modelKey)
+    ? selection!.modelKey
+    : defaultModelKey;
+
+  return {
+    taskKey,
+    options,
+    defaultModelKey,
+    selectedModelKey,
+  };
 }
 
 export async function resolveImageModelSnapshot(input: {
