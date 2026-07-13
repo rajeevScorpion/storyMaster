@@ -252,6 +252,20 @@ export default function BatchVisualsBanner() {
                       : 'Submitting… you can close this tab and come back.'}
                   </p>
                 </div>
+                {/* Escape hatch for a stalled job: if a beat is stuck pending (the
+                    worker died mid-run, or a beat was never picked up), re-submit
+                    the server job — it only re-runs beats still missing audio. */}
+                {stats.narrationPending > 0 && !isGeneratingNarrationBatch && (
+                  <button
+                    type="button"
+                    onClick={() => void generateNarrationBatch()}
+                    title="Stuck for a while? Re-run narration for any beats still missing audio."
+                    className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-800/80 px-3 py-2 text-xs text-neutral-200 transition-colors hover:bg-white/10"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                    Resume
+                  </button>
+                )}
               </>
             ) : stats.narrationPathNeeding > 0 ? (
               <>
