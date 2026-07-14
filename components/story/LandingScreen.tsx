@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
@@ -46,7 +46,9 @@ import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
-import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
+import { loadReadyReferenceSeed } from '@/app/actions/references';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -338,6 +340,10 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
   const [showCharacterPicker, setShowCharacterPicker] = useState(false);
   const [mixError, setMixError] = useState<string | null>(null);
+  const [referencePanel, setReferencePanel] = useState<ReferencePanelState | null>(null);
+  const handleReferencePanelChange = useCallback((state: ReferencePanelState) => {
+    setReferencePanel(state);
+  }, []);
   const promptInputRef = useRef<HTMLInputElement | null>(null);
 
   const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
@@ -798,13 +804,49 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
       && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
+    // Reference Personalization: adopted references must finish before the story
+    // starts (beat 1 seeds from the canonical assets). Gate on the panel state.
+    const usingReferences = Boolean(referencePanel?.hasItems);
+    if (usingReferences && !referencePanel?.allResolved) {
+      setMixError('Your references are still being adopted. Wait for them to finish or remove any that failed.');
+      return;
+    }
+
     // Pack 2 character mixing: seed selected library characters as local
     // instances. The auto-build pipeline doesn't support seeding, so surface
     // that instead of silently dropping the selection.
-    const seedCharacters =
+    const librarySeedCharacters =
       !isReelMode && mixingEnabled && selectedLibraryCharacters.length > 0
         ? selectedLibraryCharacters
-        : undefined;
+        : [];
+
+    // Adopted reference characters become ordinary roster seed characters.
+    let referenceWorlds: StoryConfig['references'] | undefined;
+    let referenceSeedCharacters: Character[] = [];
+    if (usingReferences && referencePanel) {
+      try {
+        const seed = await loadReadyReferenceSeed(referencePanel.setupId);
+        referenceSeedCharacters = seed.seedCharacters;
+        referenceWorlds = { setupId: referencePanel.setupId, worlds: seed.worlds };
+      } catch {
+        setMixError('Could not load your adopted references. Please try again.');
+        return;
+      }
+    }
+
+    const combinedSeed = [...librarySeedCharacters, ...referenceSeedCharacters];
+    const seedCharacters = combinedSeed.length > 0 ? combinedSeed : undefined;
+    if (referenceWorlds) {
+      config.references = referenceWorlds;
+      // This setup is now consumed by this story; release the id so a subsequent
+      // story starts a fresh reference setup.
+      try {
+        window.localStorage.removeItem('kissago_reference_setup_id');
+      } catch {
+        /* ignore */
+      }
+    }
+
     if (seedCharacters) {
       if (shouldAutoBuild) {
         setMixError(
@@ -1765,6 +1807,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
               />
             )}
           </AnimatePresence>
+          <div className="mt-4">
+            <ReferencePersonalizationPanel
+              active={imageGenerationMode === 'generate' && !isReelMode}
+              visualStyle={deriveVisualStyleSummary(visualSettings)}
+              imageModelSelection={imageModelSelection}
+              onStateChange={handleReferencePanelChange}
+            />
+          </div>
         </div>
         )}
 

@@ -18,8 +18,11 @@ import {
 } from '@/lib/references/reference-storage';
 import { ReferenceError } from '@/lib/references/reference-errors';
 import { authorizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
+import { buildSeedCharacters, type SeedCharacterInput } from '@/lib/references/seed';
 import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
-import type { PricingActionKey } from '@/lib/types/pricing';
+import { COINS_PER_BEAT, type PricingActionKey } from '@/lib/types/pricing';
+import type { Character } from '@/lib/types/story';
+import type { WorldAdoptionMode } from '@/lib/types/references';
 import type {
   DbReferenceSource,
   DbReferenceAdoption,
@@ -27,6 +30,8 @@ import type {
   ReferenceKind,
   ReferenceSetupItemStatus,
   ReferenceSetupStatus,
+  StoryConfigWorldReference,
+  WorldReferenceDescription,
 } from '@/lib/types/references';
 
 const PREVIEW_SIGNED_TTL_SECONDS = 600;
@@ -41,6 +46,77 @@ async function getCurrentUserId(): Promise<string | null> {
   } = await supabase.auth.getUser();
   if (error) return null;
   return user?.id ?? null;
+}
+
+export interface ReferenceCreationContext {
+  enabled: boolean;
+  charactersEnabled: boolean;
+  worldsEnabled: boolean;
+  maxCharacterRefs: number;
+  maxWorldRefs: number;
+  worldAdoptionMode: WorldAdoptionMode;
+  maxFileSizeMb: number;
+  costs: { character: number; world: number; worldVisualization: number };
+}
+
+async function loadActionCoinCost(
+  admin: ReturnType<typeof createAdminClient>,
+  actionKey: PricingActionKey
+): Promise<number> {
+  const { data } = await admin
+    .from('pricing_action_costs')
+    .select('beat_cost')
+    .eq('action_key', actionKey)
+    .eq('is_active', true)
+    .maybeSingle();
+  const beats = Number(data?.beat_cost ?? 0);
+  return Number.isFinite(beats) ? Math.round(beats * COINS_PER_BEAT) : 0;
+}
+
+/**
+ * Everything the story-creation panel needs to render: resolved entitlements and
+ * per-operation coin costs. Returns a disabled context (enabled=false) when the
+ * feature is off, the tier is not allowed, or the private R2 pipeline is
+ * unavailable — the panel renders nothing in that case.
+ */
+export async function getReferenceCreationContext(): Promise<ReferenceCreationContext> {
+  const disabled: ReferenceCreationContext = {
+    enabled: false,
+    charactersEnabled: false,
+    worldsEnabled: false,
+    maxCharacterRefs: 0,
+    maxWorldRefs: 0,
+    worldAdoptionMode: 'description_only',
+    maxFileSizeMb: 8,
+    costs: { character: 0, world: 0, worldVisualization: 0 },
+  };
+
+  const userId = await getCurrentUserId();
+  if (!userId) return disabled;
+
+  const availability = await getServerPipelineAvailability();
+  if (!availability.available) return disabled;
+
+  const { entitlements, settings } = await getReferenceRuntimeContext(userId);
+  if (!entitlements.enabled) return disabled;
+
+  const admin = createAdminClient();
+  const [character, world, worldVisualization] = await Promise.all([
+    loadActionCoinCost(admin, 'adopt_character_reference'),
+    loadActionCoinCost(admin, 'adopt_world_reference'),
+    loadActionCoinCost(admin, 'visualize_world_reference'),
+  ]);
+
+  return {
+    enabled: entitlements.enabled,
+    charactersEnabled: entitlements.charactersEnabled,
+    worldsEnabled: entitlements.worldsEnabled,
+    maxCharacterRefs: entitlements.maxCharacterRefs,
+    maxWorldRefs: entitlements.maxWorldRefs,
+    worldAdoptionMode: entitlements.worldAdoptionMode,
+    maxFileSizeMb: settings.maxFileSizeMb,
+    costs: { character, world, worldVisualization },
+  };
 }
 
 export interface UploadReferenceSourceInput {
@@ -569,4 +645,75 @@ export async function retryReferenceAdoption(adoptionId: string): Promise<{ stat
 
   await kickReferenceWorker(adoptionId);
   return { status: 'pending' };
+}
+
+// ---------------------------------------------------------------------------
+// Seed assembly for story creation (P6)
+// ---------------------------------------------------------------------------
+
+export interface ReferenceSeed {
+  seedCharacters: Character[];
+  worlds: StoryConfigWorldReference[];
+}
+
+/**
+ * Assemble the ready adoptions of a setup into StorySeedOptions.seedCharacters
+ * (adopted characters as ordinary roster entries) plus resolved world references
+ * for the story config. Only READY adoptions are included; pending/failed ones
+ * are skipped (the UI gates Start on resolution). Canonical assets are referenced
+ * as durable r2:// keys that the load-time signers re-sign on every read.
+ */
+export async function loadReadyReferenceSeed(setupId: string): Promise<ReferenceSeed> {
+  const userId = await getCurrentUserId();
+  if (!userId) return { seedCharacters: [], worlds: [] };
+  const trimmed = (setupId ?? '').trim();
+  if (!trimmed) return { seedCharacters: [], worlds: [] };
+
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from('reference_adoptions')
+    .select('*')
+    .eq('setup_id', trimmed)
+    .eq('user_id', userId)
+    .eq('status', 'ready')
+    .order('created_at', { ascending: true });
+
+  const adoptions = (data ?? []) as DbReferenceAdoption[];
+
+  const characterInputs: SeedCharacterInput[] = [];
+  const worlds: StoryConfigWorldReference[] = [];
+
+  for (const adoption of adoptions) {
+    const canonicalRef =
+      adoption.canonical_r2_bucket && adoption.canonical_r2_object_key
+        ? toR2Reference(adoption.canonical_r2_bucket, adoption.canonical_r2_object_key)
+        : null;
+
+    if (adoption.kind === 'character') {
+      if (!canonicalRef) continue; // a ready character must have a canonical image
+      characterInputs.push({
+        adoptionId: adoption.id,
+        displayName: adoption.display_name,
+        anchor: adoption.prompt_anchor ?? '',
+        canonicalReference: canonicalRef,
+        completedAt: adoption.completed_at,
+      });
+    } else {
+      const structured = adoption.structured_json as WorldReferenceDescription;
+      worlds.push({
+        adoptionId: adoption.id,
+        worldId: `world_${adoption.id}`,
+        label: adoption.display_name || structured?.summary || 'World',
+        anchor: adoption.prompt_anchor ?? '',
+        keywords: Array.isArray(structured?.keywords) ? structured.keywords : [],
+        adoptionMode:
+          adoption.adoption_mode === 'description_plus_canonical_visual'
+            ? 'description_plus_canonical_visual'
+            : 'description_only',
+        ...(canonicalRef ? { canonicalStorageKey: canonicalRef } : {}),
+      });
+    }
+  }
+
+  return { seedCharacters: buildSeedCharacters(characterInputs), worlds };
 }
