@@ -8,6 +8,7 @@ import {
   type ReferencePersonalizationSettings,
 } from '@/lib/references/reference-settings';
 import { resolveReferenceEntitlements, type ReferenceEntitlements } from '@/lib/references/entitlements';
+import type { PlanKey } from '@/lib/types/pricing';
 
 export async function getReferenceMasterEnabled(): Promise<boolean> {
   return getFeatureFlag(REFERENCE_FLAG_KEYS.enabled, false);
@@ -22,6 +23,7 @@ export interface ReferenceRuntimeContext {
   masterEnabled: boolean;
   settings: ReferencePersonalizationSettings;
   entitlements: ReferenceEntitlements;
+  planKey: PlanKey;
 }
 
 /**
@@ -31,7 +33,7 @@ export interface ReferenceRuntimeContext {
  */
 export async function getReferenceRuntimeContext(userId: string | null): Promise<ReferenceRuntimeContext> {
   const [masterEnabled, settings] = await Promise.all([getReferenceMasterEnabled(), getReferenceSettings()]);
-  const planKey = userId ? await resolvePlanKeyForUser(userId) : 'free';
+  const planKey: PlanKey = userId ? await resolvePlanKeyForUser(userId) : 'free';
   const entitlements = resolveReferenceEntitlements({ masterEnabled, planKey, settings });
-  return { masterEnabled, settings, entitlements };
+  return { masterEnabled, settings, entitlements, planKey };
 }

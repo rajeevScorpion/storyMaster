@@ -17,9 +17,13 @@ import {
   isReferenceKind,
 } from '@/lib/references/reference-storage';
 import { ReferenceError } from '@/lib/references/reference-errors';
+import { authorizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
+import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
+import type { PricingActionKey } from '@/lib/types/pricing';
 import type {
   DbReferenceSource,
   DbReferenceAdoption,
+  ReferenceAdoptionMode,
   ReferenceKind,
   ReferenceSetupItemStatus,
   ReferenceSetupStatus,
@@ -335,4 +339,234 @@ export async function linkReferenceSetupToStory(setupId: string, storyId: string
   } catch (error) {
     console.error('linkReferenceSetupToStory failed:', error instanceof Error ? error.message : error);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Adoption enqueue / retry (P4)
+// ---------------------------------------------------------------------------
+
+async function kickReferenceWorker(jobId?: string): Promise<void> {
+  const secret = process.env.CRON_SECRET;
+  const base = (
+    process.env.APP_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000')
+  ).replace(/\/$/, '');
+  await fetch(`${base}/api/reference/jobs/run`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(secret ? { authorization: `Bearer ${secret}` } : {}),
+    },
+    body: JSON.stringify(jobId ? { jobId } : {}),
+    signal: AbortSignal.timeout(15_000),
+    keepalive: true,
+  }).catch((error) => console.error('Failed to kick reference worker:', error));
+}
+
+/** Reserve coins for one adoption operation. Returns the reservation id (null in
+ *  soft/shadow/bypass modes) or throws REFERENCE_INSUFFICIENT_COINS. */
+async function reserveAdoptionCoins(input: {
+  userId: string;
+  actionKey: PricingActionKey;
+  idempotencyKey: string;
+}): Promise<string | null> {
+  const auth = await authorizeBillableAction({
+    userId: input.userId,
+    actionKey: input.actionKey,
+    idempotencyKey: input.idempotencyKey,
+    metadata: { feature: 'reference_personalization' },
+  });
+  if (auth.status === 'denied') throw new ReferenceError('REFERENCE_INSUFFICIENT_COINS');
+  return auth.status === 'allowed' ? auth.reservationId : null;
+}
+
+export interface EnqueueReferenceAdoptionInput {
+  sourceId: string;
+  /** Locked story visual style summary (deriveVisualStyleSummary) at enqueue. */
+  visualStyle: string;
+  /** Locked image model selection from the landing config, if any. */
+  imageModelSelection?: ImageModelSelection | null;
+}
+
+export interface EnqueueReferenceAdoptionResult {
+  adoptionId: string;
+  status: 'pending' | 'processing' | 'ready';
+  reused: boolean;
+}
+
+export async function enqueueReferenceAdoption(
+  input: EnqueueReferenceAdoptionInput
+): Promise<EnqueueReferenceAdoptionResult> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new ReferenceError('REFERENCE_SIGN_IN_REQUIRED');
+
+  const { entitlements, settings, planKey } = await getReferenceRuntimeContext(userId);
+  if (!entitlements.enabled) throw new ReferenceError('REFERENCE_FEATURE_DISABLED');
+  if (settings.pauseNewAdoptions) throw new ReferenceError('REFERENCE_PROVIDER_UNAVAILABLE');
+
+  const admin = createAdminClient();
+  const { data: sourceRow } = await admin
+    .from('reference_sources')
+    .select('*')
+    .eq('id', input.sourceId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  const source = sourceRow as DbReferenceSource | null;
+  if (!source || source.status === 'removed') throw new ReferenceError('REFERENCE_SOURCE_NOT_FOUND');
+
+  const kindEnabled = source.kind === 'character' ? entitlements.charactersEnabled : entitlements.worldsEnabled;
+  if (!kindEnabled) throw new ReferenceError('REFERENCE_TIER_NOT_ALLOWED');
+
+  // Idempotent: reuse an existing live adoption for this source.
+  const { data: existing } = await admin
+    .from('reference_adoptions')
+    .select('id, status')
+    .eq('source_id', source.id)
+    .in('status', ['pending', 'processing', 'ready'])
+    .maybeSingle();
+  if (existing) {
+    return {
+      adoptionId: existing.id,
+      status: existing.status as 'pending' | 'processing' | 'ready',
+      reused: true,
+    };
+  }
+
+  const adoptionId = randomUUID();
+  const adoptionMode: ReferenceAdoptionMode =
+    source.kind === 'character' ? 'canonical_visual' : entitlements.worldAdoptionMode;
+
+  // Reserve coins. Character = one charge. World = analysis charge, plus a
+  // separate visualization charge only when a canonical world visual is produced.
+  let reservationId: string | null = null;
+  let visualizationReservationId: string | null = null;
+  if (source.kind === 'character') {
+    reservationId = await reserveAdoptionCoins({
+      userId,
+      actionKey: 'adopt_character_reference',
+      idempotencyKey: `refadopt:${adoptionId}`,
+    });
+  } else {
+    reservationId = await reserveAdoptionCoins({
+      userId,
+      actionKey: 'adopt_world_reference',
+      idempotencyKey: `refadopt:${adoptionId}`,
+    });
+    if (adoptionMode === 'description_plus_canonical_visual') {
+      try {
+        visualizationReservationId = await reserveAdoptionCoins({
+          userId,
+          actionKey: 'visualize_world_reference',
+          idempotencyKey: `refworldviz:${adoptionId}`,
+        });
+      } catch (error) {
+        // Release the analysis reservation so we don't strand a hold.
+        if (reservationId) {
+          await releaseReservationSafely(userId, reservationId);
+        }
+        throw error;
+      }
+    }
+  }
+
+  const imageModelSnapshot = {
+    selection: input.imageModelSelection ?? null,
+    planKey,
+  };
+
+  const { error: insertError } = await admin.from('reference_adoptions').insert({
+    id: adoptionId,
+    user_id: userId,
+    setup_id: source.setup_id,
+    story_id: source.story_id,
+    source_id: source.id,
+    kind: source.kind,
+    adoption_mode: adoptionMode,
+    status: 'pending',
+    display_name: source.display_name,
+    structured_json: {},
+    visual_style: input.visualStyle || null,
+    image_model_snapshot: imageModelSnapshot,
+    reservation_id: reservationId,
+    visualization_reservation_id: visualizationReservationId,
+    max_attempts: settings.maxAttempts,
+  });
+  if (insertError) {
+    if (reservationId) await releaseReservationSafely(userId, reservationId);
+    if (visualizationReservationId) await releaseReservationSafely(userId, visualizationReservationId);
+    throw new ReferenceError('REFERENCE_ADOPTION_FAILED', insertError.message);
+  }
+
+  await kickReferenceWorker(adoptionId);
+  return { adoptionId, status: 'pending', reused: false };
+}
+
+async function releaseReservationSafely(userId: string, reservationId: string): Promise<void> {
+  await releaseBillableAction({ userId, reservationId, reason: 'reference_enqueue_aborted' }).catch(() => {});
+}
+
+export async function retryReferenceAdoption(adoptionId: string): Promise<{ status: 'pending' }> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new ReferenceError('REFERENCE_SIGN_IN_REQUIRED');
+
+  const { settings } = await getReferenceRuntimeContext(userId);
+  if (settings.pauseNewAdoptions) throw new ReferenceError('REFERENCE_PROVIDER_UNAVAILABLE');
+
+  const admin = createAdminClient();
+  const { data: row } = await admin
+    .from('reference_adoptions')
+    .select('*')
+    .eq('id', adoptionId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  const adoption = row as DbReferenceAdoption | null;
+  if (!adoption) throw new ReferenceError('REFERENCE_SOURCE_NOT_FOUND');
+  if (adoption.status !== 'failed') {
+    // Nothing to retry for non-failed states.
+    return { status: 'pending' };
+  }
+
+  // Fresh reservation for the retry (the previous one was released on failure);
+  // a distinct idempotency key so it is a new hold.
+  const attemptSuffix = `:retry${adoption.attempt_count}`;
+  let reservationId: string | null = null;
+  let visualizationReservationId: string | null = null;
+  if (adoption.kind === 'character') {
+    reservationId = await reserveAdoptionCoins({
+      userId,
+      actionKey: 'adopt_character_reference',
+      idempotencyKey: `refadopt:${adoptionId}${attemptSuffix}`,
+    });
+  } else {
+    reservationId = await reserveAdoptionCoins({
+      userId,
+      actionKey: 'adopt_world_reference',
+      idempotencyKey: `refadopt:${adoptionId}${attemptSuffix}`,
+    });
+    if (adoption.adoption_mode === 'description_plus_canonical_visual') {
+      visualizationReservationId = await reserveAdoptionCoins({
+        userId,
+        actionKey: 'visualize_world_reference',
+        idempotencyKey: `refworldviz:${adoptionId}${attemptSuffix}`,
+      });
+    }
+  }
+
+  await admin
+    .from('reference_adoptions')
+    .update({
+      status: 'pending',
+      error: null,
+      attempt_count: 0,
+      claimed_at: null,
+      completed_at: null,
+      reservation_id: reservationId,
+      visualization_reservation_id: visualizationReservationId,
+    })
+    .eq('id', adoptionId)
+    .eq('status', 'failed');
+
+  await kickReferenceWorker(adoptionId);
+  return { status: 'pending' };
 }

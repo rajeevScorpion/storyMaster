@@ -190,6 +190,73 @@ export interface InlineImagePart {
   data: string; // raw base64, no data: prefix
 }
 
+export interface ReferenceAnalysisCallParams {
+  task: Extract<TaskKey, 'reference_character_analysis' | 'reference_world_analysis'>;
+  model: string;
+  /** Full instruction prompt (built inline in lib/ai/reference-analysis.ts). */
+  prompt: string;
+  referenceParts: InlineImagePart[];
+  temperature?: number;
+  telemetry?: CostTelemetryContext;
+}
+
+/**
+ * Multimodal identity / World DNA extraction: sends the uploaded reference image
+ * plus a JSON-instruction prompt and returns the raw JSON text for the caller to
+ * parse. Separate from callGeminiVisionText because these tasks are not part of
+ * the admin prompt playground (no LOCKED_PROMPT_GUARDRAILS entry) and require
+ * JSON output.
+ */
+export async function callGeminiReferenceAnalysis(params: ReferenceAnalysisCallParams): Promise<string> {
+  const { task, model, prompt, referenceParts, temperature, telemetry } = params;
+  const ai = getAI();
+
+  const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [
+    { text: prompt },
+  ];
+  for (const ref of referenceParts) {
+    parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.data } });
+  }
+
+  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
+  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
+
+  const startedAt = geminiNowMs();
+  const response = await timeGeminiStep(
+    `gemini_proxy.${task}`,
+    { model, timeoutMs, referenceCount: referenceParts.length, promptChars: prompt.length },
+    () =>
+      withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: [{ role: 'user', parts }],
+          config: {
+            responseMimeType: 'application/json',
+            temperature: temperature ?? 0.2,
+          },
+        }),
+        timeoutMs,
+        task
+      )
+  );
+
+  if (telemetry) {
+    await recordModelCostEvent({
+      context: telemetry,
+      taskKey: task,
+      modelId: model,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs: geminiNowMs() - startedAt,
+      metadata: { promptChars: prompt.length, referenceCount: referenceParts.length },
+    });
+  }
+
+  const text = response.text;
+  if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
+  return text.trim();
+}
+
 export interface ImageCallParams {
   task: Extract<TaskKey, 'image_generation' | 'reel_image_generation' | 'portrait_generation'>;
   model: string;
