@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { reconcileActiveImageBatches } from '@/app/actions/image-batch';
 import { reconcileActiveNarrationJobs } from '@/app/actions/narration-batch';
 import { runImageGenerationJobs } from '@/lib/media/image-job-runner';
+import { runReferenceAdoptionJobs } from '@/lib/references/adoption-job-runner';
 import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
 
@@ -22,7 +23,7 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const [images, narration, imageJobs] = await Promise.all([
+    const [images, narration, imageJobs, adoptionJobs] = await Promise.all([
       reconcileActiveImageBatches(),
       reconcileActiveNarrationJobs().catch((error) => {
         console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
@@ -32,6 +33,11 @@ async function handle(request: Request): Promise<Response> {
       // and drains pending work within its own time budget (self re-kicks).
       runImageGenerationJobs({}).catch((error) => {
         console.error('Image job reconcile failed:', error instanceof Error ? error.message : error);
+        return { processed: 0, failed: 0, remaining: 0 };
+      }),
+      // Backstop for reference adoption jobs (reclaims stale + drains pending).
+      runReferenceAdoptionJobs({}).catch((error) => {
+        console.error('Reference adoption reconcile failed:', error instanceof Error ? error.message : error);
         return { processed: 0, failed: 0, remaining: 0 };
       }),
     ]);
@@ -51,6 +57,8 @@ async function handle(request: Request): Promise<Response> {
       narrationProcessed: narration.processed,
       imageJobsProcessed: imageJobs.processed,
       imageJobsRemaining: imageJobs.remaining,
+      adoptionJobsProcessed: adoptionJobs.processed,
+      adoptionJobsRemaining: adoptionJobs.remaining,
       originalsDeleted: cleanup.deleted,
       referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
     });
