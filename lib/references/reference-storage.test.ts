@@ -29,9 +29,9 @@ describe('reference-storage key builders', () => {
     expect(referenceMimeExtension('image/gif')).toBe('webp');
   });
 
-  it('builds a canonical key always as webp', () => {
+  it('builds a canonical key under a stories/ prefix (so signed URLs round-trip) always as webp', () => {
     const key = buildCanonicalReferenceKey({ userId: 'u1', setupId: 's1', adoptionId: 'a1' });
-    expect(key).toBe(`${REFERENCE_STORAGE_PREFIX}/u1/s1/adopt_a1_canonical.webp`);
+    expect(key).toBe(`stories/${REFERENCE_STORAGE_PREFIX}/u1/s1/adopt_a1_canonical.webp`);
   });
 
   it('exposes the accepted mime allowlist', () => {

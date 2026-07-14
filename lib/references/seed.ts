@@ -16,7 +16,13 @@ export interface SeedCharacterInput {
   displayName: string | null;
   /** Compiled stable-identity anchor -> Character.appearanceSummary. */
   anchor: string;
-  /** r2://bucket/key of the canonical adopted image (NEVER the source key). */
+  /**
+   * Freshly signed https URL of the canonical adopted image, for immediate
+   * (client-side) beat-1 generation. Re-signed on every later load via
+   * signStoryMapAssetUrls once persisted.
+   */
+  canonicalSignedUrl: string;
+  /** Durable r2://bucket/key of the canonical adopted image (NEVER the source key). */
   canonicalReference: string;
   completedAt?: string | null;
 }
@@ -58,7 +64,7 @@ export function buildSeedCharacters(inputs: SeedCharacterInput[]): Character[] {
       type: 'main',
       appearanceSummary: input.anchor,
       personalitySummary: '',
-      referenceSheetUrl: input.canonicalReference,
+      referenceSheetUrl: input.canonicalSignedUrl,
       referenceSheetStorageKey: input.canonicalReference,
       ...(input.completedAt ? { referenceSheetUploadedAt: input.completedAt } : {}),
     };

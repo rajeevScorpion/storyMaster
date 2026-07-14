@@ -691,10 +691,15 @@ export async function loadReadyReferenceSeed(setupId: string): Promise<Reference
 
     if (adoption.kind === 'character') {
       if (!canonicalRef) continue; // a ready character must have a canonical image
+      // Sign the canonical for immediate client-side beat-1 generation; the
+      // durable r2:// ref is kept as the storage key and re-signed on later loads.
+      const signedUrl = await createR2SignedGetUrl(canonicalRef, undefined, PREVIEW_SIGNED_TTL_SECONDS);
+      if (!signedUrl) continue;
       characterInputs.push({
         adoptionId: adoption.id,
         displayName: adoption.display_name,
         anchor: adoption.prompt_anchor ?? '',
+        canonicalSignedUrl: signedUrl,
         canonicalReference: canonicalRef,
         completedAt: adoption.completed_at,
       });

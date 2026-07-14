@@ -49,7 +49,6 @@ import {
 } from '@/lib/ai/model-config.shared';
 import type { ImageModelSelection, ImageModelSnapshot } from '@/lib/ai/image-models.shared';
 import { persistInlineBeatImageAction } from '@/app/actions/media-persist';
-import { getR2ObjectBuffer } from '@/lib/media/r2-server';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   findReelDefiner,
@@ -957,15 +956,6 @@ async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string
   const candidate = ref.dataUrl || ref.url;
   if (!candidate) return null;
   if (candidate.startsWith('data:')) return candidate;
-
-  // Private r2:// references (e.g. adopted reference-personalization canonicals
-  // still in-session before the first load-time signing) aren't fetchable over
-  // HTTP — resolve them directly from private storage.
-  if (candidate.startsWith('r2://')) {
-    const object = await getR2ObjectBuffer(candidate).catch(() => null);
-    if (!object) return null;
-    return `data:${object.contentType ?? 'image/webp'};base64,${object.buffer.toString('base64')}`;
-  }
 
   const response = await fetch(candidate);
   if (!response.ok) {

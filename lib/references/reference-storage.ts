@@ -34,13 +34,20 @@ export function buildReferenceSourceKey(input: {
   return `${REFERENCE_STORAGE_PREFIX}/${input.userId}/${input.setupId}/src_${input.sourceId}.${ext}`;
 }
 
-/** Private key for a canonical adopted asset: .../{setupId}/adopt_{adoptionId}_canonical.webp */
+/**
+ * Private key for a canonical adopted asset. Placed under a `stories/`-prefixed
+ * path so a signed R2 URL round-trips through normalizeStorageUrl /
+ * parseR2UrlLikeReference (which key off a `stories/` path segment) back to a
+ * durable r2:// reference — the same re-signing the character reference-sheet
+ * pipeline relies on. Sources stay under REFERENCE_STORAGE_PREFIX (resolved
+ * server-side only); canonicals must be client-signable.
+ */
 export function buildCanonicalReferenceKey(input: {
   userId: string;
   setupId: string;
   adoptionId: string;
 }): string {
-  return `${REFERENCE_STORAGE_PREFIX}/${input.userId}/${input.setupId}/adopt_${input.adoptionId}_canonical.webp`;
+  return `stories/${REFERENCE_STORAGE_PREFIX}/${input.userId}/${input.setupId}/adopt_${input.adoptionId}_canonical.webp`;
 }
 
 export function checksumSha256(buffer: Buffer): string {

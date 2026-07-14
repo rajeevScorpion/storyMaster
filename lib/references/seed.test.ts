@@ -27,14 +27,16 @@ describe('buildSeedCharacters', () => {
       adoptionId: 'a1',
       displayName: 'Leo',
       anchor: 'A curious boy. hair: messy brown',
-      canonicalReference: 'r2://private-bucket/references/u1/s1/adopt_a1_canonical.webp',
+      canonicalSignedUrl: 'https://acct.r2.cloudflarestorage.com/private-bucket/stories/references/u1/s1/adopt_a1_canonical.webp?sig=1',
+      canonicalReference: 'r2://private-bucket/stories/references/u1/s1/adopt_a1_canonical.webp',
       completedAt: '2026-07-14T00:00:00Z',
     },
     {
       adoptionId: 'a2',
       displayName: null,
       anchor: 'A small dragon',
-      canonicalReference: 'r2://private-bucket/references/u1/s1/adopt_a2_canonical.webp',
+      canonicalSignedUrl: 'https://acct.r2.cloudflarestorage.com/private-bucket/stories/references/u1/s1/adopt_a2_canonical.webp?sig=2',
+      canonicalReference: 'r2://private-bucket/stories/references/u1/s1/adopt_a2_canonical.webp',
     },
   ];
 
@@ -46,13 +48,14 @@ describe('buildSeedCharacters', () => {
     expect(characters[1].name).toBe('Character 1');
   });
 
-  it('emits ONLY the canonical r2:// reference (never a source key)', () => {
+  it('emits a signed canonical URL + durable r2 key, never a source key', () => {
     const characters = buildSeedCharacters(inputs);
     for (const character of characters) {
-      expect(character.referenceSheetUrl).toMatch(/^r2:\/\/.+adopt_.+_canonical\.webp$/);
-      expect(character.referenceSheetStorageKey).toBe(character.referenceSheetUrl);
+      // referenceSheetUrl is a client-fetchable signed URL for the canonical asset.
+      expect(character.referenceSheetUrl).toMatch(/^https:\/\/.+adopt_.+_canonical\.webp/);
+      // referenceSheetStorageKey is the durable r2:// reference to the same asset.
+      expect(character.referenceSheetStorageKey).toMatch(/^r2:\/\/.+adopt_.+_canonical\.webp$/);
       // No source-style key ("src_") must ever leak into a seeded character.
-      expect(character.referenceSheetUrl).not.toContain('src_');
       expect(JSON.stringify(character)).not.toContain('src_');
     }
   });

@@ -515,27 +515,26 @@ function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
 }
 
 /**
- * Reference Personalization: resolve the world reference relevant to this beat.
- * Returns the compact anchor (for the image prompt) and, when the world has a
- * canonical visualization, a scene reference image. Characters route themselves
- * via the roster; only worlds need this selection. The world image is appended
- * AFTER character refs so characters keep priority under a provider's input cap.
+ * Reference Personalization: resolve the world reference relevant to this beat
+ * and return its compact continuity anchor for the image prompt. Characters
+ * route themselves via the roster; only worlds need this selection.
+ *
+ * Only the text anchor is routed here (it is durable and travels in story_config
+ * JSONB). The optional canonical world *image* is not injected on this client
+ * generation path: config.references is not re-signed on load, so its r2:// key
+ * would not be browser-fetchable after a reload. Routing the world image is a
+ * follow-up that needs a server-side reference-resolution channel.
  */
 function resolveBeatWorldRouting(
   session: StorySession | null | undefined,
   beat: StoryBeat
-): { worldAnchor?: string; worldReferenceImage?: ReferenceImage } {
+): { worldAnchor?: string } {
   const worlds = session?.storyConfig?.references?.worlds;
   if (!worlds || worlds.length === 0) return {};
   const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
   const selected = selectRelevantWorld(worlds, beatText, null);
-  if (!selected) return {};
-  const routing: { worldAnchor?: string; worldReferenceImage?: ReferenceImage } = {};
-  if (selected.anchor.trim().length > 0) routing.worldAnchor = selected.anchor;
-  if (selected.adoptionMode === 'description_plus_canonical_visual' && selected.canonicalStorageKey) {
-    routing.worldReferenceImage = { type: 'scene', url: selected.canonicalStorageKey };
-  }
-  return routing;
+  if (!selected || selected.anchor.trim().length === 0) return {};
+  return { worldAnchor: selected.anchor };
 }
 
 function buildStoryboardReferenceImages(
@@ -4243,9 +4242,6 @@ export const useStoryStore = create<StoryState>()(
             portraitRefs
           );
           const worldRouting = resolveBeatWorldRouting(session, beat);
-          if (worldRouting.worldReferenceImage) {
-            referenceImages.push(worldRouting.worldReferenceImage);
-          }
 
           // Server-pipeline routing (admin processing mode): persist the beat
           // text server-side immediately, then hand the image to a durable
@@ -5935,9 +5931,6 @@ export const useStoryStore = create<StoryState>()(
             portraitReferences
           );
           const worldRouting = resolveBeatWorldRouting(session, beatForRender);
-          if (worldRouting.worldReferenceImage) {
-            referenceImages.push(worldRouting.worldReferenceImage);
-          }
           // Refine mode stays visually anchored to the current image by
           // sending it as an extra scene reference; reimagine deliberately
           // does not, so the provider can re-stage the scene.
