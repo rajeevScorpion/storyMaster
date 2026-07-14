@@ -3,6 +3,7 @@ import { reconcileActiveImageBatches } from '@/app/actions/image-batch';
 import { reconcileActiveNarrationJobs } from '@/app/actions/narration-batch';
 import { runImageGenerationJobs } from '@/lib/media/image-job-runner';
 import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
+import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -39,6 +40,11 @@ async function handle(request: Request): Promise<Response> {
       console.error('Retention cleanup failed:', error instanceof Error ? error.message : error);
       return { scanned: 0, deleted: 0, failed: 0 };
     });
+    // Delete abandoned reference setups (uploads whose story was never created).
+    const referenceCleanup = await cleanupAbandonedReferenceSetups().catch((error) => {
+      console.error('Reference cleanup failed:', error instanceof Error ? error.message : error);
+      return { setupsScanned: 0, sourcesDeleted: 0, adoptionsDeleted: 0, objectsDeleted: 0 };
+    });
     return NextResponse.json({
       ok: true,
       ...images,
@@ -46,6 +52,7 @@ async function handle(request: Request): Promise<Response> {
       imageJobsProcessed: imageJobs.processed,
       imageJobsRemaining: imageJobs.remaining,
       originalsDeleted: cleanup.deleted,
+      referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';
