@@ -41,6 +41,7 @@ const navItems = [
       { label: 'Narration voices', href: '/admin/settings/narration' },
       { label: 'Authoring', href: '/admin/settings/authoring' },
       { label: 'Character references', href: '/admin/settings/characters' },
+      { label: 'References & personalization', href: '/admin/settings/references' },
       { label: 'Video export', href: '/admin/settings/video-export' },
       { label: 'Generation timeouts', href: '/admin/settings/generation' },
       { label: 'Batch visuals', href: '/admin/settings/image-batch' },
