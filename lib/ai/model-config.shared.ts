@@ -12,6 +12,8 @@ export type TaskKey =
   | 'reel_image_generation'
   | 'portrait_generation'
   | 'graphic_style_extraction'
+  | 'reference_character_analysis'
+  | 'reference_world_analysis'
   | 'tts'
   | 'reel_tts'
   | 'story_text_overlay_alignment'
@@ -44,6 +46,8 @@ export const TASK_DEFINITIONS: {
   { key: 'reel_image_generation', label: 'Reel Image Generation', description: 'Generates abstract vertical reel storyboard panels from reel-specific image prompts' },
   { key: 'portrait_generation', label: 'Portrait Generation', description: 'Generates character reference portraits for visual consistency across beats' },
   { key: 'graphic_style_extraction', label: 'Graphic Style Extraction', description: 'Analyzes a reference image and returns a concise ≤150-word visual style description for the Graphic Style Studio' },
+  { key: 'reference_character_analysis', label: 'Reference Character Analysis', description: 'Analyzes an uploaded character reference image and extracts stable identity traits vs changeable attributes for style adoption' },
+  { key: 'reference_world_analysis', label: 'Reference World Analysis', description: 'Analyzes an uploaded world/location reference image and extracts structured World DNA (architecture, layout, materials, lighting) for continuity' },
   { key: 'tts', label: 'Text-to-Speech', description: 'Narrates story text with expressive voice acting' },
   { key: 'reel_tts', label: 'Reel Text-to-Speech', description: 'Narrates reel text with short-form pacing and selected narration style' },
   { key: 'story_text_overlay_alignment', label: 'Story Text Overlay Alignment', description: 'Aligns generated narration audio to story text for timed overlay highlighting' },
@@ -62,6 +66,8 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   reel_image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
   portrait_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },
   graphic_style_extraction: { modelId: 'gemini-2.5-flash', temperature: 0.4 },
+  reference_character_analysis: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.2 },
+  reference_world_analysis: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.2 },
   tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
   reel_tts: { modelId: DEFAULT_TTS_MODEL_ID, temperature: null },
   story_text_overlay_alignment: { modelId: 'elevenlabs-forced-alignment', temperature: null },

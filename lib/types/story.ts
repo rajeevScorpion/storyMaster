@@ -311,6 +311,12 @@ export interface StoryConfig {
   storyTransition: StoryTransitionSettings;
   portraitReferences: PortraitReferenceConfig;
   narrationVoice?: import('@/lib/ai/narration-voices').StoryNarrationVoiceSelection;
+  // Reference Personalization: setup id linking uploaded/adopted references plus
+  // resolved world anchors. Absent for stories that use no references (the
+  // overwhelming majority). Additive/optional — no migration; persists in the
+  // story_config JSONB column. Adopted characters are NOT stored here; they are
+  // seeded as ordinary roster characters via StorySeedOptions.seedCharacters.
+  references?: import('@/lib/types/references').StoryConfigReferences;
 }
 
 export interface StoryNode {
