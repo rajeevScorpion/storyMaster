@@ -1,5 +1,6 @@
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
 import { getPreludeText } from '@/lib/ai/story-config';
+import { buildWorldAnchorSummaries } from '@/lib/references/reference-routing';
 
 interface PromptCharacterAnchor {
   id: string;
@@ -47,6 +48,9 @@ interface StoryBible {
   visualDirection: {
     summary: string;
   };
+  // Reference Personalization: adopted world references (visual canon). Present
+  // only when the story uses world references; absent otherwise.
+  worldReferences?: { label: string; anchor: string }[];
   usedCharacterNames: string[];
   castRegistry: PromptCharacterAnchor[];
   choiceHistory: string[];
@@ -70,6 +74,7 @@ const NEXT_BEAT_GOAL_MAX_LENGTH = 120;
 const CONTINUITY_NOTE_MAX_LENGTH = 100;
 const ENDING_FORECAST_MAX_LENGTH = 60;
 const VISUAL_DIRECTION_MAX_LENGTH = 120;
+const WORLD_ANCHOR_MAX_LENGTH = 220;
 
 export function sanitizeCharactersForPrompt(characters: Character[] | undefined | null): Array<Record<string, unknown>> {
   return (characters || []).map((character) => ({
@@ -238,6 +243,9 @@ function buildStoryBible(
   const currentBeat = beats[beats.length - 1];
   const castRegistry = buildCastRegistry(sessionState);
   const openThreads = buildOpenThreads(sessionState, beats);
+  const worldReferences = buildWorldAnchorSummaries(sessionState?.storyConfig?.references?.worlds).map(
+    (entry) => ({ label: entry.label, anchor: truncateText(entry.anchor, WORLD_ANCHOR_MAX_LENGTH) })
+  );
 
   const episodeContext = sessionState?.episodeContext;
 
@@ -265,6 +273,7 @@ function buildStoryBible(
     visualDirection: {
       summary: truncateText(sessionState?.visualStyle || '', VISUAL_DIRECTION_MAX_LENGTH),
     },
+    ...(worldReferences.length > 0 ? { worldReferences } : {}),
     usedCharacterNames: castRegistry.map((character) => character.name),
     castRegistry,
     choiceHistory: (sessionState?.choiceHistory || [])

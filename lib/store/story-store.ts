@@ -18,6 +18,7 @@ import {
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
+import { selectRelevantWorld } from '@/lib/references/reference-routing';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import {
   generateAndPersistStoryNarrationWithOverlay,
@@ -511,6 +512,30 @@ function mergeCharacterVisualReferences(
 
 function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
   return collectPortraitReferences(beat.characters);
+}
+
+/**
+ * Reference Personalization: resolve the world reference relevant to this beat.
+ * Returns the compact anchor (for the image prompt) and, when the world has a
+ * canonical visualization, a scene reference image. Characters route themselves
+ * via the roster; only worlds need this selection. The world image is appended
+ * AFTER character refs so characters keep priority under a provider's input cap.
+ */
+function resolveBeatWorldRouting(
+  session: StorySession | null | undefined,
+  beat: StoryBeat
+): { worldAnchor?: string; worldReferenceImage?: ReferenceImage } {
+  const worlds = session?.storyConfig?.references?.worlds;
+  if (!worlds || worlds.length === 0) return {};
+  const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
+  const selected = selectRelevantWorld(worlds, beatText, null);
+  if (!selected) return {};
+  const routing: { worldAnchor?: string; worldReferenceImage?: ReferenceImage } = {};
+  if (selected.anchor.trim().length > 0) routing.worldAnchor = selected.anchor;
+  if (selected.adoptionMode === 'description_plus_canonical_visual' && selected.canonicalStorageKey) {
+    routing.worldReferenceImage = { type: 'scene', url: selected.canonicalStorageKey };
+  }
+  return routing;
 }
 
 function buildStoryboardReferenceImages(
@@ -4217,6 +4242,10 @@ export const useStoryStore = create<StoryState>()(
             currentNode.data.imageUrl,
             portraitRefs
           );
+          const worldRouting = resolveBeatWorldRouting(session, beat);
+          if (worldRouting.worldReferenceImage) {
+            referenceImages.push(worldRouting.worldReferenceImage);
+          }
 
           // Server-pipeline routing (admin processing mode): persist the beat
           // text server-side immediately, then hand the image to a durable
@@ -4476,7 +4505,7 @@ export const useStoryStore = create<StoryState>()(
                   }),
                   storyAspectRatio,
                   getImageTaskKey(session.storyConfig),
-                  getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
                   session.storyConfig.imageModelSelection,
                   imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState),
                   session.savedStoryId
@@ -5905,6 +5934,10 @@ export const useStoryStore = create<StoryState>()(
             parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
             portraitReferences
           );
+          const worldRouting = resolveBeatWorldRouting(session, beatForRender);
+          if (worldRouting.worldReferenceImage) {
+            referenceImages.push(worldRouting.worldReferenceImage);
+          }
           // Refine mode stays visually anchored to the current image by
           // sending it as an extra scene reference; reimagine deliberately
           // does not, so the provider can re-stage the scene.
@@ -6066,6 +6099,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(session.storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
                 }
               ),
             }
@@ -6081,7 +6115,7 @@ export const useStoryStore = create<StoryState>()(
                 }),
                 storyAspectRatio,
                 getImageTaskKey(session.storyConfig),
-                getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
                 session.storyConfig.imageModelSelection,
                 imageContinuityOptions(
                   session.storyConfig,
