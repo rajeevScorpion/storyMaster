@@ -1,0 +1,39 @@
+{
+  "referenceSource": {
+    "id": "refsrc_123",
+    "userId": "user_123",
+    "type": "character",
+    "displayName": "Leo",
+    "storageKey": "private/references/user_123/refsrc_123/original.webp",
+    "checksum": "sha256:...",
+    "validationStatus": "accepted",
+    "moderationStatus": "accepted",
+    "privacy": "private"
+  },
+  "storyReferenceAdoption": {
+    "id": "adopt_123",
+    "storyId": "story_123",
+    "sourceReferenceId": "refsrc_123",
+    "referenceType": "character",
+    "scope": {
+      "type": "story",
+      "id": "story_123"
+    },
+    "displayName": "Leo",
+    "style": {
+      "id": "storybook_pastel",
+      "version": "v3"
+    },
+    "imageModel": {
+      "id": "configured-model-id"
+    },
+    "adoptionVersion": 1,
+    "status": "completed",
+    "canonicalAssetId": "asset_123",
+    "providerState": {
+      "providerId": "provider-id",
+      "handle": "optional-transient-handle",
+      "expiresAt": null
+    }
+  }
+}

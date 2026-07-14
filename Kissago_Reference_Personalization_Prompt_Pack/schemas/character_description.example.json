@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "summary": "A curious young boy with messy brown hair and an alert, open expression.",
+  "stableIdentity": {
+    "face": [],
+    "hair": [],
+    "silhouette": [],
+    "distinctiveMarks": [],
+    "stableAccessories": []
+  },
+  "changeableAttributes": {
+    "clothing": [],
+    "expression": [],
+    "pose": []
+  },
+  "continuityAnchors": [],
+  "prohibitedDrift": [],
+  "confidence": {}
+}
