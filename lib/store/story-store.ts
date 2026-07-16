@@ -19,6 +19,11 @@ import {
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import { selectRelevantWorld } from '@/lib/references/reference-routing';
+import {
+  synthesizeDirectPortraitTasks,
+  collectDirectCharacterRefs,
+  selectDirectWorldReference,
+} from '@/lib/references/direct-routing';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import {
   generateAndPersistStoryNarrationWithOverlay,
@@ -528,26 +533,28 @@ function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
 }
 
 /**
- * Reference Personalization: resolve the world reference relevant to this beat
- * and return its compact continuity anchor for the image prompt. Characters
- * route themselves via the roster; only worlds need this selection.
+ * Reference Personalization: resolve the world reference relevant to this beat.
+ * Returns the compact continuity anchor for the image prompt AND, when the world
+ * carries an image key, the raw/canonical world image as a scene reference.
+ * Characters route themselves via the roster; only worlds need this selection.
  *
- * Only the text anchor is routed here (it is durable and travels in story_config
- * JSONB). The optional canonical world *image* is not injected on this client
- * generation path: config.references is not re-signed on load, so its r2:// key
- * would not be browser-fetchable after a reload. Routing the world image is a
- * follow-up that needs a server-side reference-resolution channel.
+ * The world image r2:// key is resolved to inline base64 server-side at
+ * generation time (resolveReferenceImageKeys), so it survives a reload even
+ * though config.references is not re-signed on load.
  */
 function resolveBeatWorldRouting(
-  session: StorySession | null | undefined,
+  session: Partial<StorySession> | null | undefined,
   beat: StoryBeat
-): { worldAnchor?: string } {
+): { worldAnchor?: string; worldReference?: ReferenceImage } {
   const worlds = session?.storyConfig?.references?.worlds;
   if (!worlds || worlds.length === 0) return {};
   const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
   const selected = selectRelevantWorld(worlds, beatText, null);
-  if (!selected || selected.anchor.trim().length === 0) return {};
-  return { worldAnchor: selected.anchor };
+  const worldReference = selectDirectWorldReference(worlds, beatText, null);
+  const result: { worldAnchor?: string; worldReference?: ReferenceImage } = {};
+  if (selected && selected.anchor.trim().length > 0) result.worldAnchor = selected.anchor;
+  if (worldReference) result.worldReference = worldReference;
+  return result;
 }
 
 function buildStoryboardReferenceImages(
@@ -2759,6 +2766,20 @@ export const useStoryStore = create<StoryState>()(
           const storyboardPlan = seed?.seedCharacters?.length
             ? filterCarriedPortraitTasks(composedStoryboardPlan, beat.characters)
             : composedStoryboardPlan;
+          // Reference Personalization (direct mode): seeded reference characters
+          // are never flagged "new", so the composer emits no portrait task for
+          // them. Synthesize the tasks so their raw upload feeds the beat-1
+          // character sheet (styled-sheet hybrid); the raw refs map is keyed by
+          // the beat character id to line up with the tasks.
+          const directConfigCharacters = storyConfig.references?.characters;
+          const directCharacterRefs = collectDirectCharacterRefs(directConfigCharacters, beat.characters);
+          if (directConfigCharacters?.length) {
+            storyboardPlan.portraitTasks = synthesizeDirectPortraitTasks(
+              storyboardPlan.portraitTasks,
+              directConfigCharacters,
+              beat.characters
+            );
+          }
           beat.storyboardPlan = storyboardPlan;
           beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
           if (seed?.episodeContext) {
@@ -2795,7 +2816,8 @@ export const useStoryStore = create<StoryState>()(
                   modelOverrides,
                   costPhase(baseCostTelemetry, 'portrait_generation'),
                   storyConfig.imageModelSelection,
-                  imageContinuityOptions(storyConfig, null)
+                  imageContinuityOptions(storyConfig, null),
+                  directCharacterRefs.size > 0 ? directCharacterRefs : undefined
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -2804,8 +2826,22 @@ export const useStoryStore = create<StoryState>()(
                 }
               )
             : { references: [], latestState: null };
+          // Direct-mode fallback: if a reference character's styled sheet failed
+          // to generate, attach its raw upload to the board so identity isn't
+          // lost entirely. Plus the relevant world image, characters first.
+          const directFallbackRefs: ReferenceImage[] = [];
+          for (const [charId, ref] of directCharacterRefs) {
+            const character = beat.characters.find((c) => c.id === charId);
+            if (character && !character.portraitBase64) directFallbackRefs.push(ref);
+          }
+          const beatWorldRouting = resolveBeatWorldRouting(initialSession, beat);
           const portraitRefs = initialSession.enableReferenceImages && !promptOnly
-            ? mergeReferenceImages(collectBeatPortraitReferences(beat), portraitGenerationResult.references)
+            ? mergeReferenceImages(
+                collectBeatPortraitReferences(beat),
+                portraitGenerationResult.references,
+                directFallbackRefs,
+                beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+              )
             : [];
           if (promptOnly) {
             assignPortraitPromptTexts(
@@ -2922,6 +2958,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                  ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
                 }
               );
               beat.finalImagePromptText = jobFinalPrompt;
@@ -3126,6 +3163,7 @@ export const useStoryStore = create<StoryState>()(
                     aspectRatio: storyAspectRatio,
                     task: getImageTaskKey(storyConfig),
                     ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                    ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
                   }
                 ),
               })
@@ -3150,7 +3188,10 @@ export const useStoryStore = create<StoryState>()(
                       }),
                       storyAspectRatio,
                       getImageTaskKey(storyConfig),
-                      getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                      {
+                        ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                        ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
+                      },
                       storyConfig.imageModelSelection,
                       imageContinuityOptions(storyConfig, portraitGenerationResult.latestState),
                       earlySavedStoryId
@@ -4255,12 +4296,11 @@ export const useStoryStore = create<StoryState>()(
             } : state);
           }
 
-          const referenceImages = buildStoryboardReferenceImages(
-            beat,
-            currentNode.data.imageUrl,
-            portraitRefs
-          );
           const worldRouting = resolveBeatWorldRouting(session, beat);
+          const referenceImages = mergeReferenceImages(
+            buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, portraitRefs),
+            worldRouting.worldReference ? [worldRouting.worldReference] : []
+          );
 
           // Server-pipeline routing (admin processing mode): persist the beat
           // text server-side immediately, then hand the image to a durable
@@ -5944,12 +5984,15 @@ export const useStoryStore = create<StoryState>()(
             );
           }
 
-          const referenceImages = buildStoryboardReferenceImages(
-            beatForRender,
-            parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
-            portraitReferences
-          );
           const worldRouting = resolveBeatWorldRouting(session, beatForRender);
+          const referenceImages = mergeReferenceImages(
+            buildStoryboardReferenceImages(
+              beatForRender,
+              parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
+              portraitReferences
+            ),
+            worldRouting.worldReference ? [worldRouting.worldReference] : []
+          );
           // Refine mode stays visually anchored to the current image by
           // sending it as an extra scene reference; reimagine deliberately
           // does not, so the provider can re-stage the scene.
