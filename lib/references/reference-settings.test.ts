@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  DEFAULT_REFERENCE_INPUT_MODE,
   DEFAULT_REFERENCE_PERSONALIZATION_SETTINGS,
   REFERENCE_PLATFORM_MAX_CHARACTER_REFS,
   REFERENCE_PLATFORM_MAX_WORLD_REFS,
+  normalizeReferenceInputMode,
   normalizeReferencePersonalizationSettings,
   parseReferencePersonalizationSettingsValue,
   serializeReferencePersonalizationSettings,
@@ -89,5 +91,20 @@ describe('normalizeReferencePersonalizationSettings', () => {
     expect(parseReferencePersonalizationSettingsValue(null)).toEqual(
       DEFAULT_REFERENCE_PERSONALIZATION_SETTINGS
     );
+  });
+});
+
+describe('normalizeReferenceInputMode', () => {
+  it('accepts the two valid modes', () => {
+    expect(normalizeReferenceInputMode('adoption')).toBe('adoption');
+    expect(normalizeReferenceInputMode('direct')).toBe('direct');
+  });
+
+  it('falls back to the default (direct) for anything else', () => {
+    expect(DEFAULT_REFERENCE_INPUT_MODE).toBe('direct');
+    expect(normalizeReferenceInputMode('')).toBe('direct');
+    expect(normalizeReferenceInputMode(null)).toBe('direct');
+    expect(normalizeReferenceInputMode('legacy')).toBe('direct');
+    expect(normalizeReferenceInputMode(42)).toBe('direct');
   });
 });

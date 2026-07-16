@@ -56,6 +56,7 @@ export const PRICING_ACTION_KEYS = [
   'adopt_character_reference',
   'adopt_world_reference',
   'visualize_world_reference',
+  'analyze_direct_reference',
 ] as const;
 export type PricingActionKey = (typeof PRICING_ACTION_KEYS)[number];
 

@@ -7,6 +7,17 @@ export type ReferenceKind = 'character' | 'world';
 
 export type ReferenceSourceStatus = 'uploaded' | 'removed';
 
+/**
+ * Which pipeline the References feature runs:
+ *  - adoption: v1 — analyze each upload + generate a canonical styled image,
+ *    then seed it as the character's reference sheet.
+ *  - direct: v2 — the raw upload is sent straight to the image model at
+ *    generation time (styled-sheet hybrid); no adoption jobs.
+ * The master flag reference_personalization_enabled still gates the whole
+ * feature; this only chooses which UI + pipeline is active when enabled.
+ */
+export type ReferenceInputMode = 'adoption' | 'direct';
+
 export type ReferenceAdoptionStatus =
   | 'pending'
   | 'processing'
@@ -40,6 +51,8 @@ export interface DbReferenceSource {
   kind: ReferenceKind;
   slot_index: number;
   display_name: string | null;
+  /** v2 direct input: optional user-typed description (migration 079). */
+  description: string | null;
   r2_bucket: string;
   r2_object_key: string;
   checksum_sha256: string | null;
@@ -135,24 +148,45 @@ export interface WorldReferenceDescription {
 // ---------------------------------------------------------------------------
 
 /**
- * A resolved world adoption carried on the story config so beat generation and
- * image routing can reach world anchors + canonical visualizations without a DB
- * round-trip. Characters do NOT live here — they are seeded as ordinary roster
- * characters via StorySeedOptions.seedCharacters.
+ * A resolved world reference carried on the story config so beat generation and
+ * image routing can reach world anchors + visualizations without a DB round-trip.
+ *
+ * v1 (adoption): keyed by adoptionId; anchor is the compiled DNA prompt anchor;
+ * canonicalStorageKey points at the styled visualization.
+ * v2 (direct): keyed by sourceId; anchor is the user description; sourceStorageKey
+ * points at the raw upload sent directly to the image model.
  */
 export interface StoryConfigWorldReference {
-  adoptionId: string;
+  adoptionId?: string;   // v1 adoption id (absent in direct mode)
+  sourceId?: string;     // v2 reference_sources id (absent in adoption mode)
   worldId: string;       // stable id used for beat relevance resolution
   label: string;
-  anchor: string;        // compiled compact prompt anchor
+  anchor: string;        // compiled compact prompt anchor / user description
   keywords: string[];    // relevance-match terms
   adoptionMode: WorldAdoptionMode;
-  canonicalStorageKey?: string; // r2://bucket/key of the styled world visualization
+  canonicalStorageKey?: string; // r2://bucket/key of the styled world visualization (v1)
+  sourceStorageKey?: string;    // r2://bucket/key of the raw upload (v2 direct)
+}
+
+/**
+ * A direct-input (v2) character reference carried on the story config. The raw
+ * upload key lives here — NEVER on the seeded Character (roster reference fields
+ * are re-signed for authenticated explorers; raw uploads may be personal photos).
+ * The matching roster Character is seeded separately with id `characterId`.
+ */
+export interface StoryConfigCharacterReference {
+  sourceId: string;
+  characterId: string;   // `ref_${sourceId}` — matches the seeded roster Character
+  name: string;
+  description?: string;
+  storageKey: string;    // r2://bucket/key of the raw upload
 }
 
 export interface StoryConfigReferences {
   setupId: string;
   worlds: StoryConfigWorldReference[];
+  /** v2 direct-input character references (raw keys; adoption mode leaves empty). */
+  characters?: StoryConfigCharacterReference[];
 }
 
 // ---------------------------------------------------------------------------

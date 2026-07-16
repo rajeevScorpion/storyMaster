@@ -5,11 +5,19 @@
 // ceilings or break the runtime.
 
 import { PLAN_KEYS, type PlanKey } from '@/lib/types/pricing';
-import type { WorldAdoptionMode } from '@/lib/types/references';
+import type { ReferenceInputMode, WorldAdoptionMode } from '@/lib/types/references';
 
 /** Platform hard ceilings for the first release (pack: 3 character / 3 world). */
 export const REFERENCE_PLATFORM_MAX_CHARACTER_REFS = 3;
 export const REFERENCE_PLATFORM_MAX_WORLD_REFS = 3;
+
+/** Input modes for the References feature (see ReferenceInputMode). */
+export const REFERENCE_INPUT_MODES: readonly ReferenceInputMode[] = ['adoption', 'direct'] as const;
+export const DEFAULT_REFERENCE_INPUT_MODE: ReferenceInputMode = 'direct';
+
+export function normalizeReferenceInputMode(value: unknown): ReferenceInputMode {
+  return value === 'adoption' || value === 'direct' ? value : DEFAULT_REFERENCE_INPUT_MODE;
+}
 
 export interface ReferenceTierLimits {
   enabled: boolean;
@@ -38,6 +46,7 @@ export const REFERENCE_FLAG_KEYS = {
   enabled: 'reference_personalization_enabled',
   settings: 'reference_personalization_settings',
   customOptionAttachment: 'reference_custom_option_attachment_enabled',
+  inputMode: 'reference_input_mode',
 } as const;
 
 export const DEFAULT_REFERENCE_TIER_LIMITS: Record<PlanKey, ReferenceTierLimits> = {

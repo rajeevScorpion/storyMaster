@@ -21,6 +21,7 @@ import type {
   VisualStylePreset,
 } from '@/lib/types/story';
 import type {
+  StoryConfigCharacterReference,
   StoryConfigReferences,
   StoryConfigWorldReference,
   WorldAdoptionMode,
@@ -390,15 +391,18 @@ function normalizeStoryConfigReferences(
   const worldsInput = Array.isArray(input?.worlds) ? input!.worlds : [];
   const worlds: StoryConfigWorldReference[] = [];
   for (const raw of worldsInput) {
+    // A world is keyed by adoptionId (v1) OR sourceId (v2 direct); need at least one.
     const adoptionId = sanitizeText(raw?.adoptionId);
+    const sourceId = sanitizeText(raw?.sourceId);
     const worldId = sanitizeText(raw?.worldId);
-    if (!adoptionId || !worldId) continue;
+    if ((!adoptionId && !sourceId) || !worldId) continue;
     const adoptionMode: WorldAdoptionMode =
       raw?.adoptionMode === 'description_plus_canonical_visual'
         ? 'description_plus_canonical_visual'
         : 'description_only';
     worlds.push({
-      adoptionId,
+      ...(adoptionId ? { adoptionId } : {}),
+      ...(sourceId ? { sourceId } : {}),
       worldId,
       label: sanitizeText(raw?.label) || worldId,
       anchor: typeof raw?.anchor === 'string' ? raw.anchor : '',
@@ -409,10 +413,34 @@ function normalizeStoryConfigReferences(
       ...(sanitizeText(raw?.canonicalStorageKey)
         ? { canonicalStorageKey: sanitizeText(raw?.canonicalStorageKey) }
         : {}),
+      ...(sanitizeText(raw?.sourceStorageKey)
+        ? { sourceStorageKey: sanitizeText(raw?.sourceStorageKey) }
+        : {}),
     });
   }
 
-  return { setupId, worlds };
+  const charactersInput = Array.isArray(input?.characters) ? input!.characters : [];
+  const characters: StoryConfigCharacterReference[] = [];
+  for (const raw of charactersInput) {
+    const sourceId = sanitizeText(raw?.sourceId);
+    const characterId = sanitizeText(raw?.characterId);
+    const storageKey = sanitizeText(raw?.storageKey);
+    // Direct-input characters need a raw upload pointer; skip anything malformed.
+    if (!sourceId || !characterId || !storageKey) continue;
+    characters.push({
+      sourceId,
+      characterId,
+      name: sanitizeText(raw?.name),
+      ...(sanitizeText(raw?.description) ? { description: sanitizeText(raw?.description) } : {}),
+      storageKey,
+    });
+  }
+
+  return {
+    setupId,
+    worlds,
+    ...(characters.length > 0 ? { characters } : {}),
+  };
 }
 
 function normalizeImageModelSelection(input?: Partial<ImageModelSelection> | null): ImageModelSelection | undefined {
