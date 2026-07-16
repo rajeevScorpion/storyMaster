@@ -443,13 +443,16 @@ function stripSessionForPrompt(session: Partial<StorySession>): Partial<StorySes
 
 function buildReferenceFromValue(
   type: ReferenceImage['type'],
-  value: string | undefined
+  value: string | undefined,
+  extras?: { storageKey?: string; name?: string }
 ): ReferenceImage | null {
   if (!value) return null;
-  if (value.startsWith('data:')) {
-    return { type, dataUrl: value };
-  }
-  return { type, url: value };
+  const base: ReferenceImage = value.startsWith('data:')
+    ? { type, dataUrl: value }
+    : { type, url: value };
+  if (extras?.storageKey) base.storageKey = extras.storageKey;
+  if (extras?.name?.trim()) base.name = extras.name.trim();
+  return base;
 }
 
 function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
@@ -461,7 +464,13 @@ function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
         character.portraitBase64
           || character.portraitUrl
           || character.referenceSheetUrl
-          || fallbackSheet?.url
+          || fallbackSheet?.url,
+        {
+          // Durable key so a stale signed referenceSheetUrl can be re-resolved
+          // server-side at generation time instead of silently 403-ing.
+          storageKey: character.referenceSheetStorageKey,
+          name: character.name,
+        }
       );
     })
     .filter((reference): reference is ReferenceImage => Boolean(reference));
@@ -560,7 +569,7 @@ function buildStoryboardReferenceImages(
 }
 
 function referenceKey(reference: ReferenceImage): string {
-  return `${reference.type}:${reference.url || reference.dataUrl || ''}`;
+  return `${reference.type}:${reference.storageKey || reference.url || reference.dataUrl || ''}`;
 }
 
 function mergeReferenceImages(...groups: ReferenceImage[][]): ReferenceImage[] {

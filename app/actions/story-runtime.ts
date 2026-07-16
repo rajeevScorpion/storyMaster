@@ -11,6 +11,9 @@ import {
   formatStoryBible,
   validateGeneratedBeat,
 } from '@/lib/ai/story-bible';
+import { buildReferenceBindingLines } from '@/lib/ai/reference-binding';
+import { isR2Reference } from '@/lib/media/r2-reference';
+import { resolveReferenceImageKeys } from '@/app/actions/references';
 import {
   normalizePortraitReferenceConfig,
   deriveVisualStyleSummary,
@@ -449,6 +452,14 @@ export interface ReferenceImage {
   type: 'character' | 'scene';
   dataUrl?: string;
   url?: string;
+  /**
+   * Durable r2://bucket/key pointer. Preferred over `url` — the client resolves
+   * it to fresh inline base64 via a server action at generation time, so it can
+   * never expire mid-session the way a signed `url` can (the v1 reference bug).
+   */
+  storageKey?: string;
+  /** Character name for identity binding in the image prompt (see buildReferenceBindingLines). */
+  name?: string;
 }
 
 export interface GeneratedImageResult {
@@ -700,7 +711,12 @@ export async function generateImage(
           taskKey: imageTask,
           modelKey: imageModel,
         };
-        const referenceParts = await resolveReferenceImageParts(referenceImages);
+        const { parts: referenceParts, survivors: referenceSurvivors, droppedCount: droppedReferenceCount } =
+          await resolveReferenceImageParts(referenceImages);
+        // Bind each surviving reference (in provider order) to the character it
+        // depicts so the model matches identity to the right attached image.
+        const bindingLines = buildReferenceBindingLines(referenceSurvivors);
+        const boundImagePrompt = bindingLines ? `${finalImagePrompt}\n\n${bindingLines}` : finalImagePrompt;
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
 
@@ -714,7 +730,7 @@ export async function generateImage(
           },
           () => generateSelectedImage({
             task: imageTask,
-            prompt: finalImagePrompt,
+            prompt: boundImagePrompt,
             referenceParts,
             aspectRatio: resolvedAspectRatio,
             imageSize,
@@ -738,12 +754,13 @@ export async function generateImage(
           return finalizeInlineImageResult(
             {
               imageUrl,
-              finalPromptText: finalImagePrompt,
+              finalPromptText: boundImagePrompt,
               imageModelSnapshot: result.modelSnapshot,
               imageGenerationMetadata: {
                 ...result.metadata,
                 imageModelSnapshot: result.modelSnapshot,
                 referenceCount: referenceParts.length,
+                droppedReferenceCount,
                 aspectRatio: resolvedAspectRatio,
                 imageSize,
               },
@@ -755,6 +772,7 @@ export async function generateImage(
         if (result.fallbackText && result.fallbackText !== finalImagePrompt) {
           const retryPrompt = [
             result.fallbackText,
+            ...(bindingLines ? [bindingLines] : []),
             ...(resolvedAspectRatio === '9:16' ? [VERTICAL_STORY_PROMPT_INSTRUCTION] : []),
             getStoryboardLayoutHardRequirements(resolvedAspectRatio),
           ].join('\n\n');
@@ -798,6 +816,7 @@ export async function generateImage(
                   ...retryResult.metadata,
                   imageModelSnapshot: retryResult.modelSnapshot,
                   referenceCount: referenceParts.length,
+                  droppedReferenceCount,
                   aspectRatio: resolvedAspectRatio,
                   imageSize,
                   retry: true,
@@ -855,26 +874,56 @@ async function finalizeInlineImageResult(
   };
 }
 
-async function resolveReferenceImageParts(referenceImages?: ReferenceImage[]): Promise<InlineImagePart[]> {
-  if (!referenceImages || referenceImages.length === 0) return [];
+/** The r2:// pointer for a reference, if any (durable storageKey wins over url). */
+function pickReferenceR2Key(ref: ReferenceImage): string | null {
+  if (ref.storageKey && isR2Reference(ref.storageKey)) return ref.storageKey;
+  if (ref.url && isR2Reference(ref.url)) return ref.url;
+  return null;
+}
+
+export interface ResolvedReferenceParts {
+  parts: InlineImagePart[];
+  /** The references that actually resolved, in provider order (for prompt binding). */
+  survivors: ReferenceImage[];
+  droppedCount: number;
+}
+
+async function resolveReferenceImageParts(
+  referenceImages?: ReferenceImage[]
+): Promise<ResolvedReferenceParts> {
+  if (!referenceImages || referenceImages.length === 0) {
+    return { parts: [], survivors: [], droppedCount: 0 };
+  }
 
   return timeRuntimeStep(
     'story_runtime.resolve_reference_parts',
     { referenceCount: referenceImages.length },
     async () => {
-      const resolvedDataUrls = await Promise.all(
-        referenceImages.map((ref) => resolveReferenceImageDataUrl(ref))
-      );
+      // Private r2:// keys must be resolved server-side (the browser cannot read
+      // the private bucket). Batch them into a single server round-trip.
+      const r2Keys = referenceImages
+        .map((ref) => pickReferenceR2Key(ref))
+        .filter((key): key is string => Boolean(key));
+      const resolvedKeys = r2Keys.length > 0 ? await resolveReferenceImageKeys(r2Keys) : {};
 
       const parts: InlineImagePart[] = [];
-      for (const dataUrl of resolvedDataUrls) {
-        if (!dataUrl) continue;
-        const parsed = splitBase64DataUrl(dataUrl);
-        if (parsed) {
-          parts.push({ mimeType: parsed.mimeType, data: parsed.base64 });
+      const survivors: ReferenceImage[] = [];
+      for (const ref of referenceImages) {
+        const dataUrl = await resolveReferenceImageDataUrl(ref, resolvedKeys);
+        const parsed = dataUrl ? splitBase64DataUrl(dataUrl) : null;
+        if (!parsed) {
+          const key = pickReferenceR2Key(ref);
+          console.warn('[refs] dropped reference (unresolved)', {
+            type: ref.type,
+            name: ref.name,
+            source: key ?? (ref.url ? `${ref.url.slice(0, 24)}…` : 'inline'),
+          });
+          continue;
         }
+        parts.push({ mimeType: parsed.mimeType, data: parsed.base64 });
+        survivors.push(ref);
       }
-      return parts;
+      return { parts, survivors, droppedCount: referenceImages.length - survivors.length };
     }
   );
 }
@@ -952,18 +1001,29 @@ export async function generateCharacterPortrait(
   }
 }
 
-async function resolveReferenceImageDataUrl(ref: ReferenceImage): Promise<string | null> {
+async function resolveReferenceImageDataUrl(
+  ref: ReferenceImage,
+  resolvedKeys: Record<string, string | null> = {}
+): Promise<string | null> {
+  // Inline base64 (e.g. a freshly generated portrait) is used as-is.
+  if (ref.dataUrl?.startsWith('data:')) return ref.dataUrl;
+
+  // A durable r2:// pointer was pre-resolved to base64 server-side.
+  const r2Key = pickReferenceR2Key(ref);
+  if (r2Key) return resolvedKeys[r2Key] ?? null;
+
   const candidate = ref.dataUrl || ref.url;
   if (!candidate) return null;
   if (candidate.startsWith('data:')) return candidate;
 
-  const response = await fetch(candidate);
-  if (!response.ok) {
+  try {
+    const response = await fetch(candidate);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return blobToDataUrl(blob);
+  } catch {
     return null;
   }
-
-  const blob = await response.blob();
-  return blobToDataUrl(blob);
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

@@ -23,6 +23,8 @@ export interface BeatImageJobReference {
   type: 'character' | 'scene';
   url?: string;
   r2Reference?: string;
+  /** Character name for identity binding in the worker's final prompt. */
+  name?: string;
 }
 
 /**

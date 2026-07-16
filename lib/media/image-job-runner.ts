@@ -16,6 +16,7 @@ import {
   truncatePromptSnapshot,
 } from '@/lib/media/image-versions';
 import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { buildReferenceBindingLines } from '@/lib/ai/reference-binding';
 import {
   BEAT_IMAGE_MAX_VERSIONS_FLAG_KEY,
   normalizeMaxImageVersionsPerBeat,
@@ -95,29 +96,52 @@ async function claimJob(admin: AdminClient, jobId: string, attemptCount: number)
  *  parts the provider call expects. Unfetchable refs (e.g. a signed URL that
  *  expired before a late retry) are dropped gracefully — same degradation the
  *  interactive runtime applies. */
-async function resolveJobReferenceParts(payload: BeatImageJobRequestPayload): Promise<InlineImagePart[]> {
+interface ResolvedJobReferenceParts {
+  parts: InlineImagePart[];
+  /** References that actually resolved, in order (for prompt identity binding). */
+  survivors: BeatImageJobRequestPayload['references'];
+  droppedCount: number;
+}
+
+async function resolveJobReferenceParts(
+  payload: BeatImageJobRequestPayload
+): Promise<ResolvedJobReferenceParts> {
   const parts: InlineImagePart[] = [];
-  for (const ref of payload.references ?? []) {
+  const survivors: BeatImageJobRequestPayload['references'] = [];
+  const refs = payload.references ?? [];
+  for (const ref of refs) {
+    let part: InlineImagePart | null = null;
     if (ref.r2Reference) {
       const object = await getR2ObjectBuffer(ref.r2Reference).catch(() => null);
       if (object) {
-        parts.push({ mimeType: object.contentType ?? 'image/webp', data: object.buffer.toString('base64') });
+        part = { mimeType: object.contentType ?? 'image/webp', data: object.buffer.toString('base64') };
       }
     } else if (ref.url) {
       try {
         const response = await fetch(ref.url);
-        if (!response.ok) continue;
-        const arrayBuffer = await response.arrayBuffer();
-        parts.push({
-          mimeType: response.headers.get('content-type') ?? 'image/webp',
-          data: Buffer.from(arrayBuffer).toString('base64'),
-        });
+        if (response.ok) {
+          const arrayBuffer = await response.arrayBuffer();
+          part = {
+            mimeType: response.headers.get('content-type') ?? 'image/webp',
+            data: Buffer.from(arrayBuffer).toString('base64'),
+          };
+        }
       } catch {
-        // Dropped reference — generation proceeds without it.
+        // Fall through to the dropped-reference warning below.
       }
     }
+    if (part) {
+      parts.push(part);
+      survivors.push(ref);
+    } else {
+      console.warn('[refs] job dropped reference (unresolved)', {
+        type: ref.type,
+        name: ref.name,
+        source: ref.r2Reference ?? (ref.url ? `${ref.url.slice(0, 24)}…` : 'none'),
+      });
+    }
   }
-  return parts;
+  return { parts, survivors, droppedCount: refs.length - survivors.length };
 }
 
 /** Delete the staged reference objects once a job reaches a terminal state. */
@@ -308,10 +332,14 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
   if (!existingOriginal) {
     // Same server entry point the interactive request and bulk workers use;
     // the final prompt was built client-side at enqueue time.
-    const referenceParts = await resolveJobReferenceParts(payload);
+    const { parts: referenceParts, survivors, droppedCount } = await resolveJobReferenceParts(payload);
+    // Bind surviving references (in provider order) to the character they depict
+    // so identity attaches to the right image even after some refs dropped.
+    const bindingLines = buildReferenceBindingLines(survivors);
+    const boundPrompt = bindingLines ? `${payload.finalPrompt}\n\n${bindingLines}` : payload.finalPrompt;
     const result = await generateSelectedImage({
       task: payload.imageTask,
-      prompt: payload.finalPrompt,
+      prompt: boundPrompt,
       referenceParts: referenceParts.length > 0 ? referenceParts : undefined,
       aspectRatio: payload.aspectRatio,
       imageSize: payload.imageSize,
@@ -326,10 +354,12 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
       return;
     }
     generationDataUrl = result.dataUrl;
-    finalPromptText = payload.finalPrompt;
+    finalPromptText = boundPrompt;
     generationMetadata = {
       ...(result.metadata ?? {}),
       ...(result.modelSnapshot ? { imageModelSnapshot: result.modelSnapshot } : {}),
+      referenceCount: referenceParts.length,
+      droppedReferenceCount: droppedCount,
       processingMode: 'server_pipeline',
       jobId: job.id,
     };

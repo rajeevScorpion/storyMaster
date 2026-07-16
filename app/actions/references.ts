@@ -8,8 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getServerPipelineAvailability } from '@/lib/media/processing-mode';
-import { putR2Object, createR2SignedGetUrl, deleteR2Object } from '@/lib/media/r2-server';
-import { toR2Reference } from '@/lib/media/r2-reference';
+import { putR2Object, createR2SignedGetUrl, deleteR2Object, getR2ObjectBuffer } from '@/lib/media/r2-server';
+import { toR2Reference, isR2Reference, parseR2Reference } from '@/lib/media/r2-reference';
 import { getReferenceRuntimeContext } from '@/lib/references/reference-runtime';
 import {
   buildReferenceSourceKey,
@@ -46,6 +46,38 @@ async function getCurrentUserId(): Promise<string | null> {
   } = await supabase.auth.getUser();
   if (error) return null;
   return user?.id ?? null;
+}
+
+/**
+ * Resolve private r2:// reference keys to base64 data URLs for the client image
+ * pipeline (which runs in the browser and cannot read the private bucket). Only
+ * keys under the caller's own path segment (`/{userId}/`) are resolved — this
+ * covers both direct-input source keys (references/{userId}/...) and adopted
+ * canonical keys (stories/references/{userId}/...). Anything else resolves to
+ * null so a foreign or malformed key is silently skipped, not leaked.
+ *
+ * Keys are used immediately at generation time, so returning inline base64 (vs a
+ * TTL'd signed URL that could expire mid-session) is deliberate — it is what
+ * makes durable keys immune to the v1 expired-URL bug.
+ */
+export async function resolveReferenceImageKeys(
+  keys: string[]
+): Promise<Record<string, string | null>> {
+  const out: Record<string, string | null> = {};
+  const userId = await getCurrentUserId();
+  const unique = Array.from(new Set(keys.filter((k) => typeof k === 'string' && k.length > 0)));
+  await Promise.all(
+    unique.map(async (key) => {
+      out[key] = null;
+      if (!userId || !isR2Reference(key)) return;
+      const parsed = parseR2Reference(key);
+      if (!parsed || !parsed.objectKey.includes(`/${userId}/`)) return;
+      const object = await getR2ObjectBuffer(key).catch(() => null);
+      if (!object) return;
+      out[key] = `data:${object.contentType ?? 'image/webp'};base64,${object.buffer.toString('base64')}`;
+    })
+  );
+  return out;
 }
 
 export interface ReferenceCreationContext {
