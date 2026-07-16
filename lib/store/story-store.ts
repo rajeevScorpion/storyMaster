@@ -18,6 +18,12 @@ import {
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
+import { selectRelevantWorld } from '@/lib/references/reference-routing';
+import {
+  synthesizeDirectPortraitTasks,
+  collectDirectCharacterRefs,
+  selectDirectWorldReference,
+} from '@/lib/references/direct-routing';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import {
   generateAndPersistStoryNarrationWithOverlay,
@@ -442,13 +448,16 @@ function stripSessionForPrompt(session: Partial<StorySession>): Partial<StorySes
 
 function buildReferenceFromValue(
   type: ReferenceImage['type'],
-  value: string | undefined
+  value: string | undefined,
+  extras?: { storageKey?: string; name?: string }
 ): ReferenceImage | null {
   if (!value) return null;
-  if (value.startsWith('data:')) {
-    return { type, dataUrl: value };
-  }
-  return { type, url: value };
+  const base: ReferenceImage = value.startsWith('data:')
+    ? { type, dataUrl: value }
+    : { type, url: value };
+  if (extras?.storageKey) base.storageKey = extras.storageKey;
+  if (extras?.name?.trim()) base.name = extras.name.trim();
+  return base;
 }
 
 function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
@@ -460,7 +469,13 @@ function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
         character.portraitBase64
           || character.portraitUrl
           || character.referenceSheetUrl
-          || fallbackSheet?.url
+          || fallbackSheet?.url,
+        {
+          // Durable key so a stale signed referenceSheetUrl can be re-resolved
+          // server-side at generation time instead of silently 403-ing.
+          storageKey: character.referenceSheetStorageKey,
+          name: character.name,
+        }
       );
     })
     .filter((reference): reference is ReferenceImage => Boolean(reference));
@@ -500,6 +515,10 @@ function mergeCharacterVisualReferences(
       referenceSheetStorageKey: character.referenceSheetStorageKey || reference.referenceSheetStorageKey,
       referenceSheetUploadedAt: character.referenceSheetUploadedAt || reference.referenceSheetUploadedAt,
       referenceSheetGallery: character.referenceSheetGallery ?? reference.referenceSheetGallery,
+      // The beat character always carries a resolved name, so an unnamed
+      // reference is no longer a placeholder once merged — clear the flag so the
+      // rename lock re-engages on later beats.
+      nameIsPlaceholder: character.name?.trim() ? false : reference.nameIsPlaceholder,
     };
   });
 
@@ -511,6 +530,31 @@ function mergeCharacterVisualReferences(
 
 function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
   return collectPortraitReferences(beat.characters);
+}
+
+/**
+ * Reference Personalization: resolve the world reference relevant to this beat.
+ * Returns the compact continuity anchor for the image prompt AND, when the world
+ * carries an image key, the raw/canonical world image as a scene reference.
+ * Characters route themselves via the roster; only worlds need this selection.
+ *
+ * The world image r2:// key is resolved to inline base64 server-side at
+ * generation time (resolveReferenceImageKeys), so it survives a reload even
+ * though config.references is not re-signed on load.
+ */
+function resolveBeatWorldRouting(
+  session: Partial<StorySession> | null | undefined,
+  beat: StoryBeat
+): { worldAnchor?: string; worldReference?: ReferenceImage } {
+  const worlds = session?.storyConfig?.references?.worlds;
+  if (!worlds || worlds.length === 0) return {};
+  const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
+  const selected = selectRelevantWorld(worlds, beatText, null);
+  const worldReference = selectDirectWorldReference(worlds, beatText, null);
+  const result: { worldAnchor?: string; worldReference?: ReferenceImage } = {};
+  if (selected && selected.anchor.trim().length > 0) result.worldAnchor = selected.anchor;
+  if (worldReference) result.worldReference = worldReference;
+  return result;
 }
 
 function buildStoryboardReferenceImages(
@@ -532,7 +576,7 @@ function buildStoryboardReferenceImages(
 }
 
 function referenceKey(reference: ReferenceImage): string {
-  return `${reference.type}:${reference.url || reference.dataUrl || ''}`;
+  return `${reference.type}:${reference.storageKey || reference.url || reference.dataUrl || ''}`;
 }
 
 function mergeReferenceImages(...groups: ReferenceImage[][]): ReferenceImage[] {
@@ -1462,7 +1506,10 @@ async function generatePortraitsForStoryboardPlan(
   modelOverrides?: StoryModelOverrides,
   costTelemetry?: CostTelemetryContext,
   imageModelSelection?: StoryConfig['imageModelSelection'],
-  continuity?: ReturnType<typeof imageContinuityOptions>
+  continuity?: ReturnType<typeof imageContinuityOptions>,
+  // Reference Personalization (direct mode): raw uploaded reference per character
+  // id, fed as image input so the beat-1 sheet adopts the uploaded identity.
+  directRefsByCharacterId?: Map<string, ReferenceImage>
 ): Promise<{ references: ReferenceImage[]; latestState: ImageContinuityProviderState | null }> {
   if (!storyboardPlan.portraitTasks.length) {
     return {
@@ -1495,6 +1542,8 @@ async function generatePortraitsForStoryboardPlan(
             quality: '0.5K' as const,
           };
 
+    const directRef = directRefsByCharacterId?.get(character.id);
+
     try {
       const portraitResult = await generateCharacterPortrait(
         character,
@@ -1509,7 +1558,8 @@ async function generatePortraitsForStoryboardPlan(
               ...continuity,
               previousState: latestState,
             }
-          : null
+          : null,
+        directRef ? [directRef] : undefined
       );
       const nextState = extractImageContinuityState(portraitResult.imageGenerationMetadata) ?? latestState;
       latestState = nextState;
@@ -2716,6 +2766,20 @@ export const useStoryStore = create<StoryState>()(
           const storyboardPlan = seed?.seedCharacters?.length
             ? filterCarriedPortraitTasks(composedStoryboardPlan, beat.characters)
             : composedStoryboardPlan;
+          // Reference Personalization (direct mode): seeded reference characters
+          // are never flagged "new", so the composer emits no portrait task for
+          // them. Synthesize the tasks so their raw upload feeds the beat-1
+          // character sheet (styled-sheet hybrid); the raw refs map is keyed by
+          // the beat character id to line up with the tasks.
+          const directConfigCharacters = storyConfig.references?.characters;
+          const directCharacterRefs = collectDirectCharacterRefs(directConfigCharacters, beat.characters);
+          if (directConfigCharacters?.length) {
+            storyboardPlan.portraitTasks = synthesizeDirectPortraitTasks(
+              storyboardPlan.portraitTasks,
+              directConfigCharacters,
+              beat.characters
+            );
+          }
           beat.storyboardPlan = storyboardPlan;
           beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
           if (seed?.episodeContext) {
@@ -2752,7 +2816,8 @@ export const useStoryStore = create<StoryState>()(
                   modelOverrides,
                   costPhase(baseCostTelemetry, 'portrait_generation'),
                   storyConfig.imageModelSelection,
-                  imageContinuityOptions(storyConfig, null)
+                  imageContinuityOptions(storyConfig, null),
+                  directCharacterRefs.size > 0 ? directCharacterRefs : undefined
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -2761,8 +2826,22 @@ export const useStoryStore = create<StoryState>()(
                 }
               )
             : { references: [], latestState: null };
+          // Direct-mode fallback: if a reference character's styled sheet failed
+          // to generate, attach its raw upload to the board so identity isn't
+          // lost entirely. Plus the relevant world image, characters first.
+          const directFallbackRefs: ReferenceImage[] = [];
+          for (const [charId, ref] of directCharacterRefs) {
+            const character = beat.characters.find((c) => c.id === charId);
+            if (character && !character.portraitBase64) directFallbackRefs.push(ref);
+          }
+          const beatWorldRouting = resolveBeatWorldRouting(initialSession, beat);
           const portraitRefs = initialSession.enableReferenceImages && !promptOnly
-            ? mergeReferenceImages(collectBeatPortraitReferences(beat), portraitGenerationResult.references)
+            ? mergeReferenceImages(
+                collectBeatPortraitReferences(beat),
+                portraitGenerationResult.references,
+                directFallbackRefs,
+                beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+              )
             : [];
           if (promptOnly) {
             assignPortraitPromptTexts(
@@ -2879,6 +2958,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                  ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
                 }
               );
               beat.finalImagePromptText = jobFinalPrompt;
@@ -3083,6 +3163,7 @@ export const useStoryStore = create<StoryState>()(
                     aspectRatio: storyAspectRatio,
                     task: getImageTaskKey(storyConfig),
                     ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                    ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
                   }
                 ),
               })
@@ -3107,7 +3188,10 @@ export const useStoryStore = create<StoryState>()(
                       }),
                       storyAspectRatio,
                       getImageTaskKey(storyConfig),
-                      getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                      {
+                        ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                        ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
+                      },
                       storyConfig.imageModelSelection,
                       imageContinuityOptions(storyConfig, portraitGenerationResult.latestState),
                       earlySavedStoryId
@@ -4212,10 +4296,10 @@ export const useStoryStore = create<StoryState>()(
             } : state);
           }
 
-          const referenceImages = buildStoryboardReferenceImages(
-            beat,
-            currentNode.data.imageUrl,
-            portraitRefs
+          const worldRouting = resolveBeatWorldRouting(session, beat);
+          const referenceImages = mergeReferenceImages(
+            buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, portraitRefs),
+            worldRouting.worldReference ? [worldRouting.worldReference] : []
           );
 
           // Server-pipeline routing (admin processing mode): persist the beat
@@ -4476,7 +4560,7 @@ export const useStoryStore = create<StoryState>()(
                   }),
                   storyAspectRatio,
                   getImageTaskKey(session.storyConfig),
-                  getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
                   session.storyConfig.imageModelSelection,
                   imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState),
                   session.savedStoryId
@@ -5900,10 +5984,14 @@ export const useStoryStore = create<StoryState>()(
             );
           }
 
-          const referenceImages = buildStoryboardReferenceImages(
-            beatForRender,
-            parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
-            portraitReferences
+          const worldRouting = resolveBeatWorldRouting(session, beatForRender);
+          const referenceImages = mergeReferenceImages(
+            buildStoryboardReferenceImages(
+              beatForRender,
+              parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
+              portraitReferences
+            ),
+            worldRouting.worldReference ? [worldRouting.worldReference] : []
           );
           // Refine mode stays visually anchored to the current image by
           // sending it as an extra scene reference; reimagine deliberately
@@ -6066,6 +6154,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(session.storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
                 }
               ),
             }
@@ -6081,7 +6170,7 @@ export const useStoryStore = create<StoryState>()(
                 }),
                 storyAspectRatio,
                 getImageTaskKey(session.storyConfig),
-                getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
                 session.storyConfig.imageModelSelection,
                 imageContinuityOptions(
                   session.storyConfig,

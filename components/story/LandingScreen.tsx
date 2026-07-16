@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
@@ -46,7 +46,10 @@ import AdvancedOptions from './AdvancedOptions';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
-import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
+import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
+import { loadReadyReferenceSeed, loadDirectReferenceSeed } from '@/app/actions/references';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -338,6 +341,10 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
   const [showCharacterPicker, setShowCharacterPicker] = useState(false);
   const [mixError, setMixError] = useState<string | null>(null);
+  const [referencePanel, setReferencePanel] = useState<ReferencePanelState | null>(null);
+  const handleReferencePanelChange = useCallback((state: ReferencePanelState) => {
+    setReferencePanel(state);
+  }, []);
   const promptInputRef = useRef<HTMLInputElement | null>(null);
 
   const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
@@ -798,13 +805,66 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
       && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
+    // Reference Personalization: in adoption (v1) mode, adopted references must
+    // finish before the story starts (beat 1 seeds from the canonical assets).
+    // Direct (v2) mode has no async processing, so allResolved is always true.
+    const usingReferences = Boolean(referencePanel?.hasItems);
+    if (usingReferences && !referencePanel?.allResolved) {
+      setMixError('Your references are still being adopted. Wait for them to finish or remove any that failed.');
+      return;
+    }
+
     // Pack 2 character mixing: seed selected library characters as local
     // instances. The auto-build pipeline doesn't support seeding, so surface
     // that instead of silently dropping the selection.
-    const seedCharacters =
+    const librarySeedCharacters =
       !isReelMode && mixingEnabled && selectedLibraryCharacters.length > 0
         ? selectedLibraryCharacters
-        : undefined;
+        : [];
+
+    // Adopted / direct reference characters become ordinary roster seed
+    // characters; the config carries worlds (both modes) and raw character keys
+    // (direct mode only).
+    let referenceConfig: StoryConfig['references'] | undefined;
+    let referenceSeedCharacters: Character[] = [];
+    if (usingReferences && referencePanel) {
+      try {
+        if (referencePanel.inputMode === 'direct') {
+          const seed = await loadDirectReferenceSeed(referencePanel.setupId, {
+            analyze: imageGenerationMode === 'prompt_only',
+          });
+          referenceSeedCharacters = seed.seedCharacters;
+          referenceConfig = {
+            setupId: referencePanel.setupId,
+            worlds: seed.references.worlds,
+            ...(seed.references.characters.length > 0 ? { characters: seed.references.characters } : {}),
+          };
+        } else {
+          const seed = await loadReadyReferenceSeed(referencePanel.setupId);
+          referenceSeedCharacters = seed.seedCharacters;
+          referenceConfig = { setupId: referencePanel.setupId, worlds: seed.worlds };
+        }
+      } catch {
+        setMixError('Could not load your references. Please try again.');
+        return;
+      }
+    }
+
+    const combinedSeed = [...librarySeedCharacters, ...referenceSeedCharacters];
+    const seedCharacters = combinedSeed.length > 0 ? combinedSeed : undefined;
+    if (referenceConfig) {
+      // Set even for a characters-only direct setup so linkReferenceSetupToStory
+      // (keyed off references.setupId) still backfills story_id after insert.
+      config.references = referenceConfig;
+      // This setup is now consumed by this story; release the id so a subsequent
+      // story starts a fresh reference setup.
+      try {
+        window.localStorage.removeItem('kissago_reference_setup_id');
+      } catch {
+        /* ignore */
+      }
+    }
+
     if (seedCharacters) {
       if (shouldAutoBuild) {
         setMixError(
@@ -1130,6 +1190,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             )}
                           </button>
                         </div>
+                      )}
+                      {!isReelMode && (
+                        <ReferenceDirectInputStrip
+                          active={!isReelMode}
+                          promptOnly={imageGenerationMode === 'prompt_only'}
+                          onStateChange={handleReferencePanelChange}
+                        />
                       )}
                       {!isReelMode && mixingEnabled && (
                         <div className="px-2 pb-1">
@@ -1765,6 +1832,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
               />
             )}
           </AnimatePresence>
+          <div className="mt-4">
+            <ReferencePersonalizationPanel
+              active={imageGenerationMode === 'generate' && !isReelMode}
+              visualStyle={deriveVisualStyleSummary(visualSettings)}
+              imageModelSelection={imageModelSelection}
+              onStateChange={handleReferencePanelChange}
+            />
+          </div>
         </div>
         )}
 

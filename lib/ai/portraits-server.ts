@@ -39,6 +39,10 @@ export interface ServerReferenceImage {
   type: 'character' | 'scene';
   url?: string;
   dataUrl?: string;
+  /** Durable r2://bucket/key pointer (preferred over a signed url that can expire). */
+  storageKey?: string;
+  /** Character name for identity binding in the image prompt. */
+  name?: string;
 }
 
 export interface ServerImageContinuityOptions {
@@ -84,13 +88,16 @@ function pickFallbackGalleryEntry(
 
 function buildReferenceFromValue(
   type: ServerReferenceImage['type'],
-  value: string | undefined
+  value: string | undefined,
+  extras?: { storageKey?: string; name?: string }
 ): ServerReferenceImage | null {
   if (!value) return null;
-  if (value.startsWith('data:')) {
-    return { type, dataUrl: value };
-  }
-  return { type, url: value };
+  const base: ServerReferenceImage = value.startsWith('data:')
+    ? { type, dataUrl: value }
+    : { type, url: value };
+  if (extras?.storageKey) base.storageKey = extras.storageKey;
+  if (extras?.name?.trim()) base.name = extras.name.trim();
+  return base;
 }
 
 export function collectCharacterPortraitReferences(characters: Character[]): ServerReferenceImage[] {
@@ -102,7 +109,11 @@ export function collectCharacterPortraitReferences(characters: Character[]): Ser
         character.portraitBase64
           || character.portraitUrl
           || character.referenceSheetUrl
-          || fallbackSheet?.url
+          || fallbackSheet?.url,
+        {
+          storageKey: character.referenceSheetStorageKey,
+          name: character.name,
+        }
       );
     })
     .filter((reference): reference is ServerReferenceImage => Boolean(reference));
@@ -113,7 +124,7 @@ export function mergeServerReferenceImages(...groups: ServerReferenceImage[][]):
   const merged: ServerReferenceImage[] = [];
   for (const group of groups) {
     for (const reference of group) {
-      const key = `${reference.type}:${reference.url || reference.dataUrl || ''}`;
+      const key = `${reference.type}:${reference.storageKey || reference.url || reference.dataUrl || ''}`;
       if (!key || seen.has(key)) continue;
       seen.add(key);
       merged.push(reference);

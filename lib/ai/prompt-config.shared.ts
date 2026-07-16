@@ -1,6 +1,11 @@
 import type { TaskKey } from './model-config.shared';
 
-export type PromptTaskKey = Exclude<TaskKey, 'story_text_overlay_alignment'>;
+// Reference analysis tasks build their prompts inline (lib/ai/reference-analysis.ts)
+// rather than through the admin prompt playground, so they are excluded here.
+export type PromptTaskKey = Exclude<
+  TaskKey,
+  'story_text_overlay_alignment' | 'reference_character_analysis' | 'reference_world_analysis'
+>;
 
 export interface PromptPlaceholderDefinition {
   key: string;

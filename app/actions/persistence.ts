@@ -29,6 +29,7 @@ import {
 } from '@/lib/reel/settings';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
@@ -933,6 +934,15 @@ export async function saveStory(
     } else {
       storyId = data.id;
     }
+  }
+
+  // Reference Personalization: backfill story_id onto the setup's reference rows
+  // now that the story exists. Idempotent + owner-scoped; never blocks the save.
+  const referenceSetupId = session.storyConfig?.references?.setupId;
+  if (referenceSetupId && storyId) {
+    await linkReferenceSetupToStory(referenceSetupId, storyId).catch((error) => {
+      console.error('Failed to link reference setup to story:', error instanceof Error ? error.message : error);
+    });
   }
 
   // Dual-write: batch upsert all nodes into beats table

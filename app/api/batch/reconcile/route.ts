@@ -2,7 +2,9 @@ import { NextResponse } from 'next/server';
 import { reconcileActiveImageBatches } from '@/app/actions/image-batch';
 import { reconcileActiveNarrationJobs } from '@/app/actions/narration-batch';
 import { runImageGenerationJobs } from '@/lib/media/image-job-runner';
+import { runReferenceAdoptionJobs } from '@/lib/references/adoption-job-runner';
 import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
+import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -21,7 +23,7 @@ async function handle(request: Request): Promise<Response> {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const [images, narration, imageJobs] = await Promise.all([
+    const [images, narration, imageJobs, adoptionJobs] = await Promise.all([
       reconcileActiveImageBatches(),
       reconcileActiveNarrationJobs().catch((error) => {
         console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
@@ -33,11 +35,21 @@ async function handle(request: Request): Promise<Response> {
         console.error('Image job reconcile failed:', error instanceof Error ? error.message : error);
         return { processed: 0, failed: 0, remaining: 0 };
       }),
+      // Backstop for reference adoption jobs (reclaims stale + drains pending).
+      runReferenceAdoptionJobs({}).catch((error) => {
+        console.error('Reference adoption reconcile failed:', error instanceof Error ? error.message : error);
+        return { processed: 0, failed: 0, remaining: 0 };
+      }),
     ]);
     // Retention cleanup after the reconcile work (no-ops when disabled).
     const cleanup = await cleanupExpiredOriginals().catch((error) => {
       console.error('Retention cleanup failed:', error instanceof Error ? error.message : error);
       return { scanned: 0, deleted: 0, failed: 0 };
+    });
+    // Delete abandoned reference setups (uploads whose story was never created).
+    const referenceCleanup = await cleanupAbandonedReferenceSetups().catch((error) => {
+      console.error('Reference cleanup failed:', error instanceof Error ? error.message : error);
+      return { setupsScanned: 0, sourcesDeleted: 0, adoptionsDeleted: 0, objectsDeleted: 0 };
     });
     return NextResponse.json({
       ok: true,
@@ -45,7 +57,10 @@ async function handle(request: Request): Promise<Response> {
       narrationProcessed: narration.processed,
       imageJobsProcessed: imageJobs.processed,
       imageJobsRemaining: imageJobs.remaining,
+      adoptionJobsProcessed: adoptionJobs.processed,
+      adoptionJobsRemaining: adoptionJobs.remaining,
       originalsDeleted: cleanup.deleted,
+      referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Reconcile failed.';

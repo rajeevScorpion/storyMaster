@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { resolveEffectiveProcessingMode, getConfiguredProcessingMode, getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { putR2Object } from '@/lib/media/r2-server';
+import { isR2Reference } from '@/lib/media/r2-reference';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { getFeatureFlag } from '@/lib/ai/model-config';
@@ -115,6 +116,11 @@ export async function enqueueBeatImageJob(input: EnqueueBeatImageJobInput): Prom
     const maxAttempts = (await getMediaPipelineSettings()).maxAttempts;
     for (let i = 0; i < input.payload.references.length; i += 1) {
       const ref = input.payload.references[i];
+      const name = ref.name?.trim() || undefined;
+      const durableKey =
+        (ref.storageKey && isR2Reference(ref.storageKey) && ref.storageKey) ||
+        (ref.url && isR2Reference(ref.url) && ref.url) ||
+        null;
       if (ref.dataUrl?.startsWith('data:')) {
         const parsed = splitDataUrl(ref.dataUrl);
         if (!parsed) continue;
@@ -125,10 +131,16 @@ export async function enqueueBeatImageJob(input: EnqueueBeatImageJobInput): Prom
           body: parsed.buffer,
           contentType: parsed.mimeType,
         });
-        references.push({ type: ref.type, r2Reference: stored.urlOrReference });
+        references.push({ type: ref.type, r2Reference: stored.urlOrReference, name });
+        // Staged temp object — GC'd when the job reaches a terminal state.
         referenceKeys.push(stored.urlOrReference);
+      } else if (durableKey) {
+        // Durable reference (adopted sheet / raw upload). The worker resolves it
+        // via getR2ObjectBuffer; it is owned elsewhere, so it is NOT added to
+        // referenceKeys (which are deleted on terminal states).
+        references.push({ type: ref.type, r2Reference: durableKey, name });
       } else if (ref.url || ref.dataUrl) {
-        references.push({ type: ref.type, url: ref.url ?? ref.dataUrl });
+        references.push({ type: ref.type, url: ref.url ?? ref.dataUrl, name });
       }
     }
 

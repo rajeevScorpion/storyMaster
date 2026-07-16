@@ -71,6 +71,46 @@ describe('validateGeneratedBeat — beat 1 with a pre-seeded roster (Pack 2)', (
   });
 });
 
+describe('validateGeneratedBeat — placeholder-named reference seed (Reference Personalization)', () => {
+  const seededSession: Partial<StorySession> = {
+    currentBeat: 0,
+    maxBeats: 6,
+    beats: [],
+    characters: [
+      makeCharacter('Character 1', {
+        id: 'ref_abc',
+        referenceSheetUrl: 'https://assets/ref_abc.webp',
+        nameIsPlaceholder: true,
+      }),
+    ],
+  };
+
+  it('allows the LLM to name a placeholder reference on beat 1 (id preserved)', () => {
+    const beat = makeValidBeat({
+      characters: [makeCharacter('मलिक', { id: 'ref_abc' })],
+      newCharacterIds: [],
+    });
+    const issues = validateGeneratedBeat(beat, seededSession);
+    expect(issues.some((issue) => issue.includes('was renamed'))).toBe(false);
+  });
+
+  it('still locks the name once the placeholder flag is cleared', () => {
+    const namedSession: Partial<StorySession> = {
+      currentBeat: 1,
+      maxBeats: 6,
+      beats: [],
+      characters: [makeCharacter('मलिक', { id: 'ref_abc', nameIsPlaceholder: false })],
+    };
+    const beat = makeValidBeat({
+      beatNumber: 2,
+      characters: [makeCharacter('Someone Else', { id: 'ref_abc' })],
+      newCharacterIds: [],
+    });
+    const issues = validateGeneratedBeat(beat, namedSession);
+    expect(issues.some((issue) => issue.includes('was renamed'))).toBe(true);
+  });
+});
+
 describe('validateGeneratedBeat — legacy beat 1 (no seeded roster)', () => {
   const legacySession: Partial<StorySession> = {
     currentBeat: 0,
