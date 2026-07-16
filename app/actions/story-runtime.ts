@@ -936,7 +936,11 @@ export async function generateCharacterPortrait(
   promptOverride?: string,
   costTelemetry?: CostTelemetryContext,
   imageModelSelection?: ImageModelSelection | null,
-  imageContinuity?: ImageContinuityRuntimeOptions | null
+  imageContinuity?: ImageContinuityRuntimeOptions | null,
+  // Reference Personalization: raw uploaded reference(s) for this character, fed
+  // as image input so the generated sheet adopts the uploaded identity in the
+  // story's locked visual style. Absent for ordinary (non-reference) characters.
+  referenceImages?: ReferenceImage[]
 ): Promise<GeneratedPortraitResult> {
   try {
     return await timeRuntimeStep(
@@ -949,7 +953,7 @@ export async function generateCharacterPortrait(
       },
       async () => {
         const normalizedPortraitReferenceConfig = normalizePortraitReferenceConfig(portraitReferenceConfig);
-        const prompt = buildFinalPortraitPrompt(
+        const basePrompt = buildFinalPortraitPrompt(
           character,
           visualStyle,
           normalizedPortraitReferenceConfig,
@@ -957,10 +961,18 @@ export async function generateCharacterPortrait(
           promptOverride
         );
 
+        const { parts: referenceParts } = await resolveReferenceImageParts(referenceImages);
+        // Bind the attached upload to this character's identity while keeping the
+        // rendering style locked (the reference defines identity, never style).
+        const prompt = referenceParts.length > 0
+          ? `${basePrompt}\n\nThe attached reference image depicts ${character.name}. Match this exact identity (face, hair, build, distinguishing features). Render fully in the story's locked visual style; the reference defines identity, never rendering style.`
+          : basePrompt;
+
         const portraitModel = modelOverrides?.portraitModel || DEFAULT_IMAGE_MODEL_ID;
         const result = await generateSelectedImage({
           task: 'portrait_generation',
           prompt,
+          referenceParts: referenceParts.length > 0 ? referenceParts : undefined,
           aspectRatio: '1:1',
           imageSize: normalizedPortraitReferenceConfig.quality === '1K' ? '1K' : '512',
           telemetry: costTelemetry,

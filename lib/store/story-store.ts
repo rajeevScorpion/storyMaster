@@ -1499,7 +1499,10 @@ async function generatePortraitsForStoryboardPlan(
   modelOverrides?: StoryModelOverrides,
   costTelemetry?: CostTelemetryContext,
   imageModelSelection?: StoryConfig['imageModelSelection'],
-  continuity?: ReturnType<typeof imageContinuityOptions>
+  continuity?: ReturnType<typeof imageContinuityOptions>,
+  // Reference Personalization (direct mode): raw uploaded reference per character
+  // id, fed as image input so the beat-1 sheet adopts the uploaded identity.
+  directRefsByCharacterId?: Map<string, ReferenceImage>
 ): Promise<{ references: ReferenceImage[]; latestState: ImageContinuityProviderState | null }> {
   if (!storyboardPlan.portraitTasks.length) {
     return {
@@ -1532,6 +1535,8 @@ async function generatePortraitsForStoryboardPlan(
             quality: '0.5K' as const,
           };
 
+    const directRef = directRefsByCharacterId?.get(character.id);
+
     try {
       const portraitResult = await generateCharacterPortrait(
         character,
@@ -1546,7 +1551,8 @@ async function generatePortraitsForStoryboardPlan(
               ...continuity,
               previousState: latestState,
             }
-          : null
+          : null,
+        directRef ? [directRef] : undefined
       );
       const nextState = extractImageContinuityState(portraitResult.imageGenerationMetadata) ?? latestState;
       latestState = nextState;
