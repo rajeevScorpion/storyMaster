@@ -48,6 +48,12 @@ export interface Character {
   masterId?: string;
   sourceStoryId?: string;
   importedAt?: string;
+  // Reference Personalization: true when this character was seeded from an
+  // uploaded reference the user did NOT name, so it carries an auto-generated
+  // placeholder ("Character N"). The story LLM is allowed to give it a real,
+  // setting/language-appropriate name on beat 1 (keeping the same id); the flag
+  // is cleared once a real name lands so the name locks on later beats.
+  nameIsPlaceholder?: boolean;
 }
 
 export interface Option {

@@ -11,6 +11,11 @@ interface PromptCharacterAnchor {
   introducedAtBeat: number;
   seenInBeats: number[];
   hasReferencePortrait: boolean;
+  // Reference Personalization: an unnamed uploaded reference carries a
+  // placeholder name the LLM may replace with a real one (keeping the id). The
+  // validator skips the rename lock while this is true; prompts read it as an
+  // explicit instruction to name the character.
+  nameIsPlaceholder?: boolean;
 }
 
 interface StoryBibleBeatSummary {
@@ -178,7 +183,15 @@ export function validateGeneratedBeat(
     }
 
     const existingCharacter = existingCharacters.get(character.id);
-    if (existingCharacter && normalizeName(existingCharacter.name) !== normalizedName) {
+    // A placeholder-named uploaded reference ("Character N") is expected to be
+    // named by the LLM on beat 1 — allow that first naming (id preserved). The
+    // flag is cleared once a real name lands, so the rename lock re-engages on
+    // every later beat.
+    if (
+      existingCharacter &&
+      !existingCharacter.nameIsPlaceholder &&
+      normalizeName(existingCharacter.name) !== normalizedName
+    ) {
       issues.push(`character id ${character.id} was renamed from "${existingCharacter.name}" to "${character.name}"`);
     }
 
@@ -310,6 +323,7 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
           character.referenceSheetUrl ||
           existing?.hasReferencePortrait
         ),
+        ...(character.nameIsPlaceholder ? { nameIsPlaceholder: true } : {}),
       });
     }
   }
@@ -329,6 +343,7 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
           character.portraitUrl ||
           character.referenceSheetUrl
         ),
+        ...(character.nameIsPlaceholder ? { nameIsPlaceholder: true } : {}),
       });
     }
   }

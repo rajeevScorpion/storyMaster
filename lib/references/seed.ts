@@ -57,6 +57,10 @@ function dedupeName(name: string, takenNames: Set<string>): string {
 export function buildSeedCharacters(inputs: SeedCharacterInput[]): Character[] {
   const takenNames = new Set<string>();
   return inputs.map((input) => {
+    // No user-supplied name => resolveSeedCharacterName falls back to a
+    // "Character N" placeholder the story LLM is free to replace (see
+    // nameIsPlaceholder below).
+    const userNamed = Boolean((input.displayName ?? '').trim());
     const name = resolveSeedCharacterName(input.displayName, takenNames);
     const character: Character = {
       id: `ref_${input.adoptionId}`,
@@ -67,6 +71,7 @@ export function buildSeedCharacters(inputs: SeedCharacterInput[]): Character[] {
       referenceSheetUrl: input.canonicalSignedUrl,
       referenceSheetStorageKey: input.canonicalReference,
       ...(input.completedAt ? { referenceSheetUploadedAt: input.completedAt } : {}),
+      ...(userNamed ? {} : { nameIsPlaceholder: true }),
     };
     return character;
   });

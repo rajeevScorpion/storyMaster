@@ -64,4 +64,12 @@ describe('buildSeedCharacters', () => {
     const characters = buildSeedCharacters(inputs);
     expect(characters[0].personalitySummary).toBe('');
   });
+
+  it('flags unnamed references as placeholders and locks user-named ones', () => {
+    const characters = buildSeedCharacters(inputs);
+    // 'Leo' was user-supplied -> locked name, no placeholder flag.
+    expect(characters[0].nameIsPlaceholder).toBeUndefined();
+    // null displayName -> auto "Character 1" -> flagged so the LLM may name it.
+    expect(characters[1].nameIsPlaceholder).toBe(true);
+  });
 });

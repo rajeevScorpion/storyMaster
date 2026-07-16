@@ -501,6 +501,10 @@ function mergeCharacterVisualReferences(
       referenceSheetStorageKey: character.referenceSheetStorageKey || reference.referenceSheetStorageKey,
       referenceSheetUploadedAt: character.referenceSheetUploadedAt || reference.referenceSheetUploadedAt,
       referenceSheetGallery: character.referenceSheetGallery ?? reference.referenceSheetGallery,
+      // The beat character always carries a resolved name, so an unnamed
+      // reference is no longer a placeholder once merged — clear the flag so the
+      // rename lock re-engages on later beats.
+      nameIsPlaceholder: character.name?.trim() ? false : reference.nameIsPlaceholder,
     };
   });
 
