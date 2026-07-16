@@ -48,7 +48,8 @@ import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
 import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
-import { loadReadyReferenceSeed } from '@/app/actions/references';
+import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
+import { loadReadyReferenceSeed, loadDirectReferenceSeed } from '@/app/actions/references';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -804,8 +805,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
       && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
-    // Reference Personalization: adopted references must finish before the story
-    // starts (beat 1 seeds from the canonical assets). Gate on the panel state.
+    // Reference Personalization: in adoption (v1) mode, adopted references must
+    // finish before the story starts (beat 1 seeds from the canonical assets).
+    // Direct (v2) mode has no async processing, so allResolved is always true.
     const usingReferences = Boolean(referencePanel?.hasItems);
     if (usingReferences && !referencePanel?.allResolved) {
       setMixError('Your references are still being adopted. Wait for them to finish or remove any that failed.');
@@ -820,24 +822,40 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         ? selectedLibraryCharacters
         : [];
 
-    // Adopted reference characters become ordinary roster seed characters.
-    let referenceWorlds: StoryConfig['references'] | undefined;
+    // Adopted / direct reference characters become ordinary roster seed
+    // characters; the config carries worlds (both modes) and raw character keys
+    // (direct mode only).
+    let referenceConfig: StoryConfig['references'] | undefined;
     let referenceSeedCharacters: Character[] = [];
     if (usingReferences && referencePanel) {
       try {
-        const seed = await loadReadyReferenceSeed(referencePanel.setupId);
-        referenceSeedCharacters = seed.seedCharacters;
-        referenceWorlds = { setupId: referencePanel.setupId, worlds: seed.worlds };
+        if (referencePanel.inputMode === 'direct') {
+          const seed = await loadDirectReferenceSeed(referencePanel.setupId, {
+            analyze: imageGenerationMode === 'prompt_only',
+          });
+          referenceSeedCharacters = seed.seedCharacters;
+          referenceConfig = {
+            setupId: referencePanel.setupId,
+            worlds: seed.references.worlds,
+            ...(seed.references.characters.length > 0 ? { characters: seed.references.characters } : {}),
+          };
+        } else {
+          const seed = await loadReadyReferenceSeed(referencePanel.setupId);
+          referenceSeedCharacters = seed.seedCharacters;
+          referenceConfig = { setupId: referencePanel.setupId, worlds: seed.worlds };
+        }
       } catch {
-        setMixError('Could not load your adopted references. Please try again.');
+        setMixError('Could not load your references. Please try again.');
         return;
       }
     }
 
     const combinedSeed = [...librarySeedCharacters, ...referenceSeedCharacters];
     const seedCharacters = combinedSeed.length > 0 ? combinedSeed : undefined;
-    if (referenceWorlds) {
-      config.references = referenceWorlds;
+    if (referenceConfig) {
+      // Set even for a characters-only direct setup so linkReferenceSetupToStory
+      // (keyed off references.setupId) still backfills story_id after insert.
+      config.references = referenceConfig;
       // This setup is now consumed by this story; release the id so a subsequent
       // story starts a fresh reference setup.
       try {
@@ -1172,6 +1190,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             )}
                           </button>
                         </div>
+                      )}
+                      {!isReelMode && (
+                        <ReferenceDirectInputStrip
+                          active={!isReelMode}
+                          promptOnly={imageGenerationMode === 'prompt_only'}
+                          onStateChange={handleReferencePanelChange}
+                        />
                       )}
                       {!isReelMode && mixingEnabled && (
                         <div className="px-2 pb-1">

@@ -5,13 +5,17 @@ import { getFeatureFlag, getFeatureFlagValue, setFeatureFlag, setFeatureFlagValu
 import { getServerPipelineAvailability } from '@/lib/media/processing-mode';
 import {
   REFERENCE_FLAG_KEYS,
+  normalizeReferenceInputMode,
   normalizeReferencePersonalizationSettings,
   parseReferencePersonalizationSettingsValue,
   type ReferencePersonalizationSettings,
 } from '@/lib/references/reference-settings';
+import type { ReferenceInputMode } from '@/lib/types/references';
 
 export interface ReferenceAdminState {
   masterEnabled: boolean;
+  /** 'direct' (raw refs to the model) or 'adoption' (v1 analyze + canonical). */
+  inputMode: ReferenceInputMode;
   customOptionAttachmentEnabled: boolean;
   settings: ReferencePersonalizationSettings;
   /** Adoption needs the private R2 pipeline (same gate as server_pipeline). */
@@ -53,9 +57,10 @@ async function loadReferenceMetrics(): Promise<ReferenceAdminState['metrics']> {
 
 export async function getReferenceAdminState(): Promise<ReferenceAdminState> {
   await verifyAdmin();
-  const [masterEnabled, customOptionAttachmentEnabled, settingsRaw, availability, metrics] =
+  const [masterEnabled, inputModeRaw, customOptionAttachmentEnabled, settingsRaw, availability, metrics] =
     await Promise.all([
       getFeatureFlag(REFERENCE_FLAG_KEYS.enabled, false),
+      getFeatureFlagValue(REFERENCE_FLAG_KEYS.inputMode),
       getFeatureFlag(REFERENCE_FLAG_KEYS.customOptionAttachment, false),
       getFeatureFlagValue(REFERENCE_FLAG_KEYS.settings),
       getServerPipelineAvailability(),
@@ -63,12 +68,19 @@ export async function getReferenceAdminState(): Promise<ReferenceAdminState> {
     ]);
   return {
     masterEnabled,
+    inputMode: normalizeReferenceInputMode(inputModeRaw),
     customOptionAttachmentEnabled,
     settings: parseReferencePersonalizationSettingsValue(settingsRaw),
     serverPipelineAvailable: availability.available,
     serverPipelineUnavailableReason: availability.reason,
     metrics,
   };
+}
+
+export async function setReferenceInputMode(mode: ReferenceInputMode): Promise<ReferenceAdminState> {
+  await verifyAdmin();
+  await setFeatureFlagValue(REFERENCE_FLAG_KEYS.inputMode, normalizeReferenceInputMode(mode));
+  return getReferenceAdminState();
 }
 
 export async function setReferencePersonalizationEnabled(enabled: boolean): Promise<ReferenceAdminState> {

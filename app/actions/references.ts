@@ -17,12 +17,15 @@ import {
   isReferenceKind,
 } from '@/lib/references/reference-storage';
 import { ReferenceError } from '@/lib/references/reference-errors';
-import { authorizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
+import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { buildSeedCharacters, type SeedCharacterInput } from '@/lib/references/seed';
+import { buildDirectSeed, type DirectSeedInput } from '@/lib/references/direct-seed';
+import { analyzeCharacterReference, analyzeWorldReference } from '@/lib/ai/reference-analysis';
+import { compileCharacterAnchor, compileWorldAnchor } from '@/lib/ai/reference-adoption-prompts';
 import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
 import { COINS_PER_BEAT, type PricingActionKey } from '@/lib/types/pricing';
 import type { Character } from '@/lib/types/story';
-import type { WorldAdoptionMode } from '@/lib/types/references';
+import type { ReferenceInputMode, WorldAdoptionMode } from '@/lib/types/references';
 import type {
   DbReferenceSource,
   DbReferenceAdoption,
@@ -30,6 +33,7 @@ import type {
   ReferenceKind,
   ReferenceSetupItemStatus,
   ReferenceSetupStatus,
+  StoryConfigCharacterReference,
   StoryConfigWorldReference,
   WorldReferenceDescription,
 } from '@/lib/types/references';
@@ -82,13 +86,15 @@ export async function resolveReferenceImageKeys(
 
 export interface ReferenceCreationContext {
   enabled: boolean;
+  /** Which UI/pipeline the story-creation surface should render. */
+  inputMode: ReferenceInputMode;
   charactersEnabled: boolean;
   worldsEnabled: boolean;
   maxCharacterRefs: number;
   maxWorldRefs: number;
   worldAdoptionMode: WorldAdoptionMode;
   maxFileSizeMb: number;
-  costs: { character: number; world: number; worldVisualization: number };
+  costs: { character: number; world: number; worldVisualization: number; analysis: number };
 }
 
 async function loadActionCoinCost(
@@ -114,13 +120,14 @@ async function loadActionCoinCost(
 export async function getReferenceCreationContext(): Promise<ReferenceCreationContext> {
   const disabled: ReferenceCreationContext = {
     enabled: false,
+    inputMode: 'direct',
     charactersEnabled: false,
     worldsEnabled: false,
     maxCharacterRefs: 0,
     maxWorldRefs: 0,
     worldAdoptionMode: 'description_only',
     maxFileSizeMb: 8,
-    costs: { character: 0, world: 0, worldVisualization: 0 },
+    costs: { character: 0, world: 0, worldVisualization: 0, analysis: 0 },
   };
 
   const userId = await getCurrentUserId();
@@ -129,25 +136,27 @@ export async function getReferenceCreationContext(): Promise<ReferenceCreationCo
   const availability = await getServerPipelineAvailability();
   if (!availability.available) return disabled;
 
-  const { entitlements, settings } = await getReferenceRuntimeContext(userId);
+  const { entitlements, settings, inputMode } = await getReferenceRuntimeContext(userId);
   if (!entitlements.enabled) return disabled;
 
   const admin = createAdminClient();
-  const [character, world, worldVisualization] = await Promise.all([
+  const [character, world, worldVisualization, analysis] = await Promise.all([
     loadActionCoinCost(admin, 'adopt_character_reference'),
     loadActionCoinCost(admin, 'adopt_world_reference'),
     loadActionCoinCost(admin, 'visualize_world_reference'),
+    loadActionCoinCost(admin, 'analyze_direct_reference'),
   ]);
 
   return {
     enabled: entitlements.enabled,
+    inputMode,
     charactersEnabled: entitlements.charactersEnabled,
     worldsEnabled: entitlements.worldsEnabled,
     maxCharacterRefs: entitlements.maxCharacterRefs,
     maxWorldRefs: entitlements.maxWorldRefs,
     worldAdoptionMode: entitlements.worldAdoptionMode,
     maxFileSizeMb: settings.maxFileSizeMb,
-    costs: { character, world, worldVisualization },
+    costs: { character, world, worldVisualization, analysis },
   };
 }
 
@@ -156,6 +165,8 @@ export interface UploadReferenceSourceInput {
   kind: ReferenceKind;
   slotIndex: number;
   displayName?: string | null;
+  /** v2 direct input: optional free-text description (character detail / world notes). */
+  description?: string | null;
   /** Client-compressed webp/jpg/png data URL. */
   dataUrl: string;
 }
@@ -165,6 +176,7 @@ export interface UploadReferenceSourceResult {
   kind: ReferenceKind;
   slotIndex: number;
   displayName: string | null;
+  description: string | null;
   previewUrl: string | null;
 }
 
@@ -262,6 +274,7 @@ export async function uploadReferenceSource(
   await retireSlot(admin, { setupId, userId, kind: input.kind, slotIndex });
 
   const displayName = (input.displayName ?? '').trim() || null;
+  const description = (input.description ?? '').trim() || null;
   const { error: insertError } = await admin.from('reference_sources').insert({
     id: sourceId,
     user_id: userId,
@@ -270,6 +283,7 @@ export async function uploadReferenceSource(
     kind: input.kind,
     slot_index: slotIndex,
     display_name: displayName,
+    description,
     r2_bucket: bucket,
     r2_object_key: objectKey,
     checksum_sha256: decoded.value.checksum,
@@ -291,6 +305,7 @@ export async function uploadReferenceSource(
     kind: input.kind,
     slotIndex,
     displayName,
+    description,
     previewUrl,
   };
 }
@@ -409,6 +424,7 @@ export async function getReferenceSetupStatus(setupId: string): Promise<Referenc
       kind: source.kind,
       slotIndex: source.slot_index,
       displayName: source.display_name,
+      description: source.description ?? null,
       status,
       previewUrl,
       canonicalUrl,
@@ -420,6 +436,151 @@ export async function getReferenceSetupStatus(setupId: string): Promise<Referenc
     && !hasPending;
 
   return { setupId: trimmed, items, allResolved, hasPending };
+}
+
+export interface DirectReferenceSeed {
+  seedCharacters: Character[];
+  references: {
+    characters: StoryConfigCharacterReference[];
+    worlds: StoryConfigWorldReference[];
+  };
+}
+
+const EMPTY_DIRECT_SEED: DirectReferenceSeed = {
+  seedCharacters: [],
+  references: { characters: [], worlds: [] },
+};
+
+/**
+ * v2 direct input: turn a setup's raw uploads into seed characters + config
+ * references (raw keys) at story start. When `analyze` is set (prompt_only
+ * stories), each reference is run through the multimodal analyzer to enrich its
+ * description so text prompts match the upload closely; that analysis is the one
+ * billable step in direct mode (idempotent per source, released on failure).
+ */
+export async function loadDirectReferenceSeed(
+  setupId: string,
+  opts?: { analyze?: boolean }
+): Promise<DirectReferenceSeed> {
+  const userId = await getCurrentUserId();
+  if (!userId) return EMPTY_DIRECT_SEED;
+
+  const trimmed = (setupId ?? '').trim();
+  if (!trimmed) return EMPTY_DIRECT_SEED;
+
+  const { masterEnabled, inputMode, entitlements } = await getReferenceRuntimeContext(userId);
+  if (!masterEnabled || inputMode !== 'direct' || !entitlements.enabled) return EMPTY_DIRECT_SEED;
+
+  const admin = createAdminClient();
+  const { data: sourceRows } = await admin
+    .from('reference_sources')
+    .select('*')
+    .eq('setup_id', trimmed)
+    .eq('user_id', userId)
+    .eq('status', 'uploaded')
+    .order('kind', { ascending: true })
+    .order('slot_index', { ascending: true });
+
+  const sources = (sourceRows ?? []) as DbReferenceSource[];
+  // Defensive cap against tier limits (upload already enforces per-kind slots).
+  const perKindCount: Record<ReferenceKind, number> = { character: 0, world: 0 };
+  const inputs: DirectSeedInput[] = [];
+  for (const source of sources) {
+    const cap = source.kind === 'character' ? entitlements.maxCharacterRefs : entitlements.maxWorldRefs;
+    if (perKindCount[source.kind] >= cap) continue;
+    perKindCount[source.kind] += 1;
+    inputs.push({
+      sourceId: source.id,
+      kind: source.kind,
+      displayName: source.display_name,
+      description: source.description,
+      storageKey: toR2Reference(source.r2_bucket, source.r2_object_key),
+    });
+  }
+
+  if (opts?.analyze) {
+    await Promise.all(
+      inputs.map(async (input) => {
+        const enriched = await analyzeDirectReference(userId, input).catch(() => null);
+        if (enriched) input.description = enriched;
+      })
+    );
+  }
+
+  return buildDirectSeed(inputs);
+}
+
+/**
+ * Reserve → analyze → finalize one direct reference (prompt_only enrichment).
+ * Returns the merged description (user text + compiled anchor) or null when the
+ * analysis is skipped/fails (the reservation is released, and the caller keeps
+ * the user's own description). Never throws — enrichment must not block Start.
+ */
+async function analyzeDirectReference(userId: string, input: DirectSeedInput): Promise<string | null> {
+  let reservationId: string | null = null;
+  try {
+    const auth = await authorizeBillableAction({
+      userId,
+      actionKey: 'analyze_direct_reference',
+      idempotencyKey: `refanalyze:${input.sourceId}`,
+      metadata: { feature: 'reference_direct_input' },
+    });
+    if (auth.status === 'denied') return null;
+    reservationId = auth.status === 'allowed' ? auth.reservationId : null;
+
+    const object = await getR2ObjectBuffer(input.storageKey);
+    if (!object) throw new Error('reference object unavailable');
+    const referencePart = { mimeType: object.contentType ?? 'image/webp', data: object.buffer.toString('base64') };
+
+    const userText = (input.description ?? '').trim();
+    let anchor = '';
+    if (input.kind === 'character') {
+      const description = await analyzeCharacterReference({ referencePart });
+      if (description.unusableReason) throw new Error(description.unusableReason);
+      anchor = compileCharacterAnchor(description);
+    } else {
+      const description = await analyzeWorldReference({ referencePart });
+      if (description.unusableReason) throw new Error(description.unusableReason);
+      anchor = compileWorldAnchor(description);
+    }
+
+    if (reservationId) {
+      await finalizeBillableAction({ userId, reservationId }).catch(() => {});
+    }
+    return [userText, anchor].filter((part) => part.length > 0).join('\n\n') || null;
+  } catch {
+    if (reservationId) {
+      await releaseBillableAction({ userId, reservationId, reason: 'direct_reference_analysis_failed' }).catch(() => {});
+    }
+    return null;
+  }
+}
+
+/**
+ * v2 direct input: persist name/description edits made after upload (no image
+ * change). Owner-scoped; only updates the provided fields. Empty strings clear
+ * the field.
+ */
+export async function updateReferenceSourceDetails(
+  sourceId: string,
+  patch: { displayName?: string | null; description?: string | null }
+): Promise<{ ok: true }> {
+  const userId = await getCurrentUserId();
+  if (!userId) throw new ReferenceError('REFERENCE_SIGN_IN_REQUIRED');
+
+  const update: Record<string, string | null> = {};
+  if (patch.displayName !== undefined) update.display_name = (patch.displayName ?? '').trim() || null;
+  if (patch.description !== undefined) update.description = (patch.description ?? '').trim() || null;
+  if (Object.keys(update).length === 0) return { ok: true };
+
+  const admin = createAdminClient();
+  await admin
+    .from('reference_sources')
+    .update(update)
+    .eq('id', sourceId)
+    .eq('user_id', userId)
+    .neq('status', 'removed');
+  return { ok: true };
 }
 
 /**

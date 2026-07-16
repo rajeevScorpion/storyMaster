@@ -199,6 +199,7 @@ export interface ReferenceSetupItemStatus {
   kind: ReferenceKind;
   slotIndex: number;
   displayName: string | null;
+  description: string | null; // v2 direct-input free text
   status: ReferenceAdoptionStatus | 'uploaded';
   previewUrl: string | null;   // signed preview of the original upload
   canonicalUrl: string | null; // signed url of the adopted asset when ready

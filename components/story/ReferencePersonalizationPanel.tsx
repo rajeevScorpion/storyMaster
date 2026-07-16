@@ -13,15 +13,22 @@ import {
   type ReferenceCreationContext,
 } from '@/app/actions/references';
 import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
-import type { ReferenceKind, ReferenceSetupItemStatus, ReferenceSetupStatus } from '@/lib/types/references';
+import type {
+  ReferenceInputMode,
+  ReferenceKind,
+  ReferenceSetupItemStatus,
+  ReferenceSetupStatus,
+} from '@/lib/types/references';
+import { SETUP_ID_STORAGE_KEY, newSetupId } from '@/lib/references/setup-id';
 
-const SETUP_ID_STORAGE_KEY = 'kissago_reference_setup_id';
 const POLL_INTERVAL_MS = 2500;
 
 export interface ReferencePanelState {
   setupId: string;
   hasItems: boolean;
   allResolved: boolean;
+  /** Which surface reported this state, so Start can pick the right seed loader. */
+  inputMode: ReferenceInputMode;
 }
 
 interface Props {
@@ -30,11 +37,6 @@ interface Props {
   /** Only render when the story will generate images and isn't a reel. */
   active: boolean;
   onStateChange: (state: ReferencePanelState) => void;
-}
-
-function newSetupId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
-  return `setup_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
 export default function ReferencePersonalizationPanel({
@@ -107,13 +109,14 @@ export default function ReferencePersonalizationPanel({
     };
   }, [setupId, hasPending, refreshStatus]);
 
-  // Report state up for Start gating + seed injection.
+  // Report state up for Start gating + seed injection. Only the adoption surface
+  // reports here; in direct mode the v2 strip owns state so this stays quiet.
   useEffect(() => {
-    if (!setupId) return;
+    if (!setupId || context?.inputMode !== 'adoption') return;
     const hasItems = items.length > 0;
     const allResolved = !hasPending;
-    onStateChange({ setupId, hasItems, allResolved });
-  }, [setupId, items, hasPending, onStateChange]);
+    onStateChange({ setupId, hasItems, allResolved, inputMode: 'adoption' });
+  }, [setupId, items, hasPending, onStateChange, context?.inputMode]);
 
   const characterItems = items.filter((i) => i.kind === 'character');
   const worldItems = items.filter((i) => i.kind === 'world');
@@ -179,7 +182,7 @@ export default function ReferencePersonalizationPanel({
     [setupId, refreshStatus]
   );
 
-  if (!active || !context?.enabled) return null;
+  if (!active || !context?.enabled || context.inputMode !== 'adoption') return null;
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">

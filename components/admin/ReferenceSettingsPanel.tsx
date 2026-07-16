@@ -4,6 +4,7 @@ import { useState } from 'react';
 import {
   getReferenceAdminState,
   saveReferencePersonalizationSettings,
+  setReferenceInputMode,
   setReferencePersonalizationEnabled,
   type ReferenceAdminState,
 } from '@/app/actions/admin-references';
@@ -14,6 +15,20 @@ import {
   type ReferenceTierLimits,
 } from '@/lib/references/reference-settings';
 import { PLAN_KEYS, type PlanKey } from '@/lib/types/pricing';
+import type { ReferenceInputMode } from '@/lib/types/references';
+
+const INPUT_MODES: { value: ReferenceInputMode; label: string; help: string }[] = [
+  {
+    value: 'direct',
+    label: 'Direct (v2)',
+    help: 'Raw uploads are sent to the image model at generation time (styled-sheet hybrid). No adoption jobs, no adoption coins. Adoption-only controls below are ignored.',
+  },
+  {
+    value: 'adoption',
+    label: 'Adoption (v1)',
+    help: 'Each upload is analyzed and re-generated as a canonical styled image before the story starts. Uses adoption jobs + coins.',
+  },
+];
 
 const TIER_LABELS: Record<PlanKey, string> = { free: 'Free', plus: 'Plus', studio: 'Studio' };
 
@@ -38,7 +53,10 @@ export default function ReferenceSettingsPanel({ initial }: { initial: Reference
   const [settings, setSettings] = useState<ReferencePersonalizationSettings>(initial.settings);
   const [saving, setSaving] = useState(false);
   const [togglingMaster, setTogglingMaster] = useState(false);
+  const [settingMode, setSettingMode] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  const directMode = state.inputMode === 'direct';
 
   function applyState(next: ReferenceAdminState) {
     setState(next);
@@ -55,6 +73,20 @@ export default function ReferenceSettingsPanel({ initial }: { initial: Reference
       setMessage(error instanceof Error ? error.message : 'Failed to update.');
     } finally {
       setTogglingMaster(false);
+    }
+  }
+
+  async function handleSetMode(mode: ReferenceInputMode) {
+    if (mode === state.inputMode) return;
+    setSettingMode(true);
+    setMessage(null);
+    try {
+      applyState(await setReferenceInputMode(mode));
+      setMessage(mode === 'direct' ? 'Switched to Direct (v2).' : 'Switched to Adoption (v1).');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Failed to switch mode.');
+    } finally {
+      setSettingMode(false);
     }
   }
 
@@ -126,9 +158,44 @@ export default function ReferenceSettingsPanel({ initial }: { initial: Reference
         </button>
       </div>
 
+      {/* Input mode */}
+      <div className="space-y-2">
+        <h2 className="text-sm font-medium text-neutral-200">Input mode</h2>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {INPUT_MODES.map((mode) => {
+            const active = state.inputMode === mode.value;
+            return (
+              <button
+                key={mode.value}
+                type="button"
+                onClick={() => void handleSetMode(mode.value)}
+                disabled={settingMode || active}
+                className={`rounded-xl border p-3 text-left transition-colors disabled:opacity-80 ${
+                  active
+                    ? 'border-emerald-400/40 bg-emerald-500/15'
+                    : 'border-white/10 bg-neutral-900/60 hover:bg-white/5'
+                }`}
+              >
+                <span className="flex items-center gap-2 text-sm text-neutral-100">
+                  {mode.label}
+                  {active && <span className="text-[10px] uppercase tracking-wide text-emerald-300">Active</span>}
+                </span>
+                <span className="mt-1 block text-xs text-neutral-500">{mode.help}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Global toggles */}
       <div className="space-y-2">
         <h2 className="text-sm font-medium text-neutral-200">Global controls</h2>
+        {directMode && (
+          <p className="text-xs text-amber-300/80">
+            World-visualization and adoption controls below only apply in Adoption (v1) mode. Character/world
+            enable toggles and the tier limits still apply.
+          </p>
+        )}
         {GLOBAL_TOGGLES.map(({ key, label, help }) => (
           <label
             key={key}
@@ -265,7 +332,9 @@ export default function ReferenceSettingsPanel({ initial }: { initial: Reference
       {/* Observability */}
       <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-neutral-200">Adoption jobs</h2>
+          <h2 className="text-sm font-medium text-neutral-200">
+            Adoption jobs {directMode && <span className="text-xs font-normal text-neutral-500">(adoption mode only)</span>}
+          </h2>
           <button
             type="button"
             onClick={() => void handleRefreshMetrics()}
