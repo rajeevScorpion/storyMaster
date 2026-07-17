@@ -281,6 +281,22 @@ export interface GeminiInteractionImageCallResult extends ImageCallResult {
   providerUsage?: Record<string, unknown>;
 }
 
+// The @google/genai 2.x Interactions response. We read it structurally rather
+// than importing the SDK's internal (non-exported) Interaction type. The SDK
+// adds `output_image`/`output_text` convenience accessors on top of the raw
+// `steps` timeline; we prefer those and fall back to walking the timeline.
+interface GeminiRawInteractionResponse {
+  id?: unknown;
+  usage?: unknown;
+  output_image?: { data?: unknown; mime_type?: unknown } | null;
+  output_text?: unknown;
+  steps?: unknown;
+  outputs?: unknown;
+  output?: unknown;
+  content?: unknown;
+  response?: unknown;
+}
+
 export async function callGeminiImage(params: ImageCallParams): Promise<ImageCallResult> {
   const { task, model, prompt, referenceParts, aspectRatio, imageSize, telemetry } = params;
   const ai = getAI();
@@ -393,14 +409,15 @@ export async function callGeminiImage(params: ImageCallParams): Promise<ImageCal
 function buildGeminiInteractionInput(prompt: string, referenceParts?: InlineImagePart[]): unknown {
   if (!referenceParts?.length) return prompt;
 
-  return [
-    { type: 'text', text: prompt },
-    ...referenceParts.map((ref) => ({
-      type: 'image',
-      data: ref.data,
-      mime_type: ref.mimeType,
-    })),
-  ];
+  // @google/genai 2.x expects a Content object (role + parts), the same shape
+  // ai.models.generateContent takes — not the legacy [{type:'image',data}] list.
+  return {
+    role: 'user',
+    parts: [
+      { text: prompt },
+      ...referenceParts.map((ref) => ({ inlineData: { data: ref.data, mimeType: ref.mimeType } })),
+    ],
+  };
 }
 
 // Depth cap for the interaction-response walkers below. The SDK returns rich
@@ -506,17 +523,19 @@ export async function callGeminiInteractionsImage(
       promptChars: prompt.length,
     },
     () => withTimeout(
-      (ai.interactions.create as unknown as (body: Record<string, unknown>) => Promise<Record<string, unknown>>)({
+      (ai.interactions.create as unknown as (body: Record<string, unknown>) => Promise<GeminiRawInteractionResponse>)({
         model,
         input: buildGeminiInteractionInput(prompt, referenceParts),
         ...(previousInteractionId ? { previous_interaction_id: previousInteractionId } : {}),
         ...(systemInstruction ? { system_instruction: systemInstruction } : {}),
         response_modalities: ['image'],
-        response_mime_type: 'image/png',
+        // mime_type lives inside response_format in 2.x; the top-level
+        // response_mime_type field is deprecated and slated for removal.
         response_format: {
           type: 'image',
           aspect_ratio: aspectRatio ?? '16:9',
           image_size: resolvedImageSize,
+          mime_type: 'image/png',
         },
         store: true,
       }),
@@ -525,37 +544,52 @@ export async function callGeminiInteractionsImage(
     )
   );
 
-  // Prefer the response's declared output payload; only if that yields nothing do
-  // we fall back to walking the whole interaction object. Both walks are bounded
-  // by GEMINI_INTERACTION_WALK_MAX_DEPTH, so neither can blow the stack even when
-  // the SDK object's accessors synthesize fresh sub-objects on access.
+  // 2.x exposes an SDK-synthesized `output_image` convenience accessor; prefer it.
+  // Otherwise walk the declared output payload — `steps` in 2.x (image data nests
+  // in a model_output step's content parts as inlineData), with the legacy
+  // outputs/output/content/response keys kept as fallbacks — then the whole
+  // object. All walks are bounded by GEMINI_INTERACTION_WALK_MAX_DEPTH, so none
+  // can blow the stack even when the SDK's accessors synthesize sub-objects.
+  const outputImage = interaction.output_image;
+  const directImage = outputImage && typeof outputImage.data === 'string'
+    ? {
+        data: outputImage.data,
+        mimeType: typeof outputImage.mime_type === 'string' ? outputImage.mime_type : 'image/png',
+      }
+    : null;
+
   const interactionOutput =
-    interaction.outputs
-    ?? (interaction as Record<string, unknown>).output
-    ?? (interaction as Record<string, unknown>).content
-    ?? (interaction as Record<string, unknown>).response
+    interaction.steps
+    ?? interaction.outputs
+    ?? interaction.output
+    ?? interaction.content
+    ?? interaction.response
     ?? null;
 
   const image =
-    findGeminiInteractionImage(interactionOutput)
+    directImage
+    ?? findGeminiInteractionImage(interactionOutput)
     ?? findGeminiInteractionImage(interaction);
+
+  const interactionId = typeof interaction.id === 'string' ? interaction.id : null;
+  const providerUsage = interaction.usage && typeof interaction.usage === 'object'
+    ? interaction.usage as Record<string, unknown>
+    : undefined;
+
   if (image) {
     return {
       dataUrl: `data:${image.mimeType};base64,${image.data}`,
       fallbackText: null,
-      interactionId: typeof interaction.id === 'string' ? interaction.id : null,
-      providerUsage: interaction.usage && typeof interaction.usage === 'object'
-        ? interaction.usage as Record<string, unknown>
-        : undefined,
+      interactionId,
+      providerUsage,
     };
   }
 
+  const outputText = typeof interaction.output_text === 'string' ? interaction.output_text.trim() : '';
   return {
     dataUrl: null,
-    fallbackText: collectGeminiInteractionText(interactionOutput ?? interaction) || null,
-    interactionId: typeof interaction.id === 'string' ? interaction.id : null,
-    providerUsage: interaction.usage && typeof interaction.usage === 'object'
-      ? interaction.usage as Record<string, unknown>
-      : undefined,
+    fallbackText: outputText || collectGeminiInteractionText(interactionOutput ?? interaction) || null,
+    interactionId,
+    providerUsage,
   };
 }

@@ -116,6 +116,13 @@ export default function StoryStoryboardPlayer({
   const [intervalPanel, setIntervalPanel] = useState(0);
   const [ambientElapsedMs, setAmbientElapsedMs] = useState(0);
   const [probedDuration, setProbedDuration] = useState<{ audioUrl: string; durationMs: number } | null>(null);
+  // Fade the grid in on first load so a freshly-rendered beat image reveals
+  // smoothly instead of snapping in when its bytes arrive. Comparing the loaded
+  // URL to the current gridUrl auto-resets on a new beat (the state still holds
+  // the previous URL until the new image loads); once loaded, panel switches
+  // within the same grid stay fully opaque since the grid is cached.
+  const [loadedGridUrl, setLoadedGridUrl] = useState<string | null>(null);
+  const gridRevealed = loadedGridUrl === gridUrl;
   const hasAudio = Boolean(audioUrl);
   const resolvedAudioDurationMs = audioDurationMs > 0
     ? audioDurationMs
@@ -292,7 +299,10 @@ export default function StoryStoryboardPlayer({
           src={gridUrl}
           alt=""
           className="h-full w-full object-cover"
-          onLoad={onImageLoad}
+          onLoad={() => {
+            setLoadedGridUrl(gridUrl);
+            onImageLoad?.();
+          }}
           onError={onImageError}
           style={effectsEnabled && normalizedEffects.motion.enabled ? {
             // translate3d + will-change keep the pan/zoom on the compositor;
@@ -302,8 +312,12 @@ export default function StoryStoryboardPlayer({
             transform: `translate3d(${motionFrame.translateXPercent}%, ${motionFrame.translateYPercent}%, 0) scale(${motionFrame.scale})`,
             transformOrigin: 'center',
             willChange: 'transform',
-            ...(layer ? {} : { transition: 'transform 120ms linear' }),
-          } : undefined}
+            opacity: gridRevealed ? 1 : 0,
+            transition: layer ? 'opacity 500ms ease-out' : 'transform 120ms linear, opacity 500ms ease-out',
+          } : {
+            opacity: gridRevealed ? 1 : 0,
+            transition: 'opacity 500ms ease-out',
+          }}
         />
       </div>
     </div>
