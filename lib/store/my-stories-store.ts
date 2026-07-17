@@ -2,14 +2,27 @@ import { create } from 'zustand';
 import { listUserStories, listSavedStorylines, listUserReels } from '@/app/actions/persistence';
 import { listExploredStories } from '@/app/actions/exploration';
 import {
-  getCharacterUniverseRuntimeSettings,
-  listCharacterMasters,
+  getCharacterUniversePayload,
+  repairCharacterMasterVisuals,
 } from '@/app/actions/character-library';
+import { getSessionBootstrap, type SessionBootstrapData } from '@/app/actions/landing-bootstrap';
+import { imageTaskForStoryKind } from '@/lib/ai/image-models.shared';
+import type { ImageModelSelection, ImageTaskKey } from '@/lib/ai/image-models.shared';
 import type { TabId, SavedStory, UserReel, ExploredStory, SavedStorylineItem } from '@/lib/types/my-stories';
 import type { CharacterMaster } from '@/lib/types/character-library';
 import type { CharacterUniverseRuntimeSettings } from '@/lib/character-universe/settings';
 
 const STALE_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Dedupes the bundled session bootstrap: AuthProvider (on login) and
+ * LandingScreen (on mount) both trigger it within the same tick, and we want a
+ * single POST. Held at module scope so every store consumer shares it.
+ */
+let bootstrapInFlight: Promise<SessionBootstrapData | null> | null = null;
+
+/** One thumbnail-repair sweep per page session (see maybeRepairCharacterVisuals). */
+let characterRepairAttempted = false;
 
 interface MyStoriesState {
   stories: SavedStory[];
@@ -24,6 +37,19 @@ interface MyStoriesState {
   lastFetched: Record<TabId, number>;
 
   prefetchAll: () => Promise<void>;
+  /**
+   * One bundled round trip for the whole signed-in landing surface (drawer
+   * tabs + character universe + landing payload). Deduped + staleness-gated;
+   * returns the raw payload so LandingScreen can also apply its picker/style
+   * sections. Callers that only need the store hydrated can ignore the result.
+   */
+  bootstrapSession: (input?: {
+    imageTaskKey?: ImageTaskKey;
+    imageModelSelection?: ImageModelSelection | null;
+    force?: boolean;
+  }) => Promise<SessionBootstrapData | null>;
+  /** Applies a bootstrap payload to the store (drawer tabs + characters). */
+  hydrateFromBootstrap: (data: SessionBootstrapData) => void;
   fetchTab: (tab: TabId) => Promise<void>;
   /** Loads the character-universe snapshot + masters together (deduped). */
   ensureCharacterUniverse: (force?: boolean) => Promise<void>;
@@ -73,56 +99,99 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   lastFetched: { ...initialLastFetched },
 
   prefetchAll: async () => {
+    // Everything the drawer + landing character surface needs now arrives in
+    // one bundled round trip (deduped with LandingScreen's own call).
+    await get().bootstrapSession();
+  },
+
+  bootstrapSession: async (input) => {
     const state = get();
-    // Explored is no longer surfaced in the drawer, so it's not prefetched.
-    const tabs: TabId[] = ['my-stories', 'storylines', 'reels'];
-    const staleTabs = tabs.filter((t) => isStale(state.lastFetched[t]));
-
-    // Warm the character universe (tab visibility + masters) on the same login
-    // pass as everything else, so the drawer/landing picker open instantly.
-    const characterPromise = get().ensureCharacterUniverse();
-
-    if (staleTabs.length === 0) {
-      await characterPromise;
-      return;
+    const tabsFresh = (['my-stories', 'storylines', 'reels'] as TabId[]).every(
+      (tab) => !isStale(state.lastFetched[tab])
+    );
+    const characterFresh =
+      state.characterSettings !== null && !isStale(state.characterUniverseLastFetched);
+    if (!input?.force && tabsFresh && characterFresh) {
+      return null;
     }
+    // Coalesce concurrent callers (AuthProvider + LandingScreen) onto one POST.
+    if (bootstrapInFlight) return bootstrapInFlight;
 
-    // Mark all stale tabs as loading
-    set((s) => ({
-      loading: {
-        ...s.loading,
-        ...Object.fromEntries(staleTabs.map((t) => [t, true])),
-      },
-    }));
-
-    const promises = staleTabs.map(async (tab) => {
+    const run = (async (): Promise<SessionBootstrapData | null> => {
+      set((s) => ({
+        loading: {
+          ...s.loading,
+          'my-stories': true,
+          storylines: true,
+          reels: true,
+          characters: true,
+        },
+      }));
       try {
-        if (tab === 'my-stories') {
-          const data = await listUserStories();
-          set({ stories: data });
-        } else if (tab === 'storylines') {
-          const data = await listSavedStorylines();
-          set({ savedStorylines: data });
-        } else if (tab === 'reels') {
-          const data = await listUserReels();
-          set({ reels: data });
-        }
-        set((s) => ({
-          lastFetched: { ...s.lastFetched, [tab]: Date.now() },
-        }));
+        const data = await getSessionBootstrap({
+          imageTaskKey: input?.imageTaskKey ?? imageTaskForStoryKind('story'),
+          imageModelSelection: input?.imageModelSelection ?? null,
+        });
+        get().hydrateFromBootstrap(data);
+        return data;
       } catch (error) {
-        console.error(`Failed to prefetch ${tab}:`, error);
+        console.error('Failed to bootstrap session:', error);
+        return null;
       } finally {
         set((s) => ({
-          loading: { ...s.loading, [tab]: false },
+          loading: {
+            ...s.loading,
+            'my-stories': false,
+            storylines: false,
+            reels: false,
+            characters: false,
+          },
         }));
+        bootstrapInFlight = null;
       }
-    });
+    })();
+    bootstrapInFlight = run;
+    return run;
+  },
 
-    await Promise.all([...promises, characterPromise]);
+  hydrateFromBootstrap: (data) => {
+    const now = Date.now();
+    set((s) => ({
+      ...(data.myStories
+        ? {
+            stories: data.myStories.stories,
+            savedStorylines: data.myStories.storylines,
+            reels: data.myStories.reels,
+          }
+        : {}),
+      ...(data.characterUniverse
+        ? {
+            characterSettings: data.characterUniverse.settings,
+            characters: data.characterUniverse.masters,
+          }
+        : {}),
+      lastFetched: {
+        ...s.lastFetched,
+        ...(data.myStories ? { 'my-stories': now, storylines: now, reels: now } : {}),
+        ...(data.characterUniverse ? { characters: now } : {}),
+      },
+      characterUniverseLastFetched: data.characterUniverse
+        ? now
+        : s.characterUniverseLastFetched,
+    }));
+    if (data.characterUniverse) {
+      void runCharacterRepairSweep();
+    }
   },
 
   fetchTab: async (tab: TabId) => {
+    // The Characters tab is owned by ensureCharacterUniverse (snapshot + masters
+    // together, with its own loading flag); delegate before touching loading.
+    if (tab === 'characters') {
+      await get().ensureCharacterUniverse();
+      return;
+    }
+
     const state = get();
     // Serve cache if fresh
     if (!isStale(state.lastFetched[tab])) return;
@@ -142,9 +211,6 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
       } else if (tab === 'reels') {
         const data = await listUserReels();
         set({ reels: data });
-      } else if (tab === 'characters') {
-        const data = await listCharacterMasters({ includeArchived: true });
-        set({ characters: data });
       }
       set((s) => ({
         lastFetched: { ...s.lastFetched, [tab]: Date.now() },
@@ -166,22 +232,16 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
 
     set((s) => ({ loading: { ...s.loading, characters: true } }));
     try {
-      // The flag snapshot is one batched query; only hit the masters endpoint
-      // when the library is actually on (skips a wasted call for anonymous /
-      // disabled users on the heavily-trafficked landing page).
-      const settings = await getCharacterUniverseRuntimeSettings();
-      set({ characterSettings: settings });
-
-      if (settings.libraryEnabled) {
-        const masters = await listCharacterMasters({ includeArchived: true });
-        set({ characters: masters });
-      } else {
-        set({ characters: [] });
-      }
+      // Snapshot + masters in one round trip (settings gate + list resolve
+      // server-side), replacing the prior settings→masters client waterfall.
+      const { settings, masters } = await getCharacterUniversePayload();
       set((s) => ({
+        characterSettings: settings,
+        characters: masters,
         characterUniverseLastFetched: Date.now(),
         lastFetched: { ...s.lastFetched, characters: Date.now() },
       }));
+      void runCharacterRepairSweep();
     } catch (error) {
       console.error('Failed to load character universe:', error);
     } finally {
@@ -190,6 +250,9 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
   },
 
   clear: () => {
+    // Reset module-scoped session guards so the next account bootstraps fresh.
+    bootstrapInFlight = null;
+    characterRepairAttempted = false;
     set({
       stories: [],
       reels: [],
@@ -265,3 +328,34 @@ export const useMyStoriesStore = create<MyStoriesState>((set, get) => ({
     }));
   },
 }));
+
+/**
+ * Self-heals library masters whose thumbnails are blank because they were saved
+ * before visual-backfill existed (NULL portrait + sheet, but a known origin
+ * story). Runs at most once per page session, in the background — the list is
+ * already rendered, and repaired thumbnails patch in as they resolve.
+ */
+async function runCharacterRepairSweep(): Promise<void> {
+  if (characterRepairAttempted) return;
+  const { characters } = useMyStoriesStore.getState();
+  const needsRepair = characters.some(
+    (master) => !master.portraitUrl && !master.referenceSheetUrl && master.originStoryId
+  );
+  if (!needsRepair) return;
+
+  characterRepairAttempted = true;
+  try {
+    const repaired = await repairCharacterMasterVisuals();
+    const { updateCharacter } = useMyStoriesStore.getState();
+    for (const master of repaired) {
+      updateCharacter(master.id, {
+        portraitUrl: master.portraitUrl,
+        portraitStorageKey: master.portraitStorageKey,
+        referenceSheetUrl: master.referenceSheetUrl,
+        referenceSheetStorageKey: master.referenceSheetStorageKey,
+      });
+    }
+  } catch (error) {
+    console.error('Character thumbnail repair failed:', error);
+  }
+}
