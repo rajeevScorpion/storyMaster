@@ -4,7 +4,6 @@ import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useStat
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
-import { getLandingBootstrap } from '@/app/actions/landing-bootstrap';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
 import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
@@ -43,6 +42,7 @@ import type { PricingRuntimeContext } from '@/lib/types/pricing';
 import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X, UserRound, AtSign } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
+import CharacterAvatar from './CharacterAvatar';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
@@ -347,7 +347,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   }, []);
   const promptInputRef = useRef<HTMLInputElement | null>(null);
 
-  const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
   const characterSettings = useMyStoriesStore((s) => s.characterSettings);
   const storeCharacters = useMyStoriesStore((s) => s.characters);
   const mixingEnabled = Boolean(characterSettings?.mixingEnabled && characterSettings?.libraryEnabled);
@@ -356,10 +355,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     () => storeCharacters.filter((master) => !master.archivedAt),
     [storeCharacters]
   );
-
-  useEffect(() => {
-    ensureCharacterUniverse();
-  }, [ensureCharacterUniverse]);
 
   const toggleLibraryCharacter = (master: CharacterMaster) => {
     setMixError(null);
@@ -397,10 +392,19 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   }, [searchParams]);
 
   // Everything the landing screen fetches at mount arrives in one bundled
-  // round-trip (model picker, reel style cards, reel moods) with the pricing
-  // context resolved once server-side. Storyboard/reel setup settings are NOT
-  // refetched here — the SSR initialData already seeds them.
+  // round-trip: the landing payload (model picker, reel style cards, reel
+  // moods) PLUS the drawer tabs + character universe, hydrated into the shared
+  // store. This is the single-flight `bootstrapSession` (deduped with the
+  // login-time prefetch), so the "Bring your characters" row, @mention names,
+  // and the picker all paint together instead of trickling in. Storyboard/reel
+  // setup settings are NOT refetched — the SSR initialData already seeds them.
   const pickerRequestSignatureRef = useRef<string | null>(null);
+  const applyLandingBootstrapFailure = () => {
+    pickerRequestSignatureRef.current = null;
+    setImageModelPicker(null);
+    setReelVisualStyleCards([]);
+    setPublishedMoods([]);
+  };
   useEffect(() => {
     let cancelled = false;
     pickerRequestSignatureRef.current = buildPickerRequestSignature(
@@ -408,9 +412,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       imageModelSelection,
       pricing.snapshot.planKey
     );
-    getLandingBootstrap({ imageTaskKey, imageModelSelection: imageModelSelection ?? null })
+    useMyStoriesStore
+      .getState()
+      .bootstrapSession({ force: true, imageTaskKey, imageModelSelection: imageModelSelection ?? null })
       .then((bootstrap) => {
         if (cancelled) return;
+        if (!bootstrap) {
+          applyLandingBootstrapFailure();
+          return;
+        }
         if (bootstrap.imageModelPicker) {
           const state = bootstrap.imageModelPicker;
           // Record the signature the applied state settles into so the
@@ -444,10 +454,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       })
       .catch(() => {
         if (cancelled) return;
-        pickerRequestSignatureRef.current = null;
-        setImageModelPicker(null);
-        setReelVisualStyleCards([]);
-        setPublishedMoods([]);
+        applyLandingBootstrapFailure();
       });
     return () => {
       cancelled = true;
@@ -1206,16 +1213,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                 key={character.masterId ?? character.id}
                                 className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 py-1 pl-1 pr-2 text-xs text-emerald-100"
                               >
-                                {character.portraitUrl || character.referenceSheetUrl ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={character.portraitUrl ?? character.referenceSheetUrl}
-                                    alt=""
-                                    className="h-5 w-5 rounded-full border border-white/10 object-cover"
-                                  />
-                                ) : (
-                                  <UserRound className="h-3.5 w-3.5 text-emerald-300/70" />
-                                )}
+                                <CharacterAvatar
+                                  src={character.portraitUrl ?? character.referenceSheetUrl}
+                                  alt=""
+                                  imgClassName="h-5 w-5 rounded-full border border-white/10 object-cover"
+                                  fallback={<UserRound className="h-3.5 w-3.5 text-emerald-300/70" />}
+                                />
                                 {character.name}
                                 <button
                                   type="button"
@@ -1280,18 +1283,16 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                             : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
                                         }`}
                                       >
-                                        {avatar ? (
-                                          // eslint-disable-next-line @next/next/no-img-element
-                                          <img
-                                            src={avatar}
-                                            alt=""
-                                            className="h-6 w-6 rounded-full border border-white/10 object-cover"
-                                          />
-                                        ) : (
-                                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
-                                            <UserRound className="h-3.5 w-3.5 text-neutral-500" />
-                                          </span>
-                                        )}
+                                        <CharacterAvatar
+                                          src={avatar}
+                                          alt=""
+                                          imgClassName="h-6 w-6 rounded-full border border-white/10 object-cover"
+                                          fallback={
+                                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
+                                              <UserRound className="h-3.5 w-3.5 text-neutral-500" />
+                                            </span>
+                                          }
+                                        />
                                         {master.name}
                                       </button>
                                     );

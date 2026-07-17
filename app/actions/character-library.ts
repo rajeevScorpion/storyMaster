@@ -8,6 +8,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { resolveStoryListThumbnails } from '@/app/actions/persistence';
 import { getFeatureFlag, getFeatureFlags } from '@/lib/ai/model-config';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import { extractStoragePath, normalizeStorageUrl } from '@/lib/supabase/storage';
@@ -27,12 +28,15 @@ const MAX_MASTER_NAME_CHARS = 80;
 
 // ── Runtime snapshot ───────────────────────────────────────────────
 
-export async function getCharacterUniverseRuntimeSettings(): Promise<CharacterUniverseRuntimeSettings> {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+/**
+ * Resolves the character-universe flag snapshot for an already-authenticated
+ * user (or defaults for an anonymous session). Auth is resolved by the caller
+ * so a bundled bootstrap can share one `getUser()` across sections.
+ */
+async function buildCharacterUniverseSettings(
+  userId: string | null
+): Promise<CharacterUniverseRuntimeSettings> {
+  if (!userId) {
     // Anonymous readers never see character-universe controls.
     return DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS;
   }
@@ -48,6 +52,49 @@ export async function getCharacterUniverseRuntimeSettings(): Promise<CharacterUn
     storyBibleEnabled: flags['story_bible_enabled'],
     journalEnabled: flags['episode_journal_enabled'],
   };
+}
+
+export async function getCharacterUniverseRuntimeSettings(): Promise<CharacterUniverseRuntimeSettings> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return buildCharacterUniverseSettings(user?.id ?? null);
+}
+
+/**
+ * Character-universe snapshot + masters in a single round trip, threaded with
+ * an already-resolved auth context. Flags and masters resolve in parallel;
+ * masters are discarded when the library flag is off. Used by the session
+ * bootstrap and {@link getCharacterUniversePayload}.
+ */
+export async function loadCharacterUniversePayloadData(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string | null
+): Promise<{ settings: CharacterUniverseRuntimeSettings; masters: CharacterMaster[] }> {
+  if (!userId) {
+    return { settings: DEFAULT_CHARACTER_UNIVERSE_RUNTIME_SETTINGS, masters: [] };
+  }
+  const [settings, masters] = await Promise.all([
+    buildCharacterUniverseSettings(userId),
+    loadCharacterMastersData(supabase, userId, { includeArchived: true }).catch(() => [] as CharacterMaster[]),
+  ]);
+  return { settings, masters: settings.libraryEnabled ? masters : [] };
+}
+
+/**
+ * Per-request wrapper: resolves auth, then returns the snapshot + masters in
+ * one server-action round trip (replaces the settings→masters client waterfall).
+ */
+export async function getCharacterUniversePayload(): Promise<{
+  settings: CharacterUniverseRuntimeSettings;
+  masters: CharacterMaster[];
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  return loadCharacterUniversePayloadData(supabase, user?.id ?? null);
 }
 
 // ── Shared internals ───────────────────────────────────────────────
@@ -297,15 +344,20 @@ async function backfillCharacterVisualRefs(
 
 // ── Library reads ──────────────────────────────────────────────────
 
-export async function listCharacterMasters(options?: {
-  includeArchived?: boolean;
-}): Promise<CharacterMaster[]> {
-  await requireFeature('character_library_enabled', 'The character library');
-  const { supabase } = await requireUser();
-
+/**
+ * Master-list loader threaded with an already-resolved auth context (feature
+ * gating is the caller's responsibility). `listCharacterMasters` below is the
+ * thin per-request wrapper.
+ */
+async function loadCharacterMastersData(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  options?: { includeArchived?: boolean }
+): Promise<CharacterMaster[]> {
   let query = supabase
     .from('character_masters')
     .select('*')
+    .eq('user_id', userId)
     .order('updated_at', { ascending: false });
   if (!options?.includeArchived) {
     query = query.is('archived_at', null);
@@ -315,6 +367,14 @@ export async function listCharacterMasters(options?: {
   if (error) throw new CharacterLibraryError(`Failed to load character library: ${error.message}`);
 
   return signMasterAssetUrls(supabase, (data as DbCharacterMaster[]).map(rowToMaster));
+}
+
+export async function listCharacterMasters(options?: {
+  includeArchived?: boolean;
+}): Promise<CharacterMaster[]> {
+  await requireFeature('character_library_enabled', 'The character library');
+  const { supabase, userId } = await requireUser();
+  return loadCharacterMastersData(supabase, userId, options);
 }
 
 // ── Save to library ────────────────────────────────────────────────
@@ -526,4 +586,216 @@ export async function unarchiveCharacterMaster(masterId: string): Promise<void> 
     }
     throw new CharacterLibraryError('Could not restore the character.');
   }
+}
+
+// ── Thumbnail repair ───────────────────────────────────────────────
+
+const MAX_REPAIR_PER_CALL = 15;
+
+/**
+ * Self-heals library masters that were saved before the visual-backfill logic
+ * existed (or whose best-effort asset copy failed), leaving both portrait and
+ * reference-sheet URLs null. For each such master with a known origin story, we
+ * pull the first available portrait/sheet from that story's roster, story_map
+ * nodes, and beat rows (reusing {@link backfillCharacterVisualRefs}), copy it
+ * to a stable library key, and persist the URLs. Best effort per master — one
+ * unrecoverable story never aborts the batch. Returns the repaired masters
+ * (signed) so the caller can merge them into an already-rendered list.
+ */
+export async function repairCharacterMasterVisuals(): Promise<CharacterMaster[]> {
+  await requireFeature('character_library_enabled', 'The character library');
+  const { supabase, userId } = await requireUser();
+
+  const { data, error } = await supabase
+    .from('character_masters')
+    .select('*')
+    .eq('user_id', userId)
+    .is('portrait_url', null)
+    .is('reference_sheet_url', null)
+    .not('origin_story_id', 'is', null)
+    .order('updated_at', { ascending: false })
+    .limit(MAX_REPAIR_PER_CALL);
+  if (error || !data || data.length === 0) return [];
+
+  const rows = data as DbCharacterMaster[];
+
+  // One story fetch per distinct origin story, shared across its masters.
+  const storyIds = Array.from(new Set(rows.map((row) => row.origin_story_id).filter(Boolean))) as string[];
+  const storyById = new Map<string, { characters: Character[] | null; story_map: StoryMap | null }>();
+  await Promise.all(
+    storyIds.map(async (storyId) => {
+      const { data: story } = await supabase
+        .from('stories')
+        .select('characters, story_map')
+        .eq('id', storyId)
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (story) {
+        storyById.set(storyId, {
+          characters: (story.characters as Character[] | null) ?? null,
+          story_map: (story.story_map as StoryMap | null) ?? null,
+        });
+      }
+    })
+  );
+
+  const repaired: CharacterMaster[] = [];
+
+  for (const row of rows) {
+    try {
+      const storyId = row.origin_story_id;
+      const characterId = row.origin_character_id;
+      if (!storyId || !characterId) continue;
+      const story = storyById.get(storyId);
+      if (!story) continue;
+
+      // Identity base: prefer the story roster instance, else the master's own
+      // fields — backfill only fills the visual refs.
+      const rosterInstance = (story.characters ?? []).find((entry) => entry.id === characterId);
+      const base: Character = rosterInstance ?? {
+        id: characterId,
+        name: row.name,
+        type: row.type,
+        appearanceSummary: row.appearance_summary,
+        personalitySummary: row.personality_summary,
+      };
+
+      const enriched = await backfillCharacterVisualRefs(
+        supabase,
+        userId,
+        storyId,
+        characterId,
+        base,
+        story.story_map
+      );
+      if (!enriched.portraitUrl && !enriched.referenceSheetUrl) continue;
+
+      const [portraitCopy, sheetCopy] = await Promise.all([
+        enriched.portraitUrl
+          ? copyAssetToLibraryKey(supabase, userId, row.id, enriched.portraitUrl, 'portrait')
+          : Promise.resolve(null),
+        enriched.referenceSheetUrl
+          ? copyAssetToLibraryKey(supabase, userId, row.id, enriched.referenceSheetUrl, 'sheet')
+          : Promise.resolve(null),
+      ]);
+
+      const patch = {
+        portrait_url: portraitCopy?.url ?? enriched.portraitUrl ?? null,
+        portrait_storage_key: portraitCopy?.storageKey ?? null,
+        reference_sheet_url: sheetCopy?.url ?? enriched.referenceSheetUrl ?? null,
+        reference_sheet_storage_key: sheetCopy?.storageKey ?? null,
+        updated_at: new Date().toISOString(),
+      };
+      if (!patch.portrait_url && !patch.reference_sheet_url) continue;
+
+      const { data: updated } = await supabase
+        .from('character_masters')
+        .update(patch)
+        .eq('id', row.id)
+        .eq('user_id', userId)
+        .select('*')
+        .single();
+      if (updated) repaired.push(rowToMaster(updated as DbCharacterMaster));
+    } catch (repairError) {
+      console.error(`Failed to repair visuals for master ${row.id}:`, repairError);
+    }
+  }
+
+  return repaired.length > 0 ? signMasterAssetUrls(supabase, repaired) : [];
+}
+
+// ── Story usage ────────────────────────────────────────────────────
+
+export interface CharacterStoryUsage {
+  id: string;
+  title: string;
+  status: string;
+  is_archived: boolean;
+  updated_at: string;
+  episode_number: number | null;
+  thumbnail_url: string | null;
+  thumbnail_is_storyboard: boolean;
+  /** True for the story this master was originally saved from. */
+  isOrigin: boolean;
+}
+
+/**
+ * Lists the user's stories that use a given library master, so the character
+ * detail dialog can link out to each. Matches on the `masterId` stamped onto
+ * `stories.characters` (set when a library character is mixed into a new story
+ * or saved back), unioned with the master's `origin_story_id`.
+ *
+ * Known gap: stories that used the character before masterId-stamping existed
+ * only surface via `origin_story_id`.
+ */
+export async function listStoriesUsingCharacterMaster(
+  masterId: string
+): Promise<CharacterStoryUsage[]> {
+  await requireFeature('character_library_enabled', 'The character library');
+  const { supabase, userId } = await requireUser();
+
+  const { data: master } = await supabase
+    .from('character_masters')
+    .select('origin_story_id')
+    .eq('id', masterId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  const originStoryId = (master?.origin_story_id as string | null) ?? null;
+
+  const storyColumns =
+    'id, title, status, is_archived, updated_at, cover_image_url, episode_number';
+
+  const [taggedResult, originResult] = await Promise.all([
+    supabase
+      .from('stories')
+      .select(storyColumns)
+      .eq('user_id', userId)
+      .neq('story_kind', 'reel')
+      .contains('characters', JSON.stringify([{ masterId }]))
+      .order('updated_at', { ascending: false }),
+    originStoryId
+      ? supabase
+          .from('stories')
+          .select(storyColumns)
+          .eq('id', originStoryId)
+          .eq('user_id', userId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  type StoryRow = {
+    id: string;
+    title: string;
+    status: string;
+    is_archived: boolean;
+    updated_at: string;
+    cover_image_url: string | null;
+    episode_number: number | null;
+  };
+
+  const byId = new Map<string, StoryRow>();
+  for (const row of (taggedResult.data as StoryRow[] | null) ?? []) {
+    byId.set(row.id, row);
+  }
+  const originRow = (originResult as { data: StoryRow | null }).data;
+  if (originRow) byId.set(originRow.id, originRow);
+
+  const rows = Array.from(byId.values()).sort(
+    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+  );
+  if (rows.length === 0) return [];
+
+  const thumbnails = await resolveStoryListThumbnails(supabase, rows);
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    is_archived: Boolean(row.is_archived),
+    updated_at: row.updated_at,
+    episode_number: row.episode_number ?? null,
+    thumbnail_url: thumbnails.get(row.id)?.url ?? null,
+    thumbnail_is_storyboard: thumbnails.get(row.id)?.isStoryboard === true,
+    isOrigin: row.id === originStoryId,
+  }));
 }
