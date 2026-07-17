@@ -5856,23 +5856,26 @@ function StoryScreenInner({
             </div>
           </div>
         )}
-        {!displayImageUrl && showPendingImageState && !showFailedImageState && !isBatchDeliveryStory && (
-          // Deliberately quiet: the image is on its way (background job or asset
-          // sync), so all the user needs is a small in-progress hint, not a modal.
+        {isReelStory && !displayImageUrl && showPendingImageState && !showFailedImageState && !isBatchDeliveryStory && (
+          // Reel view keeps the centered overlay. Non-reel stories show a compact
+          // right-aligned indicator above the story-card toggles instead (below).
           <div className="pointer-events-none absolute inset-0 hidden items-center justify-center px-6 md:flex">
-            <div className="group pointer-events-auto relative">
-              <div className="pointer-events-none absolute bottom-full left-1/2 mb-3 w-72 -translate-x-1/2 rounded-2xl border border-white/10 bg-neutral-950/90 px-4 py-3 text-left text-xs leading-relaxed text-neutral-300 opacity-0 shadow-[0_20px_40px_rgba(0,0,0,0.35)] backdrop-blur-md transition-opacity duration-150 group-hover:opacity-100">
-                {isServerImageJobPending
-                  ? 'The image is being generated in the background and will appear here automatically. Safe to switch tabs or close the browser.'
-                  : 'The image for this beat is syncing and will appear here automatically.'}
-              </div>
+            <div className="pointer-events-auto flex flex-col items-center gap-3 text-center">
               <div
                 className="relative flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-neutral-950/70 backdrop-blur-md"
                 role="status"
-                aria-label="Image generating in background"
+                aria-label="Painting this scene"
               >
                 <ImageIcon className="h-4 w-4 text-neutral-300" />
                 <Loader2 className="absolute h-10 w-10 animate-spin text-emerald-300/70" strokeWidth={1} />
+              </div>
+              <div className="max-w-[16rem] rounded-2xl border border-white/10 bg-neutral-950/70 px-4 py-2 backdrop-blur-md">
+                <p className="text-xs font-medium text-neutral-200">Painting this scene…</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-neutral-400">
+                  {isServerImageJobPending
+                    ? 'It appears here automatically — safe to keep reading or leave and come back.'
+                    : 'Syncing this beat’s image — it appears here automatically.'}
+                </p>
               </div>
             </div>
           </div>
@@ -6104,6 +6107,26 @@ function StoryScreenInner({
             onMouseEnter={() => setIsCardHovered(true)}
             onMouseLeave={() => setIsCardHovered(false)}
           >
+            {/* Image-still-painting indicator — compact, right-aligned with the
+                story box and sitting just above the card toggle controls. */}
+            {!isReelStory && showPendingImageState && !showFailedImageState && !isBatchDeliveryStory && (
+              <div className="mb-2 flex w-full justify-end">
+                <div
+                  className="flex items-center gap-2 rounded-full border border-white/10 bg-neutral-950/70 py-1 pl-1.5 pr-3 backdrop-blur-md"
+                  role="status"
+                  aria-label="Painting this scene"
+                  title={isServerImageJobPending
+                    ? 'Painting this scene — it appears here automatically. Safe to keep reading or leave and come back.'
+                    : 'Syncing this beat’s image — it appears here automatically.'}
+                >
+                  <span className="relative flex h-6 w-6 items-center justify-center">
+                    <ImageIcon className="h-3.5 w-3.5 text-neutral-300" />
+                    <Loader2 className="absolute h-6 w-6 animate-spin text-emerald-300/70" strokeWidth={1.25} />
+                  </span>
+                  <span className="text-xs font-medium text-neutral-300">Painting this scene…</span>
+                </div>
+              </div>
+            )}
             {/* Card chrome toggles — minimize + prompt-tools popover */}
             <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'} ${!isReelStory ? 'md:pl-[3.75rem]' : ''}`}>
               {/* Storyboard panel dots — desktop only (mobile uses the on-image

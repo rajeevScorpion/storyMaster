@@ -1,0 +1,28 @@
+{
+  "referencesPersonalization": {
+    "enabled": false,
+    "characterReferencesEnabled": true,
+    "worldReferencesEnabled": true,
+    "storyCreationEnabled": true,
+    "customOptionEnabled": false,
+    "worldVisualizationEnabled": true,
+    "descriptionFallbackEnabled": false,
+    "platformCeilings": {
+      "characterReferencesPerStory": 3,
+      "worldReferencesPerStory": 3
+    },
+    "tiers": {
+      "free": {
+        "enabled": true,
+        "characterReferencesPerStory": 2,
+        "worldReferencesPerStory": 1,
+        "customOptionReferences": false
+      }
+    },
+    "processing": {
+      "statefulHandleReuse": true,
+      "canonicalResendFallback": true,
+      "retryCount": 2
+    }
+  }
+}

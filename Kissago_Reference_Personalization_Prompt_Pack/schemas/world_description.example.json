@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "summary": "A dusty medieval library built around an ancient carved stone archway.",
+  "worldType": "interior_library",
+  "architecture": [],
+  "geography": [],
+  "spatialLayout": [],
+  "materials": [],
+  "lighting": [],
+  "atmosphere": [],
+  "recurringObjects": [],
+  "continuityAnchors": [],
+  "incidentalElements": [],
+  "prohibitedDrift": []
+}

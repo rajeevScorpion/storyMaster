@@ -20,6 +20,12 @@ import type {
   VisualSettings,
   VisualStylePreset,
 } from '@/lib/types/story';
+import type {
+  StoryConfigCharacterReference,
+  StoryConfigReferences,
+  StoryConfigWorldReference,
+  WorldAdoptionMode,
+} from '@/lib/types/references';
 import {
   DEFAULT_REEL_STORY_SETTINGS,
   getReelLegacyLengthForBeatCount,
@@ -307,6 +313,7 @@ type RawStoryConfig = Partial<StoryConfig> & {
   storyTextOverlay?: Partial<StoryConfig['storyTextOverlay']> | null;
   storyTransition?: Partial<StoryConfig['storyTransition']> | null;
   portraitReferences?: Partial<PortraitReferenceConfig> | null;
+  references?: StoryConfigReferences | null;
   narrationVoice?: Partial<StoryNarrationVoiceSelection> | null;
 };
 
@@ -340,6 +347,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
   };
 
   const portraitReferences = normalizePortraitReferenceConfig(input?.portraitReferences);
+  const references = normalizeStoryConfigReferences(input?.references);
   const narrationVoice = normalizeNarrationVoiceSelection(input?.narrationVoice);
   const imageModelSelection = normalizeImageModelSelection(input?.imageModelSelection ?? input?.image_model_selection);
   const isVerticalStory = storyKind === 'reel' ? true : normalizeVerticalStoryFlag(input);
@@ -369,7 +377,69 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     storyTextOverlay: normalizeStoryTextOverlayConfig(input?.storyTextOverlay),
     storyTransition: normalizeStoryTransitionSettings(input?.storyTransition),
     portraitReferences,
+    ...(references ? { references } : {}),
     ...(narrationVoice ? { narrationVoice } : {}),
+  };
+}
+
+function normalizeStoryConfigReferences(
+  input?: StoryConfigReferences | null
+): StoryConfigReferences | undefined {
+  const setupId = sanitizeText(input?.setupId);
+  if (!setupId) return undefined;
+
+  const worldsInput = Array.isArray(input?.worlds) ? input!.worlds : [];
+  const worlds: StoryConfigWorldReference[] = [];
+  for (const raw of worldsInput) {
+    // A world is keyed by adoptionId (v1) OR sourceId (v2 direct); need at least one.
+    const adoptionId = sanitizeText(raw?.adoptionId);
+    const sourceId = sanitizeText(raw?.sourceId);
+    const worldId = sanitizeText(raw?.worldId);
+    if ((!adoptionId && !sourceId) || !worldId) continue;
+    const adoptionMode: WorldAdoptionMode =
+      raw?.adoptionMode === 'description_plus_canonical_visual'
+        ? 'description_plus_canonical_visual'
+        : 'description_only';
+    worlds.push({
+      ...(adoptionId ? { adoptionId } : {}),
+      ...(sourceId ? { sourceId } : {}),
+      worldId,
+      label: sanitizeText(raw?.label) || worldId,
+      anchor: typeof raw?.anchor === 'string' ? raw.anchor : '',
+      keywords: Array.isArray(raw?.keywords)
+        ? raw.keywords.filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
+        : [],
+      adoptionMode,
+      ...(sanitizeText(raw?.canonicalStorageKey)
+        ? { canonicalStorageKey: sanitizeText(raw?.canonicalStorageKey) }
+        : {}),
+      ...(sanitizeText(raw?.sourceStorageKey)
+        ? { sourceStorageKey: sanitizeText(raw?.sourceStorageKey) }
+        : {}),
+    });
+  }
+
+  const charactersInput = Array.isArray(input?.characters) ? input!.characters : [];
+  const characters: StoryConfigCharacterReference[] = [];
+  for (const raw of charactersInput) {
+    const sourceId = sanitizeText(raw?.sourceId);
+    const characterId = sanitizeText(raw?.characterId);
+    const storageKey = sanitizeText(raw?.storageKey);
+    // Direct-input characters need a raw upload pointer; skip anything malformed.
+    if (!sourceId || !characterId || !storageKey) continue;
+    characters.push({
+      sourceId,
+      characterId,
+      name: sanitizeText(raw?.name),
+      ...(sanitizeText(raw?.description) ? { description: sanitizeText(raw?.description) } : {}),
+      storageKey,
+    });
+  }
+
+  return {
+    setupId,
+    worlds,
+    ...(characters.length > 0 ? { characters } : {}),
   };
 }
 

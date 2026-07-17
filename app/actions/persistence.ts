@@ -29,6 +29,7 @@ import {
 } from '@/lib/reel/settings';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
@@ -933,6 +934,15 @@ export async function saveStory(
     } else {
       storyId = data.id;
     }
+  }
+
+  // Reference Personalization: backfill story_id onto the setup's reference rows
+  // now that the story exists. Idempotent + owner-scoped; never blocks the save.
+  const referenceSetupId = session.storyConfig?.references?.setupId;
+  if (referenceSetupId && storyId) {
+    await linkReferenceSetupToStory(referenceSetupId, storyId).catch((error) => {
+      console.error('Failed to link reference setup to story:', error instanceof Error ? error.message : error);
+    });
   }
 
   // Dual-write: batch upsert all nodes into beats table
@@ -2094,7 +2104,7 @@ async function signListThumbnails(
  * Failures degrade to no thumbnail — the list itself must never break over
  * covers.
  */
-async function resolveStoryListThumbnails(
+export async function resolveStoryListThumbnails(
   supabase: SupabaseClient,
   rows: Array<{ id: string; cover_image_url: string | null }>
 ): Promise<Map<string, ListThumbnail>> {
@@ -2203,7 +2213,15 @@ async function resolveStorylineListThumbnails(
 /**
  * List the current user's created stories.
  */
-export async function listUserStories(): Promise<Array<{
+/**
+ * Story-list loader threaded with an already-resolved auth context, so a
+ * bundled bootstrap can authenticate once and fan out. `listUserStories` below
+ * is the thin per-request wrapper.
+ */
+export async function loadUserStoriesData(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<Array<{
   id: string;
   title: string;
   status: string;
@@ -2217,14 +2235,10 @@ export async function listUserStories(): Promise<Array<{
   thumbnail_url: string | null;
   thumbnail_is_storyboard: boolean;
 }>> {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error('Not authenticated');
-
   const { data, error } = await supabase
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number, is_vertical_story, aspect_ratio')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .neq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
@@ -2245,7 +2259,7 @@ export async function listUserStories(): Promise<Array<{
     const { data: fallbackData, error: fallbackError } = await supabase
       .from('stories')
       .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .neq('story_kind', 'reel')
       .order('updated_at', { ascending: false });
 
@@ -2263,10 +2277,21 @@ export async function listUserStories(): Promise<Array<{
   }));
 }
 
+export async function listUserStories() {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+  return loadUserStoriesData(supabase, user.id);
+}
+
 /**
- * List the current user's generated reels.
+ * Reel-list loader threaded with an already-resolved auth context.
+ * `listUserReels` below is the thin per-request wrapper.
  */
-export async function listUserReels(): Promise<Array<{
+export async function loadUserReelsData(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<Array<{
   id: string;
   title: string;
   status: string;
@@ -2281,14 +2306,10 @@ export async function listUserReels(): Promise<Array<{
   thumbnail_url: string | null;
   thumbnail_is_storyboard: boolean;
 }>> {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error('Not authenticated');
-
   const { data, error } = await supabase
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url, is_vertical_story, aspect_ratio')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .eq('story_kind', 'reel')
     .order('updated_at', { ascending: false });
 
@@ -2320,6 +2341,16 @@ export async function listUserReels(): Promise<Array<{
       thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
     };
   });
+}
+
+/**
+ * List the current user's generated reels.
+ */
+export async function listUserReels() {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+  return loadUserReelsData(supabase, user.id);
 }
 
 /**
@@ -2413,9 +2444,13 @@ export async function unsaveStoryline(storylineId: string): Promise<void> {
 }
 
 /**
- * List storylines saved to the user's profile.
+ * Saved-storyline loader threaded with an already-resolved auth context.
+ * `listSavedStorylines` below is the thin per-request wrapper.
  */
-export async function listSavedStorylines(): Promise<Array<{
+export async function loadSavedStorylinesData(
+  supabase: SupabaseClient,
+  userId: string
+): Promise<Array<{
   id: string;
   storyline_id: string;
   saved_at: string;
@@ -2433,10 +2468,6 @@ export async function listSavedStorylines(): Promise<Array<{
     thumbnail_is_storyboard?: boolean;
   };
 }>> {
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) throw new Error('Not authenticated');
-
   const { data, error } = await supabase
     .from('saved_storylines')
     .select(`
@@ -2456,7 +2487,7 @@ export async function listSavedStorylines(): Promise<Array<{
         node_path
       )
     `)
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .order('saved_at', { ascending: false });
 
   if (error) throw new Error(`Failed to list saved storylines: ${error.message}`);
@@ -2493,7 +2524,7 @@ export async function listSavedStorylines(): Promise<Array<{
       id: row.id,
       storyline_id: row.storyline_id,
       saved_at: row.saved_at,
-      is_owner: row.storylines.user_id === user.id,
+      is_owner: row.storylines.user_id === userId,
       storyline: {
         ...storylineFields,
         thumbnail_url: thumbnails.get(row.storyline_id)?.url ?? null,
@@ -2501,6 +2532,16 @@ export async function listSavedStorylines(): Promise<Array<{
       },
     };
   });
+}
+
+/**
+ * List storylines saved to the user's profile.
+ */
+export async function listSavedStorylines() {
+  const supabase = await createClient();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error('Not authenticated');
+  return loadSavedStorylinesData(supabase, user.id);
 }
 
 // ============================================================

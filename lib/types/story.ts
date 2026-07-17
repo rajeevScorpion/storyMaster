@@ -48,6 +48,12 @@ export interface Character {
   masterId?: string;
   sourceStoryId?: string;
   importedAt?: string;
+  // Reference Personalization: true when this character was seeded from an
+  // uploaded reference the user did NOT name, so it carries an auto-generated
+  // placeholder ("Character N"). The story LLM is allowed to give it a real,
+  // setting/language-appropriate name on beat 1 (keeping the same id); the flag
+  // is cleared once a real name lands so the name locks on later beats.
+  nameIsPlaceholder?: boolean;
 }
 
 export interface Option {
@@ -311,6 +317,12 @@ export interface StoryConfig {
   storyTransition: StoryTransitionSettings;
   portraitReferences: PortraitReferenceConfig;
   narrationVoice?: import('@/lib/ai/narration-voices').StoryNarrationVoiceSelection;
+  // Reference Personalization: setup id linking uploaded/adopted references plus
+  // resolved world anchors. Absent for stories that use no references (the
+  // overwhelming majority). Additive/optional — no migration; persists in the
+  // story_config JSONB column. Adopted characters are NOT stored here; they are
+  // seeded as ordinary roster characters via StorySeedOptions.seedCharacters.
+  references?: import('@/lib/types/references').StoryConfigReferences;
 }
 
 export interface StoryNode {

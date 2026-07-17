@@ -1,0 +1,33 @@
+{
+  "styleLock": {
+    "styleId": "storybook_pastel",
+    "styleVersion": "v3",
+    "imageModelId": "model_123"
+  },
+  "characters": [
+    {
+      "adoptionId": "adopt_character_1",
+      "characterId": "character_leo",
+      "displayName": "Leo",
+      "description": "compiled concise anchor",
+      "canonicalAssetId": "asset_character_1",
+      "providerState": {}
+    }
+  ],
+  "worlds": [
+    {
+      "adoptionId": "adopt_world_1",
+      "worldId": "world_library",
+      "displayName": "Ancient Library",
+      "description": "compiled concise world anchor",
+      "canonicalAssetId": "asset_world_1",
+      "providerState": {}
+    }
+  ],
+  "usageContext": {
+    "storyId": "story_123",
+    "branchId": "branch_main",
+    "beatId": "beat_2",
+    "panelId": "panel_1"
+  }
+}

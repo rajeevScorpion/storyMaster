@@ -1,0 +1,16 @@
+{
+  "jobId": "job_123",
+  "jobType": "character_reference_adoption",
+  "adoptionId": "adopt_123",
+  "status": "generating",
+  "step": "canonical_visualization",
+  "attempt": 1,
+  "idempotencyKey": "hashed-key",
+  "settingsSnapshot": {},
+  "entitlementSnapshot": {},
+  "coinReservationId": "coin_res_123",
+  "safeProgress": {
+    "label": "Creating your story-style character reference",
+    "percent": 65
+  }
+}

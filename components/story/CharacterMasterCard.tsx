@@ -2,6 +2,7 @@
 
 import { motion } from 'motion/react';
 import { UserRound } from 'lucide-react';
+import CharacterAvatar from './CharacterAvatar';
 import type { CharacterMaster } from '@/lib/types/character-library';
 
 export interface CharacterMasterCardProps {
@@ -32,14 +33,16 @@ export default function CharacterMasterCard({ master, onOpen }: CharacterMasterC
       }`}
     >
       <span className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-neutral-800">
-        {thumbnail ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={thumbnail} alt={master.name} className="h-full w-full object-cover" />
-        ) : (
-          <span className="flex h-full w-full items-center justify-center">
-            <UserRound className="h-6 w-6 text-neutral-600" />
-          </span>
-        )}
+        <CharacterAvatar
+          src={thumbnail}
+          alt={master.name}
+          imgClassName="h-full w-full object-cover"
+          fallback={
+            <span className="flex h-full w-full items-center justify-center">
+              <UserRound className="h-6 w-6 text-neutral-600" />
+            </span>
+          }
+        />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-base font-serif text-neutral-200 transition-colors group-hover:text-white">

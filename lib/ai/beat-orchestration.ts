@@ -93,6 +93,8 @@ export interface StoryboardImagePromptOptions {
   visualStyleDefiner?: string;
   noFaceRule?: string;
   textOverlayMode?: string;
+  /** Reference Personalization: compact world continuity anchor for this beat. */
+  worldAnchor?: string;
 }
 
 export function normalizeStoryboardAspectRatio(aspectRatio?: StoryAspectRatio | string | null): StoryAspectRatio {
@@ -664,6 +666,14 @@ export function buildFinalStoryboardImagePrompt(
       beatNumber,
     }),
   ];
+
+  if (options?.worldAnchor && options.worldAnchor.trim().length > 0) {
+    // Kept as a distinct section so it never overrides the style lock: the world
+    // reference supplies layout/continuity, the story style wins on rendering.
+    promptParts.push(
+      `World reference continuity anchor (story style wins over any reference): ${options.worldAnchor.trim()}`
+    );
+  }
 
   if (aspectRatio === '9:16') {
     promptParts.push(VERTICAL_STORY_PROMPT_INSTRUCTION);

@@ -80,6 +80,7 @@ Continuity rules:
 - If there is a conflict between your imagination and the storyState, follow storyState.
 - Reuse the same visual descriptors for characters unless a deliberate transformation happens.
 - Do not rename characters unless explicitly instructed by the story state.
+- Exception: if a character in the cast registry has "nameIsPlaceholder": true, it is an uploaded reference the user left unnamed. Give it a proper name that fits the setting and language, keep its exact id, and never keep the "Character N" placeholder in the story text.
 - Do not suddenly change setting, time of day, or mood without narrative reason.
 
 Output schema:

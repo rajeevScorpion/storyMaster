@@ -18,6 +18,12 @@ import {
   type ReferenceImage,
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
+import { selectRelevantWorld } from '@/lib/references/reference-routing';
+import {
+  synthesizeDirectPortraitTasks,
+  collectDirectCharacterRefs,
+  selectDirectWorldReference,
+} from '@/lib/references/direct-routing';
 import { ensureNarratorVoiceLocked, generateAndPersistNarration, generateReelNarrationOnly, resolveNarrationVoiceServer } from '@/app/actions/narration';
 import {
   generateAndPersistStoryNarrationWithOverlay,
@@ -42,6 +48,8 @@ import {
   reconcileStoryImageJobs,
   resolveImageProcessingModeAction,
 } from '@/app/actions/image-jobs';
+import { createClient as createBrowserSupabaseClient } from '@/lib/supabase/client';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { normalizeStoryboardImageQualitySettings } from '@/lib/types/storyboard-settings';
 import { submitStoryNarrationBatch, reconcileStoryNarration } from '@/app/actions/narration-batch';
 import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
@@ -442,13 +450,16 @@ function stripSessionForPrompt(session: Partial<StorySession>): Partial<StorySes
 
 function buildReferenceFromValue(
   type: ReferenceImage['type'],
-  value: string | undefined
+  value: string | undefined,
+  extras?: { storageKey?: string; name?: string }
 ): ReferenceImage | null {
   if (!value) return null;
-  if (value.startsWith('data:')) {
-    return { type, dataUrl: value };
-  }
-  return { type, url: value };
+  const base: ReferenceImage = value.startsWith('data:')
+    ? { type, dataUrl: value }
+    : { type, url: value };
+  if (extras?.storageKey) base.storageKey = extras.storageKey;
+  if (extras?.name?.trim()) base.name = extras.name.trim();
+  return base;
 }
 
 function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
@@ -460,7 +471,13 @@ function collectPortraitReferences(characters: Character[]): ReferenceImage[] {
         character.portraitBase64
           || character.portraitUrl
           || character.referenceSheetUrl
-          || fallbackSheet?.url
+          || fallbackSheet?.url,
+        {
+          // Durable key so a stale signed referenceSheetUrl can be re-resolved
+          // server-side at generation time instead of silently 403-ing.
+          storageKey: character.referenceSheetStorageKey,
+          name: character.name,
+        }
       );
     })
     .filter((reference): reference is ReferenceImage => Boolean(reference));
@@ -500,6 +517,10 @@ function mergeCharacterVisualReferences(
       referenceSheetStorageKey: character.referenceSheetStorageKey || reference.referenceSheetStorageKey,
       referenceSheetUploadedAt: character.referenceSheetUploadedAt || reference.referenceSheetUploadedAt,
       referenceSheetGallery: character.referenceSheetGallery ?? reference.referenceSheetGallery,
+      // The beat character always carries a resolved name, so an unnamed
+      // reference is no longer a placeholder once merged — clear the flag so the
+      // rename lock re-engages on later beats.
+      nameIsPlaceholder: character.name?.trim() ? false : reference.nameIsPlaceholder,
     };
   });
 
@@ -511,6 +532,31 @@ function mergeCharacterVisualReferences(
 
 function collectBeatPortraitReferences(beat: StoryBeat): ReferenceImage[] {
   return collectPortraitReferences(beat.characters);
+}
+
+/**
+ * Reference Personalization: resolve the world reference relevant to this beat.
+ * Returns the compact continuity anchor for the image prompt AND, when the world
+ * carries an image key, the raw/canonical world image as a scene reference.
+ * Characters route themselves via the roster; only worlds need this selection.
+ *
+ * The world image r2:// key is resolved to inline base64 server-side at
+ * generation time (resolveReferenceImageKeys), so it survives a reload even
+ * though config.references is not re-signed on load.
+ */
+function resolveBeatWorldRouting(
+  session: Partial<StorySession> | null | undefined,
+  beat: StoryBeat
+): { worldAnchor?: string; worldReference?: ReferenceImage } {
+  const worlds = session?.storyConfig?.references?.worlds;
+  if (!worlds || worlds.length === 0) return {};
+  const beatText = `${beat.title ?? ''} ${beat.sceneSummary ?? ''} ${beat.imagePrompt ?? ''}`;
+  const selected = selectRelevantWorld(worlds, beatText, null);
+  const worldReference = selectDirectWorldReference(worlds, beatText, null);
+  const result: { worldAnchor?: string; worldReference?: ReferenceImage } = {};
+  if (selected && selected.anchor.trim().length > 0) result.worldAnchor = selected.anchor;
+  if (worldReference) result.worldReference = worldReference;
+  return result;
 }
 
 function buildStoryboardReferenceImages(
@@ -532,7 +578,7 @@ function buildStoryboardReferenceImages(
 }
 
 function referenceKey(reference: ReferenceImage): string {
-  return `${reference.type}:${reference.url || reference.dataUrl || ''}`;
+  return `${reference.type}:${reference.storageKey || reference.url || reference.dataUrl || ''}`;
 }
 
 function mergeReferenceImages(...groups: ReferenceImage[][]): ReferenceImage[] {
@@ -626,9 +672,40 @@ let activeBeatAssetSyncPromise: Promise<void> | null = null;
 const queuedBeatAssetSyncStoryIds = new Set<string>();
 // Poll cadence for server-pipeline image jobs while the tab stays open. The
 // jobs are durable server-side; polling only refreshes the visible session.
-const IMAGE_JOB_POLL_INTERVAL_MS = 8_000;
+// Check soon after the worker is kicked, then ease off. A flat 8s meant the
+// beat could sit with a bare spinner for up to 8s after the image was ready;
+// but polling too tightly (e.g. 1.5s) floods the route with status POSTs and,
+// in dev, starves the single server of the cycles the worker + R2 fetch need —
+// making delivery *slower*. ~2.5s first check is the balance. Indices past the
+// array clamp to the last value.
+const IMAGE_JOB_POLL_SCHEDULE_MS = [2_500, 3_000, 4_000, 5_000, 6_000, 8_000];
+function imageJobPollDelayMs(tick: number): number {
+  return IMAGE_JOB_POLL_SCHEDULE_MS[Math.min(tick, IMAGE_JOB_POLL_SCHEDULE_MS.length - 1)];
+}
 let imageJobPollTimer: ReturnType<typeof setTimeout> | null = null;
 let imageJobPollStoryId: string | null = null;
+
+// Realtime accelerator: a beats-row change is pushed the instant the media
+// worker writes a ready/failed image (or narration audio), so we merge it
+// immediately instead of waiting for the next poll tick. The poll below stays
+// as a backstop for when Realtime is disabled on the beats table or drops an
+// event — when Realtime IS working it delivers first, pending clears, and the
+// poll loop stops itself, so steady-state call volume drops to near zero.
+let imageJobRealtimeChannel: RealtimeChannel | null = null;
+let imageJobRealtimeDebounce: ReturnType<typeof setTimeout> | null = null;
+let realtimeSupabaseClient: ReturnType<typeof createBrowserSupabaseClient> | null = null;
+function getRealtimeSupabaseClient(): ReturnType<typeof createBrowserSupabaseClient> | null {
+  if (typeof window === 'undefined') return null;
+  if (!realtimeSupabaseClient) {
+    try {
+      realtimeSupabaseClient = createBrowserSupabaseClient();
+    } catch (error) {
+      console.error('Failed to create realtime Supabase client:', error);
+      return null;
+    }
+  }
+  return realtimeSupabaseClient;
+}
 const beatAssetRetryTimers = new Map<string, number>();
 let cachedStorySaveRuntimeSettings = DEFAULT_STORY_SAVE_RUNTIME_SETTINGS;
 let cachedStorySaveRuntimeSettingsHydrated = false;
@@ -1246,11 +1323,24 @@ const IMAGE_JOB_SAFE_TO_LEAVE_NOTE =
   'Your beat is saved and the image is being painted on our servers — you can '
   + 'close this tab or come back later and it will be ready here.';
 
-const IMAGE_JOB_FOREGROUND_WAIT_MS = 150_000;
-const IMAGE_JOB_FOREGROUND_POLL_MS = 4_000;
+// Foreground wait ceiling: how long the preloader holds for the image before
+// committing the beat and letting the picture stream in via
+// startImageJobPolling. Kept deliberately short — a slow or retrying image must
+// never trap the reader (the old 150s ceiling meant a slow render held the user
+// on the preloader for up to 2.5 min, then dumped them onto the beat with a
+// bare spinner). Fast images (the common case) still land inside this window,
+// so the beat arrives complete; slow ones commit promptly and fill in. Tune here.
+const IMAGE_JOB_FOREGROUND_WAIT_MS = 20_000;
+
+// Poll the durable beats row at a steady, modest cadence — fast enough that a
+// quick image still delivers a complete beat, slow enough not to flood the
+// route (or, in dev, starve the worker) with status POSTs.
+function imageJobForegroundPollDelayMs(elapsedMs: number): number {
+  return elapsedMs < 8_000 ? 2_000 : 3_000;
+}
 
 /**
- * Foreground wait for a queued image job: the user who stays on the preloader
+ * Foreground wait for a queued image job: a user who stays on the preloader
  * should receive the beat *with* its image, exactly like the legacy inline
  * path. Polls the durable beats row (worker-written) until it turns ready or
  * failed; returns null on timeout, leaving the beat in its pending state for
@@ -1260,9 +1350,10 @@ async function waitForQueuedBeatImage(
   storyId: string,
   nodeId: string
 ): Promise<{ imageStatus: 'ready'; imageUrl: string } | { imageStatus: 'failed'; imageError: string | null } | null> {
-  const deadline = Date.now() + IMAGE_JOB_FOREGROUND_WAIT_MS;
+  const startedAt = Date.now();
+  const deadline = startedAt + IMAGE_JOB_FOREGROUND_WAIT_MS;
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, IMAGE_JOB_FOREGROUND_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, imageJobForegroundPollDelayMs(Date.now() - startedAt)));
     try {
       const [row] = await getReadyBeatImages(storyId, [nodeId]);
       if (row?.imageStatus === 'ready' && row.imageUrl) {
@@ -1462,7 +1553,10 @@ async function generatePortraitsForStoryboardPlan(
   modelOverrides?: StoryModelOverrides,
   costTelemetry?: CostTelemetryContext,
   imageModelSelection?: StoryConfig['imageModelSelection'],
-  continuity?: ReturnType<typeof imageContinuityOptions>
+  continuity?: ReturnType<typeof imageContinuityOptions>,
+  // Reference Personalization (direct mode): raw uploaded reference per character
+  // id, fed as image input so the beat-1 sheet adopts the uploaded identity.
+  directRefsByCharacterId?: Map<string, ReferenceImage>
 ): Promise<{ references: ReferenceImage[]; latestState: ImageContinuityProviderState | null }> {
   if (!storyboardPlan.portraitTasks.length) {
     return {
@@ -1495,6 +1589,8 @@ async function generatePortraitsForStoryboardPlan(
             quality: '0.5K' as const,
           };
 
+    const directRef = directRefsByCharacterId?.get(character.id);
+
     try {
       const portraitResult = await generateCharacterPortrait(
         character,
@@ -1509,7 +1605,8 @@ async function generatePortraitsForStoryboardPlan(
               ...continuity,
               previousState: latestState,
             }
-          : null
+          : null,
+        directRef ? [directRef] : undefined
       );
       const nextState = extractImageContinuityState(portraitResult.imageGenerationMetadata) ?? latestState;
       latestState = nextState;
@@ -2066,6 +2163,15 @@ export const useStoryStore = create<StoryState>()(
           clearTimeout(imageJobPollTimer);
           imageJobPollTimer = null;
         }
+        if (imageJobRealtimeDebounce) {
+          clearTimeout(imageJobRealtimeDebounce);
+          imageJobRealtimeDebounce = null;
+        }
+        if (imageJobRealtimeChannel) {
+          const channel = imageJobRealtimeChannel;
+          imageJobRealtimeChannel = null;
+          void getRealtimeSupabaseClient()?.removeChannel(channel);
+        }
         imageJobPollStoryId = null;
         if (get().activeImageJobNodeIds.length > 0) {
           set({ activeImageJobNodeIds: [] });
@@ -2129,9 +2235,48 @@ export const useStoryStore = create<StoryState>()(
       };
 
       const startImageJobPolling = (storyId: string) => {
-        if (imageJobPollStoryId === storyId && imageJobPollTimer) return;
+        if (imageJobPollStoryId === storyId && (imageJobPollTimer || imageJobRealtimeChannel)) return;
         stopImageJobPolling();
         imageJobPollStoryId = storyId;
+        let pollTick = 0;
+
+        const drainOnce = async () => {
+          if (imageJobPollStoryId !== storyId) return;
+          let stillPending = true;
+          try {
+            stillPending = await pollImageJobsOnce(storyId);
+          } catch (error) {
+            console.error('Image job realtime drain failed:', error);
+          }
+          if (imageJobPollStoryId === storyId && !stillPending) {
+            stopImageJobPolling();
+          }
+        };
+
+        // Subscribe to beats-row pushes for this story. Any UPDATE means the
+        // worker touched an image/audio field — coalesce a burst into one merge.
+        // Falls back silently to the poll below if Realtime isn't enabled.
+        const supabase = getRealtimeSupabaseClient();
+        if (supabase) {
+          imageJobRealtimeChannel = supabase
+            .channel(`beat-media:${storyId}`)
+            .on(
+              'postgres_changes',
+              { event: 'UPDATE', schema: 'public', table: 'beats', filter: `story_id=eq.${storyId}` },
+              () => {
+                if (imageJobPollStoryId !== storyId) return;
+                if (imageJobRealtimeDebounce) clearTimeout(imageJobRealtimeDebounce);
+                imageJobRealtimeDebounce = setTimeout(() => { void drainOnce(); }, 200);
+              }
+            )
+            .subscribe((status) => {
+              if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                // Realtime unavailable (e.g. beats not in the publication yet) —
+                // harmless; the poll backstop below keeps delivering images.
+                console.warn(`Beat media realtime channel ${status}; relying on poll fallback.`);
+              }
+            });
+        }
 
         const tick = async () => {
           if (imageJobPollStoryId !== storyId) return;
@@ -2144,13 +2289,13 @@ export const useStoryStore = create<StoryState>()(
           }
           if (imageJobPollStoryId !== storyId) return;
           if (stillPending) {
-            imageJobPollTimer = setTimeout(() => { void tick(); }, IMAGE_JOB_POLL_INTERVAL_MS);
+            imageJobPollTimer = setTimeout(() => { void tick(); }, imageJobPollDelayMs(pollTick++));
           } else {
             stopImageJobPolling();
           }
         };
 
-        imageJobPollTimer = setTimeout(() => { void tick(); }, IMAGE_JOB_POLL_INTERVAL_MS);
+        imageJobPollTimer = setTimeout(() => { void tick(); }, imageJobPollDelayMs(pollTick++));
       };
 
       const retryPendingBeatAssetSyncInternal = async (storyId?: string) => {
@@ -2716,6 +2861,20 @@ export const useStoryStore = create<StoryState>()(
           const storyboardPlan = seed?.seedCharacters?.length
             ? filterCarriedPortraitTasks(composedStoryboardPlan, beat.characters)
             : composedStoryboardPlan;
+          // Reference Personalization (direct mode): seeded reference characters
+          // are never flagged "new", so the composer emits no portrait task for
+          // them. Synthesize the tasks so their raw upload feeds the beat-1
+          // character sheet (styled-sheet hybrid); the raw refs map is keyed by
+          // the beat character id to line up with the tasks.
+          const directConfigCharacters = storyConfig.references?.characters;
+          const directCharacterRefs = collectDirectCharacterRefs(directConfigCharacters, beat.characters);
+          if (directConfigCharacters?.length) {
+            storyboardPlan.portraitTasks = synthesizeDirectPortraitTasks(
+              storyboardPlan.portraitTasks,
+              directConfigCharacters,
+              beat.characters
+            );
+          }
           beat.storyboardPlan = storyboardPlan;
           beat.storyboardPromptText = renderStoryboardPlan(storyboardPlan);
           if (seed?.episodeContext) {
@@ -2752,7 +2911,8 @@ export const useStoryStore = create<StoryState>()(
                   modelOverrides,
                   costPhase(baseCostTelemetry, 'portrait_generation'),
                   storyConfig.imageModelSelection,
-                  imageContinuityOptions(storyConfig, null)
+                  imageContinuityOptions(storyConfig, null),
+                  directCharacterRefs.size > 0 ? directCharacterRefs : undefined
                 ),
                 {
                   portraitTaskCount: storyboardPlan.portraitTasks.length,
@@ -2761,8 +2921,22 @@ export const useStoryStore = create<StoryState>()(
                 }
               )
             : { references: [], latestState: null };
+          // Direct-mode fallback: if a reference character's styled sheet failed
+          // to generate, attach its raw upload to the board so identity isn't
+          // lost entirely. Plus the relevant world image, characters first.
+          const directFallbackRefs: ReferenceImage[] = [];
+          for (const [charId, ref] of directCharacterRefs) {
+            const character = beat.characters.find((c) => c.id === charId);
+            if (character && !character.portraitBase64) directFallbackRefs.push(ref);
+          }
+          const beatWorldRouting = resolveBeatWorldRouting(initialSession, beat);
           const portraitRefs = initialSession.enableReferenceImages && !promptOnly
-            ? mergeReferenceImages(collectBeatPortraitReferences(beat), portraitGenerationResult.references)
+            ? mergeReferenceImages(
+                collectBeatPortraitReferences(beat),
+                portraitGenerationResult.references,
+                directFallbackRefs,
+                beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+              )
             : [];
           if (promptOnly) {
             assignPortraitPromptTexts(
@@ -2879,6 +3053,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                  ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
                 }
               );
               beat.finalImagePromptText = jobFinalPrompt;
@@ -3083,6 +3258,7 @@ export const useStoryStore = create<StoryState>()(
                     aspectRatio: storyAspectRatio,
                     task: getImageTaskKey(storyConfig),
                     ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                    ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
                   }
                 ),
               })
@@ -3107,7 +3283,10 @@ export const useStoryStore = create<StoryState>()(
                       }),
                       storyAspectRatio,
                       getImageTaskKey(storyConfig),
-                      getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                      {
+                        ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                        ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
+                      },
                       storyConfig.imageModelSelection,
                       imageContinuityOptions(storyConfig, portraitGenerationResult.latestState),
                       earlySavedStoryId
@@ -4212,10 +4391,10 @@ export const useStoryStore = create<StoryState>()(
             } : state);
           }
 
-          const referenceImages = buildStoryboardReferenceImages(
-            beat,
-            currentNode.data.imageUrl,
-            portraitRefs
+          const worldRouting = resolveBeatWorldRouting(session, beat);
+          const referenceImages = mergeReferenceImages(
+            buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, portraitRefs),
+            worldRouting.worldReference ? [worldRouting.worldReference] : []
           );
 
           // Server-pipeline routing (admin processing mode): persist the beat
@@ -4476,7 +4655,7 @@ export const useStoryStore = create<StoryState>()(
                   }),
                   storyAspectRatio,
                   getImageTaskKey(session.storyConfig),
-                  getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
                   session.storyConfig.imageModelSelection,
                   imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState),
                   session.savedStoryId
@@ -5900,10 +6079,14 @@ export const useStoryStore = create<StoryState>()(
             );
           }
 
-          const referenceImages = buildStoryboardReferenceImages(
-            beatForRender,
-            parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
-            portraitReferences
+          const worldRouting = resolveBeatWorldRouting(session, beatForRender);
+          const referenceImages = mergeReferenceImages(
+            buildStoryboardReferenceImages(
+              beatForRender,
+              parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
+              portraitReferences
+            ),
+            worldRouting.worldReference ? [worldRouting.worldReference] : []
           );
           // Refine mode stays visually anchored to the current image by
           // sending it as an extra scene reference; reimagine deliberately
@@ -6066,6 +6249,7 @@ export const useStoryStore = create<StoryState>()(
                   aspectRatio: storyAspectRatio,
                   task: getImageTaskKey(session.storyConfig),
                   ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
                 }
               ),
             }
@@ -6081,7 +6265,7 @@ export const useStoryStore = create<StoryState>()(
                 }),
                 storyAspectRatio,
                 getImageTaskKey(session.storyConfig),
-                getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
                 session.storyConfig.imageModelSelection,
                 imageContinuityOptions(
                   session.storyConfig,

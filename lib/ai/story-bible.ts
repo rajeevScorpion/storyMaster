@@ -1,5 +1,6 @@
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
 import { getPreludeText } from '@/lib/ai/story-config';
+import { buildWorldAnchorSummaries } from '@/lib/references/reference-routing';
 
 interface PromptCharacterAnchor {
   id: string;
@@ -10,6 +11,11 @@ interface PromptCharacterAnchor {
   introducedAtBeat: number;
   seenInBeats: number[];
   hasReferencePortrait: boolean;
+  // Reference Personalization: an unnamed uploaded reference carries a
+  // placeholder name the LLM may replace with a real one (keeping the id). The
+  // validator skips the rename lock while this is true; prompts read it as an
+  // explicit instruction to name the character.
+  nameIsPlaceholder?: boolean;
 }
 
 interface StoryBibleBeatSummary {
@@ -47,6 +53,9 @@ interface StoryBible {
   visualDirection: {
     summary: string;
   };
+  // Reference Personalization: adopted world references (visual canon). Present
+  // only when the story uses world references; absent otherwise.
+  worldReferences?: { label: string; anchor: string }[];
   usedCharacterNames: string[];
   castRegistry: PromptCharacterAnchor[];
   choiceHistory: string[];
@@ -70,6 +79,7 @@ const NEXT_BEAT_GOAL_MAX_LENGTH = 120;
 const CONTINUITY_NOTE_MAX_LENGTH = 100;
 const ENDING_FORECAST_MAX_LENGTH = 60;
 const VISUAL_DIRECTION_MAX_LENGTH = 120;
+const WORLD_ANCHOR_MAX_LENGTH = 220;
 
 export function sanitizeCharactersForPrompt(characters: Character[] | undefined | null): Array<Record<string, unknown>> {
   return (characters || []).map((character) => ({
@@ -173,7 +183,15 @@ export function validateGeneratedBeat(
     }
 
     const existingCharacter = existingCharacters.get(character.id);
-    if (existingCharacter && normalizeName(existingCharacter.name) !== normalizedName) {
+    // A placeholder-named uploaded reference ("Character N") is expected to be
+    // named by the LLM on beat 1 — allow that first naming (id preserved). The
+    // flag is cleared once a real name lands, so the rename lock re-engages on
+    // every later beat.
+    if (
+      existingCharacter &&
+      !existingCharacter.nameIsPlaceholder &&
+      normalizeName(existingCharacter.name) !== normalizedName
+    ) {
       issues.push(`character id ${character.id} was renamed from "${existingCharacter.name}" to "${character.name}"`);
     }
 
@@ -238,6 +256,9 @@ function buildStoryBible(
   const currentBeat = beats[beats.length - 1];
   const castRegistry = buildCastRegistry(sessionState);
   const openThreads = buildOpenThreads(sessionState, beats);
+  const worldReferences = buildWorldAnchorSummaries(sessionState?.storyConfig?.references?.worlds).map(
+    (entry) => ({ label: entry.label, anchor: truncateText(entry.anchor, WORLD_ANCHOR_MAX_LENGTH) })
+  );
 
   const episodeContext = sessionState?.episodeContext;
 
@@ -265,6 +286,7 @@ function buildStoryBible(
     visualDirection: {
       summary: truncateText(sessionState?.visualStyle || '', VISUAL_DIRECTION_MAX_LENGTH),
     },
+    ...(worldReferences.length > 0 ? { worldReferences } : {}),
     usedCharacterNames: castRegistry.map((character) => character.name),
     castRegistry,
     choiceHistory: (sessionState?.choiceHistory || [])
@@ -301,6 +323,7 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
           character.referenceSheetUrl ||
           existing?.hasReferencePortrait
         ),
+        ...(character.nameIsPlaceholder ? { nameIsPlaceholder: true } : {}),
       });
     }
   }
@@ -320,6 +343,7 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
           character.portraitUrl ||
           character.referenceSheetUrl
         ),
+        ...(character.nameIsPlaceholder ? { nameIsPlaceholder: true } : {}),
       });
     }
   }

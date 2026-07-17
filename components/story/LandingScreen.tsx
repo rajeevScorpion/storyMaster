@@ -1,10 +1,9 @@
 'use client';
 
-import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
-import { getLandingBootstrap } from '@/app/actions/landing-bootstrap';
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
 import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
@@ -43,10 +42,14 @@ import type { PricingRuntimeContext } from '@/lib/types/pricing';
 import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X, UserRound, AtSign } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
+import CharacterAvatar from './CharacterAvatar';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
-import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
+import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
+import { loadReadyReferenceSeed, loadDirectReferenceSeed } from '@/app/actions/references';
 import {
   FALLBACK_REEL_SETUP,
   DEFAULT_LANDING_INITIAL_DATA,
@@ -338,9 +341,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
   const [showCharacterPicker, setShowCharacterPicker] = useState(false);
   const [mixError, setMixError] = useState<string | null>(null);
+  const [referencePanel, setReferencePanel] = useState<ReferencePanelState | null>(null);
+  const handleReferencePanelChange = useCallback((state: ReferencePanelState) => {
+    setReferencePanel(state);
+  }, []);
   const promptInputRef = useRef<HTMLInputElement | null>(null);
 
-  const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
   const characterSettings = useMyStoriesStore((s) => s.characterSettings);
   const storeCharacters = useMyStoriesStore((s) => s.characters);
   const mixingEnabled = Boolean(characterSettings?.mixingEnabled && characterSettings?.libraryEnabled);
@@ -349,10 +355,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     () => storeCharacters.filter((master) => !master.archivedAt),
     [storeCharacters]
   );
-
-  useEffect(() => {
-    ensureCharacterUniverse();
-  }, [ensureCharacterUniverse]);
 
   const toggleLibraryCharacter = (master: CharacterMaster) => {
     setMixError(null);
@@ -390,10 +392,19 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   }, [searchParams]);
 
   // Everything the landing screen fetches at mount arrives in one bundled
-  // round-trip (model picker, reel style cards, reel moods) with the pricing
-  // context resolved once server-side. Storyboard/reel setup settings are NOT
-  // refetched here — the SSR initialData already seeds them.
+  // round-trip: the landing payload (model picker, reel style cards, reel
+  // moods) PLUS the drawer tabs + character universe, hydrated into the shared
+  // store. This is the single-flight `bootstrapSession` (deduped with the
+  // login-time prefetch), so the "Bring your characters" row, @mention names,
+  // and the picker all paint together instead of trickling in. Storyboard/reel
+  // setup settings are NOT refetched — the SSR initialData already seeds them.
   const pickerRequestSignatureRef = useRef<string | null>(null);
+  const applyLandingBootstrapFailure = () => {
+    pickerRequestSignatureRef.current = null;
+    setImageModelPicker(null);
+    setReelVisualStyleCards([]);
+    setPublishedMoods([]);
+  };
   useEffect(() => {
     let cancelled = false;
     pickerRequestSignatureRef.current = buildPickerRequestSignature(
@@ -401,9 +412,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       imageModelSelection,
       pricing.snapshot.planKey
     );
-    getLandingBootstrap({ imageTaskKey, imageModelSelection: imageModelSelection ?? null })
+    useMyStoriesStore
+      .getState()
+      .bootstrapSession({ force: true, imageTaskKey, imageModelSelection: imageModelSelection ?? null })
       .then((bootstrap) => {
         if (cancelled) return;
+        if (!bootstrap) {
+          applyLandingBootstrapFailure();
+          return;
+        }
         if (bootstrap.imageModelPicker) {
           const state = bootstrap.imageModelPicker;
           // Record the signature the applied state settles into so the
@@ -437,10 +454,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       })
       .catch(() => {
         if (cancelled) return;
-        pickerRequestSignatureRef.current = null;
-        setImageModelPicker(null);
-        setReelVisualStyleCards([]);
-        setPublishedMoods([]);
+        applyLandingBootstrapFailure();
       });
     return () => {
       cancelled = true;
@@ -798,13 +812,66 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
       && (imageDeliveryMode === 'batch' || imageDeliveryMode === 'stateful');
 
+    // Reference Personalization: in adoption (v1) mode, adopted references must
+    // finish before the story starts (beat 1 seeds from the canonical assets).
+    // Direct (v2) mode has no async processing, so allResolved is always true.
+    const usingReferences = Boolean(referencePanel?.hasItems);
+    if (usingReferences && !referencePanel?.allResolved) {
+      setMixError('Your references are still being adopted. Wait for them to finish or remove any that failed.');
+      return;
+    }
+
     // Pack 2 character mixing: seed selected library characters as local
     // instances. The auto-build pipeline doesn't support seeding, so surface
     // that instead of silently dropping the selection.
-    const seedCharacters =
+    const librarySeedCharacters =
       !isReelMode && mixingEnabled && selectedLibraryCharacters.length > 0
         ? selectedLibraryCharacters
-        : undefined;
+        : [];
+
+    // Adopted / direct reference characters become ordinary roster seed
+    // characters; the config carries worlds (both modes) and raw character keys
+    // (direct mode only).
+    let referenceConfig: StoryConfig['references'] | undefined;
+    let referenceSeedCharacters: Character[] = [];
+    if (usingReferences && referencePanel) {
+      try {
+        if (referencePanel.inputMode === 'direct') {
+          const seed = await loadDirectReferenceSeed(referencePanel.setupId, {
+            analyze: imageGenerationMode === 'prompt_only',
+          });
+          referenceSeedCharacters = seed.seedCharacters;
+          referenceConfig = {
+            setupId: referencePanel.setupId,
+            worlds: seed.references.worlds,
+            ...(seed.references.characters.length > 0 ? { characters: seed.references.characters } : {}),
+          };
+        } else {
+          const seed = await loadReadyReferenceSeed(referencePanel.setupId);
+          referenceSeedCharacters = seed.seedCharacters;
+          referenceConfig = { setupId: referencePanel.setupId, worlds: seed.worlds };
+        }
+      } catch {
+        setMixError('Could not load your references. Please try again.');
+        return;
+      }
+    }
+
+    const combinedSeed = [...librarySeedCharacters, ...referenceSeedCharacters];
+    const seedCharacters = combinedSeed.length > 0 ? combinedSeed : undefined;
+    if (referenceConfig) {
+      // Set even for a characters-only direct setup so linkReferenceSetupToStory
+      // (keyed off references.setupId) still backfills story_id after insert.
+      config.references = referenceConfig;
+      // This setup is now consumed by this story; release the id so a subsequent
+      // story starts a fresh reference setup.
+      try {
+        window.localStorage.removeItem('kissago_reference_setup_id');
+      } catch {
+        /* ignore */
+      }
+    }
+
     if (seedCharacters) {
       if (shouldAutoBuild) {
         setMixError(
@@ -1131,6 +1198,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                           </button>
                         </div>
                       )}
+                      {!isReelMode && (
+                        <ReferenceDirectInputStrip
+                          active={!isReelMode}
+                          promptOnly={imageGenerationMode === 'prompt_only'}
+                          onStateChange={handleReferencePanelChange}
+                        />
+                      )}
                       {!isReelMode && mixingEnabled && (
                         <div className="px-2 pb-1">
                           <div className="flex flex-wrap items-center gap-2">
@@ -1139,16 +1213,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                 key={character.masterId ?? character.id}
                                 className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 py-1 pl-1 pr-2 text-xs text-emerald-100"
                               >
-                                {character.portraitUrl || character.referenceSheetUrl ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={character.portraitUrl ?? character.referenceSheetUrl}
-                                    alt=""
-                                    className="h-5 w-5 rounded-full border border-white/10 object-cover"
-                                  />
-                                ) : (
-                                  <UserRound className="h-3.5 w-3.5 text-emerald-300/70" />
-                                )}
+                                <CharacterAvatar
+                                  src={character.portraitUrl ?? character.referenceSheetUrl}
+                                  alt=""
+                                  imgClassName="h-5 w-5 rounded-full border border-white/10 object-cover"
+                                  fallback={<UserRound className="h-3.5 w-3.5 text-emerald-300/70" />}
+                                />
                                 {character.name}
                                 <button
                                   type="button"
@@ -1213,18 +1283,16 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                             : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
                                         }`}
                                       >
-                                        {avatar ? (
-                                          // eslint-disable-next-line @next/next/no-img-element
-                                          <img
-                                            src={avatar}
-                                            alt=""
-                                            className="h-6 w-6 rounded-full border border-white/10 object-cover"
-                                          />
-                                        ) : (
-                                          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
-                                            <UserRound className="h-3.5 w-3.5 text-neutral-500" />
-                                          </span>
-                                        )}
+                                        <CharacterAvatar
+                                          src={avatar}
+                                          alt=""
+                                          imgClassName="h-6 w-6 rounded-full border border-white/10 object-cover"
+                                          fallback={
+                                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
+                                              <UserRound className="h-3.5 w-3.5 text-neutral-500" />
+                                            </span>
+                                          }
+                                        />
                                         {master.name}
                                       </button>
                                     );
@@ -1765,6 +1833,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
               />
             )}
           </AnimatePresence>
+          <div className="mt-4">
+            <ReferencePersonalizationPanel
+              active={imageGenerationMode === 'generate' && !isReelMode}
+              visualStyle={deriveVisualStyleSummary(visualSettings)}
+              imageModelSelection={imageModelSelection}
+              onStateChange={handleReferencePanelChange}
+            />
+          </div>
         </div>
         )}
 
