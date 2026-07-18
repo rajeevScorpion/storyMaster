@@ -74,7 +74,6 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const R2_RE = /\br2:\/\/\S+/gi;
 const URL_RE = /\bhttps?:\/\/\S+/gi;
 const STORAGE_KEY_RE = /\b(?:internal|storage|media)[-_/][A-Za-z0-9_\-/.]+/gi;
-// eslint-disable-next-line no-control-regex
 const CONTROL_RE = /[\u0000-\u001F\u007F]/g;
 
 /** Scrub anything that could leak internal ids/urls; returns hits found. */

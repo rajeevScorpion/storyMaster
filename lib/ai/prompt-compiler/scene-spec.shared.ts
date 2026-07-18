@@ -141,7 +141,6 @@ export interface CanonicalImageScene {
 
 /** Replace control characters (incl. newlines/tabs) with spaces. */
 export function stripControlChars(value: string): string {
-  // eslint-disable-next-line no-control-regex
   return value.replace(/[\u0000-\u001F\u007F]/g, ' ');
 }
 
@@ -398,7 +397,6 @@ export interface SceneValidationResult {
 }
 
 function hasControlChars(value: string): boolean {
-  // eslint-disable-next-line no-control-regex
   return /[\u0000-\u001F\u007F]/.test(value);
 }
 

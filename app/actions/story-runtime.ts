@@ -667,7 +667,11 @@ export async function generateImage(
   }
 ): Promise<GeneratedImageResult> {
   const resolvedAspectRatio = normalizeStoryboardAspectRatio(aspectRatio);
-  const finalImagePrompt = buildFinalStoryboardImagePrompt(
+  // The store may pre-assemble the final prompt via the image prompt compiler and
+  // pass it as finalPromptOverride; otherwise fall back to the legacy assembler.
+  const promptOverride = imagePromptOptions.finalPromptOverride;
+  const compiledEngine = promptOverride?.engine === 'compiled';
+  const finalImagePrompt = promptOverride?.finalPrompt ?? buildFinalStoryboardImagePrompt(
     prompt,
     characters,
     visualStyle,
@@ -675,6 +679,7 @@ export async function generateImage(
     modelOverrides,
     { aspectRatio: resolvedAspectRatio, task: imageTask, ...imagePromptOptions }
   );
+  const promptCompilerMeta = promptOverride?.compiler;
   const fallbackSize = resolvedAspectRatio === '9:16'
     ? { width: 1080, height: 1920 }
     : { width: 1920, height: 1080 };
@@ -714,8 +719,10 @@ export async function generateImage(
         const { parts: referenceParts, survivors: referenceSurvivors, droppedCount: droppedReferenceCount } =
           await resolveReferenceImageParts(referenceImages);
         // Bind each surviving reference (in provider order) to the character it
-        // depicts so the model matches identity to the right attached image.
-        const bindingLines = buildReferenceBindingLines(referenceSurvivors);
+        // depicts so the model matches identity to the right attached image. When
+        // the compiled prompt already carries full identity language, use the
+        // compact binding form to avoid duplicating it.
+        const bindingLines = buildReferenceBindingLines(referenceSurvivors, { compact: compiledEngine });
         const boundImagePrompt = bindingLines ? `${finalImagePrompt}\n\n${bindingLines}` : finalImagePrompt;
         const storyboardImageSettings = normalizeStoryboardImageQualitySettings(modelOverrides?.storyboardImageSettings);
         const imageSize = storyboardImageSettings.imageSize;
@@ -763,6 +770,7 @@ export async function generateImage(
                 droppedReferenceCount,
                 aspectRatio: resolvedAspectRatio,
                 imageSize,
+                ...(promptCompilerMeta ? { promptCompiler: promptCompilerMeta } : {}),
               },
             },
             persistOptions?.persistTarget
@@ -820,6 +828,7 @@ export async function generateImage(
                   aspectRatio: resolvedAspectRatio,
                   imageSize,
                   retry: true,
+                  ...(promptCompilerMeta ? { promptCompiler: promptCompilerMeta } : {}),
                 },
               },
               persistOptions?.persistTarget
