@@ -1,0 +1,35 @@
+{
+  "provider": "example-provider",
+  "model": "example-model",
+  "adapterVersion": "1.0.0",
+  "prompt": "<compiled provider-specific prompt>",
+  "negativePrompt": "<separate only if supported>",
+  "referenceBindings": [
+    {
+      "role": "character",
+      "characterKey": "master-elrick",
+      "assetId": "internal-ref-elrick",
+      "requestIndex": 0
+    },
+    {
+      "role": "character",
+      "characterKey": "leo",
+      "assetId": "internal-ref-leo",
+      "requestIndex": 1
+    }
+  ],
+  "output": {
+    "aspectRatio": "9:16"
+  },
+  "diagnostics": {
+    "promptCharacters": 2130,
+    "compressionLevel": 0,
+    "removedCategories": [
+      "internal metadata",
+      "duplicate style",
+      "duplicate character appearance",
+      "duplicate negatives"
+    ],
+    "warnings": []
+  }
+}

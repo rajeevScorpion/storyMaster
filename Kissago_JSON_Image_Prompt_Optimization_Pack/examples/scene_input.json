@@ -1,0 +1,140 @@
+{
+  "schemaVersion": "1.0",
+  "imageType": "storyboard",
+  "aspectRatio": "9:16",
+  "layout": {
+    "type": "grid",
+    "columns": 2,
+    "rows": 2,
+    "panelCount": 4,
+    "fullBleed": true,
+    "divider": "thin near-black"
+  },
+  "global": {
+    "style": {
+      "medium": "whimsical storybook illustration",
+      "rendering": "painterly textures",
+      "acting": "expressive",
+      "tone": "playful and warm",
+      "palette": [
+        "sunlit gold",
+        "amber",
+        "rich red"
+      ],
+      "detailLevel": "balanced"
+    },
+    "world": {
+      "setting": "medieval European market",
+      "elements": [
+        "cobblestone streets",
+        "wooden stalls",
+        "bread baskets",
+        "active merchants"
+      ],
+      "lighting": "warm golden sunlight"
+    }
+  },
+  "characters": [
+    {
+      "key": "master-elrick",
+      "displayName": "Master Elrick",
+      "visualIdentity": "elderly scholar with a long white beard, spectacles and scholarly medieval robes",
+      "referenceAssetId": "internal-ref-elrick",
+      "continuityPriority": "critical"
+    },
+    {
+      "key": "leo",
+      "displayName": "Leo",
+      "visualIdentity": "curious boy with messy brown hair and a simple medieval tunic",
+      "referenceAssetId": "internal-ref-leo",
+      "continuityPriority": "critical"
+    }
+  ],
+  "panels": [
+    {
+      "position": "top-left",
+      "shot": "wide establishing shot",
+      "charactersPresent": [],
+      "action": "a lively market square filled with colourful wooden stalls, bread baskets and animated merchants",
+      "emotion": "cheerful",
+      "visualFocus": [
+        "market atmosphere",
+        "stalls",
+        "bread baskets"
+      ]
+    },
+    {
+      "position": "top-right",
+      "shot": "medium shot",
+      "charactersPresent": [
+        "leo",
+        "master-elrick"
+      ],
+      "action": "Leo stands beside Master Elrick in the centre of the busy market",
+      "emotion": "Leo is curious and expectant; Elrick is calm and attentive",
+      "visualFocus": [
+        "Leo",
+        "Master Elrick"
+      ]
+    },
+    {
+      "position": "bottom-left",
+      "shot": "medium close-up",
+      "charactersPresent": [
+        "master-elrick"
+      ],
+      "action": "Master Elrick smiles, strokes his beard with one hand and tosses a bright red apple with the other; the apple is suspended in mid-air",
+      "emotion": "playful and instructive",
+      "visualFocus": [
+        "Master Elrick",
+        "red apple"
+      ]
+    },
+    {
+      "position": "bottom-right",
+      "shot": "medium shot",
+      "charactersPresent": [
+        "master-elrick",
+        "leo"
+      ],
+      "action": "Master Elrick holds the same red apple in his open palm while Leo studies it",
+      "emotion": "warmth, wonder and thoughtful curiosity",
+      "visualFocus": [
+        "Leo's expression",
+        "Master Elrick",
+        "red apple"
+      ]
+    }
+  ],
+  "continuity": {
+    "characterIdentity": "strict",
+    "clothing": "strict within scene",
+    "world": "strict",
+    "sequentialMoments": true,
+    "importantObjects": [
+      {
+        "key": "red-apple",
+        "description": "one bright red apple",
+        "continuity": "same object in bottom-left and bottom-right"
+      }
+    ]
+  },
+  "negativeConstraints": [
+    "text",
+    "captions",
+    "speech bubbles",
+    "subtitles",
+    "modern elements",
+    "extra panels",
+    "nested panels",
+    "white or cream gutters",
+    "outer borders",
+    "watermarks",
+    "logos",
+    "duplicated named characters"
+  ],
+  "internal": {
+    "beatNumber": 1,
+    "note": "Internal metadata must not enter the image prompt."
+  }
+}
