@@ -239,6 +239,10 @@ export function filterAndDedupScene(scene: CanonicalImageScene): {
   }
   invariants = remainingInvariants;
 
+  // Character names are handled by the identity section — never treat them as
+  // world invariants or hoist candidates.
+  const characterNameKeys = new Set(scene.characters.map((c) => phraseKey(c.displayName)));
+
   // 2) Hoist a visualFocus item shared by >= 3 panels to a global invariant.
   const focusCounts = new Map<string, { count: number; sample: string }>();
   for (const panel of panels) {
@@ -247,6 +251,7 @@ export function filterAndDedupScene(scene: CanonicalImageScene): {
       const key = phraseKey(item);
       if (!uniqueKeys.has(key)) continue;
       uniqueKeys.delete(key);
+      if (characterNameKeys.has(key)) continue;
       const entry = focusCounts.get(key);
       if (entry) entry.count += 1;
       else focusCounts.set(key, { count: 1, sample: item });
@@ -267,7 +272,6 @@ export function filterAndDedupScene(scene: CanonicalImageScene): {
   excluded.push(...invariantDedup.excluded);
   invariants = invariantDedup.kept;
 
-  const characterNameKeys = new Set(scene.characters.map((c) => phraseKey(c.displayName)));
   for (const panel of panels) {
     const focusDedup = dedupPhrases(panel.visualFocus, `panels.${panel.position}.visualFocus`);
     excluded.push(...focusDedup.excluded);
