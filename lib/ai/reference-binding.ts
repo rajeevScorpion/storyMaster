@@ -10,13 +10,19 @@
  * the 1-based index matches the image order the model receives.
  */
 export function buildReferenceBindingLines(
-  refs: Array<{ type: string; name?: string }>
+  refs: Array<{ type: string; name?: string }>,
+  options?: { compact?: boolean }
 ): string {
   const lines: string[] = [];
   refs.forEach((ref, index) => {
     if (ref.type === 'character' && ref.name?.trim()) {
+      // Compact form is used when the prompt compiler already carries the full
+      // identity + style-lock language in its characters section, so the binding
+      // line only needs to map the image index to the character (no duplication).
       lines.push(
-        `Attached reference image ${index + 1} depicts ${ref.name.trim()} — match this exact identity (face, hair, build, distinguishing features). Render fully in the story's locked visual style; the reference defines identity, never rendering style.`
+        options?.compact
+          ? `Attached reference image ${index + 1} depicts ${ref.name.trim()}.`
+          : `Attached reference image ${index + 1} depicts ${ref.name.trim()} — match this exact identity (face, hair, build, distinguishing features). Render fully in the story's locked visual style; the reference defines identity, never rendering style.`
       );
     }
   });

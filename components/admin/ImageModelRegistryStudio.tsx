@@ -11,7 +11,8 @@ import {
   saveAdminElevenLabsCostSettings,
   testAdminImageModel,
 } from '@/app/actions/image-models';
-import type { ImageModelRegistryRecord, ImageTaskKey } from '@/lib/ai/image-models.shared';
+import type { ImageModelCapabilities, ImageModelRegistryRecord, ImageTaskKey } from '@/lib/ai/image-models.shared';
+import { normalizePromptCompilerCapability } from '@/lib/ai/prompt-compiler/capability.shared';
 import {
   DEFAULT_IMAGE_CONTINUITY_SETTINGS,
   type ImageContinuitySettings,
@@ -38,6 +39,7 @@ type Draft = Pick<
   | 'coinCostPerImage'
   | 'providerCostPerOutputImageUsd'
   | 'providerCostPerInputImageUsd'
+  | 'capabilities'
   | 'sortOrder'
 >;
 
@@ -63,6 +65,7 @@ function toDraft(record: ImageModelRegistryRecord): Draft {
     coinCostPerImage: record.coinCostPerImage,
     providerCostPerOutputImageUsd: record.providerCostPerOutputImageUsd,
     providerCostPerInputImageUsd: record.providerCostPerInputImageUsd,
+    capabilities: record.capabilities,
     sortOrder: record.sortOrder,
   };
 }
@@ -137,6 +140,23 @@ export default function ImageModelRegistryStudio() {
         ...patch,
       },
     }));
+  };
+
+  // Merge a prompt-compiler capability patch into the model's capabilities JSONB
+  // (the registry save fully replaces capabilities, so we keep the rest intact).
+  const updatePromptCompiler = (
+    id: string,
+    patch: Partial<NonNullable<ImageModelCapabilities['promptCompiler']>>
+  ) => {
+    setDrafts((current) => {
+      const draft = current[id];
+      if (!draft) return current;
+      const capabilities: ImageModelCapabilities = {
+        ...(draft.capabilities ?? {}),
+        promptCompiler: { ...(draft.capabilities?.promptCompiler ?? {}), ...patch },
+      };
+      return { ...current, [id]: { ...draft, capabilities } };
+    });
   };
 
   const save = async (record: ImageModelRegistryRecord) => {
@@ -563,6 +583,57 @@ export default function ImageModelRegistryStudio() {
                               </label>
                             ))}
                           </div>
+                          {(() => {
+                            const compiler = normalizePromptCompilerCapability(draft.capabilities);
+                            return (
+                              <div className="mt-3 rounded-lg border border-white/10 bg-neutral-950/50 p-2">
+                                <p className="text-[10px] uppercase tracking-[0.14em] text-emerald-300/70">Prompt compiler</p>
+                                <label className="mt-1.5 inline-flex items-center gap-2 text-xs text-neutral-300">
+                                  <input
+                                    type="checkbox"
+                                    checked={compiler.enabled}
+                                    onChange={(event) => updatePromptCompiler(record.id, { enabled: event.target.checked })}
+                                    className="h-3.5 w-3.5 accent-emerald-500"
+                                  />
+                                  Enabled
+                                </label>
+                                <label className="mt-2 block text-[11px] text-neutral-400">
+                                  Budget (chars)
+                                  <input
+                                    type="number"
+                                    min={1200}
+                                    max={20000}
+                                    step={100}
+                                    value={compiler.promptBudgetChars}
+                                    onChange={(event) => updatePromptCompiler(record.id, { promptBudgetChars: Number(event.target.value) })}
+                                    className="mt-1 block w-24 rounded-lg border border-white/10 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-emerald-500/50"
+                                    aria-label={`${record.displayName} prompt compiler budget`}
+                                  />
+                                </label>
+                                <label className="mt-2 block text-[11px] text-neutral-400">
+                                  Adapter
+                                  <select
+                                    value={compiler.adapterVersion}
+                                    onChange={(event) => updatePromptCompiler(record.id, { adapterVersion: event.target.value })}
+                                    className="mt-1 block w-full rounded-lg border border-white/10 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-emerald-500/50"
+                                    aria-label={`${record.displayName} prompt compiler adapter`}
+                                  >
+                                    <option value="neutral-v1">neutral-v1</option>
+                                    <option value="gemini-v1">gemini-v1</option>
+                                  </select>
+                                </label>
+                                <label className="mt-2 inline-flex items-center gap-2 text-xs text-neutral-300">
+                                  <input
+                                    type="checkbox"
+                                    checked={compiler.supportsNegativePrompt}
+                                    onChange={(event) => updatePromptCompiler(record.id, { supportsNegativePrompt: event.target.checked })}
+                                    className="h-3.5 w-3.5 accent-emerald-500"
+                                  />
+                                  Negative prompt
+                                </label>
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex justify-end gap-2">

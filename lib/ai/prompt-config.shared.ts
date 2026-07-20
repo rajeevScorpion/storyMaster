@@ -459,6 +459,7 @@ Core rules:
 19. Preserve one-to-one identity for each named character across all four panels.
 20. Use Hidden Story Text Parts as the timing spine for the four panels: part 1 maps to topLeft, part 2 to topRight, part 3 to bottomLeft, and part 4 to bottomRight.
 21. Each frame should visualize the narrative content and emotional beat of its matching storyTextPart. Do not let one part's action drift into a different panel unless the story explicitly requires overlap.
+22. For each frame, set charactersPresent to the exact display names (from {{characters}}) of the named characters actually visible in that panel. Use an empty array for scenery-only panels. Do not list a character who is absent from the panel, and use the character's canonical name exactly.
 
 Frame design rules:
 - topLeft should establish the beat or its opening emotional note
@@ -490,6 +491,7 @@ Each frame object must contain:
 - visualFocus
 - emotion
 - continuityAnchor
+- charactersPresent
 
 Intent example 1:
 - A child enters a mysterious shop, discovers a magical umbrella, touches a brass dial, and sunlight bursts in.
