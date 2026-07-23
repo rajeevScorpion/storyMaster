@@ -18,6 +18,7 @@ import {
   Images,
   Layers,
   LayoutGrid,
+  LifeBuoy,
   Megaphone,
   Mic2,
   Package,
@@ -361,6 +362,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     label: 'Configuration',
     items: [
       { label: 'Global Settings', href: '/admin/settings', icon: Settings, childGroups: SETTINGS_CHILD_GROUPS },
+      { label: 'Admin manual', href: '/admin/help', icon: LifeBuoy },
     ],
   },
 ];

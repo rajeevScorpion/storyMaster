@@ -89,6 +89,15 @@ describe('admin nav config', () => {
     expect(new Set(icons).size).toBe(icons.length);
   });
 
+  it('includes the admin manual (help) as a top-level Configuration item', () => {
+    const configuration = ADMIN_NAV.find((group) => group.id === 'configuration');
+    const help = configuration?.items.find((item) => item.href === '/admin/help');
+    expect(help).toBeDefined();
+    // Help is not a Global Settings section, so it must not leak into the
+    // settings destinations contract.
+    expect(SETTINGS_NAV_ITEMS.some((item) => item.href === '/admin/help')).toBe(false);
+  });
+
   it('resolves items by id', () => {
     expect(findSettingsNavItem('storyboard')?.href).toBe('/admin/settings/storyboard');
     expect(findSettingsNavItem('nonexistent')).toBeUndefined();
