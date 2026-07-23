@@ -1,10 +1,27 @@
 'use client';
 
 import Link from 'next/link';
-import { type ComponentType, useEffect, useState } from 'react';
-import MediaProcessingModeCard from '@/components/admin/MediaProcessingModeCard';
-import VideoExportPresetStudio from '@/components/admin/VideoExportPresetStudio';
+import dynamic from 'next/dynamic';
+import { type ComponentType, useEffect, useMemo, useState } from 'react';
 import { Check, Loader2, Plus, RefreshCcw } from 'lucide-react';
+
+// These two panels only render in the `media` and `video-export` sections but
+// are ~600 lines combined. Load them on demand so they aren't in the JS chunk
+// shipped to every settings route.
+const panelLoading = () => (
+  <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-6 text-neutral-400">
+    <Loader2 size={16} className="animate-spin" />
+    Loading panel...
+  </div>
+);
+const MediaProcessingModeCard = dynamic(() => import('@/components/admin/MediaProcessingModeCard'), {
+  ssr: false,
+  loading: panelLoading,
+});
+const VideoExportPresetStudio = dynamic(() => import('@/components/admin/VideoExportPresetStudio'), {
+  ssr: false,
+  loading: panelLoading,
+});
 import {
   getGlobalSettings,
   saveAdminNarrationVoiceSettings,
@@ -899,20 +916,31 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const pageTitle = section === 'overview' ? 'Settings overview' : sectionMeta.label;
   // Live, data-derived summaries shown on the overview cards. Sections with no
   // live summary fall back to the static summary defined in the nav config.
-  const overviewSummaries: Partial<Record<string, string>> = {
-    storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
-    reader: `${storyUiTextLineCount} text lines, ${storyTextOverlayWordsPerLine} overlay words, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
-    narration: narrationVoiceSettings
-      ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
-      : 'Voice settings not loaded',
-    authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
-    characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
-    media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
-    'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
-    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
-  };
-  const imageUploadHasUnsavedChanges = JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings);
-  const mediaStorageHasUnsavedChanges = JSON.stringify(mediaStorageDraft) !== JSON.stringify(mediaStorage.settings);
+  // Built only on the overview page (the only place it is read) so typing in a
+  // focused section doesn't re-allocate it on every keystroke.
+  const overviewSummaries: Partial<Record<string, string>> = section === 'overview'
+    ? {
+        storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
+        reader: `${storyUiTextLineCount} text lines, ${storyTextOverlayWordsPerLine} overlay words, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
+        narration: narrationVoiceSettings
+          ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
+          : 'Voice settings not loaded',
+        authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
+        characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
+        media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
+        'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
+        generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
+      }
+    : {};
+  // Memoized so editing an unrelated field doesn't re-stringify these drafts.
+  const imageUploadHasUnsavedChanges = useMemo(
+    () => JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings),
+    [imageUploadDraft, imageUploadSettings]
+  );
+  const mediaStorageHasUnsavedChanges = useMemo(
+    () => JSON.stringify(mediaStorageDraft) !== JSON.stringify(mediaStorage.settings),
+    [mediaStorageDraft, mediaStorage.settings]
+  );
 
   return (
     <div className="mx-auto max-w-7xl">
