@@ -85,12 +85,12 @@ export default function InfoPopover({
             role="dialog"
             aria-label={title}
             data-info-popover-open="true"
-            initial={{ opacity: 0, y: 12, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 12, scale: 0.98 }}
+            initial={{ y: 12, scale: 0.98 }}
+            animate={{ y: 0, scale: 1 }}
+            exit={{ y: 12, scale: 0.98 }}
             transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-            style={panelStyle}
-            className="fixed z-[1100] max-h-[min(52dvh,24rem)] w-auto overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-4 text-left shadow-2xl shadow-black/60 md:w-80 md:max-h-[75vh]"
+            style={{ ...panelStyle, backgroundColor: '#080808' }}
+            className="fixed z-[1100] isolate max-h-[min(52dvh,24rem)] w-auto overflow-y-auto rounded-2xl border border-white/15 p-4 text-left shadow-[0_24px_80px_rgba(0,0,0,0.95)] md:w-80 md:max-h-[75vh]"
           >
             <div className="flex items-start justify-between gap-3">
               <p className="text-sm font-medium text-neutral-100">{title}</p>

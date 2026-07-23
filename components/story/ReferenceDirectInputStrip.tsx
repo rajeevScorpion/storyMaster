@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Plus, X, UserPlus, ImagePlus } from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { Loader2, X, UserPlus, ImagePlus } from 'lucide-react';
 import { compressImageFile, blobToDataUrl } from '@/lib/media/clientImageCompression';
 import {
   getReferenceCreationContext,
@@ -21,6 +21,10 @@ interface Props {
   /** Text-only story: show the "attach the same refs externally" hint. */
   promptOnly: boolean;
   onStateChange: (state: ReferencePanelState) => void;
+  /** Controls owned by the landing screen that should lead this toolbar. */
+  toolbarStart?: ReactNode;
+  /** Shared help for all controls; rendered only when the toolbar has an action. */
+  toolbarInfo?: ReactNode;
 }
 
 /**
@@ -30,7 +34,13 @@ interface Props {
  * image model at generation time. Self-hides unless the References feature is on
  * in 'direct' mode for this user.
  */
-export default function ReferenceDirectInputStrip({ active, promptOnly, onStateChange }: Props) {
+export default function ReferenceDirectInputStrip({
+  active,
+  promptOnly,
+  onStateChange,
+  toolbarStart,
+  toolbarInfo,
+}: Props) {
   const [context, setContext] = useState<ReferenceCreationContext | null>(null);
   const [setupId, setSetupId] = useState<string>('');
   const [items, setItems] = useState<ReferenceSetupItemStatus[]>([]);
@@ -141,44 +151,56 @@ export default function ReferenceDirectInputStrip({ active, promptOnly, onStateC
     []
   );
 
-  if (!active || !isDirect || !context) return null;
+  if (!active) return null;
 
-  const canAddCharacter = context.charactersEnabled && characterItems.length < context.maxCharacterRefs;
-  const canAddWorld = context.worldsEnabled && worldItems.length < context.maxWorldRefs;
-  if (!context.charactersEnabled && !context.worldsEnabled) return null;
+  const canAddCharacter = Boolean(
+    isDirect
+      && context?.charactersEnabled
+      && characterItems.length < context.maxCharacterRefs
+  );
+  const canAddWorld = Boolean(
+    isDirect
+      && context?.worldsEnabled
+      && worldItems.length < context.maxWorldRefs
+  );
+  const hasToolbarActions = Boolean(toolbarStart) || canAddCharacter || canAddWorld;
+
+  if (!hasToolbarActions && items.length === 0) return null;
 
   return (
     <div className="px-2 pb-1">
-      <div className="flex flex-wrap items-center gap-2">
-        {canAddCharacter && (
-          <button
-            type="button"
-            disabled={busyKind !== null}
-            onClick={() => characterInputRef.current?.click()}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100 disabled:opacity-60"
-          >
-            {busyKind === 'character' ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
-            Add character
-          </button>
-        )}
-        {canAddWorld && (
-          <button
-            type="button"
-            disabled={busyKind !== null}
-            onClick={() => worldInputRef.current?.click()}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100 disabled:opacity-60"
-          >
-            {busyKind === 'world' ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-            Add world
-          </button>
-        )}
-        {items.length === 0 && (canAddCharacter || canAddWorld) && (
-          <span className="text-[11px] text-neutral-600">
-            <Plus size={10} className="mr-0.5 inline" />
-            Attach a reference image — crop to one clear, front-facing subject for the best match.
-          </span>
-        )}
-      </div>
+      {hasToolbarActions && (
+        <div className="flex flex-nowrap items-center gap-2">
+          {toolbarStart}
+          {canAddCharacter && (
+            <button
+              type="button"
+              disabled={busyKind !== null}
+              onClick={() => characterInputRef.current?.click()}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100 disabled:opacity-60"
+            >
+              {busyKind === 'character'
+                ? <Loader2 size={13} className="animate-spin" />
+                : <UserPlus size={13} />}
+              Add character
+            </button>
+          )}
+          {canAddWorld && (
+            <button
+              type="button"
+              disabled={busyKind !== null}
+              onClick={() => worldInputRef.current?.click()}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100 disabled:opacity-60"
+            >
+              {busyKind === 'world'
+                ? <Loader2 size={13} className="animate-spin" />
+                : <ImagePlus size={13} />}
+              Add world
+            </button>
+          )}
+          {toolbarInfo}
+        </div>
+      )}
 
       <input
         ref={characterInputRef}

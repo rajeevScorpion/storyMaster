@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
@@ -39,13 +39,14 @@ import {
 } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X, UserRound, AtSign } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, X, UserRound } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
 import CharacterAvatar from './CharacterAvatar';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import InfoPopover from '@/components/ui/InfoPopover';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
 import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
 import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
@@ -86,6 +87,11 @@ type CreationMode = 'prompt' | 'seeded' | 'reel';
 const REEL_SETUP_CACHE_KEY = 'kissago_reel_story_setup_cache';
 const REEL_SETUP_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_REEL_LANDING_BEAT_COUNT = 1;
+const MIN_STORY_IDEA_WORDS = 3;
+
+function countMeaningfulWords(value: string): number {
+  return value.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+}
 
 function readCachedReelSetup(): ReelStorySetupSettings | null {
   if (typeof window === 'undefined') return null;
@@ -119,98 +125,6 @@ function writeCachedReelSetup(setup: ReelStorySetupSettings): void {
   } catch {
     // Best-effort paint cache only.
   }
-}
-
-function InfoPopover({
-  title,
-  ariaLabel,
-  children,
-}: {
-  title: string;
-  ariaLabel: string;
-  children: ReactNode;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const panelId = useId();
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen]);
-
-  return (
-    <div ref={rootRef} className="relative inline-flex">
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-neutral-900/80 text-neutral-500 transition-colors hover:border-emerald-400/40 hover:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-controls={panelId}
-      >
-        <Info className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <>
-            <motion.button
-              type="button"
-              aria-label={`Close ${title} details`}
-              className="fixed inset-0 z-[65] bg-black/40 sm:hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
-            />
-            <motion.div
-              id={panelId}
-              role="dialog"
-              aria-label={title}
-              initial={{ opacity: 0, y: 8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.98 }}
-              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed inset-x-3 bottom-3 z-[70] max-h-[75vh] overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-4 text-left shadow-2xl shadow-black/50 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:w-80"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-medium text-neutral-100">{title}</p>
-                <button
-                  type="button"
-                  onClick={() => setIsOpen(false)}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200"
-                  aria-label={`Close ${title} details`}
-                >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-              <div className="mt-3 space-y-3 text-sm leading-relaxed text-neutral-400">
-                {children}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  );
 }
 
 function buildPickerRequestSignature(
@@ -641,6 +555,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       : prompt
   );
   const isOverAuthoringWordCap = authoringWordCount > authoringWordCap;
+  const storyIdeaWordCount = countMeaningfulWords(prompt);
+  const hasMinimumStoryIdea = storyIdeaWordCount >= MIN_STORY_IDEA_WORDS;
 
   const clearSeedPreview = () => {
     setSeedPreview(null);
@@ -807,6 +723,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         ? reelUserText.trim()
         : prompt.trim();
     if (!storyPrompt) return;
+    if (!isReelMode
+      && creationMode === 'prompt'
+      && countMeaningfulWords(storyPrompt) < MIN_STORY_IDEA_WORDS) {
+      return;
+    }
 
     const shouldAutoBuild =
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
@@ -1056,7 +977,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       return;
     }
 
-    if (prompt.trim() && !isLoading && !isOverAuthoringWordCap) {
+    const hasRequiredPrompt = isReelMode ? Boolean(prompt.trim()) : hasMinimumStoryIdea;
+    if (hasRequiredPrompt && !isLoading && !isOverAuthoringWordCap) {
       await startConfiguredStory();
     }
   };
@@ -1155,47 +1077,59 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   {creationMode !== 'seeded' ? (
                     <div className="space-y-3 p-2">
                       {!isReelMode && (
-                        <div className="relative flex items-center">
-                          <input
-                            ref={promptInputRef}
-                            type="text"
-                            value={prompt}
-                            onChange={(e) => {
-                              setPrompt(e.target.value);
-                              promptMentions.syncMentionState(e.target.value, e.target.selectionStart);
-                            }}
-                            onClick={(e) => promptMentions.syncMentionState(prompt, e.currentTarget.selectionStart)}
-                            onKeyDown={(e) => {
-                              promptMentions.handleKeyDown(e);
-                            }}
-                            placeholder="Tell me a story of a monkey and an elephant..."
-                            className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
-                            disabled={isLoading}
-                          />
-                          <MentionSuggestionList
-                            open={Boolean(promptMentions.mention)}
-                            suggestions={promptMentions.suggestions}
-                            highlightIndex={promptMentions.highlightIndex}
-                            onHighlight={promptMentions.setHighlightIndex}
-                            onSelect={promptMentions.applySuggestion}
-                            avatarUrlByName={Object.fromEntries(
-                              libraryCharacters.map((master) => [
-                                master.name,
-                                master.portraitUrl ?? master.referenceSheetUrl ?? undefined,
-                              ])
-                            )}
-                          />
-                          <button
-                            type="submit"
-                            disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
-                            className="ml-2 bg-white text-black px-6 py-3 rounded-xl font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                          >
-                            {isLoading ? (
-                              <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <span>Begin</span>
-                            )}
-                          </button>
+                        <div className="space-y-1">
+                          <div className="relative flex items-center">
+                            <input
+                              ref={promptInputRef}
+                              type="text"
+                              value={prompt}
+                              onChange={(e) => {
+                                setPrompt(e.target.value);
+                                promptMentions.syncMentionState(e.target.value, e.target.selectionStart);
+                              }}
+                              onClick={(e) => promptMentions.syncMentionState(prompt, e.currentTarget.selectionStart)}
+                              onKeyDown={(e) => {
+                                promptMentions.handleKeyDown(e);
+                              }}
+                              placeholder="Tell me a story of a monkey and an elephant..."
+                              aria-describedby={!hasMinimumStoryIdea && prompt.trim() ? 'story-idea-minimum' : undefined}
+                              className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
+                              disabled={isLoading}
+                            />
+                            <MentionSuggestionList
+                              open={Boolean(promptMentions.mention)}
+                              suggestions={promptMentions.suggestions}
+                              highlightIndex={promptMentions.highlightIndex}
+                              onHighlight={promptMentions.setHighlightIndex}
+                              onSelect={promptMentions.applySuggestion}
+                              avatarUrlByName={Object.fromEntries(
+                                libraryCharacters.map((master) => [
+                                  master.name,
+                                  master.portraitUrl ?? master.referenceSheetUrl ?? undefined,
+                                ])
+                              )}
+                            />
+                            <button
+                              type="submit"
+                              disabled={!hasMinimumStoryIdea || isLoading || isOverAuthoringWordCap}
+                              className="ml-2 flex items-center gap-2 rounded-xl bg-white px-6 py-3 font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isLoading ? (
+                                <div className="h-5 w-5 rounded-full border-2 border-black border-t-transparent animate-spin" />
+                              ) : (
+                                <span>Begin</span>
+                              )}
+                            </button>
+                          </div>
+                          {!hasMinimumStoryIdea && prompt.trim() && (
+                            <p
+                              id="story-idea-minimum"
+                              className="px-4 text-left text-[11px] text-amber-300/80"
+                              aria-live="polite"
+                            >
+                              Enter at least {MIN_STORY_IDEA_WORDS} words to begin.
+                            </p>
+                          )}
                         </div>
                       )}
                       {!isReelMode && (
@@ -1203,9 +1137,52 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                           active={!isReelMode}
                           promptOnly={imageGenerationMode === 'prompt_only'}
                           onStateChange={handleReferencePanelChange}
+                          toolbarStart={
+                            mixingEnabled && libraryCharacters.length > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => setShowCharacterPicker((value) => !value)}
+                                aria-expanded={showCharacterPicker}
+                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-white/15 px-2.5 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-400/30 hover:text-neutral-200"
+                              >
+                                <UserRound className="h-3.5 w-3.5" />
+                                Bring your characters
+                                {showCharacterPicker ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )}
+                              </button>
+                            ) : undefined
+                          }
+                          toolbarInfo={
+                            <InfoPopover
+                              title="Characters and worlds"
+                              ariaLabel="How characters and worlds affect your story"
+                            >
+                              <p>
+                                <strong className="text-neutral-200">Bring your characters:</strong>{' '}
+                                choose characters already saved in your library, or type{' '}
+                                <span className="font-medium text-neutral-200">@name</span> in your
+                                idea to add one.
+                              </p>
+                              <p>
+                                <strong className="text-neutral-200">Add character:</strong>{' '}
+                                attach a reference image. Crop to one clear, front-facing subject
+                                for the best match.
+                              </p>
+                              <p>
+                                <strong className="text-neutral-200">Add world:</strong>{' '}
+                                attach a clear image of a setting to guide the locations,
+                                atmosphere, and visual continuity.
+                              </p>
+                            </InfoPopover>
+                          }
                         />
                       )}
-                      {!isReelMode && mixingEnabled && (
+                      {!isReelMode
+                        && mixingEnabled
+                        && (selectedLibraryCharacters.length > 0 || showCharacterPicker || mixError) && (
                         <div className="px-2 pb-1">
                           <div className="flex flex-wrap items-center gap-2">
                             {selectedLibraryCharacters.map((character) => (
@@ -1234,27 +1211,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                 </button>
                               </span>
                             ))}
-                            {libraryCharacters.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setShowCharacterPicker((value) => !value)}
-                                aria-expanded={showCharacterPicker}
-                                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-white/15 px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-400/30 hover:text-neutral-200"
-                              >
-                                <UserRound className="h-3.5 w-3.5" />
-                                Bring your characters
-                                {showCharacterPicker ? (
-                                  <ChevronUp className="h-3 w-3" />
-                                ) : (
-                                  <ChevronDown className="h-3 w-3" />
-                                )}
-                              </button>
-                            )}
-                            {libraryCharacters.length > 0 && (
-                              <span className="hidden items-center gap-1 text-[11px] text-neutral-600 sm:flex">
-                                <AtSign className="h-3 w-3" /> or type @name in your idea
-                              </span>
-                            )}
                           </div>
                           <AnimatePresence>
                             {showCharacterPicker && (
