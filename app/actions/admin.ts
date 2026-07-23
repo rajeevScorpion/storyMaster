@@ -533,7 +533,12 @@ const GLOBAL_SETTINGS_WARM_KEYS: readonly string[] = [
   STORY_LANGUAGE_ENABLED_FLAG_KEY,
 ];
 
-export async function getGlobalSettings(): Promise<{
+// `section` scopes the two real DB round-trips below (narration sample statuses
+// + preview seed-plan price) to the pages that actually render them. Every other
+// value is served from the warm flag cache, so the rest stays a single query
+// regardless of section. Defaults to 'overview', which fetches everything (its
+// live summaries read both scoped values).
+export async function getGlobalSettings(section: string = 'overview'): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
@@ -585,6 +590,12 @@ export async function getGlobalSettings(): Promise<{
   // Warm both flag caches in one query so the per-key getters below (including
   // those inside the composite fetchers) hit cache instead of round-tripping.
   await warmFeatureFlagCaches(GLOBAL_SETTINGS_WARM_KEYS);
+  // Only these two sections (and the overview, which summarizes both) render the
+  // narration sample statuses / preview seed-plan price, so skip their DB reads
+  // everywhere else. When skipped they resolve to the same empty values the
+  // component holds by default and never displays off-section.
+  const needsNarrationSamples = section === 'overview' || section === 'narration';
+  const needsPreviewPrice = section === 'overview' || section === 'authoring';
   const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationBundle, enabledStoryLanguageIds] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
@@ -619,7 +630,7 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
-    getPreviewSeedPlanPriceCoins(),
+    needsPreviewPrice ? getPreviewSeedPlanPriceCoins() : Promise.resolve(0),
     getFeatureFlagValue('prompt_only_max_images_per_beat'),
     getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
     getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
@@ -631,7 +642,7 @@ export async function getGlobalSettings(): Promise<{
       // twice (the warm cache already covers this; sequencing keeps the dedupe
       // even if warming failed).
       const settings = await getNarrationVoiceSettings();
-      const statuses = await getNarrationVoiceSampleStatusesForAdmin();
+      const statuses = needsNarrationSamples ? await getNarrationVoiceSampleStatusesForAdmin() : [];
       return { settings, statuses };
     })(),
     getEnabledStoryLanguageIds(),

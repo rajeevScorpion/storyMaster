@@ -323,7 +323,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [mediaStorageMessage, setMediaStorageMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    getGlobalSettings()
+    getGlobalSettings(section)
       .then(({
         cycleOverride: co,
         cycleMs: cm,
@@ -454,7 +454,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setLoadError(err.message || 'Failed to load settings');
         setLoading(false);
       });
-  }, []);
+  }, [section]);
 
   async function handleCycleMsSave() {
     const ms = parseInt(cycleMsInput, 10);
@@ -918,7 +918,16 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       )}
 
       {loading ? (
-        <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading settings...</div>
+        <div className="space-y-6" aria-busy="true" aria-label="Loading settings">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="animate-pulse rounded-2xl border border-white/10 bg-white/5 p-6">
+              <div className="h-4 w-40 rounded bg-white/10" />
+              <div className="mt-3 h-3 w-3/4 rounded bg-white/5" />
+              <div className="mt-6 h-10 w-full rounded-lg bg-white/5" />
+              <div className="mt-3 h-10 w-2/3 rounded-lg bg-white/5" />
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-6">
           {section === 'overview' && (
