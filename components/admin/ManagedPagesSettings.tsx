@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, FileText, RotateCcw, Save } from 'lucide-react';
 
+import AdminToggle from '@/components/admin/AdminToggle';
+
 import {
   getManagedPagesAdminStateAction,
   resetManagedPageToSeedAction,
@@ -75,19 +77,7 @@ function Toggle({
   onChange: (checked: boolean) => void;
   label: string;
 }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      className={`inline-flex h-6 w-11 items-center rounded-full transition-colors ${checked ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-      aria-pressed={checked}
-      aria-label={label}
-    >
-      <span
-        className={`mx-1 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`}
-      />
-    </button>
-  );
+  return <AdminToggle checked={checked} onToggle={() => onChange(!checked)} ariaLabel={label} />;
 }
 
 export default function ManagedPagesSettings() {

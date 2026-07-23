@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ChevronLeft, ChevronRight, ShieldAlert } from 'lucide-react';
 import { getPricingAuditPage } from '@/app/actions/pricing-admin';
+import AdminPageHeader from '@/components/admin/AdminPageHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,48 +40,48 @@ export default async function PricingAuditPage({ searchParams }: PricingAuditPag
   const canGoNext = audit.page < audit.totalPages;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl text-neutral-100">Recent audit</h1>
-            <p className="mt-1 text-sm text-neutral-400">Latest pricing changes recorded for traceability.</p>
-            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
-              Showing {audit.entries.length} of {audit.totalCount} entries
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {canGoPrevious ? (
-              <Link
-                href={auditPageHref(audit.page - 1)}
-                className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-3 py-2 text-sm text-neutral-200 hover:bg-white/10"
-              >
-                <ChevronLeft size={14} />
-                Previous
-              </Link>
-            ) : (
-              <span className="inline-flex cursor-default items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-600">
-                <ChevronLeft size={14} />
-                Previous
-              </span>
-            )}
+        <AdminPageHeader
+          title="Recent audit"
+          description="Latest pricing changes recorded for traceability."
+          actions={
+            <>
+              {canGoPrevious ? (
+                <Link
+                  href={auditPageHref(audit.page - 1)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-3 py-2 text-sm text-neutral-200 hover:bg-white/10"
+                >
+                  <ChevronLeft size={14} />
+                  Previous
+                </Link>
+              ) : (
+                <span className="inline-flex cursor-default items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-600">
+                  <ChevronLeft size={14} />
+                  Previous
+                </span>
+              )}
 
-            {canGoNext ? (
-              <Link
-                href={auditPageHref(audit.page + 1)}
-                className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-3 py-2 text-sm text-neutral-200 hover:bg-white/10"
-              >
-                Next
-                <ChevronRight size={14} />
-              </Link>
-            ) : (
-              <span className="inline-flex cursor-default items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-600">
-                Next
-                <ChevronRight size={14} />
-              </span>
-            )}
-          </div>
-        </div>
+              {canGoNext ? (
+                <Link
+                  href={auditPageHref(audit.page + 1)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-3 py-2 text-sm text-neutral-200 hover:bg-white/10"
+                >
+                  Next
+                  <ChevronRight size={14} />
+                </Link>
+              ) : (
+                <span className="inline-flex cursor-default items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/40 px-3 py-2 text-sm text-neutral-600">
+                  Next
+                  <ChevronRight size={14} />
+                </span>
+              )}
+            </>
+          }
+        />
+        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">
+          Showing {audit.entries.length} of {audit.totalCount} entries
+        </p>
       </div>
 
       <section className="rounded-2xl border border-white/10 bg-white/5 p-6">

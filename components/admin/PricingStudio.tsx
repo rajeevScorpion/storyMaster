@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
@@ -37,6 +36,9 @@ import {
 } from '@/app/actions/pricing-admin';
 import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
 import { PRICING_NAV_ITEMS, findPricingNavItem } from '@/lib/admin/nav';
+import AdminToggle from '@/components/admin/AdminToggle';
+import AdminPageHeader from '@/components/admin/AdminPageHeader';
+import AdminHubCard from '@/components/admin/AdminHubCard';
 import {
   BILLING_INTERVALS,
   BILLING_PROVIDERS,
@@ -599,23 +601,23 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
   const isWorkshop = section === 'workshop';
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl text-neutral-100">{sectionMeta.label}</h1>
-            <p className="mt-1 text-sm text-neutral-400">{sectionMeta.description}</p>
-            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">Display mode: 10 coins = 1 internal beat</p>
-          </div>
-          <button
-            onClick={() => void refreshState()}
-            disabled={busyKey !== null}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-200 hover:bg-white/10 disabled:opacity-50"
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-        </div>
+        <AdminPageHeader
+          title={sectionMeta.label}
+          description={sectionMeta.description}
+          actions={
+            <button
+              onClick={() => void refreshState()}
+              disabled={busyKey !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-200 hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          }
+        />
+        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">Display mode: 10 coins = 1 internal beat</p>
 
         {isWorkshop && (
           <>
@@ -627,20 +629,15 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
             </div>
 
             <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {PRICING_NAV_ITEMS.filter((item) => item.id !== 'workshop').map(({ href, label, description, icon: Icon }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="group rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="rounded-lg bg-emerald-500/10 p-2 text-emerald-300">
-                      <Icon size={16} />
-                    </span>
-                    <span className="text-sm font-medium text-neutral-100 group-hover:text-emerald-200">{label}</span>
-                  </div>
-                  <p className="mt-3 text-xs leading-relaxed text-neutral-400">{description}</p>
-                </Link>
+              {PRICING_NAV_ITEMS.filter((item) => item.id !== 'workshop').map((item) => (
+                <AdminHubCard
+                  key={item.href}
+                  href={item.href}
+                  label={item.label}
+                  description={item.description}
+                  icon={item.icon}
+                  summary={item.staticSummary}
+                />
               ))}
             </div>
           </>
@@ -662,12 +659,11 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                     <p className="text-sm font-medium text-neutral-100">{setting.label}</p>
                     <p className="mt-1 text-xs text-neutral-400">{setting.description}</p>
                   </div>
-                  <button
-                    onClick={() => setRuntimeDrafts((current) => ({ ...current, [setting.key]: { ...draft, enabled: !draft.enabled } }))}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${draft.enabled ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-                  >
-                    <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${draft.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                  </button>
+                  <AdminToggle
+                    checked={draft.enabled}
+                    onToggle={() => setRuntimeDrafts((current) => ({ ...current, [setting.key]: { ...draft, enabled: !draft.enabled } }))}
+                    ariaLabel={setting.label}
+                  />
                 </div>
 
                 <div className="mt-4 rounded-xl border border-white/10 bg-neutral-950/40 px-3 py-3">
@@ -1090,15 +1086,14 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                     className="w-28 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
                   />
                   <span className="text-xs text-neutral-500">coins</span>
-                  <button
-                    onClick={() => setActionCostDrafts((current) => ({
+                  <AdminToggle
+                    checked={draft.isActive}
+                    onToggle={() => setActionCostDrafts((current) => ({
                       ...current,
                       [action.action_key]: { ...draft, isActive: !draft.isActive },
                     }))}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${draft.isActive ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-                  >
-                    <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${draft.isActive ? 'translate-x-6' : 'translate-x-1'}`} />
-                  </button>
+                    ariaLabel={`Toggle ${action.action_key}`}
+                  />
                   <span className="text-xs text-neutral-500">{draft.isActive ? 'Active' : 'Inactive'}</span>
                 </div>
                 <div className="mt-4">

@@ -1,8 +1,7 @@
 'use client';
 
-import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { type ComponentType, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check, Loader2, Plus, RefreshCcw } from 'lucide-react';
 
 // These two panels only render in the `media` and `video-export` sections but
@@ -106,6 +105,9 @@ import {
   type MediaStorageSettings,
 } from '@/lib/media/storage-settings';
 import { SETTINGS_NAV_GROUPS, SETTINGS_NAV_ITEMS, findSettingsNavItem } from '@/lib/admin/nav';
+import AdminToggle from '@/components/admin/AdminToggle';
+import AdminPageHeader from '@/components/admin/AdminPageHeader';
+import AdminHubCard from '@/components/admin/AdminHubCard';
 
 export type GlobalSettingsSection =
   | 'overview'
@@ -142,13 +144,9 @@ function ToggleRow({
         <p className="text-sm font-medium text-neutral-100">{label}</p>
         <p className="mt-0.5 text-xs text-neutral-400">{description}</p>
       </div>
-      <button
-        onClick={onToggle}
-        disabled={toggling}
-        className={`relative ml-6 inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-50 ${checked ? 'bg-emerald-500' : 'bg-neutral-600'}`}
-      >
-        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
-      </button>
+      <span className="ml-6">
+        <AdminToggle checked={checked} onToggle={onToggle} disabled={toggling} ariaLabel={label} />
+      </span>
     </div>
   );
 }
@@ -173,41 +171,6 @@ function sampleStatusClassName(status: NarrationVoiceSampleClientStatus['status'
 
 function formatToggleSummary(enabled: boolean): string {
   return enabled ? 'Enabled' : 'Disabled';
-}
-
-function OverviewLinkCard({
-  href,
-  label,
-  description,
-  summary,
-  icon: Icon,
-}: {
-  href: string;
-  label: string;
-  description: string;
-  summary: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="rounded-lg bg-emerald-500/10 p-2 text-emerald-300">
-            <Icon size={16} />
-          </span>
-          <span className="text-sm font-medium text-neutral-100 group-hover:text-emerald-200">{label}</span>
-        </div>
-        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-neutral-500">
-          Open
-        </span>
-      </div>
-      <p className="mt-3 text-xs leading-relaxed text-neutral-400">{description}</p>
-      <p className="mt-4 text-xs text-emerald-300/80">{summary}</p>
-    </Link>
-  );
 }
 
 export default function GlobalSettings({ section = 'overview' }: { section?: GlobalSettingsSection }) {
@@ -943,9 +906,10 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   );
 
   return (
-    <div className="mx-auto max-w-7xl">
-      <h1 className="mb-1 text-2xl text-neutral-100">{pageTitle}</h1>
-      <p className="mb-8 text-sm text-neutral-400">{sectionMeta.description}</p>
+    <div className={`mx-auto ${section === 'overview' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+      <div className="mb-8">
+        <AdminPageHeader title={pageTitle} description={sectionMeta.description} />
+      </div>
 
       {loadError && (
         <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
@@ -981,13 +945,13 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                     )}
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {cards.map((item) => (
-                        <OverviewLinkCard
+                        <AdminHubCard
                           key={item.href}
                           href={item.href}
                           label={item.label}
                           description={item.description}
                           icon={item.icon}
-                          summary={overviewSummaries[item.id] ?? item.staticSummary ?? ''}
+                          summary={overviewSummaries[item.id] ?? item.staticSummary}
                         />
                       ))}
                     </div>
