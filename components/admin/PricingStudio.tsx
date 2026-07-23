@@ -35,7 +35,7 @@ import {
   type PricingAdminState,
 } from '@/app/actions/pricing-admin';
 import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
-import { PRICING_NAV_ITEMS, findPricingNavItem } from '@/lib/admin/nav';
+import { PRICING_NAV_ITEMS, findPricingNavItem, type AdminNavChild } from '@/lib/admin/nav';
 import AdminToggle from '@/components/admin/AdminToggle';
 import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import AdminHubCard from '@/components/admin/AdminHubCard';
@@ -143,6 +143,14 @@ export type PricingStudioSection =
   | 'recovery-tools';
 
 const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100';
+
+// Workshop hub cards grouped like the Global Settings overview: catalog authoring,
+// live operations, and change history each get their own titled box.
+const WORKSHOP_CARD_GROUPS: { label: string; ids: string[] }[] = [
+  { label: 'Catalog', ids: ['plans', 'top-up-packs', 'promotions'] },
+  { label: 'Operations', ids: ['action-costs', 'runtime-controls', 'recovery-tools'] },
+  { label: 'History', ids: ['audit'] },
+];
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
 const LEGACY_TOPUP_PACK_KEYS = new Set(['beats_25', 'beats_80', 'beats_200']);
 const VIDEO_EXPORT_WATERMARK_MODE_LABELS: Record<VideoExportWatermarkMode, string> = {
@@ -172,7 +180,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+    <section className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-6">
       <div className="mb-5 flex items-start gap-3">
         <div className="rounded-xl bg-emerald-500/10 p-2.5 text-emerald-300">
           <Icon size={18} />
@@ -603,7 +611,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+      <div>
         <AdminPageHeader
           title={sectionMeta.label}
           description={sectionMeta.description}
@@ -619,34 +627,45 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
           }
         />
         <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">Display mode: 10 coins = 1 internal beat</p>
-
-        {isWorkshop && (
-          <>
-            <div className="mt-6 grid gap-3 md:grid-cols-4">
-              <MetricCard label="Plans" value={String(state.plans.length)} hint="Plan families" />
-              <MetricCard label="Versions" value={String(state.plans.reduce((sum, item) => sum + item.versions.length, 0))} hint="Draft + live variants" />
-              <MetricCard label="Top-ups" value={String(state.topupPacks.length)} hint="Market variants" />
-              <MetricCard label="Promotions" value={String(state.promotions.length)} hint="Immediate-save promos" />
-            </div>
-
-            <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {PRICING_NAV_ITEMS.filter((item) => item.id !== 'workshop').map((item) => (
-                <AdminHubCard
-                  key={item.href}
-                  href={item.href}
-                  label={item.label}
-                  description={item.description}
-                  icon={item.icon}
-                  summary={item.staticSummary}
-                />
-              ))}
-            </div>
-          </>
-        )}
-
-        {error && <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
-        {message && <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
       </div>
+
+      {error && <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
+      {message && <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
+
+      {isWorkshop && (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <MetricCard label="Plans" value={String(state.plans.length)} hint="Plan families" />
+            <MetricCard label="Versions" value={String(state.plans.reduce((sum, item) => sum + item.versions.length, 0))} hint="Draft + live variants" />
+            <MetricCard label="Top-ups" value={String(state.topupPacks.length)} hint="Market variants" />
+            <MetricCard label="Promotions" value={String(state.promotions.length)} hint="Immediate-save promos" />
+          </div>
+
+          {WORKSHOP_CARD_GROUPS.map((group) => {
+            const cards = group.ids
+              .map((id) => PRICING_NAV_ITEMS.find((item) => item.id === id))
+              .filter((item): item is AdminNavChild => Boolean(item));
+            if (cards.length === 0) return null;
+            return (
+              <div key={group.label} className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-neutral-500">{group.label}</h3>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {cards.map((item) => (
+                    <AdminHubCard
+                      key={item.href}
+                      href={item.href}
+                      label={item.label}
+                      description={item.description}
+                      icon={item.icon}
+                      summary={item.staticSummary}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
 
       {section === 'runtime-controls' && (
       <SectionCard title="Runtime Controls" description="Use these switches to decide what people can see, buy, and experience. Each card explains what changes when it is on or off." icon={Settings2}>
@@ -691,7 +710,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                   </div>
                 )}
 
-                <div className="mt-4 flex items-center justify-between gap-3">
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-[11px] uppercase tracking-wider text-neutral-500">
                     If this is off, Kissago uses: {formatRuntimeDefaultValue(setting.key, setting.defaultValue, setting.defaultEnabled)}
                   </p>
@@ -1092,8 +1111,8 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
             const draft = actionCostDrafts[action.action_key] ?? { coinCost: String(beatsToCoins(action.beat_cost)), isActive: action.is_active };
             return (
               <div key={action.id} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-                <p className="text-sm font-medium text-neutral-100">{action.action_key}</p>
-                <div className="mt-4 flex items-center gap-3">
+                <p className="text-sm font-medium text-neutral-100 break-all">{action.action_key}</p>
+                <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
                   <input
                     type="number"
                     min="0"
