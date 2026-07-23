@@ -922,7 +922,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       ) : (
         <div className="space-y-6">
           {section === 'overview' && (
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+            <>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <h2 className="text-base font-medium text-neutral-100">Global settings workspace</h2>
@@ -939,9 +939,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                 const cards = group.items.filter((item) => item.id !== 'overview');
                 if (cards.length === 0) return null;
                 return (
-                  <div key={group.id} className="mt-6">
+                  <div key={group.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
                     {group.label && (
-                      <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-neutral-500">{group.label}</h3>
+                      <h3 className="mb-4 text-xs font-medium uppercase tracking-wider text-neutral-500">{group.label}</h3>
                     )}
                     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       {cards.map((item) => (
@@ -958,7 +958,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   </div>
                 );
               })}
-            </div>
+            </>
           )}
 
           {section === 'storyboard' && (
