@@ -225,6 +225,45 @@ export async function setFeatureFlagValue(flagKey: string, value: string): Promi
   flagValueCache.delete(flagKey);
 }
 
+/**
+ * Best-effort cache warmer for callers (e.g. the admin settings page) that read
+ * many flags at once via getFeatureFlag/getFeatureFlagValue. A single `.in()`
+ * query populates BOTH caches with exactly what those single-key getters would
+ * have cached — `row.enabled` and `row.value ?? null` — so subsequent getter
+ * calls short-circuit to the cache instead of doing one round-trip per key.
+ *
+ * Rows that don't exist are intentionally NOT cached, mirroring the getters
+ * (which cache only real rows and otherwise apply their per-call fallback). It
+ * follows that this warmer can never change a read result: warmed keys hold the
+ * same value the getter would have fetched, and un-warmed keys fall through to
+ * the getter unchanged. Failures are swallowed so warming stays best-effort.
+ */
+export async function warmFeatureFlagCaches(flagKeys: readonly string[]): Promise<void> {
+  const now = Date.now();
+  const missing = flagKeys.filter((key) => {
+    const flagHit = flagCache.get(key);
+    const valueHit = flagValueCache.get(key);
+    return !(flagHit && now - flagHit.ts < CACHE_TTL && valueHit && now - valueHit.ts < CACHE_TTL);
+  });
+  if (missing.length === 0) return;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('feature_flags')
+      .select('flag_key, enabled, value')
+      .in('flag_key', missing);
+
+    if (error || !data) return;
+    for (const row of data) {
+      flagCache.set(row.flag_key, { data: row.enabled, ts: now });
+      flagValueCache.set(row.flag_key, { data: row.value ?? null, ts: now });
+    }
+  } catch (err) {
+    console.error('model-config: warmFeatureFlagCaches failed (non-fatal):', err);
+  }
+}
+
 export interface ConfigAudit {
   changedBy: string;
   experimentId?: string;
