@@ -13,7 +13,6 @@ import {
   RefreshCw,
   Save,
   Settings2,
-  ShieldAlert,
   Sparkles,
   Wrench,
 } from 'lucide-react';
@@ -37,6 +36,7 @@ import {
   type PricingAdminState,
 } from '@/app/actions/pricing-admin';
 import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
+import { PRICING_NAV_ITEMS, findPricingNavItem } from '@/lib/admin/nav';
 import {
   BILLING_INTERVALS,
   BILLING_PROVIDERS,
@@ -156,71 +156,6 @@ const VIDEO_EXPORT_WATERMARK_SIZE_LABELS: Record<VideoExportWatermarkSize, strin
   medium: 'Medium',
   large: 'Large',
 };
-
-const PRICING_WORKSPACE_LINKS: Array<{
-  section: PricingStudioSection | 'audit';
-  label: string;
-  href: string;
-  description: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-}> = [
-  {
-    section: 'workshop',
-    label: 'Pricing workshop',
-    href: '/admin/pricing',
-    description: 'Review pricing catalog health and jump into focused tools.',
-    icon: Coins,
-  },
-  {
-    section: 'plans',
-    label: 'Plans',
-    href: '/admin/pricing/plans',
-    description: 'Draft and publish plan variants by market and interval.',
-    icon: CreditCard,
-  },
-  {
-    section: 'top-up-packs',
-    label: 'Top-up packs',
-    href: '/admin/pricing/top-up-packs',
-    description: 'Manage one-time coin packs by market.',
-    icon: Coins,
-  },
-  {
-    section: 'promotions',
-    label: 'Promotions',
-    href: '/admin/pricing/promotions',
-    description: 'Create and archive campaign bonus offers.',
-    icon: Megaphone,
-  },
-  {
-    section: 'action-costs',
-    label: 'Action costs',
-    href: '/admin/pricing/action-costs',
-    description: 'Set immediate-save coin costs for billable actions.',
-    icon: Sparkles,
-  },
-  {
-    section: 'runtime-controls',
-    label: 'Runtime controls',
-    href: '/admin/pricing/runtime-controls',
-    description: 'Control visibility, rollout behavior, and live settings.',
-    icon: Settings2,
-  },
-  {
-    section: 'recovery-tools',
-    label: 'Recovery tools',
-    href: '/admin/pricing/recovery-tools',
-    description: 'Repair test wallet, checkout, and reservation issues.',
-    icon: Wrench,
-  },
-  {
-    section: 'audit',
-    label: 'Recent audit',
-    href: '/admin/pricing/audit',
-    description: 'Review pricing changes with paginated history.',
-    icon: ShieldAlert,
-  },
-];
 
 function SectionCard({
   title,
@@ -660,7 +595,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     return <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error || 'Failed to load pricing data.'}</div>;
   }
 
-  const sectionMeta = PRICING_WORKSPACE_LINKS.find((item) => item.section === section) ?? PRICING_WORKSPACE_LINKS[0];
+  const sectionMeta = findPricingNavItem(section) ?? findPricingNavItem('workshop')!;
   const isWorkshop = section === 'workshop';
 
   return (
@@ -692,7 +627,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
             </div>
 
             <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {PRICING_WORKSPACE_LINKS.filter((item) => item.section !== 'workshop').map(({ href, label, description, icon: Icon }) => (
+              {PRICING_NAV_ITEMS.filter((item) => item.id !== 'workshop').map(({ href, label, description, icon: Icon }) => (
                 <Link
                   key={href}
                   href={href}

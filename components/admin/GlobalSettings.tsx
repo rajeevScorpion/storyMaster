@@ -4,22 +4,7 @@ import Link from 'next/link';
 import { type ComponentType, useEffect, useState } from 'react';
 import MediaProcessingModeCard from '@/components/admin/MediaProcessingModeCard';
 import VideoExportPresetStudio from '@/components/admin/VideoExportPresetStudio';
-import {
-  BookOpenText,
-  Brush,
-  Check,
-  Clapperboard,
-  Clock3,
-  FileText,
-  ImageIcon,
-  Loader2,
-  Mic2,
-  Plus,
-  RefreshCcw,
-  UserRound,
-  Video,
-  WandSparkles,
-} from 'lucide-react';
+import { Check, Loader2, Plus, RefreshCcw } from 'lucide-react';
 import {
   getGlobalSettings,
   saveAdminNarrationVoiceSettings,
@@ -103,6 +88,7 @@ import {
   type MediaStorageAdminState,
   type MediaStorageSettings,
 } from '@/lib/media/storage-settings';
+import { SETTINGS_NAV_GROUPS, SETTINGS_NAV_ITEMS, findSettingsNavItem } from '@/lib/admin/nav';
 
 export type GlobalSettingsSection =
   | 'overview'
@@ -119,121 +105,6 @@ export type GlobalSettingsSection =
   | 'video-export'
   | 'generation'
   | 'pages';
-
-type GlobalSettingsSubsection = Exclude<GlobalSettingsSection, 'overview'>;
-
-type GlobalSettingsLink = {
-  section: GlobalSettingsSection;
-  label: string;
-  href: string;
-  description: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-};
-
-const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
-  {
-    section: 'overview',
-    label: 'Settings overview',
-    href: '/admin/settings',
-    description: 'Review the global runtime controls and jump into focused settings pages.',
-    icon: WandSparkles,
-  },
-  {
-    section: 'storyboard',
-    label: 'Storyboard',
-    href: '/admin/settings/storyboard',
-    description: 'Image output, panel timing, WebP processing, layout, and vignette controls.',
-    icon: Brush,
-  },
-  {
-    section: 'reels',
-    label: 'Reel Story',
-    href: '/admin/settings/reels',
-    description: 'Short-form reel defaults, prompt definers, retention windows, and manual cleanup.',
-    icon: Clapperboard,
-  },
-  {
-    section: 'reader',
-    label: 'Reader and loader',
-    href: '/admin/settings/reader',
-    description: 'Story text display, auto-scroll, loading labels, and generated text reveal behavior.',
-    icon: BookOpenText,
-  },
-  {
-    section: 'narration',
-    label: 'Narration voices',
-    href: '/admin/settings/narration',
-    description: 'User-led voice selection, curated voice lists, sample text, and sample generation status.',
-    icon: Mic2,
-  },
-  {
-    section: 'authoring',
-    label: 'Authoring',
-    href: '/admin/settings/authoring',
-    description: 'Prompt/seed authoring limits and seed preview pricing.',
-    icon: FileText,
-  },
-  {
-    section: 'characters',
-    label: 'Character references',
-    href: '/admin/settings/characters',
-    description: 'Character sheet availability for Free, Plus, and Creator workflows.',
-    icon: UserRound,
-  },
-  {
-    section: 'media',
-    label: 'Image uploads',
-    href: '/admin/settings/media',
-    description: 'Client-side upload compression, raw limits, optimized size limits, and rollback controls.',
-    icon: ImageIcon,
-  },
-  {
-    section: 'media-pipeline',
-    label: 'Media pipeline',
-    href: '/admin/settings/media-pipeline',
-    description: 'Server-side processing mode, HQ retention, variants, cleanup, publishing gates, and job monitoring.',
-    icon: ImageIcon,
-  },
-  {
-    section: 'beat-control',
-    label: 'Beat control',
-    href: '/admin/settings/beat-control',
-    description: 'Beat text editing, timeline rewrite, image/narration/options regeneration, custom options, and version history.',
-    icon: WandSparkles,
-  },
-  {
-    section: 'character-universe',
-    label: 'Characters & episodes',
-    href: '/admin/settings/character-universe',
-    description: 'Character library, save-to-library, character mixing, episodic branching, story bible, and journal.',
-    icon: UserRound,
-  },
-  {
-    section: 'video-export',
-    label: 'Video export',
-    href: '/admin/settings/video-export',
-    description: 'Global video download availability and admin-only bypass for testing.',
-    icon: Video,
-  },
-  {
-    section: 'generation',
-    label: 'Generation timeouts',
-    href: '/admin/settings/generation',
-    description: 'Gemini text, image, TTS, and cloud-save timeout guards.',
-    icon: Clock3,
-  },
-  {
-    section: 'pages',
-    label: 'Pages',
-    href: '/admin/settings/pages',
-    description: 'Rollout legal, support, blog, docs, FAQ, and footer controls.',
-    icon: FileText,
-  },
-];
-
-const GLOBAL_SETTINGS_SECTION_LINKS = GLOBAL_SETTINGS_LINKS.filter(
-  (item): item is GlobalSettingsLink & { section: GlobalSettingsSubsection } => item.section !== 'overview'
-);
 
 function ToggleRow({
   label,
@@ -1024,10 +895,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     plus: 'Plus',
     studio: 'Studio',
   };
-  const sectionMeta = GLOBAL_SETTINGS_LINKS.find((item) => item.section === section) ?? GLOBAL_SETTINGS_LINKS[0];
-  const overviewSummaries: Record<Exclude<GlobalSettingsSection, 'overview'>, string> = {
+  const sectionMeta = findSettingsNavItem(section) ?? findSettingsNavItem('overview')!;
+  const pageTitle = section === 'overview' ? 'Settings overview' : sectionMeta.label;
+  // Live, data-derived summaries shown on the overview cards. Sections with no
+  // live summary fall back to the static summary defined in the nav config.
+  const overviewSummaries: Partial<Record<string, string>> = {
     storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
-    reels: 'Prompt-only 9:16 reels, editable JSON definers, and manual draft cleanup',
     reader: `${storyUiTextLineCount} text lines, ${storyTextOverlayWordsPerLine} overlay words, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
     narration: narrationVoiceSettings
       ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
@@ -1035,19 +908,15 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
     characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
     media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
-    'media-pipeline': 'Server-side processing mode, HQ retention, variants, cleanup, and job monitoring',
-    'beat-control': 'Beat editing, timeline rewrite, regeneration controls, custom options, and version history',
-    'character-universe': 'Character library, mixing, episodic branching, story bible, and journal',
     'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
     generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
-    pages: 'Managed rollout pages, footer controls, and route guards',
   };
   const imageUploadHasUnsavedChanges = JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings);
   const mediaStorageHasUnsavedChanges = JSON.stringify(mediaStorageDraft) !== JSON.stringify(mediaStorage.settings);
 
   return (
     <div className="mx-auto max-w-7xl">
-      <h1 className="mb-1 text-2xl text-neutral-100">{sectionMeta.label}</h1>
+      <h1 className="mb-1 text-2xl text-neutral-100">{pageTitle}</h1>
       <p className="mb-8 text-sm text-neutral-400">{sectionMeta.description}</p>
 
       {loadError && (
@@ -1070,22 +939,33 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   </p>
                 </div>
                 <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs uppercase tracking-wider text-emerald-300">
-                  {GLOBAL_SETTINGS_SECTION_LINKS.length} sections
+                  {SETTINGS_NAV_ITEMS.length - 1} sections
                 </span>
               </div>
 
-              <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {GLOBAL_SETTINGS_SECTION_LINKS.map(({ section: linkSection, href, label, description, icon }) => (
-                  <OverviewLinkCard
-                    key={href}
-                    href={href}
-                    label={label}
-                    description={description}
-                    icon={icon}
-                    summary={overviewSummaries[linkSection]}
-                  />
-                ))}
-              </div>
+              {SETTINGS_NAV_GROUPS.map((group) => {
+                const cards = group.items.filter((item) => item.id !== 'overview');
+                if (cards.length === 0) return null;
+                return (
+                  <div key={group.id} className="mt-6">
+                    {group.label && (
+                      <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-neutral-500">{group.label}</h3>
+                    )}
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {cards.map((item) => (
+                        <OverviewLinkCard
+                          key={item.href}
+                          href={item.href}
+                          label={item.label}
+                          description={item.description}
+                          icon={item.icon}
+                          summary={overviewSummaries[item.id] ?? item.staticSummary ?? ''}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
 
