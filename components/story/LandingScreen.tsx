@@ -134,6 +134,20 @@ function buildPickerRequestSignature(
   return `${taskKey}|${selection?.taskKey ?? ''}|${selection?.modelKey ?? ''}|${planKey}`;
 }
 
+/**
+ * Creation-mode tab styling. The active tab wears an emerald wash with a soft
+ * inset edge and glow instead of a flat white fill, which read too stark against
+ * the dark theme; inactive tabs warm toward emerald on hover so the row responds
+ * rather than sitting inert.
+ */
+function modeTabClass(active: boolean): string {
+  return `rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 active:scale-[0.97] ${
+    active
+      ? 'bg-emerald-500/15 text-emerald-100 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.4),0_0_20px_rgba(16,185,129,0.18)]'
+      : 'text-neutral-400 hover:bg-white/[0.06] hover:text-emerald-100'
+  }`;
+}
+
 export default function LandingScreen({ onBegin, initialData, initialPricing }: LandingScreenProps) {
   const [initialLandingData] = useState(() => normalizeLandingInitialData(initialData ?? DEFAULT_LANDING_INITIAL_DATA));
   const router = useRouter();
@@ -558,9 +572,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   // Drives the go button's halo + hover response, so the glow only ever appears
   // when pressing it would actually do something.
   const canBeginStory = hasMinimumStoryIdea && !isLoading && !isOverAuthoringWordCap;
-  // Quick Story uses a pill composer: prompt + go button ride inside one fully
-  // rounded bar, with the attach row sitting below it instead of inside.
+  // Quick Story uses a pill composer: the + trigger, prompt and go button ride
+  // inside one fully rounded bar, with attachments sitting below it. The strip
+  // portals its trigger into `attachSlot` and aligns its popup under `composerEl`.
   const isQuickStoryComposer = creationMode !== 'seeded' && !isReelMode;
+  const [attachSlot, setAttachSlot] = useState<HTMLDivElement | null>(null);
+  const [composerEl, setComposerEl] = useState<HTMLDivElement | null>(null);
 
   const clearSeedPreview = () => {
     setSeedPreview(null);
@@ -1027,11 +1044,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       setAuthoringMode('prompt');
                       clearSeedPreview();
                     }}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                      creationMode === 'prompt'
-                        ? 'bg-white text-black'
-                        : 'text-neutral-300 hover:text-white'
-                    }`}
+                    className={modeTabClass(creationMode === 'prompt')}
                   >
                     Quick Story
                   </button>
@@ -1042,11 +1055,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       setAuthoringMode('seeded');
                       clearSeedPreview();
                     }}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                      creationMode === 'seeded'
-                        ? 'bg-white text-black'
-                        : 'text-neutral-300 hover:text-white'
-                    }`}
+                    className={modeTabClass(creationMode === 'seeded')}
                   >
                     Seed Story
                   </button>
@@ -1063,11 +1072,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       setShowAdvanced(false);
                       clearSeedPreview();
                       }}
-                      className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                        creationMode === 'reel'
-                          ? 'bg-white text-black'
-                          : 'text-neutral-300 hover:text-white'
-                      }`}
+                      className={modeTabClass(creationMode === 'reel')}
                     >
                       Reels
                     </button>
@@ -1078,11 +1083,20 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
               <div className="space-y-2">
               <div className="relative group">
                 <div className={`absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 blur opacity-25 transition duration-1000 group-hover:opacity-50 group-hover:duration-200 ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`} />
-                <div className={`relative border border-white/10 bg-neutral-900 shadow-2xl ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`}>
+                <div
+                  ref={setComposerEl}
+                  className={`relative border border-white/10 bg-neutral-900 shadow-2xl ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`}
+                >
                   {creationMode !== 'seeded' ? (
                     <div className={isReelMode ? 'space-y-3 p-2' : 'p-2'}>
                       {!isReelMode && (
                         <div className="relative flex items-center gap-2">
+                            {/* The pill is 72px tall, so its rounded left cap is a
+                                36px-radius semicircle. Pill p-2 (8) + pl-3 (12) +
+                                half the 32px trigger sits the + on that cap's
+                                centre; the extra 10px margin nudges it clear of
+                                the curve for better optical balance. */}
+                            <div ref={setAttachSlot} className="ml-[10px] flex shrink-0 items-center pl-3" />
                             <input
                               ref={promptInputRef}
                               type="text"
@@ -1097,7 +1111,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                               }}
                               placeholder="Tell me a story of a monkey and an elephant..."
                               aria-describedby={!hasMinimumStoryIdea && prompt.trim() ? 'story-idea-minimum' : undefined}
-                              className="w-full bg-transparent text-white placeholder-neutral-500 px-5 py-3 outline-none font-sans text-lg"
+                              className="w-full bg-transparent text-white placeholder-neutral-500 px-3 py-3 outline-none font-sans text-sm"
                               disabled={isLoading}
                             />
                             <MentionSuggestionList
@@ -1557,6 +1571,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                     active={!isReelMode}
                     promptOnly={imageGenerationMode === 'prompt_only'}
                     onStateChange={handleReferencePanelChange}
+                    triggerSlot={attachSlot}
+                    anchorEl={composerEl}
                     library={{
                       settingsLoaded: characterSettings !== null,
                       enabled: mixingEnabled,

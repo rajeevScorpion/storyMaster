@@ -29,9 +29,8 @@ export interface AttachMenuOption {
 const MENU_WIDTH = 304;
 /** Rough per-row height, used only to decide whether to flip above the trigger. */
 const ROW_HEIGHT = 52;
-/** Gap between the trigger and the popup, wide enough to read as a separate
- *  surface rather than part of the composer box it sits over. */
-const TRIGGER_GAP = 20;
+/** Gap between the anchor's bottom edge and the popup. */
+const TRIGGER_GAP = 10;
 /** Minimum distance the popup keeps from any viewport edge. */
 const VIEWPORT_MARGIN = 12;
 
@@ -50,11 +49,18 @@ export default function AttachMenu({
   open,
   onOpenChange,
   options,
+  anchorEl,
   ariaLabel = 'Add characters and worlds',
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   options: AttachMenuOption[];
+  /**
+   * Element the popup aligns to. The trigger now sits *inside* the composer
+   * pill, so anchoring to the button itself would open the menu overlapping the
+   * pill's lower edge — pass the pill to drop the menu clear of it instead.
+   */
+  anchorEl?: HTMLElement | null;
   ariaLabel?: string;
 }) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -64,9 +70,9 @@ export default function AttachMenu({
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
   const updatePosition = useCallback(() => {
-    const trigger = triggerRef.current;
-    if (!trigger) return;
-    const rect = trigger.getBoundingClientRect();
+    const anchor = anchorEl ?? triggerRef.current;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
     const width = Math.min(MENU_WIDTH, window.innerWidth - VIEWPORT_MARGIN * 2);
 
     let left = rect.left;
@@ -83,7 +89,7 @@ export default function AttachMenu({
     }
 
     setPosition({ top, left, width });
-  }, [options.length]);
+  }, [options.length, anchorEl]);
 
   // The opening measurement happens in the click handler below, not here, so the
   // effect only ever subscribes to external events.
@@ -198,7 +204,7 @@ export default function AttachMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={ariaLabel}
-        className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100"
+        className="flex h-8 w-8 items-center justify-center rounded-full text-neutral-400 transition-all duration-200 hover:bg-emerald-500/15 hover:text-emerald-200 hover:shadow-[inset_0_0_0_1px_rgba(52,211,153,0.35),0_0_16px_rgba(16,185,129,0.2)]"
       >
         <Plus size={16} className={`transition-transform duration-200 ${open ? 'rotate-45' : ''}`} />
       </button>

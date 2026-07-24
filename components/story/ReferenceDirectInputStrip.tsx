@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ImagePlus, UserPlus, UserRound } from 'lucide-react';
 import { compressImageFile, blobToDataUrl } from '@/lib/media/clientImageCompression';
 import {
@@ -40,6 +41,14 @@ interface Props {
   onStateChange: (state: ReferencePanelState) => void;
   /** Saved-character picker, owned by the landing screen. */
   library?: AttachLibraryData;
+  /**
+   * Node inside the composer pill to render the `+` trigger into. The trigger
+   * lives in the pill while attachments stay below it, so the two halves of this
+   * toolbar are portalled apart rather than duplicating the upload state.
+   */
+  triggerSlot?: HTMLElement | null;
+  /** Element the popup aligns under — the composer pill. */
+  anchorEl?: HTMLElement | null;
 }
 
 /**
@@ -60,6 +69,8 @@ export default function ReferenceDirectInputStrip({
   promptOnly,
   onStateChange,
   library,
+  triggerSlot,
+  anchorEl,
 }: Props) {
   const [context, setContext] = useState<ReferenceCreationContext | null>(null);
   // Tracked separately from `context` because the fetch also resolves to null on
@@ -284,10 +295,23 @@ export default function ReferenceDirectInputStrip({
   // Nothing is available and nothing is attached — stay out of the way entirely.
   if (options.length === 0 && attachmentCount === 0) return null;
 
+  const menu = (
+    <AttachMenu
+      open={menuOpen}
+      onOpenChange={setMenuOpen}
+      options={options}
+      anchorEl={anchorEl}
+    />
+  );
+
   return (
     <div className="px-2 pb-1">
-      <div className="flex items-center gap-2">
-        <AttachMenu open={menuOpen} onOpenChange={setMenuOpen} options={options} />
+      {triggerSlot && createPortal(menu, triggerSlot)}
+
+      {/* With the trigger portalled into the pill this row holds only the
+          attachment summary, so skip it entirely when nothing is attached. */}
+      <div className={triggerSlot && attachmentCount === 0 ? 'hidden' : 'flex items-center gap-2'}>
+        {!triggerSlot && menu}
 
         {attachmentCount > 0 && (
           <button
