@@ -112,6 +112,12 @@ export interface StoryboardFramePlan {
   visualFocus: string[];
   emotion: string;
   continuityAnchor: string;
+  // Optional list of named characters actually present in this frame, by display
+  // name. Populated by the storyboard composer (image prompt compiler) so the
+  // canonical scene can name only the characters in each panel instead of
+  // deriving presence from free text. Backward compatible: absent on legacy
+  // plans, where the scene builder falls back to name matching.
+  charactersPresent?: string[];
 }
 
 export interface StoryboardPlan {

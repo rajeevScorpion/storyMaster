@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Check, Loader2, ExternalLink } from 'lucide-react';
+import { X, Check, Loader2, ExternalLink, Share2, Film } from 'lucide-react';
 
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
@@ -10,6 +10,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { extractStoryline } from '@/lib/utils/storyline';
 import { uploadNodeAssets, uploadCoverImage, extractStoragePath, stripBase64FromStoryMap } from '@/lib/supabase/storage';
 import { publishStoryline, saveStory, copyCoverToPublicBucket } from '@/app/actions/persistence';
+import { getFirstBeatShareExcerpt } from '@/lib/story/share-message';
 import { extractImageContinuityState } from '@/lib/ai/image-continuity.shared';
 import {
   buildStoryCoverPromptInputFromSession,
@@ -82,6 +83,7 @@ export default function PublishDialog({
   const [status, setStatus] = useState<'idle' | 'saving' | 'uploading' | 'publishing' | 'done' | 'error'>('idle');
   const [storylineUrl, setStorylineUrl] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
   const [visibility, setVisibility] = useState<'public' | 'unlisted'>('public');
   const [publishQuality, setPublishQuality] = useState<'standard' | 'high'>('standard');
 
@@ -118,7 +120,25 @@ export default function PublishDialog({
     setStatus('idle');
     setStorylineUrl(null);
     setErrorMsg(null);
+    setShareCopied(false);
     onClose();
+  };
+
+  const handleShareStoryline = async () => {
+    if (!storylineUrl) return;
+    const url = `${window.location.origin}${storylineUrl}`;
+    const text = getFirstBeatShareExcerpt(storylineData.beats) ?? undefined;
+    if (navigator.share) {
+      navigator.share({ title: session.title, text, url }).catch(() => {});
+    } else {
+      try {
+        await navigator.clipboard.writeText(text ? `${session.title}\n\n${text}\n\n${url}` : url);
+        setShareCopied(true);
+        setTimeout(() => setShareCopied(false), 3000);
+      } catch (error) {
+        console.error('Failed to copy share link:', error);
+      }
+    }
   };
 
   const handlePublish = async (submission: StorylineCoverEditorSubmission) => {
@@ -209,7 +229,7 @@ export default function PublishDialog({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          onClick={status === 'done' || status === 'idle' || status === 'error' ? handleDialogClose : undefined}
+          onClick={status === 'idle' || status === 'error' ? handleDialogClose : undefined}
         >
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -343,7 +363,7 @@ export default function PublishDialog({
 
             {status === 'done' && (
               <div className="space-y-4">
-                <div className="flex flex-col items-center py-4 gap-3">
+                <div className="flex flex-col items-center py-4 gap-3 text-center">
                   <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center">
                     <Check className="w-6 h-6 text-emerald-400" />
                   </div>
@@ -352,7 +372,35 @@ export default function PublishDialog({
                       ? 'Audio story published successfully!'
                       : 'Storyline published successfully!'}
                   </p>
+                  <p className="text-xs text-neutral-500">
+                    {hasAllBeatImages
+                      ? 'Share it with friends or export it as a video — right from here.'
+                      : 'Share it with friends — right from here.'}
+                  </p>
                 </div>
+                {storylineUrl && (
+                  <div className={`grid gap-2 ${hasAllBeatImages ? 'sm:grid-cols-2' : ''}`}>
+                    <button
+                      onClick={() => void handleShareStoryline()}
+                      className="flex items-center justify-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-4 py-2.5 text-sm text-emerald-200 transition-colors hover:bg-emerald-500/25"
+                    >
+                      <Share2 className="w-4 h-4" />
+                      Share Storyline
+                    </button>
+                    {hasAllBeatImages && (
+                      <a
+                        href={`${storylineUrl}${storylineUrl.includes('?') ? '&' : '?'}export=1`}
+                        className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-neutral-200 transition-colors hover:bg-white/10"
+                      >
+                        <Film className="w-4 h-4" />
+                        Export Video
+                      </a>
+                    )}
+                  </div>
+                )}
+                {shareCopied && (
+                  <p className="text-center text-xs text-emerald-300">Link copied to clipboard</p>
+                )}
                 {storylineUrl && (
                   <a
                     href={storylineUrl}
@@ -364,7 +412,7 @@ export default function PublishDialog({
                 )}
                 <button
                   onClick={handleDialogClose}
-                  className="w-full px-4 py-2 text-sm text-neutral-500 hover:text-neutral-300 transition-colors"
+                  className="w-full rounded-xl border border-white/10 px-4 py-2 text-sm text-neutral-400 transition-colors hover:bg-white/5 hover:text-neutral-200"
                 >
                   Close
                 </button>

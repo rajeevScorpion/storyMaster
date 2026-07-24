@@ -35,4 +35,13 @@ describe('buildReferenceBindingLines', () => {
     ]);
     expect(out).toBe('');
   });
+
+  it('emits only the index->character mapping in compact mode', () => {
+    const out = buildReferenceBindingLines(
+      [{ type: 'character', name: 'Malik' }],
+      { compact: true }
+    );
+    expect(out).toBe('Attached reference image 1 depicts Malik.');
+    expect(out).not.toContain('match this exact identity');
+  });
 });

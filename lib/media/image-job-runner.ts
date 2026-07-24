@@ -334,8 +334,12 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
     // the final prompt was built client-side at enqueue time.
     const { parts: referenceParts, survivors, droppedCount } = await resolveJobReferenceParts(payload);
     // Bind surviving references (in provider order) to the character they depict
-    // so identity attaches to the right image even after some refs dropped.
-    const bindingLines = buildReferenceBindingLines(survivors);
+    // so identity attaches to the right image even after some refs dropped. When
+    // the compiled prompt already carries full identity + style-lock language,
+    // use the compact binding form so the two do not duplicate.
+    const bindingLines = buildReferenceBindingLines(survivors, {
+      compact: payload.promptCompiler?.engine === 'compiled',
+    });
     const boundPrompt = bindingLines ? `${payload.finalPrompt}\n\n${bindingLines}` : payload.finalPrompt;
     const result = await generateSelectedImage({
       task: payload.imageTask,
@@ -362,6 +366,7 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
       droppedReferenceCount: droppedCount,
       processingMode: 'server_pipeline',
       jobId: job.id,
+      ...(payload.promptCompiler ? { promptCompiler: payload.promptCompiler } : {}),
     };
   }
 
@@ -396,6 +401,9 @@ async function processJob(admin: AdminClient, job: ImageGenerationJobRow): Promi
       image_error: null,
       image_synced_at: new Date().toISOString(),
       ...(updatedGallery ? { image_gallery: serializeGalleryRows(updatedGallery) } : {}),
+      // Persist generation metadata (incl. prompt compiler diagnostics) on the
+      // durable beats row so the admin comparison sees server-pipeline jobs too.
+      ...(generationMetadata ? { image_generation_metadata: generationMetadata } : {}),
     })
     .eq('story_id', job.story_id)
     .eq('node_id', job.node_id);

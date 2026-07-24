@@ -8,6 +8,7 @@
     "preview": "next start --hostname 127.0.0.1 --port 3000",
     "start": "next start",
     "test": "vitest run",
+    "compare:image-prompts": "vitest run lib/ai/prompt-compiler/compare.shared.test.ts",
     "lint": "eslint .",
     "clean": "next clean"
   },

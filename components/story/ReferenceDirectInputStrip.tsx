@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Plus, X, UserPlus, ImagePlus } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ImagePlus, UserPlus, UserRound } from 'lucide-react';
 import { compressImageFile, blobToDataUrl } from '@/lib/media/clientImageCompression';
 import {
   getReferenceCreationContext,
@@ -14,6 +15,23 @@ import {
 import type { ReferenceKind, ReferenceSetupItemStatus } from '@/lib/types/references';
 import { readOrCreateSetupId } from '@/lib/references/setup-id';
 import type { ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
+import type { Character } from '@/lib/types/story';
+import type { CharacterMaster } from '@/lib/types/character-library';
+import AttachMenu, { type AttachMenuOption } from './AttachMenu';
+import AttachmentsSheet, { type PendingReferenceUpload } from './AttachmentsSheet';
+import CharacterAvatar from './CharacterAvatar';
+
+export interface AttachLibraryData {
+  /** False while the character-universe settings are still loading. */
+  settingsLoaded: boolean;
+  /** Character mixing + library are both switched on for this user. */
+  enabled: boolean;
+  characters: CharacterMaster[];
+  selected: Character[];
+  onToggle: (master: CharacterMaster) => void;
+  onRemoveSelected: (character: Character) => void;
+  error?: string | null;
+}
 
 interface Props {
   /** Render only when the story isn't a reel (direct mode works for images AND text). */
@@ -21,30 +39,69 @@ interface Props {
   /** Text-only story: show the "attach the same refs externally" hint. */
   promptOnly: boolean;
   onStateChange: (state: ReferencePanelState) => void;
+  /** Saved-character picker, owned by the landing screen. */
+  library?: AttachLibraryData;
+  /**
+   * Node inside the composer pill to render the `+` trigger into. The trigger
+   * lives in the pill while attachments stay below it, so the two halves of this
+   * toolbar are portalled apart rather than duplicating the upload state.
+   */
+  triggerSlot?: HTMLElement | null;
+  /** Element the popup aligns under — the composer pill. */
+  anchorEl?: HTMLElement | null;
 }
 
 /**
- * v2 "direct input" reference strip: a compact + button below the prompt that
- * uploads a raw character/world reference (thumbnail immediately, no AI
- * processing) with an optional name + description. The raw image is sent to the
- * image model at generation time. Self-hides unless the References feature is on
- * in 'direct' mode for this user.
+ * v2 "direct input" reference strip: a single `+` button below the prompt that
+ * opens a menu of attach actions — pick a saved library character, or upload a
+ * raw character/world reference (thumbnail immediately, no AI processing). The
+ * raw image is sent to the image model at generation time.
+ *
+ * Two deliberate UX rules here:
+ * - The toolbar is always exactly one `+`, so it cannot overflow narrow screens
+ *   the way the old inline button row did.
+ * - Options whose gate is still resolving render immediately in a greyed
+ *   `pending` state rather than appearing once the check lands, so the menu
+ *   never changes shape under the user.
  */
-export default function ReferenceDirectInputStrip({ active, promptOnly, onStateChange }: Props) {
+export default function ReferenceDirectInputStrip({
+  active,
+  promptOnly,
+  onStateChange,
+  library,
+  triggerSlot,
+  anchorEl,
+}: Props) {
   const [context, setContext] = useState<ReferenceCreationContext | null>(null);
+  // Tracked separately from `context` because the fetch also resolves to null on
+  // failure — without this we could not tell "still checking" from "unavailable".
+  const [contextLoaded, setContextLoaded] = useState(false);
   const [setupId, setSetupId] = useState<string>('');
   const [items, setItems] = useState<ReferenceSetupItemStatus[]>([]);
   const [busyKind, setBusyKind] = useState<ReferenceKind | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState<PendingReferenceUpload[]>([]);
   const characterInputRef = useRef<HTMLInputElement | null>(null);
   const worldInputRef = useRef<HTMLInputElement | null>(null);
+  // Object URLs backing the instant previews, revoked together on unmount.
+  const objectUrlsRef = useRef<string[]>([]);
+
+  useEffect(
+    () => () => {
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    },
+    []
+  );
 
   useEffect(() => {
     if (!active) return;
     setSetupId(readOrCreateSetupId());
     getReferenceCreationContext()
       .then(setContext)
-      .catch(() => setContext(null));
+      .catch(() => setContext(null))
+      .finally(() => setContextLoaded(true));
   }, [active]);
 
   const refreshStatus = useCallback(async (id: string) => {
@@ -97,24 +154,58 @@ export default function ReferenceDirectInputStrip({ active, promptOnly, onStateC
         setError(`That image is too large (max ~${context.maxFileSizeMb}MB).`);
         return;
       }
+      // Show the picked image and open the sheet before any async work starts,
+      // so compression + upload happen behind a visible thumbnail instead of an
+      // empty wait. The progress line below the image tracks the phases.
+      const tempId = `${kind}-${slotIndex}-${Date.now()}`;
+      const previewUrl = URL.createObjectURL(file);
+      objectUrlsRef.current.push(previewUrl);
+      setPendingUploads((previous) => [...previous, { tempId, kind, previewUrl, phase: 'compressing' }]);
+      setSheetOpen(true);
       setBusyKind(kind);
       setError(null);
+
+      const patchPending = (patch: Partial<PendingReferenceUpload>) =>
+        setPendingUploads((previous) =>
+          previous.map((entry) => (entry.tempId === tempId ? { ...entry, ...patch } : entry))
+        );
+
       try {
         const compressed = await compressImageFile(file, {
           assetType: 'character_reference',
           orientation: kind === 'character' ? 'square' : 'auto',
         });
+        patchPending({ phase: 'uploading' });
         const dataUrl = await blobToDataUrl(compressed.file);
         await uploadReferenceSource({ setupId, kind, slotIndex, dataUrl });
+        patchPending({ phase: 'done' });
         await refreshStatus(setupId);
+        // The stored reference now renders in its place.
+        setPendingUploads((previous) => previous.filter((entry) => entry.tempId !== tempId));
+        URL.revokeObjectURL(previewUrl);
+        objectUrlsRef.current = objectUrlsRef.current.filter((url) => url !== previewUrl);
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Upload failed.');
+        const message = e instanceof Error ? e.message : 'Upload failed.';
+        // Keep the thumbnail on screen carrying the error so the failure is
+        // attached to the image it belongs to, not just a line of text.
+        patchPending({ error: message });
       } finally {
         setBusyKind(null);
       }
     },
     [context, setupId, nextFreeSlot, refreshStatus]
   );
+
+  const dismissPending = useCallback((tempId: string) => {
+    setPendingUploads((previous) => {
+      const target = previous.find((entry) => entry.tempId === tempId);
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+        objectUrlsRef.current = objectUrlsRef.current.filter((url) => url !== target.previewUrl);
+      }
+      return previous.filter((entry) => entry.tempId !== tempId);
+    });
+  }, []);
 
   const handleRemove = useCallback(
     async (sourceId: string) => {
@@ -141,42 +232,126 @@ export default function ReferenceDirectInputStrip({ active, promptOnly, onStateC
     []
   );
 
-  if (!active || !isDirect || !context) return null;
+  if (!active) return null;
 
-  const canAddCharacter = context.charactersEnabled && characterItems.length < context.maxCharacterRefs;
-  const canAddWorld = context.worldsEnabled && worldItems.length < context.maxWorldRefs;
-  if (!context.charactersEnabled && !context.worldsEnabled) return null;
+  // While a gate is still resolving its row is shown greyed rather than hidden,
+  // so nothing pops into the menu a moment later.
+  const refsPending = !contextLoaded;
+  const characterFeatureOn = isDirect && Boolean(context?.charactersEnabled);
+  const worldFeatureOn = isDirect && Boolean(context?.worldsEnabled);
+  // In-flight uploads occupy their slot too, so the menu can't offer one more
+  // than the limit while an upload is still settling.
+  const livePending = pendingUploads.filter((entry) => !entry.error);
+  const pendingOfKind = (kind: ReferenceKind) =>
+    livePending.filter((entry) => entry.kind === kind).length;
+  const characterSlotsFull =
+    characterItems.length + pendingOfKind('character') >= (context?.maxCharacterRefs ?? 0);
+  const worldSlotsFull = worldItems.length + pendingOfKind('world') >= (context?.maxWorldRefs ?? 0);
+  const libraryPending = Boolean(library) && !library!.settingsLoaded;
+
+  const options: AttachMenuOption[] = [];
+
+  if (library && (libraryPending || library.enabled)) {
+    options.push({
+      id: 'library',
+      label: 'Bring your characters',
+      description: 'Reuse a character saved in your library',
+      icon: <UserRound size={13} className="text-neutral-300" />,
+      state: libraryPending ? 'pending' : library.characters.length === 0 ? 'disabled' : 'ready',
+      disabledReason: 'No saved characters yet',
+      onSelect: () => setSheetOpen(true),
+    });
+  }
+
+  if (refsPending || characterFeatureOn) {
+    options.push({
+      id: 'character',
+      label: 'Add character',
+      description: 'Upload one clear, front-facing subject',
+      icon: <UserPlus size={13} className="text-neutral-300" />,
+      state: refsPending ? 'pending' : characterSlotsFull ? 'disabled' : 'ready',
+      disabledReason: `Limit reached (${context?.maxCharacterRefs ?? 0})`,
+      busy: busyKind === 'character',
+      onSelect: () => characterInputRef.current?.click(),
+    });
+  }
+
+  if (refsPending || worldFeatureOn) {
+    options.push({
+      id: 'world',
+      label: 'Add world',
+      description: 'Upload a setting to guide places and mood',
+      icon: <ImagePlus size={13} className="text-neutral-300" />,
+      state: refsPending ? 'pending' : worldSlotsFull ? 'disabled' : 'ready',
+      disabledReason: `Limit reached (${context?.maxWorldRefs ?? 0})`,
+      busy: busyKind === 'world',
+      onSelect: () => worldInputRef.current?.click(),
+    });
+  }
+
+  const selectedCharacters = library?.selected ?? [];
+  const attachmentCount = selectedCharacters.length + items.length + livePending.length;
+
+  // Nothing is available and nothing is attached — stay out of the way entirely.
+  if (options.length === 0 && attachmentCount === 0) return null;
+
+  const menu = (
+    <AttachMenu
+      open={menuOpen}
+      onOpenChange={setMenuOpen}
+      options={options}
+      anchorEl={anchorEl}
+    />
+  );
 
   return (
     <div className="px-2 pb-1">
-      <div className="flex flex-wrap items-center gap-2">
-        {canAddCharacter && (
+      {triggerSlot && createPortal(menu, triggerSlot)}
+
+      {/* With the trigger portalled into the pill this row holds only the
+          attachment summary, so skip it entirely when nothing is attached. */}
+      <div className={triggerSlot && attachmentCount === 0 ? 'hidden' : 'flex items-center gap-2'}>
+        {!triggerSlot && menu}
+
+        {attachmentCount > 0 && (
           <button
             type="button"
-            disabled={busyKind !== null}
-            onClick={() => characterInputRef.current?.click()}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100 disabled:opacity-60"
+            onClick={() => setSheetOpen(true)}
+            className="flex min-w-0 shrink items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] py-1 pl-1 pr-2.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100"
           >
-            {busyKind === 'character' ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
-            Add character
+            <span className="flex -space-x-1.5">
+              {selectedCharacters.slice(0, 3).map((character) => (
+                <span
+                  key={character.masterId ?? character.id}
+                  className="flex h-5 w-5 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-neutral-800"
+                >
+                  <CharacterAvatar
+                    src={character.portraitUrl ?? character.referenceSheetUrl}
+                    alt=""
+                    imgClassName="h-full w-full object-cover"
+                    fallback={<UserRound className="h-3 w-3 text-emerald-300/70" />}
+                  />
+                </span>
+              ))}
+              {[
+                ...livePending.map((entry) => ({ key: entry.tempId, url: entry.previewUrl })),
+                ...items.map((item) => ({ key: item.sourceId, url: item.previewUrl ?? '' })),
+              ]
+                .slice(0, Math.max(0, 3 - selectedCharacters.length))
+                .map((thumb) => (
+                  <span
+                    key={thumb.key}
+                    className="flex h-5 w-5 items-center justify-center overflow-hidden rounded-full border border-white/15 bg-neutral-800"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={thumb.url} alt="" className="h-full w-full object-cover" />
+                  </span>
+                ))}
+            </span>
+            <span className="truncate">
+              {attachmentCount} attached
+            </span>
           </button>
-        )}
-        {canAddWorld && (
-          <button
-            type="button"
-            disabled={busyKind !== null}
-            onClick={() => worldInputRef.current?.click()}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-neutral-300 transition-colors hover:border-white/25 hover:text-neutral-100 disabled:opacity-60"
-          >
-            {busyKind === 'world' ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-            Add world
-          </button>
-        )}
-        {items.length === 0 && (canAddCharacter || canAddWorld) && (
-          <span className="text-[11px] text-neutral-600">
-            <Plus size={10} className="mr-0.5 inline" />
-            Attach a reference image — crop to one clear, front-facing subject for the best match.
-          </span>
         )}
       </div>
 
@@ -201,78 +376,29 @@ export default function ReferenceDirectInputStrip({ active, promptOnly, onStateC
         }}
       />
 
-      {items.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {items.map((item) => (
-            <ReferenceChip
-              key={item.sourceId}
-              item={item}
-              onRemove={handleRemove}
-              onSaveDetails={handleSaveDetails}
-            />
-          ))}
-        </div>
-      )}
-
       {error && <p className="mt-1.5 text-[11px] text-rose-300">{error}</p>}
 
-      {promptOnly && items.length > 0 && (
-        <p className="mt-1.5 text-[11px] text-neutral-500">
-          Generating visuals outside Kissago? Attach the same reference images there to keep the closest match.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ReferenceChip({
-  item,
-  onRemove,
-  onSaveDetails,
-}: {
-  item: ReferenceSetupItemStatus;
-  onRemove: (sourceId: string) => void;
-  onSaveDetails: (sourceId: string, patch: { displayName?: string; description?: string }) => void;
-}) {
-  const [name, setName] = useState(item.displayName ?? '');
-  const [description, setDescription] = useState(item.description ?? '');
-
-  return (
-    <div className="flex w-40 flex-col gap-1 rounded-xl border border-white/10 bg-neutral-900/60 p-1.5">
-      <div className="relative aspect-square overflow-hidden rounded-lg border border-white/10 bg-neutral-950">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={item.previewUrl ?? ''}
-          alt={item.displayName ?? 'reference'}
-          className="h-full w-full object-cover"
-        />
-        <button
-          type="button"
-          onClick={() => onRemove(item.sourceId)}
-          className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-neutral-200 hover:bg-black/80"
-          aria-label="Remove reference"
-        >
-          <X size={11} />
-        </button>
-        <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[9px] uppercase tracking-wide text-neutral-300">
-          {item.kind}
-        </span>
-      </div>
-      <input
-        type="text"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onBlur={() => name.trim() !== (item.displayName ?? '') && onSaveDetails(item.sourceId, { displayName: name })}
-        placeholder={item.kind === 'character' ? 'Name' : 'Label'}
-        className="rounded border border-white/10 bg-neutral-900 px-1.5 py-1 text-[11px] text-neutral-200 placeholder:text-neutral-600"
-      />
-      <textarea
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        onBlur={() => description.trim() !== (item.description ?? '') && onSaveDetails(item.sourceId, { description })}
-        placeholder={item.kind === 'character' ? 'Details (optional)' : 'World notes (optional)'}
-        rows={2}
-        className="resize-none rounded border border-white/10 bg-neutral-900 px-1.5 py-1 text-[11px] text-neutral-200 placeholder:text-neutral-600"
+      <AttachmentsSheet
+        open={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        library={
+          library && library.enabled
+            ? {
+                characters: library.characters,
+                selected: library.selected,
+                onToggle: library.onToggle,
+                onRemoveSelected: library.onRemoveSelected,
+                error: library.error,
+              }
+            : undefined
+        }
+        referenceItems={items}
+        pendingUploads={pendingUploads}
+        onRemoveReference={handleRemove}
+        onDismissPending={dismissPending}
+        onSaveReferenceDetails={handleSaveDetails}
+        referenceError={error}
+        promptOnly={promptOnly}
       />
     </div>
   );

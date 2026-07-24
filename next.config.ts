@@ -75,6 +75,11 @@ const nextConfig: NextConfig = {
     middlewareClientMaxBodySize: '20mb',
   },
   output: 'standalone',
+  // Ensure the admin manual markdown is traced into the standalone server
+  // bundle so /admin/help can fs.readFile it at runtime.
+  outputFileTracingIncludes: {
+    '/admin/help': ['./docs/admin-settings-manual.md'],
+  },
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.

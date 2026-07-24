@@ -4,6 +4,7 @@ import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
 import type { PlanKey } from '@/lib/types/pricing';
 import type { ImageContinuityRuntimeOptions } from '@/app/actions/story-runtime';
+import type { PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
 
 export type ImageGenerationJobKind = 'beat_image' | 'reel_image';
 
@@ -64,6 +65,10 @@ export interface BeatImageJobRequestPayload {
   /** Pack 1: set when the user requested this generation from the
    *  regenerate-image dialog; recorded on the resulting version entry. */
   regeneration?: BeatImageRegenerationMeta | null;
+  /** Image prompt compiler diagnostics (engine used, legacy vs compiled sizes,
+   *  compression, warnings). Recorded on the beat's image_generation_metadata by
+   *  the worker; also tells the worker whether to use compact reference binding. */
+  promptCompiler?: PromptCompilerBeatMetadata | null;
 }
 
 export interface ImageGenerationJobRow {

@@ -19,6 +19,9 @@ import {
   withGeneratedOrigin,
   type StoryModelOverrides,
 } from '@/lib/ai/beat-orchestration';
+import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import { assembleFinalImagePrompt } from '@/lib/ai/prompt-compiler/assemble.shared';
+import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
 import {
   collectCharacterPortraitReferences,
   generatePortraitsForPlanServer,
@@ -277,7 +280,7 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
       ];
 
   const storyboardPrompt = beat.storyboardPromptText || renderStoryboardPlan(storyboardPlan);
-  const finalPrompt = buildFinalStoryboardImagePrompt(
+  const legacyBuild = () => buildFinalStoryboardImagePrompt(
     storyboardPrompt,
     beat.characters,
     input.visualStyle,
@@ -288,7 +291,36 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
       task: 'image_generation',
     }
   );
+
+  // Image prompt compiler: build the canonical scene and let the mode decide
+  // legacy vs compiled. A strict 'new'-mode compile failure must not strand the
+  // coin reservation or break beat visuals here, so fall back to legacy.
+  const compilerRuntime = await resolveImagePromptCompilerRuntimeAction({
+    taskKey: 'image_generation',
+    selection: input.storyConfig.imageModelSelection ?? null,
+  }).catch(() => null);
+  const canonicalScene = buildCanonicalImageScene({
+    storyboardPlan,
+    storyboardPromptText: beat.storyboardPromptText,
+    continuityNotes: beat.continuityNotes,
+    characters: beat.characters,
+    visualStyle: input.visualStyle,
+    aspectRatio: input.storyAspectRatio,
+  });
+  let finalPrompt: string;
+  let promptCompilerMeta: ReturnType<typeof assembleFinalImagePrompt>['compiler'] = undefined;
+  try {
+    const assembled = assembleFinalImagePrompt({ runtime: compilerRuntime, scene: canonicalScene, legacyBuild });
+    finalPrompt = assembled.finalPrompt;
+    promptCompilerMeta = assembled.compiler;
+  } catch (error) {
+    console.error('prompt compiler failed in bundle path; using legacy prompt:', error);
+    finalPrompt = legacyBuild();
+  }
   beat.finalImagePromptText = finalPrompt;
+  if (promptCompilerMeta) {
+    beat.imageGenerationMetadata = { ...(beat.imageGenerationMetadata ?? {}), promptCompiler: promptCompilerMeta };
+  }
 
   // Durable beat copy: pending image, no inline media, portraits stripped
   // (the job carries its own staged references; base64 never lands in the DB).
@@ -414,6 +446,7 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
       },
       costTelemetry: input.imageTelemetry,
       references,
+      promptCompiler: promptCompilerMeta ?? null,
     },
   });
 

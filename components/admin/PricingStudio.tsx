@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import {
   Archive,
@@ -13,7 +12,6 @@ import {
   RefreshCw,
   Save,
   Settings2,
-  ShieldAlert,
   Sparkles,
   Wrench,
 } from 'lucide-react';
@@ -37,6 +35,11 @@ import {
   type PricingAdminState,
 } from '@/app/actions/pricing-admin';
 import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
+import { PRICING_NAV_ITEMS, findPricingNavItem, type AdminNavChild } from '@/lib/admin/nav';
+import AdminToggle from '@/components/admin/AdminToggle';
+import AdminPageHeader from '@/components/admin/AdminPageHeader';
+import AdminHubCard from '@/components/admin/AdminHubCard';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import {
   BILLING_INTERVALS,
   BILLING_PROVIDERS,
@@ -140,6 +143,14 @@ export type PricingStudioSection =
   | 'recovery-tools';
 
 const INPUT_CLASS = 'w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100';
+
+// Workshop hub cards grouped like the Global Settings overview: catalog authoring,
+// live operations, and change history each get their own titled box.
+const WORKSHOP_CARD_GROUPS: { label: string; ids: string[] }[] = [
+  { label: 'Catalog', ids: ['plans', 'top-up-packs', 'promotions'] },
+  { label: 'Operations', ids: ['action-costs', 'runtime-controls', 'recovery-tools'] },
+  { label: 'History', ids: ['audit'] },
+];
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
 const LEGACY_TOPUP_PACK_KEYS = new Set(['beats_25', 'beats_80', 'beats_200']);
 const VIDEO_EXPORT_WATERMARK_MODE_LABELS: Record<VideoExportWatermarkMode, string> = {
@@ -157,71 +168,6 @@ const VIDEO_EXPORT_WATERMARK_SIZE_LABELS: Record<VideoExportWatermarkSize, strin
   large: 'Large',
 };
 
-const PRICING_WORKSPACE_LINKS: Array<{
-  section: PricingStudioSection | 'audit';
-  label: string;
-  href: string;
-  description: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-}> = [
-  {
-    section: 'workshop',
-    label: 'Pricing workshop',
-    href: '/admin/pricing',
-    description: 'Review pricing catalog health and jump into focused tools.',
-    icon: Coins,
-  },
-  {
-    section: 'plans',
-    label: 'Plans',
-    href: '/admin/pricing/plans',
-    description: 'Draft and publish plan variants by market and interval.',
-    icon: CreditCard,
-  },
-  {
-    section: 'top-up-packs',
-    label: 'Top-up packs',
-    href: '/admin/pricing/top-up-packs',
-    description: 'Manage one-time coin packs by market.',
-    icon: Coins,
-  },
-  {
-    section: 'promotions',
-    label: 'Promotions',
-    href: '/admin/pricing/promotions',
-    description: 'Create and archive campaign bonus offers.',
-    icon: Megaphone,
-  },
-  {
-    section: 'action-costs',
-    label: 'Action costs',
-    href: '/admin/pricing/action-costs',
-    description: 'Set immediate-save coin costs for billable actions.',
-    icon: Sparkles,
-  },
-  {
-    section: 'runtime-controls',
-    label: 'Runtime controls',
-    href: '/admin/pricing/runtime-controls',
-    description: 'Control visibility, rollout behavior, and live settings.',
-    icon: Settings2,
-  },
-  {
-    section: 'recovery-tools',
-    label: 'Recovery tools',
-    href: '/admin/pricing/recovery-tools',
-    description: 'Repair test wallet, checkout, and reservation issues.',
-    icon: Wrench,
-  },
-  {
-    section: 'audit',
-    label: 'Recent audit',
-    href: '/admin/pricing/audit',
-    description: 'Review pricing changes with paginated history.',
-    icon: ShieldAlert,
-  },
-];
-
 function SectionCard({
   title,
   description,
@@ -234,7 +180,7 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+    <section className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-6">
       <div className="mb-5 flex items-start gap-3">
         <div className="rounded-xl bg-emerald-500/10 p-2.5 text-emerald-300">
           <Icon size={18} />
@@ -660,60 +606,66 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     return <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error || 'Failed to load pricing data.'}</div>;
   }
 
-  const sectionMeta = PRICING_WORKSPACE_LINKS.find((item) => item.section === section) ?? PRICING_WORKSPACE_LINKS[0];
+  const sectionMeta = findPricingNavItem(section) ?? findPricingNavItem('workshop')!;
   const isWorkshop = section === 'workshop';
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl text-neutral-100">{sectionMeta.label}</h1>
-            <p className="mt-1 text-sm text-neutral-400">{sectionMeta.description}</p>
-            <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">Display mode: 10 coins = 1 internal beat</p>
-          </div>
-          <button
-            onClick={() => void refreshState()}
-            disabled={busyKey !== null}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-200 hover:bg-white/10 disabled:opacity-50"
-          >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
-        </div>
-
-        {isWorkshop && (
-          <>
-            <div className="mt-6 grid gap-3 md:grid-cols-4">
-              <MetricCard label="Plans" value={String(state.plans.length)} hint="Plan families" />
-              <MetricCard label="Versions" value={String(state.plans.reduce((sum, item) => sum + item.versions.length, 0))} hint="Draft + live variants" />
-              <MetricCard label="Top-ups" value={String(state.topupPacks.length)} hint="Market variants" />
-              <MetricCard label="Promotions" value={String(state.promotions.length)} hint="Immediate-save promos" />
-            </div>
-
-            <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {PRICING_WORKSPACE_LINKS.filter((item) => item.section !== 'workshop').map(({ href, label, description, icon: Icon }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="group rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="rounded-lg bg-emerald-500/10 p-2 text-emerald-300">
-                      <Icon size={16} />
-                    </span>
-                    <span className="text-sm font-medium text-neutral-100 group-hover:text-emerald-200">{label}</span>
-                  </div>
-                  <p className="mt-3 text-xs leading-relaxed text-neutral-400">{description}</p>
-                </Link>
-              ))}
-            </div>
-          </>
-        )}
-
-        {error && <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
-        {message && <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
+    <div className="mx-auto max-w-7xl space-y-6">
+      <div>
+        <AdminPageHeader
+          title={sectionMeta.label}
+          description={sectionMeta.description}
+          actions={
+            <button
+              onClick={() => void refreshState()}
+              disabled={busyKey !== null}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900/60 px-4 py-2 text-sm text-neutral-200 hover:bg-white/10 disabled:opacity-50"
+            >
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          }
+        />
+        <p className="mt-2 text-xs uppercase tracking-[0.18em] text-emerald-300/80">Display mode: 10 coins = 1 internal beat</p>
       </div>
+
+      {error && <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">{error}</div>}
+      {message && <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">{message}</div>}
+
+      {isWorkshop && (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <MetricCard label="Plans" value={String(state.plans.length)} hint="Plan families" />
+            <MetricCard label="Versions" value={String(state.plans.reduce((sum, item) => sum + item.versions.length, 0))} hint="Draft + live variants" />
+            <MetricCard label="Top-ups" value={String(state.topupPacks.length)} hint="Market variants" />
+            <MetricCard label="Promotions" value={String(state.promotions.length)} hint="Immediate-save promos" />
+          </div>
+
+          {WORKSHOP_CARD_GROUPS.map((group) => {
+            const cards = group.ids
+              .map((id) => PRICING_NAV_ITEMS.find((item) => item.id === id))
+              .filter((item): item is AdminNavChild => Boolean(item));
+            if (cards.length === 0) return null;
+            return (
+              <div key={group.label} className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                <h3 className="mb-3 text-xs font-medium uppercase tracking-wider text-neutral-500">{group.label}</h3>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  {cards.map((item) => (
+                    <AdminHubCard
+                      key={item.href}
+                      href={item.href}
+                      label={item.label}
+                      description={item.description}
+                      icon={item.icon}
+                      summary={item.staticSummary}
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
 
       {section === 'runtime-controls' && (
       <SectionCard title="Runtime Controls" description="Use these switches to decide what people can see, buy, and experience. Each card explains what changes when it is on or off." icon={Settings2}>
@@ -727,12 +679,11 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                     <p className="text-sm font-medium text-neutral-100">{setting.label}</p>
                     <p className="mt-1 text-xs text-neutral-400">{setting.description}</p>
                   </div>
-                  <button
-                    onClick={() => setRuntimeDrafts((current) => ({ ...current, [setting.key]: { ...draft, enabled: !draft.enabled } }))}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${draft.enabled ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-                  >
-                    <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${draft.enabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                  </button>
+                  <AdminToggle
+                    checked={draft.enabled}
+                    onToggle={() => setRuntimeDrafts((current) => ({ ...current, [setting.key]: { ...draft, enabled: !draft.enabled } }))}
+                    ariaLabel={setting.label}
+                  />
                 </div>
 
                 <div className="mt-4 rounded-xl border border-white/10 bg-neutral-950/40 px-3 py-3">
@@ -759,7 +710,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                   </div>
                 )}
 
-                <div className="mt-4 flex items-center justify-between gap-3">
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-[11px] uppercase tracking-wider text-neutral-500">
                     If this is off, Kissago uses: {formatRuntimeDefaultValue(setting.key, setting.defaultValue, setting.defaultEnabled)}
                   </p>
@@ -794,19 +745,34 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
         <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
           <div className="space-y-4 rounded-xl border border-white/10 bg-neutral-900/50 p-4">
             <SelectField label="Plan">
-              <select value={selectedPlanKey} onChange={(event) => setSelectedPlanKey(event.target.value as PlanKey)} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                {PLAN_KEYS.map((key) => <option key={key} value={key}>{key}</option>)}
-              </select>
+              <FilterDropdown
+                fullWidth
+                size="form"
+                value={selectedPlanKey}
+                options={PLAN_KEYS.map((key) => ({ value: key, label: key }))}
+                onChange={(value) => setSelectedPlanKey(value as PlanKey)}
+                ariaLabel="Plan"
+              />
             </SelectField>
             <SelectField label="Market">
-              <select value={selectedPlanMarket} onChange={(event) => setSelectedPlanMarket(event.target.value as PricingMarketKey)} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                {PRICING_MARKET_KEYS.map((key) => <option key={key} value={key}>{key}</option>)}
-              </select>
+              <FilterDropdown
+                fullWidth
+                size="form"
+                value={selectedPlanMarket}
+                options={PRICING_MARKET_KEYS.map((key) => ({ value: key, label: key }))}
+                onChange={(value) => setSelectedPlanMarket(value as PricingMarketKey)}
+                ariaLabel="Market"
+              />
             </SelectField>
             <SelectField label="Interval">
-              <select value={selectedPlanInterval} onChange={(event) => setSelectedPlanInterval(event.target.value as BillingInterval)} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                {BILLING_INTERVALS.map((value) => <option key={value} value={value}>{value}</option>)}
-              </select>
+              <FilterDropdown
+                fullWidth
+                size="form"
+                value={selectedPlanInterval}
+                options={BILLING_INTERVALS.map((value) => ({ value, label: value }))}
+                onChange={(value) => setSelectedPlanInterval(value as BillingInterval)}
+                ariaLabel="Interval"
+              />
             </SelectField>
             <VariantStatus title="Draft" value={formatPlanVariantValue(currentPlanDraft)} />
             <VariantStatus title="Published" value={formatPlanVariantValue(currentPlanPublished)} />
@@ -822,10 +788,14 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               <InputField label="Grace Period Days"><input type="number" value={planEditor.gracePeriodDays} onChange={(event) => setPlanEditor((current) => ({ ...current, gracePeriodDays: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Carry Forward Cap Multiplier"><input type="number" step="0.1" value={planEditor.carryForwardCapMultiplier} onChange={(event) => setPlanEditor((current) => ({ ...current, carryForwardCapMultiplier: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
               <SelectField label="Provider">
-                <select value={planEditor.provider} onChange={(event) => setPlanEditor((current) => ({ ...current, provider: event.target.value as BillingProvider | '' }))} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                  <option value="">None</option>
-                  {BILLING_PROVIDERS.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
-                </select>
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={planEditor.provider}
+                  options={[{ value: '', label: 'None' }, ...BILLING_PROVIDERS.map((provider) => ({ value: provider, label: provider }))]}
+                  onChange={(value) => setPlanEditor((current) => ({ ...current, provider: value as BillingProvider | '' }))}
+                  ariaLabel="Provider"
+                />
               </SelectField>
               <InputField label="Currency"><input value={planEditor.currencyCode} onChange={(event) => setPlanEditor((current) => ({ ...current, currencyCode: event.target.value.toUpperCase() }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Provider Product Ref"><input value={planEditor.providerProductRef} onChange={(event) => setPlanEditor((current) => ({ ...current, providerProductRef: event.target.value }))} className={INPUT_CLASS} /></InputField>
@@ -857,63 +827,59 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
 
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 <SelectField label="Vertical Resolution">
-                  <select
+                  <FilterDropdown
+                    fullWidth
+                    size="form"
                     value={planEditor.videoExportVerticalResolution}
-                    onChange={(event) => setPlanEditor((current) => ({
+                    options={VIDEO_EXPORT_VERTICAL_RESOLUTIONS.map((value) => ({ value, label: value }))}
+                    onChange={(value) => setPlanEditor((current) => ({
                       ...current,
-                      videoExportVerticalResolution: event.target.value as VideoExportVerticalResolution,
+                      videoExportVerticalResolution: value as VideoExportVerticalResolution,
                     }))}
-                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
-                  >
-                    {VIDEO_EXPORT_VERTICAL_RESOLUTIONS.map((value) => (
-                      <option key={value} value={value}>{value}</option>
-                    ))}
-                  </select>
+                    ariaLabel="Vertical Resolution"
+                  />
                 </SelectField>
 
                 <SelectField label="Watermark Visibility">
-                  <select
+                  <FilterDropdown
+                    fullWidth
+                    size="form"
                     value={planEditor.videoExportWatermarkMode}
-                    onChange={(event) => setPlanEditor((current) => ({
+                    options={VIDEO_EXPORT_WATERMARK_MODES.map((value) => ({ value, label: VIDEO_EXPORT_WATERMARK_MODE_LABELS[value] }))}
+                    onChange={(value) => setPlanEditor((current) => ({
                       ...current,
-                      videoExportWatermarkMode: event.target.value as VideoExportWatermarkMode,
+                      videoExportWatermarkMode: value as VideoExportWatermarkMode,
                     }))}
-                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
-                  >
-                    {VIDEO_EXPORT_WATERMARK_MODES.map((value) => (
-                      <option key={value} value={value}>{VIDEO_EXPORT_WATERMARK_MODE_LABELS[value]}</option>
-                    ))}
-                  </select>
+                    ariaLabel="Watermark Visibility"
+                  />
                 </SelectField>
 
                 <SelectField label="Watermark Position">
-                  <select
+                  <FilterDropdown
+                    fullWidth
+                    size="form"
                     value={planEditor.videoExportWatermarkPosition}
-                    onChange={(event) => setPlanEditor((current) => ({
+                    options={VIDEO_EXPORT_WATERMARK_POSITIONS.map((value) => ({ value, label: VIDEO_EXPORT_WATERMARK_POSITION_LABELS[value] }))}
+                    onChange={(value) => setPlanEditor((current) => ({
                       ...current,
-                      videoExportWatermarkPosition: event.target.value as VideoExportWatermarkPosition,
+                      videoExportWatermarkPosition: value as VideoExportWatermarkPosition,
                     }))}
-                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
-                  >
-                    {VIDEO_EXPORT_WATERMARK_POSITIONS.map((value) => (
-                      <option key={value} value={value}>{VIDEO_EXPORT_WATERMARK_POSITION_LABELS[value]}</option>
-                    ))}
-                  </select>
+                    ariaLabel="Watermark Position"
+                  />
                 </SelectField>
 
                 <SelectField label="Watermark Size">
-                  <select
+                  <FilterDropdown
+                    fullWidth
+                    size="form"
                     value={planEditor.videoExportWatermarkSize}
-                    onChange={(event) => setPlanEditor((current) => ({
+                    options={VIDEO_EXPORT_WATERMARK_SIZES.map((value) => ({ value, label: VIDEO_EXPORT_WATERMARK_SIZE_LABELS[value] }))}
+                    onChange={(value) => setPlanEditor((current) => ({
                       ...current,
-                      videoExportWatermarkSize: event.target.value as VideoExportWatermarkSize,
+                      videoExportWatermarkSize: value as VideoExportWatermarkSize,
                     }))}
-                    className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
-                  >
-                    {VIDEO_EXPORT_WATERMARK_SIZES.map((value) => (
-                      <option key={value} value={value}>{VIDEO_EXPORT_WATERMARK_SIZE_LABELS[value]}</option>
-                    ))}
-                  </select>
+                    ariaLabel="Watermark Size"
+                  />
                 </SelectField>
               </div>
             </div>
@@ -1007,33 +973,32 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               New pack
             </button>
             <SelectField label="Pack">
-              <select
+              <FilterDropdown
+                fullWidth
+                size="form"
                 value={isCreatingTopup ? 'new' : (selectedTopupRecordId ?? '')}
-                onChange={(event) => {
-                  if (event.target.value === 'new') {
+                options={[{ value: 'new', label: 'New pack' }, ...topupCatalogEntries.map((entry) => ({ value: entry.current.id, label: entry.label }))]}
+                onChange={(value) => {
+                  if (value === 'new') {
                     startNewTopupDraft();
                     return;
                   }
 
                   setIsCreatingTopup(false);
-                  setSelectedTopupRecordId(event.target.value);
+                  setSelectedTopupRecordId(value);
                 }}
-                className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
-              >
-                <option value="new">New pack</option>
-                {topupCatalogEntries.map((entry) => (
-                  <option key={entry.current.id} value={entry.current.id}>{entry.label}</option>
-                ))}
-              </select>
+                ariaLabel="Pack"
+              />
             </SelectField>
             <SelectField label="Market">
-              <select
+              <FilterDropdown
+                fullWidth
+                size="form"
                 value={selectedTopupMarket}
-                onChange={(event) => setSelectedTopupMarket(event.target.value as PricingMarketKey)}
-                className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
-              >
-                {PRICING_MARKET_KEYS.map((key) => <option key={key} value={key}>{key}</option>)}
-              </select>
+                options={PRICING_MARKET_KEYS.map((key) => ({ value: key, label: key }))}
+                onChange={(value) => setSelectedTopupMarket(value as PricingMarketKey)}
+                ariaLabel="Market"
+              />
             </SelectField>
             <VariantStatus title="Draft" value={formatTopupVariantValue(currentTopupDraft)} />
             <VariantStatus title="Published" value={formatTopupVariantValue(currentTopupPublished)} />
@@ -1061,9 +1026,14 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
             <div className="grid gap-4 md:grid-cols-2">
               <InputField label="Name"><input value={topupEditor.name} onChange={(event) => setTopupEditor((current) => ({ ...current, name: event.target.value }))} className={INPUT_CLASS} /></InputField>
               <SelectField label="Provider">
-                <select value={topupEditor.provider} onChange={(event) => setTopupEditor((current) => ({ ...current, provider: event.target.value as BillingProvider }))} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                  {BILLING_PROVIDERS.map((provider) => <option key={provider} value={provider}>{provider}</option>)}
-                </select>
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={topupEditor.provider}
+                  options={BILLING_PROVIDERS.map((provider) => ({ value: provider, label: provider }))}
+                  onChange={(value) => setTopupEditor((current) => ({ ...current, provider: value as BillingProvider }))}
+                  ariaLabel="Provider"
+                />
               </SelectField>
               <InputField label="Currency"><input value={topupEditor.currencyCode} onChange={(event) => setTopupEditor((current) => ({ ...current, currencyCode: event.target.value.toUpperCase() }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Price (minor units)"><input type="number" value={topupEditor.priceMinor} onChange={(event) => setTopupEditor((current) => ({ ...current, priceMinor: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
@@ -1141,8 +1111,8 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
             const draft = actionCostDrafts[action.action_key] ?? { coinCost: String(beatsToCoins(action.beat_cost)), isActive: action.is_active };
             return (
               <div key={action.id} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-                <p className="text-sm font-medium text-neutral-100">{action.action_key}</p>
-                <div className="mt-4 flex items-center gap-3">
+                <p className="text-sm font-medium text-neutral-100 break-all">{action.action_key}</p>
+                <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
                   <input
                     type="number"
                     min="0"
@@ -1155,15 +1125,14 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                     className="w-28 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
                   />
                   <span className="text-xs text-neutral-500">coins</span>
-                  <button
-                    onClick={() => setActionCostDrafts((current) => ({
+                  <AdminToggle
+                    checked={draft.isActive}
+                    onToggle={() => setActionCostDrafts((current) => ({
                       ...current,
                       [action.action_key]: { ...draft, isActive: !draft.isActive },
                     }))}
-                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${draft.isActive ? 'bg-emerald-500' : 'bg-neutral-700'}`}
-                  >
-                    <span className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${draft.isActive ? 'translate-x-6' : 'translate-x-1'}`} />
-                  </button>
+                    ariaLabel={`Toggle ${action.action_key}`}
+                  />
                   <span className="text-xs text-neutral-500">{draft.isActive ? 'Active' : 'Inactive'}</span>
                 </div>
                 <div className="mt-4">
@@ -1227,21 +1196,34 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               <InputField label="Promo Key"><input value={promotionEditor.promoKey} onChange={(event) => setPromotionEditor((current) => ({ ...current, promoKey: event.target.value }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Name"><input value={promotionEditor.name} onChange={(event) => setPromotionEditor((current) => ({ ...current, name: event.target.value }))} className={INPUT_CLASS} /></InputField>
               <SelectField label="Status">
-                <select value={promotionEditor.status} onChange={(event) => setPromotionEditor((current) => ({ ...current, status: event.target.value as PricingCatalogStatus }))} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                  <option value="published">published</option>
-                  <option value="archived">archived</option>
-                </select>
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={promotionEditor.status}
+                  options={[{ value: 'published', label: 'published' }, { value: 'archived', label: 'archived' }]}
+                  onChange={(value) => setPromotionEditor((current) => ({ ...current, status: value as PricingCatalogStatus }))}
+                  ariaLabel="Status"
+                />
               </SelectField>
               <SelectField label="Market Scope">
-                <select value={promotionEditor.pricingMarketScope} onChange={(event) => setPromotionEditor((current) => ({ ...current, pricingMarketScope: event.target.value as PromotionMarketScope }))} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                  {PROMOTION_MARKET_SCOPES.map((scope) => <option key={scope} value={scope}>{scope}</option>)}
-                </select>
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={promotionEditor.pricingMarketScope}
+                  options={PROMOTION_MARKET_SCOPES.map((scope) => ({ value: scope, label: scope }))}
+                  onChange={(value) => setPromotionEditor((current) => ({ ...current, pricingMarketScope: value as PromotionMarketScope }))}
+                  ariaLabel="Market Scope"
+                />
               </SelectField>
               <SelectField label="Target Plan">
-                <select value={promotionEditor.targetPlanKey} onChange={(event) => setPromotionEditor((current) => ({ ...current, targetPlanKey: event.target.value as PlanKey | '' }))} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100">
-                  <option value="">All plans</option>
-                  {PLAN_KEYS.map((planKey) => <option key={planKey} value={planKey}>{planKey}</option>)}
-                </select>
+                <FilterDropdown
+                  fullWidth
+                  size="form"
+                  value={promotionEditor.targetPlanKey}
+                  options={[{ value: '', label: 'All plans' }, ...PLAN_KEYS.map((planKey) => ({ value: planKey, label: planKey }))]}
+                  onChange={(value) => setPromotionEditor((current) => ({ ...current, targetPlanKey: value as PlanKey | '' }))}
+                  ariaLabel="Target Plan"
+                />
               </SelectField>
               <InputField label="Target User Segment"><input value={promotionEditor.targetUserSegment} onChange={(event) => setPromotionEditor((current) => ({ ...current, targetUserSegment: event.target.value }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Bonus Coins"><input type="number" step="10" value={promotionEditor.bonusCoins} onChange={(event) => setPromotionEditor((current) => ({ ...current, bonusCoins: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
@@ -1410,15 +1392,14 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
                 />
               </InputField>
               <SelectField label="Market">
-                <select
+                <FilterDropdown
+                  fullWidth
+                  size="form"
                   value={recoveryDrafts.freeGrantMarket}
-                  onChange={(event) => setRecoveryDrafts((current) => ({ ...current, freeGrantMarket: event.target.value as PricingMarketKey }))}
-                  className={INPUT_CLASS}
-                >
-                  {PRICING_MARKET_KEYS.map((market) => (
-                    <option key={market} value={market}>{market}</option>
-                  ))}
-                </select>
+                  options={PRICING_MARKET_KEYS.map((market) => ({ value: market, label: market }))}
+                  onChange={(value) => setRecoveryDrafts((current) => ({ ...current, freeGrantMarket: value as PricingMarketKey }))}
+                  ariaLabel="Market"
+                />
               </SelectField>
             </div>
             <div className="mt-4">

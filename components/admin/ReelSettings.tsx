@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, RefreshCcw, Save, Trash2 } from 'lucide-react';
 
+import AdminToggle from '@/components/admin/AdminToggle';
 import {
   getReelStorySetupSettings,
   saveReelStorySettings,
@@ -55,14 +56,9 @@ function ToggleRow({
         <p className="text-sm font-medium text-neutral-100">{label}</p>
         <p className="mt-0.5 text-xs text-neutral-400">{description}</p>
       </div>
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={disabled}
-        className={`relative ml-6 inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-50 ${checked ? 'bg-emerald-500' : 'bg-neutral-600'}`}
-      >
-        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
-      </button>
+      <span className="ml-6">
+        <AdminToggle checked={checked} onToggle={onToggle} disabled={disabled} ariaLabel={label} />
+      </span>
     </div>
   );
 }

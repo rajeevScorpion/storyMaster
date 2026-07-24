@@ -12,6 +12,7 @@ import {
   FileText,
   Hash,
   History,
+  List,
   Loader2,
   Play,
   RotateCcw,
@@ -391,6 +392,9 @@ export default function PlaygroundStudio({
   const [showApplyConfirm, setShowApplyConfirm] = useState(false);
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
+  // Mobile-only collapse for the task rail below. Ignored at md+ where the rail
+  // is always shown (see md:block override); desktop layout is unchanged.
+  const [isTaskRailOpen, setIsTaskRailOpen] = useState(false);
   const [reelStyles, setReelStyles] = useState<ReelVisualStyleRecord[]>([]);
   const resultRef = useRef<HTMLDivElement>(null);
 
@@ -789,28 +793,45 @@ export default function PlaygroundStudio({
       {isFetchingConfigs ? (
         <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading playground config...</div>
       ) : (
-        <div className="flex gap-6">
-          <div className="w-72 shrink-0 space-y-2">
-            {visibleTaskKeys.map((taskKey) => {
-              const task = TASK_DEFINITIONS.find((item) => item.key === taskKey)!;
-              const config = configs.find((item) => item.taskKey === taskKey);
-              const active = selectedTask === taskKey;
-              const promptEnabled = PROMPT_TASK_KEYS.includes(taskKey);
-              return (
-                <button key={taskKey} onClick={() => setSelectedTask(taskKey)} className={`w-full rounded-xl border p-3 text-left transition-all ${active ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-white/10 bg-white/5 text-neutral-300 hover:bg-white/10'}`}>
-                    <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium">{task.label}</p>
-                    <div className="flex items-center gap-2">
-                      {promptEnabled && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">Prompt</span>}
+        <div className="flex flex-col gap-4 md:flex-row md:gap-6">
+          <div className="md:w-72 md:shrink-0">
+            {/* Mobile-only rail toggle — a second, in-page nav distinct from the
+                admin hamburger; collapses the task list so the panel gets full width. */}
+            <button
+              type="button"
+              onClick={() => setIsTaskRailOpen((open) => !open)}
+              aria-expanded={isTaskRailOpen}
+              className="flex w-full items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-left md:hidden"
+            >
+              <span className="flex min-w-0 items-center gap-2 text-neutral-200">
+                <List size={16} className="shrink-0 text-emerald-300" />
+                <span className="truncate text-sm font-medium">{taskDef.label}</span>
+              </span>
+              <ChevronDown size={16} className={`shrink-0 text-neutral-400 transition-transform ${isTaskRailOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            <div className={`space-y-2 ${isTaskRailOpen ? 'mt-2' : 'hidden'} md:mt-0 md:block`}>
+              {visibleTaskKeys.map((taskKey) => {
+                const task = TASK_DEFINITIONS.find((item) => item.key === taskKey)!;
+                const config = configs.find((item) => item.taskKey === taskKey);
+                const active = selectedTask === taskKey;
+                const promptEnabled = PROMPT_TASK_KEYS.includes(taskKey);
+                return (
+                  <button key={taskKey} onClick={() => { setSelectedTask(taskKey); setIsTaskRailOpen(false); }} className={`w-full rounded-xl border p-3 text-left transition-all ${active ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-white/10 bg-white/5 text-neutral-300 hover:bg-white/10'}`}>
+                      <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-medium">{task.label}</p>
+                      <div className="flex items-center gap-2">
+                        {promptEnabled && <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-300">Prompt</span>}
+                      </div>
                     </div>
-                  </div>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-neutral-500">{config?.modelId || DEFAULT_MODELS[task.key].modelId}</p>
-                </button>
-              );
-            })}
+                    <p className="mt-0.5 truncate font-mono text-[11px] text-neutral-500">{config?.modelId || DEFAULT_MODELS[task.key].modelId}</p>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          <div className="flex-1 space-y-6">
+          <div className="min-w-0 flex-1 space-y-6">
             <>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <div className="flex flex-wrap items-start justify-between gap-4">

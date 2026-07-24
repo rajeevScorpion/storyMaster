@@ -1,7 +1,7 @@
 'use server';
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
-import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue, setFeatureFlagValue, type ModelConfig } from '@/lib/ai/model-config';
+import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue, setFeatureFlagValue, warmFeatureFlagCaches, type ModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 import {
@@ -28,6 +28,9 @@ import {
   getEnabledStoryLanguageIds,
   saveEnabledStoryLanguageIds,
 } from '@/lib/ai/story-language-settings';
+import { NARRATION_VOICE_FLAG_KEYS, SUPPORTED_NARRATION_VOICE_LANGUAGES } from '@/lib/ai/narration-voices';
+import { NARRATION_ACCENT_FLAG_KEYS } from '@/lib/ai/narration-accents';
+import { STORY_LANGUAGE_ENABLED_FLAG_KEY } from '@/lib/ai/story-config';
 import type { StoryLanguage } from '@/lib/types/story';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
 import {
@@ -464,7 +467,78 @@ export async function saveMediaStorageSettings(
   return loadMediaStorageAdminState();
 }
 
-export async function getGlobalSettings(): Promise<{
+// Every feature_flags key read (directly or via a composite fetcher) inside
+// getGlobalSettings below. Warming these in one query lets the per-key getters
+// short-circuit to cache instead of doing ~70+ individual round-trips on a cold
+// cache. Keep this list in sync when adding/removing flag reads in
+// getGlobalSettings — a stale entry only costs a warmed-but-unused cache row,
+// and a missing entry only falls back to an individual read (never a wrong
+// value). Keys sourced from constants are spread so they can't drift.
+const GLOBAL_SETTINGS_WARM_KEYS: readonly string[] = [
+  // Storyboard (inline + getStoryboardImageQualitySettings)
+  'storyboard_cycle_override',
+  'storyboard_cycle_ms',
+  'storyboard_vignette_enabled',
+  'storyboard_vignette_amount_percent',
+  'storyboard_image_size',
+  'storyboard_webp_compression_enabled',
+  'storyboard_webp_quality_percent',
+  'storyboard_client_processing_enabled',
+  'storyboard_layout_mode',
+  // Reader / loader
+  'story_loading_node_labels_enabled',
+  'story_loading_hint_typewriter_enabled',
+  'story_loading_reader_anticipation_ms',
+  'story_loading_reader_story_text_enabled',
+  'story_loading_reader_options_enabled',
+  'story_loading_reader_scroll_speed_px_per_second',
+  'story_ui_text_line_count',
+  'story_ui_auto_scroll_enabled',
+  'story_text_overlay_words_per_line',
+  // Persistence / branch flash
+  'client_story_persistence_enabled',
+  'storyline_choice_flash_enabled',
+  'storyline_choice_flash_ms',
+  // Character sheets
+  'character_sheet_enabled_free_plus',
+  'character_sheet_enabled_creator',
+  // Prompt-only / vertical / audio
+  'story_prompt_only_mode_enabled',
+  'vertical_stories_setting_enabled',
+  'audio_storyline_publish_enabled',
+  // Video export
+  'video_download_enabled',
+  'video_download_admin_bypass',
+  // Asset sync
+  'story_asset_signed_url_swap_enabled',
+  'story_incremental_asset_sync_enabled',
+  'story_asset_upload_pause_during_generation_enabled',
+  // Timeouts + authoring
+  'gemini_text_timeout_ms',
+  'gemini_image_timeout_ms',
+  'gemini_tts_timeout_ms',
+  'cloud_save_timeout_ms',
+  'story_asset_sync_warning_timeout_ms',
+  'story_authoring_word_cap',
+  // Prompt-only image gallery
+  'prompt_only_max_images_per_beat',
+  'prompt_only_image_gallery_cleanup_enabled',
+  'prompt_only_image_gallery_cleanup_days',
+  // Composite fetchers (keys sourced from their own constants)
+  ...Object.values(IMAGE_UPLOAD_OPTIMIZATION_FLAG_KEYS),
+  ...Object.values(MEDIA_STORAGE_FLAG_KEYS),
+  ...Object.values(NARRATION_VOICE_FLAG_KEYS),
+  ...SUPPORTED_NARRATION_VOICE_LANGUAGES.map((language) => language.sampleTextFlagKey),
+  ...Object.values(NARRATION_ACCENT_FLAG_KEYS),
+  STORY_LANGUAGE_ENABLED_FLAG_KEY,
+];
+
+// `section` scopes the two real DB round-trips below (narration sample statuses
+// + preview seed-plan price) to the pages that actually render them. Every other
+// value is served from the warm flag cache, so the rest stays a single query
+// regardless of section. Defaults to 'overview', which fetches everything (its
+// live summaries read both scoped values).
+export async function getGlobalSettings(section: string = 'overview'): Promise<{
   cycleOverride: boolean;
   cycleMs: number;
   vignetteEnabled: boolean;
@@ -513,7 +587,16 @@ export async function getGlobalSettings(): Promise<{
   enabledStoryLanguageIds: StoryLanguage[];
 }> {
   await verifyAdmin();
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationVoiceSettings, narrationVoiceSampleStatuses, enabledStoryLanguageIds] = await Promise.all([
+  // Warm both flag caches in one query so the per-key getters below (including
+  // those inside the composite fetchers) hit cache instead of round-tripping.
+  await warmFeatureFlagCaches(GLOBAL_SETTINGS_WARM_KEYS);
+  // Only these two sections (and the overview, which summarizes both) render the
+  // narration sample statuses / preview seed-plan price, so skip their DB reads
+  // everywhere else. When skipped they resolve to the same empty values the
+  // component holds by default and never displays off-section.
+  const needsNarrationSamples = section === 'overview' || section === 'narration';
+  const needsPreviewPrice = section === 'overview' || section === 'authoring';
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationBundle, enabledStoryLanguageIds] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -547,16 +630,25 @@ export async function getGlobalSettings(): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
-    getPreviewSeedPlanPriceCoins(),
+    needsPreviewPrice ? getPreviewSeedPlanPriceCoins() : Promise.resolve(0),
     getFeatureFlagValue('prompt_only_max_images_per_beat'),
     getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
     getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
     getImageUploadOptimizationSettings(),
     loadMediaStorageAdminState(),
-    getNarrationVoiceSettings(),
-    getNarrationVoiceSampleStatusesForAdmin(),
+    (async () => {
+      // Sequential so the statuses fetch's internal getNarrationVoiceSettings()
+      // read reuses the first call's result instead of fetching voice settings
+      // twice (the warm cache already covers this; sequencing keeps the dedupe
+      // even if warming failed).
+      const settings = await getNarrationVoiceSettings();
+      const statuses = needsNarrationSamples ? await getNarrationVoiceSampleStatusesForAdmin() : [];
+      return { settings, statuses };
+    })(),
     getEnabledStoryLanguageIds(),
   ]);
+  const narrationVoiceSettings = narrationBundle.settings;
+  const narrationVoiceSampleStatuses = narrationBundle.statuses;
   const parsedLoadingReaderAnticipationMs = parseInt(loadingReaderAnticipationMsStr ?? '10000', 10);
   const parsedLoadingReaderScrollSpeed = parseInt(loadingReaderScrollSpeedStr ?? '24', 10);
   const parsedStorylineChoiceFlashMs = parseInt(storylineChoiceFlashMsStr ?? '3000', 10);

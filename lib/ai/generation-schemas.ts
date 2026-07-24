@@ -215,6 +215,10 @@ const storyboardFrameSchema = {
     },
     emotion: { type: Type.STRING },
     continuityAnchor: { type: Type.STRING },
+    charactersPresent: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+    },
   },
   required: [
     'description',
@@ -223,6 +227,7 @@ const storyboardFrameSchema = {
     'visualFocus',
     'emotion',
     'continuityAnchor',
+    'charactersPresent',
   ],
 };
 

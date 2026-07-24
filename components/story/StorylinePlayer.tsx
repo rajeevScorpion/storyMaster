@@ -195,6 +195,7 @@ export default function StorylinePlayer({
   const signedUrlRefreshInFlightRef = useRef(false);
   const lastSignedUrlRefreshAtRef = useRef(Date.now());
   const progressRestoredRef = useRef(false);
+  const exportParamHandledRef = useRef(false);
   const { data: pricing } = usePricingRuntime();
   // Video download gating:
   // 1. Global master toggle must be ON (admin Global Settings)
@@ -239,6 +240,21 @@ export default function StorylinePlayer({
       checkIsAdmin().then(setIsAdminUser).catch(() => setIsAdminUser(false));
     }
   }, [isLoggedIn]);
+
+  // Auto-open the export dialog when arriving via the post-publish "Export
+  // Video" link (?export=1). Download gating resolves asynchronously (settings
+  // + pricing), so wait for canDownload before consuming the param; if the
+  // user isn't allowed to export, the param is left alone and the standard
+  // locked/upsell export button applies.
+  useEffect(() => {
+    if (exportParamHandledRef.current || !canDownload) return;
+    const url = new URL(window.location.href);
+    exportParamHandledRef.current = true;
+    if (url.searchParams.get('export') !== '1') return;
+    url.searchParams.delete('export');
+    window.history.replaceState(null, '', url.toString());
+    setExportDialogOpen(true);
+  }, [canDownload]);
 
   // Sync current beat index to URL for persistence across refresh
   useEffect(() => {

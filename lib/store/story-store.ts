@@ -16,6 +16,7 @@ import {
   renderStoryboardPlan,
   type StoryModelOverrides,
   type ReferenceImage,
+  type GeneratedImageResult,
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
 import { selectRelevantWorld } from '@/lib/references/reference-routing';
@@ -93,6 +94,16 @@ import {
   cleanPanelSuggestions,
   type BeatImageRegenerationOptions,
 } from '@/lib/ai/image-regeneration.shared';
+import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
+import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import {
+  assembleFinalImagePrompt,
+  type ImagePromptCompilerRuntime,
+  type PromptCompilerBeatMetadata,
+} from '@/lib/ai/prompt-compiler/assemble.shared';
+import { DEFAULT_PROMPT_COMPILER_CAPABILITY } from '@/lib/ai/prompt-compiler/capability.shared';
+import type { ImageModelSelection } from '@/lib/ai/image-models.shared';
+import type { StoryboardImagePromptOptions } from '@/lib/ai/beat-orchestration';
 import {
   DEFAULT_BEAT_CONTROL_RUNTIME_SETTINGS,
   type BeatControlRuntimeSettings,
@@ -1107,6 +1118,85 @@ async function resolveBeatGenerationModeCached(): Promise<'legacy' | 'bundle'> {
   const data = await resolveBeatGenerationModeAction();
   cachedBeatGenerationMode = { data, fetchedAtMs: Date.now() };
   return data;
+}
+
+// Image prompt compiler: cache the mode+capability per (task, model) for 60s,
+// mirroring resolveImageProcessingModeCached. Reels/portraits are not covered.
+const LEGACY_COMPILER_RUNTIME: ImagePromptCompilerRuntime = {
+  mode: 'legacy',
+  capability: { ...DEFAULT_PROMPT_COMPILER_CAPABILITY },
+};
+const cachedCompilerRuntime = new Map<string, { data: ImagePromptCompilerRuntime; fetchedAtMs: number }>();
+
+async function resolveImagePromptCompilerRuntimeCached(
+  taskKey: 'image_generation' | 'reel_image_generation',
+  selection: ImageModelSelection | null | undefined
+): Promise<ImagePromptCompilerRuntime> {
+  if (taskKey !== 'image_generation') return LEGACY_COMPILER_RUNTIME;
+  const key = `${taskKey}:${selection?.modelKey ?? 'default'}`;
+  const cached = cachedCompilerRuntime.get(key);
+  if (cached && Date.now() - cached.fetchedAtMs < GENERATION_SETTINGS_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  try {
+    const data = await resolveImagePromptCompilerRuntimeAction({ taskKey, selection: selection ?? null });
+    cachedCompilerRuntime.set(key, { data, fetchedAtMs: Date.now() });
+    return data;
+  } catch {
+    return LEGACY_COMPILER_RUNTIME;
+  }
+}
+
+/**
+ * Assemble the final storyboard image prompt through the compiler. The caller
+ * supplies a legacyBuild closure (the existing buildFinalStoryboardImagePrompt
+ * call) plus the beat data needed to build the canonical scene. Returns the
+ * final prompt to send/store, the finalPromptOverride to pass into generateImage,
+ * and the compiler diagnostics to persist. Falls back to legacy on any failure so
+ * image generation can never be broken by the compiler.
+ */
+async function assembleStoryboardFinalPrompt(params: {
+  legacyBuild: () => string;
+  taskKey: 'image_generation' | 'reel_image_generation';
+  storyboardPlan?: StoryboardPlan | null;
+  storyboardPromptText?: string | null;
+  continuityNotes?: string[] | null;
+  characters: Character[];
+  visualStyle: string;
+  aspectRatio: StoryAspectRatio;
+  worldAnchor?: string;
+  regeneration?: BeatImageRegenerationOptions;
+  imageModelSelection?: ImageModelSelection | null;
+}): Promise<{
+  finalPrompt: string;
+  override?: NonNullable<StoryboardImagePromptOptions['finalPromptOverride']>;
+  compiler?: PromptCompilerBeatMetadata;
+}> {
+  const runtime = await resolveImagePromptCompilerRuntimeCached(params.taskKey, params.imageModelSelection ?? null);
+  if (runtime.mode === 'legacy' || !runtime.capability.enabled) {
+    return { finalPrompt: params.legacyBuild() };
+  }
+  try {
+    const scene = buildCanonicalImageScene({
+      storyboardPlan: params.storyboardPlan,
+      storyboardPromptText: params.storyboardPromptText,
+      continuityNotes: params.continuityNotes,
+      characters: params.characters,
+      visualStyle: params.visualStyle,
+      aspectRatio: params.aspectRatio,
+      worldAnchor: params.worldAnchor,
+      regeneration: params.regeneration,
+    });
+    const assembled = assembleFinalImagePrompt({ runtime, scene, legacyBuild: params.legacyBuild });
+    return {
+      finalPrompt: assembled.finalPrompt,
+      override: { finalPrompt: assembled.finalPrompt, engine: assembled.engine, compiler: assembled.compiler },
+      compiler: assembled.compiler,
+    };
+  } catch (error) {
+    console.error('prompt compiler failed in store; using legacy prompt:', error);
+    return { finalPrompt: params.legacyBuild() };
+  }
 }
 
 async function releaseBundleReservation(reservationId: string | null, reason: string): Promise<void> {
@@ -3043,20 +3133,34 @@ export const useStoryStore = create<StoryState>()(
               earlySavedByUserId = (await resolveCurrentUserId()) ?? undefined;
               // The worker replays generateSelectedImage with this exact final
               // prompt — built here because the prompt orchestrator is client code.
-              const jobFinalPrompt = buildFinalStoryboardImagePrompt(
-                storyboardPrompt,
-                beat.characters,
-                initialSession.visualStyle!,
-                beat.beatNumber,
-                modelOverrides,
-                {
-                  aspectRatio: storyAspectRatio,
-                  task: getImageTaskKey(storyConfig),
-                  ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
-                  ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
-                }
-              );
+              const { finalPrompt: jobFinalPrompt, compiler: jobPromptCompiler } = await assembleStoryboardFinalPrompt({
+                legacyBuild: () => buildFinalStoryboardImagePrompt(
+                  storyboardPrompt,
+                  beat.characters,
+                  initialSession.visualStyle!,
+                  beat.beatNumber,
+                  modelOverrides,
+                  {
+                    aspectRatio: storyAspectRatio,
+                    task: getImageTaskKey(storyConfig),
+                    ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+                    ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
+                  }
+                ),
+                taskKey: getImageTaskKey(storyConfig),
+                storyboardPlan: beat.storyboardPlan,
+                storyboardPromptText: storyboardPrompt,
+                continuityNotes: beat.continuityNotes,
+                characters: beat.characters,
+                visualStyle: initialSession.visualStyle!,
+                aspectRatio: storyAspectRatio,
+                worldAnchor: beatWorldRouting.worldAnchor,
+                imageModelSelection: storyConfig.imageModelSelection ?? null,
+              });
               beat.finalImagePromptText = jobFinalPrompt;
+              if (jobPromptCompiler) {
+                beat.imageGenerationMetadata = { ...(beat.imageGenerationMetadata ?? {}), promptCompiler: jobPromptCompiler };
+              }
 
               storyMap.nodes[rootNodeId] = {
                 ...storyMap.nodes[rootNodeId],
@@ -3132,6 +3236,7 @@ export const useStoryStore = create<StoryState>()(
                         referenceCount: portraitRefs.length,
                       }),
                       references: portraitRefs,
+                      promptCompiler: jobPromptCompiler ?? null,
                     },
                   })
                 );
@@ -3244,24 +3349,43 @@ export const useStoryStore = create<StoryState>()(
           // Beat 1 portraits are already resolved before storyboard rendering so Gemini can
           // use them as direct visual references during the first 2x2 board generation.
           setLoadingStage(set, 'start_story', 'image', { deferImages: promptOnly });
+          const openingLegacyBuild = () => buildFinalStoryboardImagePrompt(
+            storyboardPrompt,
+            beat.characters,
+            initialSession.visualStyle!,
+            beat.beatNumber,
+            modelOverrides,
+            {
+              aspectRatio: storyAspectRatio,
+              task: getImageTaskKey(storyConfig),
+              ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
+              ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
+            }
+          );
+          const openingAssembleParams = {
+            taskKey: getImageTaskKey(storyConfig),
+            storyboardPlan: beat.storyboardPlan,
+            storyboardPromptText: storyboardPrompt,
+            continuityNotes: beat.continuityNotes,
+            characters: beat.characters,
+            visualStyle: initialSession.visualStyle!,
+            aspectRatio: storyAspectRatio,
+            worldAnchor: beatWorldRouting.worldAnchor,
+            imageModelSelection: storyConfig.imageModelSelection ?? null,
+          };
           const [imageResult, narratorVoiceResolution] = await Promise.all([
             promptOnly
-              ? Promise.resolve({
-                  imageUrl: '',
-                  finalPromptText: buildFinalStoryboardImagePrompt(
-                    storyboardPrompt,
-                    beat.characters,
-                    initialSession.visualStyle!,
-                    beat.beatNumber,
-                  modelOverrides,
-                  {
-                    aspectRatio: storyAspectRatio,
-                    task: getImageTaskKey(storyConfig),
-                    ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
-                    ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
-                  }
-                ),
-              })
+              ? (async () => {
+                  const { finalPrompt, compiler } = await assembleStoryboardFinalPrompt({
+                    legacyBuild: openingLegacyBuild,
+                    ...openingAssembleParams,
+                  });
+                  return {
+                    imageUrl: '',
+                    finalPromptText: finalPrompt,
+                    ...(compiler ? { imageGenerationMetadata: { promptCompiler: compiler } as Record<string, unknown> } : {}),
+                  };
+                })()
               : measureAsyncStep(
                   timingSteps,
                   getImageTaskKey(storyConfig),
@@ -3271,6 +3395,10 @@ export const useStoryStore = create<StoryState>()(
                     // lets the runtime persist the opening image server-side
                     // (durable, no base64 round trip) when the pipeline is on.
                     await earlySavePromise.catch(() => {});
+                    const { override } = await assembleStoryboardFinalPrompt({
+                      legacyBuild: openingLegacyBuild,
+                      ...openingAssembleParams,
+                    });
                     return generateImage(
                       storyboardPrompt,
                       beat.characters,
@@ -3286,6 +3414,7 @@ export const useStoryStore = create<StoryState>()(
                       {
                         ...getReelVisualStylePromptOptions(modelOverrides, storyConfig),
                         ...(beatWorldRouting.worldAnchor ? { worldAnchor: beatWorldRouting.worldAnchor } : {}),
+                        ...(override ? { finalPromptOverride: override } : {}),
                       },
                       storyConfig.imageModelSelection,
                       imageContinuityOptions(storyConfig, portraitGenerationResult.latestState),
@@ -4419,19 +4548,33 @@ export const useStoryStore = create<StoryState>()(
             const savedStoryId = session.savedStoryId;
             // The worker replays generateSelectedImage with this exact final
             // prompt — built here because the prompt orchestrator is client code.
-            const jobFinalPrompt = buildFinalStoryboardImagePrompt(
-              storyboardPrompt,
-              beat.characters,
-              session.visualStyle,
-              beat.beatNumber,
-              modelOverrides,
-              {
-                aspectRatio: storyAspectRatio,
-                task: getImageTaskKey(session.storyConfig),
-                ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
-              }
-            );
+            const { finalPrompt: jobFinalPrompt, compiler: jobPromptCompiler } = await assembleStoryboardFinalPrompt({
+              legacyBuild: () => buildFinalStoryboardImagePrompt(
+                storyboardPrompt,
+                beat.characters,
+                session.visualStyle,
+                beat.beatNumber,
+                modelOverrides,
+                {
+                  aspectRatio: storyAspectRatio,
+                  task: getImageTaskKey(session.storyConfig),
+                  ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                }
+              ),
+              taskKey: getImageTaskKey(session.storyConfig),
+              storyboardPlan: beat.storyboardPlan,
+              storyboardPromptText: storyboardPrompt,
+              continuityNotes: beat.continuityNotes,
+              characters: beat.characters,
+              visualStyle: session.visualStyle,
+              aspectRatio: storyAspectRatio,
+              worldAnchor: worldRouting.worldAnchor,
+              imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+            });
             beat.finalImagePromptText = jobFinalPrompt;
+            if (jobPromptCompiler) {
+              beat.imageGenerationMetadata = { ...(beat.imageGenerationMetadata ?? {}), promptCompiler: jobPromptCompiler };
+            }
 
             // Durable early save: the beat text (with parent link and cursor)
             // lands in beats + story_map before any image work starts.
@@ -4506,6 +4649,7 @@ export const useStoryStore = create<StoryState>()(
                       referenceCount: referenceImages.length,
                     }),
                     references: referenceImages,
+                    promptCompiler: jobPromptCompiler ?? null,
                   },
                 })
               );
@@ -4623,45 +4767,81 @@ export const useStoryStore = create<StoryState>()(
 
           // Block loading on image only
           setLoadingStage(set, 'continue_story', 'image', { deferImages: promptOnly });
+          const continueAssembleParams = {
+            taskKey: getImageTaskKey(session.storyConfig),
+            storyboardPlan: beat.storyboardPlan,
+            storyboardPromptText: storyboardPrompt,
+            continuityNotes: beat.continuityNotes,
+            characters: beat.characters,
+            visualStyle: session.visualStyle,
+            aspectRatio: storyAspectRatio,
+            worldAnchor: worldRouting.worldAnchor,
+            imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+          };
           const imageResult = promptOnly
-            ? {
-                imageUrl: '',
-                finalPromptText: buildFinalStoryboardImagePrompt(
-                  storyboardPrompt,
-                  beat.characters,
-                  session.visualStyle,
-                  beat.beatNumber,
-                  modelOverrides,
-                  {
-                    aspectRatio: storyAspectRatio,
-                    task: getImageTaskKey(session.storyConfig),
-                    ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
-                  }
-                ),
-              }
+            ? await (async () => {
+                const { finalPrompt, compiler } = await assembleStoryboardFinalPrompt({
+                  legacyBuild: () => buildFinalStoryboardImagePrompt(
+                    storyboardPrompt,
+                    beat.characters,
+                    session.visualStyle,
+                    beat.beatNumber,
+                    modelOverrides,
+                    {
+                      aspectRatio: storyAspectRatio,
+                      task: getImageTaskKey(session.storyConfig),
+                      ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                    }
+                  ),
+                  ...continueAssembleParams,
+                });
+                return {
+                  imageUrl: '',
+                  finalPromptText: finalPrompt,
+                  ...(compiler ? { imageGenerationMetadata: { promptCompiler: compiler } as Record<string, unknown> } : {}),
+                };
+              })()
             : await measureAsyncStep(
                 timingSteps,
                 getImageTaskKey(session.storyConfig),
                 'Render branch storyboard image',
-                () => generateImage(
-                  storyboardPrompt,
-                  beat.characters,
-                  session.visualStyle,
-                  modelOverrides,
-                  referenceImages.length > 0 ? referenceImages : undefined,
-                  beat.beatNumber,
-                  costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), {
-                    referenceCount: referenceImages.length,
-                  }),
-                  storyAspectRatio,
-                  getImageTaskKey(session.storyConfig),
-                  { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
-                  session.storyConfig.imageModelSelection,
-                  imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState),
-                  session.savedStoryId
-                    ? { persistTarget: { storyId: session.savedStoryId, nodeId: newNodeId } }
-                    : undefined
-                ),
+                async () => {
+                  const { override } = await assembleStoryboardFinalPrompt({
+                    legacyBuild: () => buildFinalStoryboardImagePrompt(
+                      storyboardPrompt,
+                      beat.characters,
+                      session.visualStyle,
+                      beat.beatNumber,
+                      modelOverrides,
+                      {
+                        aspectRatio: storyAspectRatio,
+                        task: getImageTaskKey(session.storyConfig),
+                        ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                        ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
+                      }
+                    ),
+                    ...continueAssembleParams,
+                  });
+                  return generateImage(
+                    storyboardPrompt,
+                    beat.characters,
+                    session.visualStyle,
+                    modelOverrides,
+                    referenceImages.length > 0 ? referenceImages : undefined,
+                    beat.beatNumber,
+                    costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), {
+                      referenceCount: referenceImages.length,
+                    }),
+                    storyAspectRatio,
+                    getImageTaskKey(session.storyConfig),
+                    { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}), ...(override ? { finalPromptOverride: override } : {}) },
+                    session.storyConfig.imageModelSelection,
+                    imageContinuityOptions(session.storyConfig, portraitGenerationResult.latestState),
+                    session.savedStoryId
+                      ? { persistTarget: { storyId: session.savedStoryId, nodeId: newNodeId } }
+                      : undefined
+                  );
+                },
                 {
                   beatNumber: beat.beatNumber,
                   referenceCount: referenceImages.length,
@@ -6118,18 +6298,36 @@ export const useStoryStore = create<StoryState>()(
           if (effectiveImageMode === 'server_pipeline' && !promptOnly && session.savedStoryId) {
             // The worker replays generateSelectedImage with this exact final
             // prompt — built here because the prompt orchestrator is client code.
-            const jobFinalPrompt = buildFinalStoryboardImagePrompt(
-              storyboardPrompt,
-              beatForRender.characters,
-              session.visualStyle,
-              beatForRender.beatNumber,
-              modelOverrides,
-              {
-                aspectRatio: storyAspectRatio,
-                task: getImageTaskKey(session.storyConfig),
-                ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
-              }
-            );
+            // Legacy uses storyboardPrompt (regen block already appended); the
+            // compiled path builds from the plan + structured regenOptions.
+            const { finalPrompt: jobFinalPrompt, compiler: jobPromptCompiler } = await assembleStoryboardFinalPrompt({
+              legacyBuild: () => buildFinalStoryboardImagePrompt(
+                storyboardPrompt,
+                beatForRender.characters,
+                session.visualStyle,
+                beatForRender.beatNumber,
+                modelOverrides,
+                {
+                  aspectRatio: storyAspectRatio,
+                  task: getImageTaskKey(session.storyConfig),
+                  ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+                  ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
+                }
+              ),
+              taskKey: getImageTaskKey(session.storyConfig),
+              storyboardPlan,
+              storyboardPromptText: baseStoryboardPrompt,
+              continuityNotes: beatForRender.continuityNotes,
+              characters: beatForRender.characters,
+              visualStyle: session.visualStyle,
+              aspectRatio: storyAspectRatio,
+              worldAnchor: worldRouting.worldAnchor,
+              regeneration: regenOptions,
+              imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+            });
+            if (jobPromptCompiler) {
+              beatForRender.imageGenerationMetadata = { ...(beatForRender.imageGenerationMetadata ?? {}), promptCompiler: jobPromptCompiler };
+            }
             const enqueueResult = await enqueueBeatImageJob({
               storyId: session.savedStoryId,
               nodeId,
@@ -6160,6 +6358,7 @@ export const useStoryStore = create<StoryState>()(
                       source: 'user',
                     }
                   : null,
+                promptCompiler: jobPromptCompiler ?? null,
               },
             });
 
@@ -6236,43 +6435,69 @@ export const useStoryStore = create<StoryState>()(
             // through to the legacy path with the reservation we already hold.
           }
 
+          const regenAssembleParams = {
+            taskKey: getImageTaskKey(session.storyConfig),
+            storyboardPlan,
+            storyboardPromptText: baseStoryboardPrompt,
+            continuityNotes: beatForRender.continuityNotes,
+            characters: beatForRender.characters,
+            visualStyle: session.visualStyle,
+            aspectRatio: storyAspectRatio,
+            worldAnchor: worldRouting.worldAnchor,
+            regeneration: regenOptions,
+            imageModelSelection: session.storyConfig.imageModelSelection ?? null,
+          };
+          const regenLegacyBuild = () => buildFinalStoryboardImagePrompt(
+            storyboardPrompt,
+            beatForRender.characters,
+            session.visualStyle,
+            beatForRender.beatNumber,
+            modelOverrides,
+            {
+              aspectRatio: storyAspectRatio,
+              task: getImageTaskKey(session.storyConfig),
+              ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
+              ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
+            }
+          );
           const imageResult = promptOnly
-            ? {
-                imageUrl: '',
-                finalPromptText: buildFinalStoryboardImagePrompt(
+            ? await (async (): Promise<GeneratedImageResult> => {
+                const { finalPrompt, compiler } = await assembleStoryboardFinalPrompt({
+                  legacyBuild: regenLegacyBuild,
+                  ...regenAssembleParams,
+                });
+                return {
+                  imageUrl: '',
+                  finalPromptText: finalPrompt,
+                  ...(compiler ? { imageGenerationMetadata: { promptCompiler: compiler } as Record<string, unknown> } : {}),
+                };
+              })()
+            : await (async () => {
+                const { override } = await assembleStoryboardFinalPrompt({
+                  legacyBuild: regenLegacyBuild,
+                  ...regenAssembleParams,
+                });
+                return generateImage(
                   storyboardPrompt,
                   beatForRender.characters,
                   session.visualStyle,
+                  modelOverrides,
+                  referenceImages.length > 0 ? referenceImages : undefined,
                   beatForRender.beatNumber,
-                modelOverrides,
-                {
-                  aspectRatio: storyAspectRatio,
-                  task: getImageTaskKey(session.storyConfig),
-                  ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig),
-                  ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}),
-                }
-              ),
-            }
-            : await generateImage(
-                storyboardPrompt,
-                beatForRender.characters,
-                session.visualStyle,
-                modelOverrides,
-                referenceImages.length > 0 ? referenceImages : undefined,
-                beatForRender.beatNumber,
-                costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), {
-                  referenceCount: referenceImages.length,
-                }),
-                storyAspectRatio,
-                getImageTaskKey(session.storyConfig),
-                { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}) },
-                session.storyConfig.imageModelSelection,
-                imageContinuityOptions(
-                  session.storyConfig,
-                  regenerationContinuityState,
-                  regenerationContinuityStrategy
-                )
-              );
+                  costPhase(baseCostTelemetry, getImageTaskKey(session.storyConfig), {
+                    referenceCount: referenceImages.length,
+                  }),
+                  storyAspectRatio,
+                  getImageTaskKey(session.storyConfig),
+                  { ...getReelVisualStylePromptOptions(modelOverrides, session.storyConfig), ...(worldRouting.worldAnchor ? { worldAnchor: worldRouting.worldAnchor } : {}), ...(override ? { finalPromptOverride: override } : {}) },
+                  session.storyConfig.imageModelSelection,
+                  imageContinuityOptions(
+                    session.storyConfig,
+                    regenerationContinuityState,
+                    regenerationContinuityStrategy
+                  )
+                );
+              })();
           beatForRender.finalImagePromptText = imageResult.finalPromptText;
           beatForRender = applyImageGenerationResultMetadata(beatForRender, imageResult);
           const generatedPlaceholder = Boolean(imageResult.imageGenerationMetadata?.placeholder);

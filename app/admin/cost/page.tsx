@@ -1,18 +1,37 @@
 import Link from 'next/link';
 import { Activity, BarChart3, Coins, ExternalLink, GitBranch, UserRound } from 'lucide-react';
 import { getCostDashboardData, type AdminCostBeatRow } from '@/app/actions/cost-admin';
+import { RECENT_BEAT_LIMIT_OPTIONS } from '@/lib/admin/cost-config';
 
 export const dynamic = 'force-dynamic';
 
 interface AdminCostPageProps {
   searchParams: Promise<{
     userId?: string | string[];
+    limit?: string | string[];
   }>;
 }
 
 function parseStringParam(value: string | string[] | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
   return raw?.trim() || null;
+}
+
+function parseLimitParam(value: string | string[] | undefined): number | undefined {
+  const raw = parseStringParam(value);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+// Builds a cost-dashboard URL that preserves the active user filter while
+// changing (or clearing) another param. Omits limit at its default to keep URLs clean.
+function buildCostHref({ userId, limit }: { userId: string | null; limit: number }): string {
+  const search = new URLSearchParams();
+  if (userId) search.set('userId', userId);
+  if (limit !== RECENT_BEAT_LIMIT_OPTIONS[0]) search.set('limit', String(limit));
+  const query = search.toString();
+  return query ? `/admin/cost?${query}` : '/admin/cost';
 }
 
 function formatUsd(value: number) {
@@ -100,13 +119,16 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
   return (
     <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
       {beat.breakdown.map((item) => (
-        <div key={item.taskKey} className="rounded-lg border border-white/10 bg-neutral-950/60 p-3">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-xs font-medium uppercase tracking-[0.14em] text-neutral-500">{taskLabel(item.taskKey)}</p>
-            <p className="text-sm text-emerald-300">{formatInr(item.estimatedCostUsd * 93)}</p>
+        <div key={item.taskKey} className="rounded-lg border border-white/10 bg-neutral-950/60 p-2.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="min-w-0 truncate text-xs font-medium uppercase tracking-[0.14em] text-neutral-500">{taskLabel(item.taskKey)}</p>
+            <p className="shrink-0 text-sm font-medium text-emerald-300">
+              {formatInr(item.estimatedCostUsd * 93)}
+              <span className="ml-1.5 text-[11px] font-normal text-neutral-500">{formatUsd(item.estimatedCostUsd)}</span>
+            </p>
           </div>
           {item.generationModes.some((mode) => mode !== 'regular') && (
-            <div className="mt-1 flex flex-wrap gap-1">
+            <div className="mt-1.5 flex flex-wrap gap-1">
               {item.generationModes.map((mode) => (
                 <span
                   key={mode}
@@ -123,18 +145,17 @@ function CostBreakdown({ beat }: { beat: AdminCostBeatRow }) {
               ))}
             </div>
           )}
-          <p className="mt-1 text-xs text-neutral-500">{formatUsd(item.estimatedCostUsd)}</p>
-          <p className="mt-2 truncate text-xs text-neutral-400" title={(item.providers.length ? item.providers : item.models).join(', ')}>
+          <p className="mt-1.5 truncate text-xs text-neutral-400" title={(item.providers.length ? item.providers : item.models).join(', ')}>
             {(item.providers.length ? item.providers : item.models).join(', ')}
           </p>
-          <p className="mt-2 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-neutral-500">
             {item.inputTokens.toLocaleString()} in / {item.outputTokens.toLocaleString()} out
             {item.cachedTokens > 0 ? ` / ${item.cachedTokens.toLocaleString()} cached` : ''}
             {item.imageCount > 0 ? ` / ${item.imageCount} image${item.imageCount === 1 ? '' : 's'}` : ''}
             {item.audioSeconds > 0 ? ` / ${item.audioSeconds.toFixed(1)}s audio` : ''}
           </p>
           {(item.runtimeCostUsd > 0 || item.imageCostUsd > 0 || item.strategies.length > 0 || item.fallbacks.length > 0) && (
-            <p className="mt-2 text-xs text-neutral-500">
+            <p className="mt-1 text-xs text-neutral-500">
               {item.runtimeCostUsd > 0 ? `runtime ${formatUsd(item.runtimeCostUsd)}` : ''}
               {item.runtimeCostUsd > 0 && item.imageCostUsd > 0 ? ' / ' : ''}
               {item.imageCostUsd > 0 ? `image ${formatUsd(item.imageCostUsd)}` : ''}
@@ -152,6 +173,7 @@ export default async function AdminCostPage({ searchParams }: AdminCostPageProps
   const params = await searchParams;
   const data = await getCostDashboardData({
     userId: parseStringParam(params.userId),
+    limit: parseLimitParam(params.limit),
   });
 
   return (
@@ -168,7 +190,10 @@ export default async function AdminCostPage({ searchParams }: AdminCostPageProps
               <span className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200">
                 User filter: {shortId(data.userFilterId)}
               </span>
-              <Link href="/admin/cost" className="text-xs text-neutral-400 hover:text-neutral-200">
+              <Link
+                href={buildCostHref({ userId: null, limit: data.recentBeatsLimit })}
+                className="text-xs text-neutral-400 hover:text-neutral-200"
+              >
                 Clear filter
               </Link>
             </div>
@@ -197,9 +222,34 @@ export default async function AdminCostPage({ searchParams }: AdminCostPageProps
       </div>
 
       <section className="space-y-3">
-        <div className="flex items-center gap-2">
-          <GitBranch className="h-5 w-5 text-emerald-300" />
-          <h2 className="text-xl font-serif text-neutral-100">Last 5 Generated Beats</h2>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <GitBranch className="h-5 w-5 text-emerald-300" />
+            <h2 className="text-xl font-serif text-neutral-100">Last {data.recentBeatsLimit} Generated Beats</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs uppercase tracking-[0.14em] text-neutral-500">Show</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-white/10">
+              {RECENT_BEAT_LIMIT_OPTIONS.map((option, index) => {
+                const active = data.recentBeatsLimit === option;
+                return (
+                  <Link
+                    key={option}
+                    href={buildCostHref({ userId: data.userFilterId, limit: option })}
+                    scroll={false}
+                    aria-current={active ? 'true' : undefined}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${index > 0 ? 'border-l border-white/10' : ''} ${
+                      active
+                        ? 'bg-emerald-500/15 text-emerald-200'
+                        : 'text-neutral-400 hover:bg-white/5 hover:text-neutral-200'
+                    }`}
+                  >
+                    {option}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <div className="space-y-3">
@@ -262,10 +312,11 @@ export default async function AdminCostPage({ searchParams }: AdminCostPageProps
                   </div>
                 </div>
 
-                <div className="min-w-40 text-right">
+                <div className="min-w-40 text-left sm:text-right">
                   <p className="text-2xl font-semibold text-emerald-300">{formatInr(beat.totalCostInr)}</p>
-                  <p className="mt-1 text-xs text-neutral-500">{formatUsd(beat.totalCostUsd)}</p>
-                  <p className="mt-2 text-xs text-neutral-500">{beat.eventCount} model calls</p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    {formatUsd(beat.totalCostUsd)} · {beat.eventCount} model calls
+                  </p>
                 </div>
               </div>
               <CostBreakdown beat={beat} />

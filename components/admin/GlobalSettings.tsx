@@ -1,25 +1,26 @@
 'use client';
 
-import Link from 'next/link';
-import { type ComponentType, useEffect, useState } from 'react';
-import MediaProcessingModeCard from '@/components/admin/MediaProcessingModeCard';
-import VideoExportPresetStudio from '@/components/admin/VideoExportPresetStudio';
-import {
-  BookOpenText,
-  Brush,
-  Check,
-  Clapperboard,
-  Clock3,
-  FileText,
-  ImageIcon,
-  Loader2,
-  Mic2,
-  Plus,
-  RefreshCcw,
-  UserRound,
-  Video,
-  WandSparkles,
-} from 'lucide-react';
+import dynamic from 'next/dynamic';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Loader2, Plus, RefreshCcw } from 'lucide-react';
+
+// These two panels only render in the `media` and `video-export` sections but
+// are ~600 lines combined. Load them on demand so they aren't in the JS chunk
+// shipped to every settings route.
+const panelLoading = () => (
+  <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-6 text-neutral-400">
+    <Loader2 size={16} className="animate-spin" />
+    Loading panel...
+  </div>
+);
+const MediaProcessingModeCard = dynamic(() => import('@/components/admin/MediaProcessingModeCard'), {
+  ssr: false,
+  loading: panelLoading,
+});
+const VideoExportPresetStudio = dynamic(() => import('@/components/admin/VideoExportPresetStudio'), {
+  ssr: false,
+  loading: panelLoading,
+});
 import {
   getGlobalSettings,
   saveAdminNarrationVoiceSettings,
@@ -103,6 +104,10 @@ import {
   type MediaStorageAdminState,
   type MediaStorageSettings,
 } from '@/lib/media/storage-settings';
+import { SETTINGS_NAV_GROUPS, SETTINGS_NAV_ITEMS, findSettingsNavItem } from '@/lib/admin/nav';
+import AdminToggle from '@/components/admin/AdminToggle';
+import AdminPageHeader from '@/components/admin/AdminPageHeader';
+import AdminHubCard from '@/components/admin/AdminHubCard';
 
 export type GlobalSettingsSection =
   | 'overview'
@@ -119,121 +124,6 @@ export type GlobalSettingsSection =
   | 'video-export'
   | 'generation'
   | 'pages';
-
-type GlobalSettingsSubsection = Exclude<GlobalSettingsSection, 'overview'>;
-
-type GlobalSettingsLink = {
-  section: GlobalSettingsSection;
-  label: string;
-  href: string;
-  description: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-};
-
-const GLOBAL_SETTINGS_LINKS: GlobalSettingsLink[] = [
-  {
-    section: 'overview',
-    label: 'Settings overview',
-    href: '/admin/settings',
-    description: 'Review the global runtime controls and jump into focused settings pages.',
-    icon: WandSparkles,
-  },
-  {
-    section: 'storyboard',
-    label: 'Storyboard',
-    href: '/admin/settings/storyboard',
-    description: 'Image output, panel timing, WebP processing, layout, and vignette controls.',
-    icon: Brush,
-  },
-  {
-    section: 'reels',
-    label: 'Reel Story',
-    href: '/admin/settings/reels',
-    description: 'Short-form reel defaults, prompt definers, retention windows, and manual cleanup.',
-    icon: Clapperboard,
-  },
-  {
-    section: 'reader',
-    label: 'Reader and loader',
-    href: '/admin/settings/reader',
-    description: 'Story text display, auto-scroll, loading labels, and generated text reveal behavior.',
-    icon: BookOpenText,
-  },
-  {
-    section: 'narration',
-    label: 'Narration voices',
-    href: '/admin/settings/narration',
-    description: 'User-led voice selection, curated voice lists, sample text, and sample generation status.',
-    icon: Mic2,
-  },
-  {
-    section: 'authoring',
-    label: 'Authoring',
-    href: '/admin/settings/authoring',
-    description: 'Prompt/seed authoring limits and seed preview pricing.',
-    icon: FileText,
-  },
-  {
-    section: 'characters',
-    label: 'Character references',
-    href: '/admin/settings/characters',
-    description: 'Character sheet availability for Free, Plus, and Creator workflows.',
-    icon: UserRound,
-  },
-  {
-    section: 'media',
-    label: 'Image uploads',
-    href: '/admin/settings/media',
-    description: 'Client-side upload compression, raw limits, optimized size limits, and rollback controls.',
-    icon: ImageIcon,
-  },
-  {
-    section: 'media-pipeline',
-    label: 'Media pipeline',
-    href: '/admin/settings/media-pipeline',
-    description: 'Server-side processing mode, HQ retention, variants, cleanup, publishing gates, and job monitoring.',
-    icon: ImageIcon,
-  },
-  {
-    section: 'beat-control',
-    label: 'Beat control',
-    href: '/admin/settings/beat-control',
-    description: 'Beat text editing, timeline rewrite, image/narration/options regeneration, custom options, and version history.',
-    icon: WandSparkles,
-  },
-  {
-    section: 'character-universe',
-    label: 'Characters & episodes',
-    href: '/admin/settings/character-universe',
-    description: 'Character library, save-to-library, character mixing, episodic branching, story bible, and journal.',
-    icon: UserRound,
-  },
-  {
-    section: 'video-export',
-    label: 'Video export',
-    href: '/admin/settings/video-export',
-    description: 'Global video download availability and admin-only bypass for testing.',
-    icon: Video,
-  },
-  {
-    section: 'generation',
-    label: 'Generation timeouts',
-    href: '/admin/settings/generation',
-    description: 'Gemini text, image, TTS, and cloud-save timeout guards.',
-    icon: Clock3,
-  },
-  {
-    section: 'pages',
-    label: 'Pages',
-    href: '/admin/settings/pages',
-    description: 'Rollout legal, support, blog, docs, FAQ, and footer controls.',
-    icon: FileText,
-  },
-];
-
-const GLOBAL_SETTINGS_SECTION_LINKS = GLOBAL_SETTINGS_LINKS.filter(
-  (item): item is GlobalSettingsLink & { section: GlobalSettingsSubsection } => item.section !== 'overview'
-);
 
 function ToggleRow({
   label,
@@ -254,13 +144,9 @@ function ToggleRow({
         <p className="text-sm font-medium text-neutral-100">{label}</p>
         <p className="mt-0.5 text-xs text-neutral-400">{description}</p>
       </div>
-      <button
-        onClick={onToggle}
-        disabled={toggling}
-        className={`relative ml-6 inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-50 ${checked ? 'bg-emerald-500' : 'bg-neutral-600'}`}
-      >
-        <span className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
-      </button>
+      <span className="ml-6">
+        <AdminToggle checked={checked} onToggle={onToggle} disabled={toggling} ariaLabel={label} />
+      </span>
     </div>
   );
 }
@@ -285,41 +171,6 @@ function sampleStatusClassName(status: NarrationVoiceSampleClientStatus['status'
 
 function formatToggleSummary(enabled: boolean): string {
   return enabled ? 'Enabled' : 'Disabled';
-}
-
-function OverviewLinkCard({
-  href,
-  label,
-  description,
-  summary,
-  icon: Icon,
-}: {
-  href: string;
-  label: string;
-  description: string;
-  summary: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group rounded-xl border border-white/10 bg-neutral-900/60 p-4 transition-colors hover:border-emerald-500/30 hover:bg-emerald-500/10"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="rounded-lg bg-emerald-500/10 p-2 text-emerald-300">
-            <Icon size={16} />
-          </span>
-          <span className="text-sm font-medium text-neutral-100 group-hover:text-emerald-200">{label}</span>
-        </div>
-        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-neutral-500">
-          Open
-        </span>
-      </div>
-      <p className="mt-3 text-xs leading-relaxed text-neutral-400">{description}</p>
-      <p className="mt-4 text-xs text-emerald-300/80">{summary}</p>
-    </Link>
-  );
 }
 
 export default function GlobalSettings({ section = 'overview' }: { section?: GlobalSettingsSection }) {
@@ -472,7 +323,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [mediaStorageMessage, setMediaStorageMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    getGlobalSettings()
+    getGlobalSettings(section)
       .then(({
         cycleOverride: co,
         cycleMs: cm,
@@ -603,7 +454,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setLoadError(err.message || 'Failed to load settings');
         setLoading(false);
       });
-  }, []);
+  }, [section]);
 
   async function handleCycleMsSave() {
     const ms = parseInt(cycleMsInput, 10);
@@ -1024,31 +875,41 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     plus: 'Plus',
     studio: 'Studio',
   };
-  const sectionMeta = GLOBAL_SETTINGS_LINKS.find((item) => item.section === section) ?? GLOBAL_SETTINGS_LINKS[0];
-  const overviewSummaries: Record<Exclude<GlobalSettingsSection, 'overview'>, string> = {
-    storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
-    reels: 'Prompt-only 9:16 reels, editable JSON definers, and manual draft cleanup',
-    reader: `${storyUiTextLineCount} text lines, ${storyTextOverlayWordsPerLine} overlay words, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
-    narration: narrationVoiceSettings
-      ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
-      : 'Voice settings not loaded',
-    authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
-    characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
-    media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
-    'media-pipeline': 'Server-side processing mode, HQ retention, variants, cleanup, and job monitoring',
-    'beat-control': 'Beat editing, timeline rewrite, regeneration controls, custom options, and version history',
-    'character-universe': 'Character library, mixing, episodic branching, story bible, and journal',
-    'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
-    generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
-    pages: 'Managed rollout pages, footer controls, and route guards',
-  };
-  const imageUploadHasUnsavedChanges = JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings);
-  const mediaStorageHasUnsavedChanges = JSON.stringify(mediaStorageDraft) !== JSON.stringify(mediaStorage.settings);
+  const sectionMeta = findSettingsNavItem(section) ?? findSettingsNavItem('overview')!;
+  const pageTitle = section === 'overview' ? 'Settings overview' : sectionMeta.label;
+  // Live, data-derived summaries shown on the overview cards. Sections with no
+  // live summary fall back to the static summary defined in the nav config.
+  // Built only on the overview page (the only place it is read) so typing in a
+  // focused section doesn't re-allocate it on every keystroke.
+  const overviewSummaries: Partial<Record<string, string>> = section === 'overview'
+    ? {
+        storyboard: `${storyboardImageSize} images, ${storyboardLayoutMode} layout, ${formatToggleSummary(vignetteEnabled).toLowerCase()} vignette`,
+        reader: `${storyUiTextLineCount} text lines, ${storyTextOverlayWordsPerLine} overlay words, branch flash ${formatToggleSummary(storylineChoiceFlashEnabled).toLowerCase()}`,
+        narration: narrationVoiceSettings
+          ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
+          : 'Voice settings not loaded',
+        authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
+        characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
+        media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
+        'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
+        generation: `${Math.round(textTimeoutMs / 1000)}s text, ${Math.round(imageTimeoutMs / 1000)}s image, incremental sync ${formatToggleSummary(storyIncrementalAssetSyncEnabled).toLowerCase()}`,
+      }
+    : {};
+  // Memoized so editing an unrelated field doesn't re-stringify these drafts.
+  const imageUploadHasUnsavedChanges = useMemo(
+    () => JSON.stringify(imageUploadDraft) !== JSON.stringify(imageUploadSettings),
+    [imageUploadDraft, imageUploadSettings]
+  );
+  const mediaStorageHasUnsavedChanges = useMemo(
+    () => JSON.stringify(mediaStorageDraft) !== JSON.stringify(mediaStorage.settings),
+    [mediaStorageDraft, mediaStorage.settings]
+  );
 
   return (
-    <div className="mx-auto max-w-7xl">
-      <h1 className="mb-1 text-2xl text-neutral-100">{sectionMeta.label}</h1>
-      <p className="mb-8 text-sm text-neutral-400">{sectionMeta.description}</p>
+    <div className={`mx-auto ${section === 'overview' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+      <div className="mb-8">
+        <AdminPageHeader title={pageTitle} description={sectionMeta.description} />
+      </div>
 
       {loadError && (
         <div className="mb-6 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-400">
@@ -1057,11 +918,20 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
       )}
 
       {loading ? (
-        <div className="flex items-center gap-2 text-neutral-400"><Loader2 size={16} className="animate-spin" />Loading settings...</div>
+        <div className="space-y-6" aria-busy="true" aria-label="Loading settings">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="animate-pulse rounded-2xl border border-white/10 bg-white/5 p-6">
+              <div className="h-4 w-40 rounded bg-white/10" />
+              <div className="mt-3 h-3 w-3/4 rounded bg-white/5" />
+              <div className="mt-6 h-10 w-full rounded-lg bg-white/5" />
+              <div className="mt-3 h-10 w-2/3 rounded-lg bg-white/5" />
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-6">
           {section === 'overview' && (
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+            <>
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <h2 className="text-base font-medium text-neutral-100">Global settings workspace</h2>
@@ -1070,23 +940,34 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   </p>
                 </div>
                 <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs uppercase tracking-wider text-emerald-300">
-                  {GLOBAL_SETTINGS_SECTION_LINKS.length} sections
+                  {SETTINGS_NAV_ITEMS.length - 1} sections
                 </span>
               </div>
 
-              <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {GLOBAL_SETTINGS_SECTION_LINKS.map(({ section: linkSection, href, label, description, icon }) => (
-                  <OverviewLinkCard
-                    key={href}
-                    href={href}
-                    label={label}
-                    description={description}
-                    icon={icon}
-                    summary={overviewSummaries[linkSection]}
-                  />
-                ))}
-              </div>
-            </div>
+              {SETTINGS_NAV_GROUPS.map((group) => {
+                const cards = group.items.filter((item) => item.id !== 'overview');
+                if (cards.length === 0) return null;
+                return (
+                  <div key={group.id} className="rounded-2xl border border-white/10 bg-white/5 p-5">
+                    {group.label && (
+                      <h3 className="mb-4 text-xs font-medium uppercase tracking-wider text-neutral-500">{group.label}</h3>
+                    )}
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {cards.map((item) => (
+                        <AdminHubCard
+                          key={item.href}
+                          href={item.href}
+                          label={item.label}
+                          description={item.description}
+                          icon={item.icon}
+                          summary={overviewSummaries[item.id] ?? item.staticSummary}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
           )}
 
           {section === 'storyboard' && (

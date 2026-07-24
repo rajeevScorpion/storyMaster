@@ -8,6 +8,7 @@
 
 import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import type { Character } from '@/lib/types/story';
+import type { CompilerEngine, PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { callGeminiText } from '@/app/actions/gemini-proxy';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
@@ -95,6 +96,17 @@ export interface StoryboardImagePromptOptions {
   textOverlayMode?: string;
   /** Reference Personalization: compact world continuity anchor for this beat. */
   worldAnchor?: string;
+  /**
+   * Image prompt compiler: a pre-assembled final prompt (compiled or legacy) that
+   * overrides buildFinalStoryboardImagePrompt for this call. The store assembles
+   * it (it owns the mode/capability + canonical scene); generateImage just uses it
+   * and records the diagnostics. When absent, the legacy assembler is used.
+   */
+  finalPromptOverride?: {
+    finalPrompt: string;
+    engine: CompilerEngine;
+    compiler?: PromptCompilerBeatMetadata;
+  };
 }
 
 export function normalizeStoryboardAspectRatio(aspectRatio?: StoryAspectRatio | string | null): StoryAspectRatio {

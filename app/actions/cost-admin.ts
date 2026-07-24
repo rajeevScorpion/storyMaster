@@ -1,6 +1,7 @@
 'use server';
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
+import { RECENT_BEAT_LIMIT_OPTIONS, DEFAULT_RECENT_BEAT_LIMIT } from '@/lib/admin/cost-config';
 import type { DbAiCostEvent, DbBeat, DbStory } from '@/lib/types/database';
 
 const INR_PER_USD = 93;
@@ -56,6 +57,7 @@ export interface AdminCostDashboardData {
   inrPerUsd: number;
   dailyWindowDays: number;
   userFilterId: string | null;
+  recentBeatsLimit: number;
   totalWindowCostUsd: number;
   totalWindowCostInr: number;
   recentBeats: AdminCostBeatRow[];
@@ -152,18 +154,22 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
 }
 
-export async function getCostDashboardData(input?: { userId?: string | null }): Promise<AdminCostDashboardData> {
+export async function getCostDashboardData(input?: { userId?: string | null; limit?: number }): Promise<AdminCostDashboardData> {
   await verifyAdmin();
   const admin = createAdminClient();
 
   const since = new Date(Date.now() - DAILY_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const userFilterId = input?.userId?.trim() || null;
+  const requestedLimit = input?.limit ?? DEFAULT_RECENT_BEAT_LIMIT;
+  const beatLimit = (RECENT_BEAT_LIMIT_OPTIONS as readonly number[]).includes(requestedLimit)
+    ? requestedLimit
+    : DEFAULT_RECENT_BEAT_LIMIT;
 
   let beatsQuery = admin
     .from('beats')
     .select('id, story_id, node_id, beat_number, title, generated_by, created_at')
     .order('created_at', { ascending: false })
-    .limit(5);
+    .limit(beatLimit);
 
   let dailyEventsQuery = admin
     .from('ai_cost_events')
@@ -311,6 +317,7 @@ export async function getCostDashboardData(input?: { userId?: string | null }): 
     inrPerUsd: INR_PER_USD,
     dailyWindowDays: DAILY_WINDOW_DAYS,
     userFilterId,
+    recentBeatsLimit: beatLimit,
     totalWindowCostUsd: Number(totalWindowCostUsd.toFixed(6)),
     totalWindowCostInr: Number(toInr(totalWindowCostUsd).toFixed(2)),
     recentBeats,

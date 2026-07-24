@@ -21,6 +21,15 @@ export interface ImageModelCapabilities {
   supportsReferences?: boolean;
   supportsBase64?: boolean;
   outputFormats?: string[];
+  // Image prompt compiler settings (Kissago JSON image prompt optimization).
+  // Stored in the image_model_registry `capabilities` JSONB; read by
+  // normalizePromptCompilerCapability. All fields optional and fail-closed.
+  promptCompiler?: {
+    enabled?: boolean;
+    promptBudgetChars?: number;
+    supportsNegativePrompt?: boolean;
+    adapterVersion?: string;
+  };
   [key: string]: unknown;
 }
 

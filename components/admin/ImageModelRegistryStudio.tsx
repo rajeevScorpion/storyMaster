@@ -11,7 +11,8 @@ import {
   saveAdminElevenLabsCostSettings,
   testAdminImageModel,
 } from '@/app/actions/image-models';
-import type { ImageModelRegistryRecord, ImageTaskKey } from '@/lib/ai/image-models.shared';
+import type { ImageModelCapabilities, ImageModelRegistryRecord, ImageTaskKey } from '@/lib/ai/image-models.shared';
+import { normalizePromptCompilerCapability } from '@/lib/ai/prompt-compiler/capability.shared';
 import {
   DEFAULT_IMAGE_CONTINUITY_SETTINGS,
   type ImageContinuitySettings,
@@ -38,6 +39,7 @@ type Draft = Pick<
   | 'coinCostPerImage'
   | 'providerCostPerOutputImageUsd'
   | 'providerCostPerInputImageUsd'
+  | 'capabilities'
   | 'sortOrder'
 >;
 
@@ -48,6 +50,8 @@ const TASK_LABELS: Record<ImageTaskKey, string> = {
 };
 
 const PLAN_KEYS: PlanKey[] = ['free', 'plus', 'studio'];
+
+const FIELD_LABEL = 'text-[11px] font-medium uppercase tracking-[0.14em] text-neutral-500';
 
 function toDraft(record: ImageModelRegistryRecord): Draft {
   return {
@@ -63,6 +67,7 @@ function toDraft(record: ImageModelRegistryRecord): Draft {
     coinCostPerImage: record.coinCostPerImage,
     providerCostPerOutputImageUsd: record.providerCostPerOutputImageUsd,
     providerCostPerInputImageUsd: record.providerCostPerInputImageUsd,
+    capabilities: record.capabilities,
     sortOrder: record.sortOrder,
   };
 }
@@ -137,6 +142,23 @@ export default function ImageModelRegistryStudio() {
         ...patch,
       },
     }));
+  };
+
+  // Merge a prompt-compiler capability patch into the model's capabilities JSONB
+  // (the registry save fully replaces capabilities, so we keep the rest intact).
+  const updatePromptCompiler = (
+    id: string,
+    patch: Partial<NonNullable<ImageModelCapabilities['promptCompiler']>>
+  ) => {
+    setDrafts((current) => {
+      const draft = current[id];
+      if (!draft) return current;
+      const capabilities: ImageModelCapabilities = {
+        ...(draft.capabilities ?? {}),
+        promptCompiler: { ...(draft.capabilities?.promptCompiler ?? {}), ...patch },
+      };
+      return { ...current, [id]: { ...draft, capabilities } };
+    });
   };
 
   const save = async (record: ImageModelRegistryRecord) => {
@@ -446,91 +468,93 @@ export default function ImageModelRegistryStudio() {
               <h2 className="text-xl font-serif text-neutral-100">{TASK_LABELS[taskKey]}</h2>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-white/10">
-              <table className="w-full min-w-[1260px] text-sm">
-                <thead>
-                  <tr className="border-b border-white/10 bg-white/5 text-left text-neutral-500">
-                    <th className="px-4 py-3 font-medium">Model</th>
-                    <th className="px-4 py-3 font-medium">Readiness</th>
-                    <th className="px-4 py-3 font-medium">Coins</th>
-                    <th className="px-4 py-3 font-medium">Provider USD</th>
-                    <th className="px-4 py-3 font-medium">Plans</th>
-                    <th className="px-4 py-3 font-medium">Flags</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {grouped[taskKey].map((record) => {
-                    const draft = drafts[record.id] ?? toDraft(record);
-                    const busy = savingId === record.id || testingId === record.id;
-                    return (
-                      <tr key={record.id} className="border-b border-white/5 align-top">
-                        <td className="px-4 py-3">
-                          <input
-                            value={draft.displayName}
-                            onChange={(event) => updateDraft(record.id, { displayName: event.target.value })}
-                            className="w-64 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
-                            aria-label={`${record.displayName} display name`}
-                          />
-                          <p className="mt-2 text-xs text-neutral-500">{record.providerLabel} · {record.providerModelId}</p>
-                          <textarea
-                            value={draft.description}
-                            onChange={(event) => updateDraft(record.id, { description: event.target.value })}
-                            className="mt-2 h-16 w-64 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-xs text-neutral-300 outline-none focus:border-emerald-500/50"
-                            aria-label={`${record.displayName} description`}
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className={`rounded-full border px-2 py-1 text-xs ${
-                            record.isProviderConfigured
-                              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                              : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                          }`}>
-                            {readinessLabel(record)}
-                          </span>
-                          <p className="mt-2 text-xs text-neutral-500">
-                            Env: {record.requiredEnvVars.length > 0 ? record.requiredEnvVars.join(', ') : 'none'}
-                          </p>
-                        </td>
-                        <td className="px-4 py-3">
+            <div className="space-y-3">
+              {grouped[taskKey].map((record) => {
+                const draft = drafts[record.id] ?? toDraft(record);
+                const busy = savingId === record.id || testingId === record.id;
+                const compiler = normalizePromptCompilerCapability(draft.capabilities);
+                return (
+                  <div key={record.id} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                    <div className="grid gap-x-6 gap-y-5 md:grid-cols-2 xl:grid-cols-3">
+                      {/* Column 1: identity */}
+                      <div className="min-w-0 space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <input
+                              value={draft.displayName}
+                              onChange={(event) => updateDraft(record.id, { displayName: event.target.value })}
+                              className="w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
+                              aria-label={`${record.displayName} display name`}
+                            />
+                            <p className="mt-2 text-xs text-neutral-500">{record.providerLabel} · {record.providerModelId}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <span className={`inline-block rounded-full border px-2 py-1 text-xs ${
+                              record.isProviderConfigured
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                                : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                            }`}>
+                              {readinessLabel(record)}
+                            </span>
+                            <p className="mt-1.5 text-[10px] text-neutral-500">
+                              Env: {record.requiredEnvVars.length > 0 ? record.requiredEnvVars.join(', ') : 'none'}
+                            </p>
+                          </div>
+                        </div>
+                        <textarea
+                          value={draft.description}
+                          onChange={(event) => updateDraft(record.id, { description: event.target.value })}
+                          className="h-20 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-xs text-neutral-300 outline-none focus:border-emerald-500/50"
+                          aria-label={`${record.displayName} description`}
+                        />
+                      </div>
+
+                      {/* Column 2: pricing + plans */}
+                      <div className="min-w-0 space-y-4">
+                        <div>
+                          <p className={FIELD_LABEL}>Coins per image</p>
                           <input
                             type="number"
                             min={0}
                             step={0.5}
                             value={draft.coinCostPerImage}
                             onChange={(event) => updateDraft(record.id, { coinCostPerImage: Number(event.target.value) })}
-                            className="w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
+                            className="mt-2 w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500/50"
                             aria-label={`${record.displayName} coins per image`}
                           />
-                        </td>
-                        <td className="px-4 py-3">
-                          <label className="block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
-                            Output
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.001}
-                              value={draft.providerCostPerOutputImageUsd}
-                              onChange={(event) => updateDraft(record.id, { providerCostPerOutputImageUsd: Number(event.target.value) })}
-                              className="mt-1 block w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
-                              aria-label={`${record.displayName} provider USD per output image`}
-                            />
-                          </label>
-                          <label className="mt-2 block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
-                            Input ref
-                            <input
-                              type="number"
-                              min={0}
-                              step={0.001}
-                              value={draft.providerCostPerInputImageUsd}
-                              onChange={(event) => updateDraft(record.id, { providerCostPerInputImageUsd: Number(event.target.value) })}
-                              className="mt-1 block w-24 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
-                              aria-label={`${record.displayName} provider USD per input reference image`}
-                            />
-                          </label>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-2">
+                        </div>
+                        <div>
+                          <p className={FIELD_LABEL}>Provider USD</p>
+                          <div className="mt-2 grid grid-cols-2 gap-2">
+                            <label className="block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
+                              Output
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.001}
+                                value={draft.providerCostPerOutputImageUsd}
+                                onChange={(event) => updateDraft(record.id, { providerCostPerOutputImageUsd: Number(event.target.value) })}
+                                className="mt-1 block w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
+                                aria-label={`${record.displayName} provider USD per output image`}
+                              />
+                            </label>
+                            <label className="block text-[11px] uppercase tracking-[0.14em] text-neutral-500">
+                              Input ref
+                              <input
+                                type="number"
+                                min={0}
+                                step={0.001}
+                                value={draft.providerCostPerInputImageUsd}
+                                onChange={(event) => updateDraft(record.id, { providerCostPerInputImageUsd: Number(event.target.value) })}
+                                className="mt-1 block w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm normal-case tracking-normal text-neutral-100 outline-none focus:border-emerald-500/50"
+                                aria-label={`${record.displayName} provider USD per input reference image`}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                        <div>
+                          <p className={FIELD_LABEL}>Plans</p>
+                          <div className="mt-2 flex flex-wrap gap-2">
                             {PLAN_KEYS.map((plan) => (
                               <label key={plan} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-neutral-900 px-2 py-1 text-xs text-neutral-300">
                                 <input
@@ -543,9 +567,14 @@ export default function ImageModelRegistryStudio() {
                               </label>
                             ))}
                           </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="grid gap-2">
+                        </div>
+                      </div>
+
+                      {/* Column 3: flags + prompt compiler */}
+                      <div className="min-w-0 space-y-4 md:col-span-2 xl:col-span-1">
+                        <div>
+                          <p className={FIELD_LABEL}>Flags</p>
+                          <div className="mt-2 grid max-w-xs grid-cols-2 gap-x-4 gap-y-2">
                             {([
                               ['isEnabled', 'Enabled'],
                               ['isUserVisible', 'User visible'],
@@ -563,34 +592,82 @@ export default function ImageModelRegistryStudio() {
                               </label>
                             ))}
                           </div>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() => void runTest(record)}
-                              disabled={busy || !record.isProviderConfigured}
-                              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-xs text-neutral-200 hover:bg-white/10 disabled:opacity-50"
-                            >
-                              {testingId === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                              Test
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void save(record)}
-                              disabled={busy}
-                              className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
-                            >
-                              {savingId === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                              Save
-                            </button>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-neutral-950/50 p-3">
+                          <p className="text-[10px] uppercase tracking-[0.14em] text-emerald-300/70">Prompt compiler</p>
+                          <div className="mt-2 flex flex-wrap items-end gap-x-4 gap-y-3">
+                            <label className="inline-flex items-center gap-2 text-xs text-neutral-300">
+                              <input
+                                type="checkbox"
+                                checked={compiler.enabled}
+                                onChange={(event) => updatePromptCompiler(record.id, { enabled: event.target.checked })}
+                                className="h-3.5 w-3.5 accent-emerald-500"
+                              />
+                              Enabled
+                            </label>
+                            <label className="block text-[11px] text-neutral-400">
+                              Budget (chars)
+                              <input
+                                type="number"
+                                min={1200}
+                                max={20000}
+                                step={100}
+                                value={compiler.promptBudgetChars}
+                                onChange={(event) => updatePromptCompiler(record.id, { promptBudgetChars: Number(event.target.value) })}
+                                className="mt-1 block w-24 rounded-lg border border-white/10 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-emerald-500/50"
+                                aria-label={`${record.displayName} prompt compiler budget`}
+                              />
+                            </label>
+                            <label className="block text-[11px] text-neutral-400">
+                              Adapter
+                              <select
+                                value={compiler.adapterVersion}
+                                onChange={(event) => updatePromptCompiler(record.id, { adapterVersion: event.target.value })}
+                                className="mt-1 block w-32 rounded-lg border border-white/10 bg-neutral-900 px-2 py-1 text-xs text-neutral-100 outline-none focus:border-emerald-500/50"
+                                aria-label={`${record.displayName} prompt compiler adapter`}
+                              >
+                                <option value="neutral-v1">neutral-v1</option>
+                                <option value="gemini-v1">gemini-v1</option>
+                              </select>
+                            </label>
+                            <label className="inline-flex items-center gap-2 text-xs text-neutral-300">
+                              <input
+                                type="checkbox"
+                                checked={compiler.supportsNegativePrompt}
+                                onChange={(event) => updatePromptCompiler(record.id, { supportsNegativePrompt: event.target.checked })}
+                                className="h-3.5 w-3.5 accent-emerald-500"
+                              />
+                              Negative prompt
+                            </label>
                           </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="mt-4 flex justify-end gap-2 border-t border-white/5 pt-4">
+                      <button
+                        type="button"
+                        onClick={() => void runTest(record)}
+                        disabled={busy || !record.isProviderConfigured}
+                        className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-xs text-neutral-200 hover:bg-white/10 disabled:opacity-50"
+                      >
+                        {testingId === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                        Test
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void save(record)}
+                        disabled={busy}
+                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50"
+                      >
+                        {savingId === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         ))

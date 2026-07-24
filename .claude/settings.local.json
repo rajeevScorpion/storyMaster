@@ -72,7 +72,8 @@
       "Bash(echo \"exit:$?\")",
       "Bash(git commit -m ' *)",
       "Bash(git commit -m 'chore: add video export fix prompt pack *)",
-      "Bash(git commit -m 'diagnostics: add video export report and timestamp logging *)"
+      "Bash(git commit -m 'diagnostics: add video export report and timestamp logging *)",
+      "PowerShell(git checkout -b feature/image-prompt-compiler)"
     ]
   },
   "sandbox": {

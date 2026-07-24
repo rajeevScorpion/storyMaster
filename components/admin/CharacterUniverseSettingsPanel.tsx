@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
+import AdminToggle from '@/components/admin/AdminToggle';
 import {
   getCharacterUniverseAdminSettings,
   setCharacterUniverseFlag,
@@ -99,16 +100,14 @@ export default function CharacterUniverseSettingsPanel() {
                 <span className="block text-sm text-neutral-100">{field.label}</span>
                 <span className="mt-0.5 block text-xs leading-snug text-neutral-400">{field.description}</span>
               </span>
-              <button
-                onClick={() => void handleToggle(field.key)}
-                disabled={togglingKey === field.key}
-                aria-label={`Toggle ${field.label}`}
-                className={`relative mt-1 inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none disabled:opacity-50 ${settings.flags[field.key] ? 'bg-emerald-500' : 'bg-neutral-600'}`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 rounded-full bg-white shadow transition-transform ${settings.flags[field.key] ? 'translate-x-5' : 'translate-x-0'}`}
+              <span className="mt-1 shrink-0">
+                <AdminToggle
+                  checked={settings.flags[field.key]}
+                  onToggle={() => void handleToggle(field.key)}
+                  disabled={togglingKey === field.key}
+                  ariaLabel={`Toggle ${field.label}`}
                 />
-              </button>
+              </span>
             </div>
           ))}
         </div>

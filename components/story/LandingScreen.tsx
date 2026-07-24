@@ -1,6 +1,6 @@
 'use client';
 
-import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { getImageModelPickerState } from '@/app/actions/image-models';
@@ -39,13 +39,13 @@ import {
 } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, Info, X, UserRound, AtSign } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
-import CharacterAvatar from './CharacterAvatar';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import InfoPopover from '@/components/ui/InfoPopover';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
 import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
 import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
@@ -86,6 +86,11 @@ type CreationMode = 'prompt' | 'seeded' | 'reel';
 const REEL_SETUP_CACHE_KEY = 'kissago_reel_story_setup_cache';
 const REEL_SETUP_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_REEL_LANDING_BEAT_COUNT = 1;
+const MIN_STORY_IDEA_WORDS = 3;
+
+function countMeaningfulWords(value: string): number {
+  return value.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+}
 
 function readCachedReelSetup(): ReelStorySetupSettings | null {
   if (typeof window === 'undefined') return null;
@@ -121,104 +126,26 @@ function writeCachedReelSetup(setup: ReelStorySetupSettings): void {
   }
 }
 
-function InfoPopover({
-  title,
-  ariaLabel,
-  children,
-}: {
-  title: string;
-  ariaLabel: string;
-  children: ReactNode;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const panelId = useId();
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handlePointerDown = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen]);
-
-  return (
-    <div ref={rootRef} className="relative inline-flex">
-      <button
-        type="button"
-        onClick={() => setIsOpen((current) => !current)}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-white/10 bg-neutral-900/80 text-neutral-500 transition-colors hover:border-emerald-400/40 hover:text-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-400/50"
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        aria-controls={panelId}
-      >
-        <Info className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <>
-            <motion.button
-              type="button"
-              aria-label={`Close ${title} details`}
-              className="fixed inset-0 z-[65] bg-black/40 sm:hidden"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
-            />
-            <motion.div
-              id={panelId}
-              role="dialog"
-              aria-label={title}
-              initial={{ opacity: 0, y: 8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.98 }}
-              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed inset-x-3 bottom-3 z-[70] max-h-[75vh] overflow-y-auto rounded-2xl border border-white/10 bg-neutral-950 p-4 text-left shadow-2xl shadow-black/50 sm:absolute sm:inset-auto sm:left-0 sm:top-full sm:mt-2 sm:w-80"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-medium text-neutral-100">{title}</p>
-                <button
-                  type="button"
-                  onClick={() => setIsOpen(false)}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-white/10 hover:text-neutral-200"
-                  aria-label={`Close ${title} details`}
-                >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-              <div className="mt-3 space-y-3 text-sm leading-relaxed text-neutral-400">
-                {children}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
 function buildPickerRequestSignature(
   taskKey: string,
   selection: ImageModelSelection | undefined,
   planKey: string
 ): string {
   return `${taskKey}|${selection?.taskKey ?? ''}|${selection?.modelKey ?? ''}|${planKey}`;
+}
+
+/**
+ * Creation-mode tab styling. The active tab wears an emerald wash with a soft
+ * inset edge and glow instead of a flat white fill, which read too stark against
+ * the dark theme; inactive tabs warm toward emerald on hover so the row responds
+ * rather than sitting inert.
+ */
+function modeTabClass(active: boolean): string {
+  return `rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200 active:scale-[0.97] ${
+    active
+      ? 'bg-emerald-500/15 text-emerald-100 shadow-[inset_0_0_0_1px_rgba(52,211,153,0.4),0_0_20px_rgba(16,185,129,0.18)]'
+      : 'text-neutral-400 hover:bg-white/[0.06] hover:text-emerald-100'
+  }`;
 }
 
 export default function LandingScreen({ onBegin, initialData, initialPricing }: LandingScreenProps) {
@@ -339,7 +266,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   // shared my-stories store (prefetched on login, deduped), so this no longer
   // pays its own settings→masters waterfall. Fail-closed until it loads.
   const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
-  const [showCharacterPicker, setShowCharacterPicker] = useState(false);
   const [mixError, setMixError] = useState<string | null>(null);
   const [referencePanel, setReferencePanel] = useState<ReferencePanelState | null>(null);
   const handleReferencePanelChange = useCallback((state: ReferencePanelState) => {
@@ -641,6 +567,17 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       : prompt
   );
   const isOverAuthoringWordCap = authoringWordCount > authoringWordCap;
+  const storyIdeaWordCount = countMeaningfulWords(prompt);
+  const hasMinimumStoryIdea = storyIdeaWordCount >= MIN_STORY_IDEA_WORDS;
+  // Drives the go button's halo + hover response, so the glow only ever appears
+  // when pressing it would actually do something.
+  const canBeginStory = hasMinimumStoryIdea && !isLoading && !isOverAuthoringWordCap;
+  // Quick Story uses a pill composer: the + trigger, prompt and go button ride
+  // inside one fully rounded bar, with attachments sitting below it. The strip
+  // portals its trigger into `attachSlot` and aligns its popup under `composerEl`.
+  const isQuickStoryComposer = creationMode !== 'seeded' && !isReelMode;
+  const [attachSlot, setAttachSlot] = useState<HTMLDivElement | null>(null);
+  const [composerEl, setComposerEl] = useState<HTMLDivElement | null>(null);
 
   const clearSeedPreview = () => {
     setSeedPreview(null);
@@ -807,6 +744,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         ? reelUserText.trim()
         : prompt.trim();
     if (!storyPrompt) return;
+    if (!isReelMode
+      && creationMode === 'prompt'
+      && countMeaningfulWords(storyPrompt) < MIN_STORY_IDEA_WORDS) {
+      return;
+    }
 
     const shouldAutoBuild =
       autoBuildStory && !isReelMode && config.imageGenerationMode === 'generate'
@@ -1056,7 +998,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       return;
     }
 
-    if (prompt.trim() && !isLoading && !isOverAuthoringWordCap) {
+    const hasRequiredPrompt = isReelMode ? Boolean(prompt.trim()) : hasMinimumStoryIdea;
+    if (hasRequiredPrompt && !isLoading && !isOverAuthoringWordCap) {
       await startConfiguredStory();
     }
   };
@@ -1101,11 +1044,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       setAuthoringMode('prompt');
                       clearSeedPreview();
                     }}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                      creationMode === 'prompt'
-                        ? 'bg-white text-black'
-                        : 'text-neutral-300 hover:text-white'
-                    }`}
+                    className={modeTabClass(creationMode === 'prompt')}
                   >
                     Quick Story
                   </button>
@@ -1116,11 +1055,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       setAuthoringMode('seeded');
                       clearSeedPreview();
                     }}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                      creationMode === 'seeded'
-                        ? 'bg-white text-black'
-                        : 'text-neutral-300 hover:text-white'
-                    }`}
+                    className={modeTabClass(creationMode === 'seeded')}
                   >
                     Seed Story
                   </button>
@@ -1137,11 +1072,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                       setShowAdvanced(false);
                       clearSeedPreview();
                       }}
-                      className={`rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                        creationMode === 'reel'
-                          ? 'bg-white text-black'
-                          : 'text-neutral-300 hover:text-white'
-                      }`}
+                      className={modeTabClass(creationMode === 'reel')}
                     >
                       Reels
                     </button>
@@ -1149,161 +1080,91 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 </div>
               </div>
 
+              <div className="space-y-2">
               <div className="relative group">
-                <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 rounded-2xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200" />
-                <div className="relative rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
+                <div className={`absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 blur opacity-25 transition duration-1000 group-hover:opacity-50 group-hover:duration-200 ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`} />
+                <div
+                  ref={setComposerEl}
+                  className={`relative border border-white/10 bg-neutral-900 shadow-2xl ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`}
+                >
                   {creationMode !== 'seeded' ? (
-                    <div className="space-y-3 p-2">
+                    <div className={isReelMode ? 'space-y-3 p-2' : 'p-2'}>
                       {!isReelMode && (
-                        <div className="relative flex items-center">
-                          <input
-                            ref={promptInputRef}
-                            type="text"
-                            value={prompt}
-                            onChange={(e) => {
-                              setPrompt(e.target.value);
-                              promptMentions.syncMentionState(e.target.value, e.target.selectionStart);
-                            }}
-                            onClick={(e) => promptMentions.syncMentionState(prompt, e.currentTarget.selectionStart)}
-                            onKeyDown={(e) => {
-                              promptMentions.handleKeyDown(e);
-                            }}
-                            placeholder="Tell me a story of a monkey and an elephant..."
-                            className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
-                            disabled={isLoading}
-                          />
-                          <MentionSuggestionList
-                            open={Boolean(promptMentions.mention)}
-                            suggestions={promptMentions.suggestions}
-                            highlightIndex={promptMentions.highlightIndex}
-                            onHighlight={promptMentions.setHighlightIndex}
-                            onSelect={promptMentions.applySuggestion}
-                            avatarUrlByName={Object.fromEntries(
-                              libraryCharacters.map((master) => [
-                                master.name,
-                                master.portraitUrl ?? master.referenceSheetUrl ?? undefined,
-                              ])
-                            )}
-                          />
-                          <button
-                            type="submit"
-                            disabled={!prompt.trim() || isLoading || isOverAuthoringWordCap}
-                            className="ml-2 bg-white text-black px-6 py-3 rounded-xl font-medium hover:bg-neutral-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                          >
-                            {isLoading ? (
-                              <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <span>Begin</span>
-                            )}
-                          </button>
-                        </div>
-                      )}
-                      {!isReelMode && (
-                        <ReferenceDirectInputStrip
-                          active={!isReelMode}
-                          promptOnly={imageGenerationMode === 'prompt_only'}
-                          onStateChange={handleReferencePanelChange}
-                        />
-                      )}
-                      {!isReelMode && mixingEnabled && (
-                        <div className="px-2 pb-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            {selectedLibraryCharacters.map((character) => (
-                              <span
-                                key={character.masterId ?? character.id}
-                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 py-1 pl-1 pr-2 text-xs text-emerald-100"
-                              >
-                                <CharacterAvatar
-                                  src={character.portraitUrl ?? character.referenceSheetUrl}
-                                  alt=""
-                                  imgClassName="h-5 w-5 rounded-full border border-white/10 object-cover"
-                                  fallback={<UserRound className="h-3.5 w-3.5 text-emerald-300/70" />}
-                                />
-                                {character.name}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setSelectedLibraryCharacters((previous) =>
-                                      previous.filter((entry) => entry.masterId !== character.masterId)
-                                    )
-                                  }
-                                  className="rounded-full p-0.5 text-emerald-300/70 transition-colors hover:bg-white/10 hover:text-emerald-100"
-                                  aria-label={`Remove ${character.name}`}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </span>
-                            ))}
-                            {libraryCharacters.length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setShowCharacterPicker((value) => !value)}
-                                aria-expanded={showCharacterPicker}
-                                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-white/15 px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-400/30 hover:text-neutral-200"
-                              >
-                                <UserRound className="h-3.5 w-3.5" />
-                                Bring your characters
-                                {showCharacterPicker ? (
-                                  <ChevronUp className="h-3 w-3" />
-                                ) : (
-                                  <ChevronDown className="h-3 w-3" />
+                        <div className="relative flex items-center gap-2">
+                            {/* The pill is 72px tall, so its rounded left cap is a
+                                36px-radius semicircle. Pill p-2 (8) + pl-3 (12) +
+                                half the 32px trigger sits the + on that cap's
+                                centre; the extra 10px margin nudges it clear of
+                                the curve for better optical balance. */}
+                            <div ref={setAttachSlot} className="ml-[10px] flex shrink-0 items-center pl-3" />
+                            <input
+                              ref={promptInputRef}
+                              type="text"
+                              value={prompt}
+                              onChange={(e) => {
+                                setPrompt(e.target.value);
+                                promptMentions.syncMentionState(e.target.value, e.target.selectionStart);
+                              }}
+                              onClick={(e) => promptMentions.syncMentionState(prompt, e.currentTarget.selectionStart)}
+                              onKeyDown={(e) => {
+                                promptMentions.handleKeyDown(e);
+                              }}
+                              placeholder="Tell me a story of a monkey and an elephant..."
+                              aria-describedby={!hasMinimumStoryIdea && prompt.trim() ? 'story-idea-minimum' : undefined}
+                              className="w-full bg-transparent text-white placeholder-neutral-500 px-3 py-3 outline-none font-sans text-sm"
+                              disabled={isLoading}
+                            />
+                            <MentionSuggestionList
+                              open={Boolean(promptMentions.mention)}
+                              suggestions={promptMentions.suggestions}
+                              highlightIndex={promptMentions.highlightIndex}
+                              onHighlight={promptMentions.setHighlightIndex}
+                              onSelect={promptMentions.applySuggestion}
+                              avatarUrlByName={Object.fromEntries(
+                                libraryCharacters.map((master) => [
+                                  master.name,
+                                  master.portraitUrl ?? master.referenceSheetUrl ?? undefined,
+                                ])
+                              )}
+                            />
+                            <div className="relative ml-2 shrink-0">
+                              {/* Emerald halo: breathes slowly while the story is
+                                  ready to start, so the button reads as alive
+                                  rather than merely enabled. */}
+                              <AnimatePresence>
+                                {canBeginStory && (
+                                  <motion.span
+                                    aria-hidden
+                                    initial={{ opacity: 0, scale: 0.8 }}
+                                    animate={{ opacity: [0.55, 0.95, 0.55], scale: [0.95, 1.12, 0.95] }}
+                                    exit={{ opacity: 0, scale: 0.8 }}
+                                    transition={{
+                                      opacity: { duration: 3.4, repeat: Infinity, ease: 'easeInOut' },
+                                      scale: { duration: 3.4, repeat: Infinity, ease: 'easeInOut' },
+                                    }}
+                                    className="pointer-events-none absolute -inset-4 rounded-full bg-emerald-500/60 blur-2xl"
+                                  />
                                 )}
-                              </button>
-                            )}
-                            {libraryCharacters.length > 0 && (
-                              <span className="hidden items-center gap-1 text-[11px] text-neutral-600 sm:flex">
-                                <AtSign className="h-3 w-3" /> or type @name in your idea
-                              </span>
-                            )}
-                          </div>
-                          <AnimatePresence>
-                            {showCharacterPicker && (
-                              <motion.div
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                transition={{ duration: 0.15 }}
-                                className="overflow-hidden"
+                              </AnimatePresence>
+                              <motion.button
+                                type="submit"
+                                disabled={!canBeginStory}
+                                whileHover={canBeginStory ? { scale: 1.07 } : undefined}
+                                whileTap={canBeginStory ? { scale: 0.93 } : undefined}
+                                transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                                className="relative flex h-14 w-14 items-center justify-center rounded-full border border-emerald-400/25 bg-white/5 font-serif text-2xl font-semibold leading-none tracking-wide text-emerald-300 backdrop-blur-md transition-colors hover:border-emerald-400/60 hover:bg-white/10 hover:text-emerald-200 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600"
                               >
-                                <div className="mt-2 flex flex-wrap gap-2 rounded-xl border border-white/10 bg-neutral-950/60 p-3">
-                                  {libraryCharacters.map((master) => {
-                                    const isSelected = selectedLibraryCharacters.some(
-                                      (character) => character.masterId === master.id
-                                    );
-                                    const avatar = master.portraitUrl ?? master.referenceSheetUrl;
-                                    return (
-                                      <button
-                                        key={master.id}
-                                        type="button"
-                                        onClick={() => toggleLibraryCharacter(master)}
-                                        aria-pressed={isSelected}
-                                        className={`inline-flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-xs transition-colors ${
-                                          isSelected
-                                            ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
-                                            : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
-                                        }`}
-                                      >
-                                        <CharacterAvatar
-                                          src={avatar}
-                                          alt=""
-                                          imgClassName="h-6 w-6 rounded-full border border-white/10 object-cover"
-                                          fallback={
-                                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
-                                              <UserRound className="h-3.5 w-3.5 text-neutral-500" />
-                                            </span>
-                                          }
-                                        />
-                                        {master.name}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                          {mixError && (
-                            <p className="mt-2 text-xs leading-snug text-rose-300">{mixError}</p>
-                          )}
+                                {isLoading ? (
+                                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-emerald-300/70 border-t-transparent" />
+                                ) : (
+                                  // "Go" runs cap-height to baseline with no
+                                  // descender, so its ink sits only ~1.5px below
+                                  // the circle's centre. Padding shifts a centred
+                                  // flex child by half its value, hence 3px.
+                                  <span className="pb-[3px] leading-none">Go</span>
+                                )}
+                              </motion.button>
+                            </div>
                         </div>
                       )}
                       {isReelMode && (
@@ -1693,6 +1554,40 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                     </div>
                   )}
                 </div>
+              </div>
+
+              {isQuickStoryComposer && (
+                <div className="space-y-1">
+                  {!hasMinimumStoryIdea && prompt.trim() && (
+                    <p
+                      id="story-idea-minimum"
+                      className="px-4 text-left text-[11px] text-amber-300/80"
+                      aria-live="polite"
+                    >
+                      Enter at least {MIN_STORY_IDEA_WORDS} words to begin.
+                    </p>
+                  )}
+                  <ReferenceDirectInputStrip
+                    active={!isReelMode}
+                    promptOnly={imageGenerationMode === 'prompt_only'}
+                    onStateChange={handleReferencePanelChange}
+                    triggerSlot={attachSlot}
+                    anchorEl={composerEl}
+                    library={{
+                      settingsLoaded: characterSettings !== null,
+                      enabled: mixingEnabled,
+                      characters: libraryCharacters,
+                      selected: selectedLibraryCharacters,
+                      onToggle: toggleLibraryCharacter,
+                      onRemoveSelected: (character) =>
+                        setSelectedLibraryCharacters((previous) =>
+                          previous.filter((entry) => entry.masterId !== character.masterId)
+                        ),
+                      error: mixError,
+                    }}
+                  />
+                </div>
+              )}
               </div>
 
               {previewError && (
