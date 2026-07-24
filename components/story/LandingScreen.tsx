@@ -39,10 +39,9 @@ import {
 } from '@/lib/reel/styles';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import type { PricingRuntimeContext } from '@/lib/types/pricing';
-import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw, X, UserRound } from 'lucide-react';
+import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
-import CharacterAvatar from './CharacterAvatar';
 import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
@@ -253,7 +252,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   // shared my-stories store (prefetched on login, deduped), so this no longer
   // pays its own settings→masters waterfall. Fail-closed until it loads.
   const [selectedLibraryCharacters, setSelectedLibraryCharacters] = useState<Character[]>([]);
-  const [showCharacterPicker, setShowCharacterPicker] = useState(false);
   const [mixError, setMixError] = useState<string | null>(null);
   const [referencePanel, setReferencePanel] = useState<ReferencePanelState | null>(null);
   const handleReferencePanelChange = useCallback((state: ReferencePanelState) => {
@@ -557,6 +555,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const isOverAuthoringWordCap = authoringWordCount > authoringWordCap;
   const storyIdeaWordCount = countMeaningfulWords(prompt);
   const hasMinimumStoryIdea = storyIdeaWordCount >= MIN_STORY_IDEA_WORDS;
+  // Drives the go button's halo + hover response, so the glow only ever appears
+  // when pressing it would actually do something.
+  const canBeginStory = hasMinimumStoryIdea && !isLoading && !isOverAuthoringWordCap;
+  // Quick Story uses a pill composer: prompt + go button ride inside one fully
+  // rounded bar, with the attach row sitting below it instead of inside.
+  const isQuickStoryComposer = creationMode !== 'seeded' && !isReelMode;
 
   const clearSeedPreview = () => {
     setSeedPreview(null);
@@ -1071,14 +1075,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 </div>
               </div>
 
+              <div className="space-y-2">
               <div className="relative group">
-                <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 rounded-2xl blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200" />
-                <div className="relative rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
+                <div className={`absolute -inset-1 bg-gradient-to-r from-emerald-500 to-indigo-500 blur opacity-25 transition duration-1000 group-hover:opacity-50 group-hover:duration-200 ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`} />
+                <div className={`relative border border-white/10 bg-neutral-900 shadow-2xl ${isQuickStoryComposer ? 'rounded-full' : 'rounded-2xl'}`}>
                   {creationMode !== 'seeded' ? (
-                    <div className="space-y-3 p-2">
+                    <div className={isReelMode ? 'space-y-3 p-2' : 'p-2'}>
                       {!isReelMode && (
-                        <div className="space-y-1">
-                          <div className="relative flex items-center">
+                        <div className="relative flex items-center gap-2">
                             <input
                               ref={promptInputRef}
                               type="text"
@@ -1093,7 +1097,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                               }}
                               placeholder="Tell me a story of a monkey and an elephant..."
                               aria-describedby={!hasMinimumStoryIdea && prompt.trim() ? 'story-idea-minimum' : undefined}
-                              className="w-full bg-transparent text-white placeholder-neutral-500 px-4 py-3 outline-none font-sans text-lg"
+                              className="w-full bg-transparent text-white placeholder-neutral-500 px-5 py-3 outline-none font-sans text-lg"
                               disabled={isLoading}
                             />
                             <MentionSuggestionList
@@ -1109,157 +1113,44 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                 ])
                               )}
                             />
-                            <button
-                              type="submit"
-                              disabled={!hasMinimumStoryIdea || isLoading || isOverAuthoringWordCap}
-                              className="ml-2 flex items-center gap-2 rounded-xl bg-white px-6 py-3 font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {isLoading ? (
-                                <div className="h-5 w-5 rounded-full border-2 border-black border-t-transparent animate-spin" />
-                              ) : (
-                                <span>Begin</span>
-                              )}
-                            </button>
-                          </div>
-                          {!hasMinimumStoryIdea && prompt.trim() && (
-                            <p
-                              id="story-idea-minimum"
-                              className="px-4 text-left text-[11px] text-amber-300/80"
-                              aria-live="polite"
-                            >
-                              Enter at least {MIN_STORY_IDEA_WORDS} words to begin.
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {!isReelMode && (
-                        <ReferenceDirectInputStrip
-                          active={!isReelMode}
-                          promptOnly={imageGenerationMode === 'prompt_only'}
-                          onStateChange={handleReferencePanelChange}
-                          toolbarStart={
-                            mixingEnabled && libraryCharacters.length > 0 ? (
-                              <button
-                                type="button"
-                                onClick={() => setShowCharacterPicker((value) => !value)}
-                                aria-expanded={showCharacterPicker}
-                                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-white/15 px-2.5 py-1.5 text-xs text-neutral-400 transition-colors hover:border-emerald-400/30 hover:text-neutral-200"
-                              >
-                                <UserRound className="h-3.5 w-3.5" />
-                                Bring your characters
-                                {showCharacterPicker ? (
-                                  <ChevronUp className="h-3 w-3" />
-                                ) : (
-                                  <ChevronDown className="h-3 w-3" />
+                            <div className="relative ml-2 shrink-0">
+                              {/* Emerald halo: breathes slowly while the story is
+                                  ready to start, so the button reads as alive
+                                  rather than merely enabled. */}
+                              <AnimatePresence>
+                                {canBeginStory && (
+                                  <motion.span
+                                    aria-hidden
+                                    initial={{ opacity: 0, scale: 0.8 }}
+                                    animate={{ opacity: [0.55, 0.95, 0.55], scale: [0.95, 1.12, 0.95] }}
+                                    exit={{ opacity: 0, scale: 0.8 }}
+                                    transition={{
+                                      opacity: { duration: 3.4, repeat: Infinity, ease: 'easeInOut' },
+                                      scale: { duration: 3.4, repeat: Infinity, ease: 'easeInOut' },
+                                    }}
+                                    className="pointer-events-none absolute -inset-4 rounded-full bg-emerald-500/60 blur-2xl"
+                                  />
                                 )}
-                              </button>
-                            ) : undefined
-                          }
-                          toolbarInfo={
-                            <InfoPopover
-                              title="Characters and worlds"
-                              ariaLabel="How characters and worlds affect your story"
-                            >
-                              <p>
-                                <strong className="text-neutral-200">Bring your characters:</strong>{' '}
-                                choose characters already saved in your library, or type{' '}
-                                <span className="font-medium text-neutral-200">@name</span> in your
-                                idea to add one.
-                              </p>
-                              <p>
-                                <strong className="text-neutral-200">Add character:</strong>{' '}
-                                attach a reference image. Crop to one clear, front-facing subject
-                                for the best match.
-                              </p>
-                              <p>
-                                <strong className="text-neutral-200">Add world:</strong>{' '}
-                                attach a clear image of a setting to guide the locations,
-                                atmosphere, and visual continuity.
-                              </p>
-                            </InfoPopover>
-                          }
-                        />
-                      )}
-                      {!isReelMode
-                        && mixingEnabled
-                        && (selectedLibraryCharacters.length > 0 || showCharacterPicker || mixError) && (
-                        <div className="px-2 pb-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            {selectedLibraryCharacters.map((character) => (
-                              <span
-                                key={character.masterId ?? character.id}
-                                className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 py-1 pl-1 pr-2 text-xs text-emerald-100"
+                              </AnimatePresence>
+                              <motion.button
+                                type="submit"
+                                disabled={!canBeginStory}
+                                whileHover={canBeginStory ? { scale: 1.07 } : undefined}
+                                whileTap={canBeginStory ? { scale: 0.93 } : undefined}
+                                transition={{ type: 'spring', stiffness: 420, damping: 24 }}
+                                className="relative flex h-14 w-14 items-center justify-center rounded-full border border-emerald-400/25 bg-white/5 font-serif text-2xl font-semibold leading-none tracking-wide text-emerald-300 backdrop-blur-md transition-colors hover:border-emerald-400/60 hover:bg-white/10 hover:text-emerald-200 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-neutral-600"
                               >
-                                <CharacterAvatar
-                                  src={character.portraitUrl ?? character.referenceSheetUrl}
-                                  alt=""
-                                  imgClassName="h-5 w-5 rounded-full border border-white/10 object-cover"
-                                  fallback={<UserRound className="h-3.5 w-3.5 text-emerald-300/70" />}
-                                />
-                                {character.name}
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setSelectedLibraryCharacters((previous) =>
-                                      previous.filter((entry) => entry.masterId !== character.masterId)
-                                    )
-                                  }
-                                  className="rounded-full p-0.5 text-emerald-300/70 transition-colors hover:bg-white/10 hover:text-emerald-100"
-                                  aria-label={`Remove ${character.name}`}
-                                >
-                                  <X className="h-3 w-3" />
-                                </button>
-                              </span>
-                            ))}
-                          </div>
-                          <AnimatePresence>
-                            {showCharacterPicker && (
-                              <motion.div
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
-                                transition={{ duration: 0.15 }}
-                                className="overflow-hidden"
-                              >
-                                <div className="mt-2 flex flex-wrap gap-2 rounded-xl border border-white/10 bg-neutral-950/60 p-3">
-                                  {libraryCharacters.map((master) => {
-                                    const isSelected = selectedLibraryCharacters.some(
-                                      (character) => character.masterId === master.id
-                                    );
-                                    const avatar = master.portraitUrl ?? master.referenceSheetUrl;
-                                    return (
-                                      <button
-                                        key={master.id}
-                                        type="button"
-                                        onClick={() => toggleLibraryCharacter(master)}
-                                        aria-pressed={isSelected}
-                                        className={`inline-flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 text-xs transition-colors ${
-                                          isSelected
-                                            ? 'border-emerald-400/40 bg-emerald-500/15 text-emerald-100'
-                                            : 'border-white/10 bg-neutral-900/60 text-neutral-300 hover:border-white/20'
-                                        }`}
-                                      >
-                                        <CharacterAvatar
-                                          src={avatar}
-                                          alt=""
-                                          imgClassName="h-6 w-6 rounded-full border border-white/10 object-cover"
-                                          fallback={
-                                            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-neutral-800">
-                                              <UserRound className="h-3.5 w-3.5 text-neutral-500" />
-                                            </span>
-                                          }
-                                        />
-                                        {master.name}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                          {mixError && (
-                            <p className="mt-2 text-xs leading-snug text-rose-300">{mixError}</p>
-                          )}
+                                {isLoading ? (
+                                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-emerald-300/70 border-t-transparent" />
+                                ) : (
+                                  // "Go" runs cap-height to baseline with no
+                                  // descender, so its ink sits only ~1.5px below
+                                  // the circle's centre. Padding shifts a centred
+                                  // flex child by half its value, hence 3px.
+                                  <span className="pb-[3px] leading-none">Go</span>
+                                )}
+                              </motion.button>
+                            </div>
                         </div>
                       )}
                       {isReelMode && (
@@ -1649,6 +1540,38 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                     </div>
                   )}
                 </div>
+              </div>
+
+              {isQuickStoryComposer && (
+                <div className="space-y-1">
+                  {!hasMinimumStoryIdea && prompt.trim() && (
+                    <p
+                      id="story-idea-minimum"
+                      className="px-4 text-left text-[11px] text-amber-300/80"
+                      aria-live="polite"
+                    >
+                      Enter at least {MIN_STORY_IDEA_WORDS} words to begin.
+                    </p>
+                  )}
+                  <ReferenceDirectInputStrip
+                    active={!isReelMode}
+                    promptOnly={imageGenerationMode === 'prompt_only'}
+                    onStateChange={handleReferencePanelChange}
+                    library={{
+                      settingsLoaded: characterSettings !== null,
+                      enabled: mixingEnabled,
+                      characters: libraryCharacters,
+                      selected: selectedLibraryCharacters,
+                      onToggle: toggleLibraryCharacter,
+                      onRemoveSelected: (character) =>
+                        setSelectedLibraryCharacters((previous) =>
+                          previous.filter((entry) => entry.masterId !== character.masterId)
+                        ),
+                      error: mixError,
+                    }}
+                  />
+                </div>
+              )}
               </div>
 
               {previewError && (
