@@ -1,0 +1,201 @@
+{
+  "route": "/learn",
+  "redirects": [
+    "/tutorial"
+  ],
+  "chapters": [
+    {
+      "id": "why",
+      "title": "Why Kissago Exists",
+      "slides": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    },
+    {
+      "id": "how",
+      "title": "How Kissago Works",
+      "slides": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ]
+    },
+    {
+      "id": "build",
+      "title": "What You Can Build",
+      "slides": [
+        16,
+        17,
+        18
+      ]
+    }
+  ],
+  "slides": [
+    {
+      "id": "welcome",
+      "chapter": "why",
+      "index": 1,
+      "eyebrow": "A guided storytelling platform",
+      "title": "Turn an idea into a narrated visual story.",
+      "visualType": "statement",
+      "accent": "balanced"
+    },
+    {
+      "id": "everyone-has-a-story",
+      "chapter": "why",
+      "index": 2,
+      "title": "Imagination is not limited by age. Creation tools often are.",
+      "visualType": "statement",
+      "accent": "ember"
+    },
+    {
+      "id": "fragmented-creation",
+      "chapter": "why",
+      "index": 3,
+      "title": "One story can require too many tools.",
+      "visualType": "tool-fragmentation",
+      "accent": "ember"
+    },
+    {
+      "id": "learning-curve",
+      "chapter": "why",
+      "index": 4,
+      "title": "People begin with a story and end up learning software.",
+      "visualType": "tool-fragmentation",
+      "accent": "ember"
+    },
+    {
+      "id": "faster-is-not-better",
+      "chapter": "why",
+      "index": 5,
+      "title": "AI can generate quickly. Meaning still needs direction.",
+      "visualType": "statement",
+      "accent": "balanced"
+    },
+    {
+      "id": "calm-attention",
+      "chapter": "why",
+      "index": 6,
+      "title": "A story can hold attention without competing for it.",
+      "visualType": "calm-content",
+      "accent": "balanced",
+      "assetKey": "bg-03-calm-attention"
+    },
+    {
+      "id": "what-is-missing",
+      "chapter": "why",
+      "index": 7,
+      "title": "A simpler way to create, with more meaningful control.",
+      "visualType": "statement",
+      "accent": "emerald"
+    },
+    {
+      "id": "process-together",
+      "chapter": "how",
+      "index": 8,
+      "title": "Story + Images + Narration + Spoken Text + Motion + Effects",
+      "visualType": "story-equation",
+      "accent": "balanced",
+      "assetKey": "bg-04-story-convergence"
+    },
+    {
+      "id": "minutes",
+      "chapter": "how",
+      "index": 9,
+      "title": "Begin with an idea. Move quickly toward something you can experience.",
+      "visualType": "timeline",
+      "accent": "emerald"
+    },
+    {
+      "id": "begin-with-what-you-have",
+      "chapter": "how",
+      "index": 10,
+      "title": "A sentence is enough to begin.",
+      "visualType": "screenshot",
+      "screenshotKey": "idea-entry-desktop",
+      "accent": "balanced"
+    },
+    {
+      "id": "shape-the-story",
+      "chapter": "how",
+      "index": 11,
+      "title": "Kissago turns the idea into a sequence.",
+      "visualType": "screenshot",
+      "screenshotKey": "story-beats",
+      "accent": "emerald"
+    },
+    {
+      "id": "characters-and-worlds",
+      "chapter": "how",
+      "index": 12,
+      "title": "Create once. Continue with consistency.",
+      "visualType": "character-world",
+      "screenshotKey": "character-setup",
+      "accent": "balanced",
+      "assetKey": "bg-05-character-continuity"
+    },
+    {
+      "id": "bring-to-life",
+      "chapter": "how",
+      "index": 13,
+      "title": "The story becomes something you can watch, read and hear.",
+      "visualType": "screenshot",
+      "screenshotKey": "story-playback",
+      "accent": "balanced"
+    },
+    {
+      "id": "remain-in-control",
+      "chapter": "how",
+      "index": 14,
+      "title": "Refine one part without starting again.",
+      "visualType": "screenshot",
+      "screenshotKey": "scene-editing",
+      "accent": "emerald"
+    },
+    {
+      "id": "best-practices",
+      "chapter": "how",
+      "index": 15,
+      "title": "A few thoughtful decisions improve the whole experience.",
+      "visualType": "best-practices",
+      "accent": "emerald"
+    },
+    {
+      "id": "many-story-forms",
+      "chapter": "build",
+      "index": 16,
+      "title": "The same platform can support many forms of storytelling.",
+      "visualType": "use-cases",
+      "accent": "balanced"
+    },
+    {
+      "id": "story-world",
+      "chapter": "build",
+      "index": 17,
+      "title": "One story can become a continuing creative identity.",
+      "visualType": "story-universe",
+      "accent": "balanced",
+      "assetKey": "bg-06-episodic-world"
+    },
+    {
+      "id": "create",
+      "chapter": "build",
+      "index": 18,
+      "title": "The best way to understand Kissago is to begin.",
+      "visualType": "cta",
+      "accent": "emerald",
+      "assetKey": "bg-07-create-invitation"
+    }
+  ]
+}
