@@ -7,25 +7,34 @@ import {
   BookOpenText,
   Captions,
   Check,
+  CircleDollarSign,
   CircleUserRound,
-  Clapperboard,
+  Coins,
+  Database,
   Feather,
+  GitBranch,
   GraduationCap,
+  Handshake,
   Heart,
   Image as ImageIcon,
   Layers3,
-  MessageCircleQuestion,
   Mic2,
   Move3D,
+  Network,
   Palette,
   Pause,
   PenLine,
   Play,
   RefreshCw,
+  Rocket,
+  School,
   Share2,
+  ShieldCheck,
   Sparkles,
   Timer,
+  UsersRound,
   WandSparkles,
+  Workflow,
 } from 'lucide-react';
 
 import {
@@ -42,6 +51,32 @@ const toolIcons = [PenLine, ImageIcon, Mic2, Timer, Captions, Move3D, Sparkles, 
 const audienceIcons = [Sparkles, Heart, GraduationCap, Palette];
 const equationIcons = [BookOpenText, ImageIcon, Mic2, Captions, Move3D, Sparkles];
 const controlIcons = [PenLine, Timer, RefreshCw, AudioLines];
+const modelIcons = [Sparkles, Layers3, Coins, CircleDollarSign];
+const moatIcons = [Database, Workflow, ShieldCheck, WandSparkles];
+
+const characterPortfolio = [
+  {
+    src: '/learn/illustrations/character-brass-companion.webp',
+    alt: 'A small brass mechanical companion with a glowing blue eye',
+  },
+  {
+    src: '/learn/illustrations/character-starlight-creature.webp',
+    alt: 'A playful purple magical creature with a luminous tail',
+  },
+  {
+    src: '/learn/illustrations/character-community-storyteller.webp',
+    alt: 'An older Indian community storyteller holding fresh vegetables',
+  },
+  {
+    src: '/learn/illustrations/character-adventure-keeper.webp',
+    alt: 'A bearded adventure character carrying golden pumpkins',
+  },
+] as const;
+
+function splitVisualPoint(point: string): { title: string; detail: string } {
+  const [title, detail = ''] = point.split('|');
+  return { title, detail };
+}
 
 function Frame({
   label,
@@ -82,6 +117,276 @@ function AuthenticScreenshot({ asset }: { asset: LearnScreenshotAsset }) {
       </div>
       <p className="mt-3 text-xs text-neutral-500">Authentic Kissago product capture</p>
     </Frame>
+  );
+}
+
+function HeroPromiseVisual({ points }: { points: readonly string[] }) {
+  const icons = [BookOpenText, CircleUserRound, Play];
+
+  return (
+    <div className="ml-auto grid w-full max-w-lg gap-3">
+      {points.map((point, index) => {
+        const Icon = icons[index] ?? Sparkles;
+        return (
+          <div
+            key={point}
+            className="flex items-center gap-4 rounded-2xl border border-white/10 bg-neutral-950/50 p-4 shadow-xl shadow-black/20 backdrop-blur-md"
+          >
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${
+              index === 1
+                ? 'bg-amber-400/10 text-amber-200'
+                : 'bg-emerald-400/10 text-emerald-200'
+            }`}>
+              <Icon className="h-5 w-5" strokeWidth={1.5} />
+            </span>
+            <span className="text-sm font-medium text-neutral-100">{point}</span>
+            <Check className="ml-auto h-4 w-4 text-emerald-300/70" />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProductSystemVisual({ points }: { points: readonly string[] }) {
+  const icons = [Feather, BookOpenText, CircleUserRound, ImageIcon, Mic2, Share2];
+
+  return (
+    <Frame label="Guided creation system">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {points.map((point, index) => {
+          const Icon = icons[index] ?? Sparkles;
+          return (
+            <div
+              key={point}
+              className="relative flex min-h-28 flex-col justify-between rounded-2xl border border-white/10 bg-neutral-950/65 p-4"
+            >
+              <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${
+                index === 2 || index === 4
+                  ? 'bg-amber-400/10 text-amber-200'
+                  : 'bg-emerald-400/10 text-emerald-200'
+              }`}>
+                <Icon className="h-4 w-4" strokeWidth={1.5} />
+              </span>
+              <span className="text-sm text-neutral-200">{point}</span>
+              {index < points.length - 1 ? (
+                <ArrowRight className="absolute -right-2.5 top-1/2 z-10 hidden h-4 w-4 -translate-y-1/2 text-emerald-300/50 sm:block" />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-4 text-xs text-neutral-500">
+        Complexity stays in the system. Creative decisions stay with the person.
+      </p>
+    </Frame>
+  );
+}
+
+function PlatformFlywheelVisual({ points }: { points: readonly string[] }) {
+  const icons = [Sparkles, Database, GitBranch, Share2];
+
+  return (
+    <div className="relative mx-auto grid w-full max-w-2xl grid-cols-2 gap-3">
+      {points.map((point, index) => {
+        const { title, detail } = splitVisualPoint(point);
+        const Icon = icons[index] ?? Sparkles;
+        return (
+          <div
+            key={title}
+            className="min-h-36 rounded-2xl border border-white/10 bg-neutral-950/60 p-4 backdrop-blur-md sm:p-5"
+          >
+            <div className="mb-7 flex items-center justify-between">
+              <span className="font-mono text-[10px] text-emerald-300/60">
+                {String(index + 1).padStart(2, '0')}
+              </span>
+              <Icon className={index === 0 ? 'h-5 w-5 text-amber-200' : 'h-5 w-5 text-emerald-200'} strokeWidth={1.5} />
+            </div>
+            <p className="font-serif text-lg text-neutral-100">{title}</p>
+            <p className="mt-1 text-xs leading-5 text-neutral-500">{detail}</p>
+          </div>
+        );
+      })}
+      <div className="pointer-events-none absolute left-1/2 top-1/2 flex h-20 w-20 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-emerald-300/25 bg-neutral-950 shadow-[0_0_60px_rgba(16,185,129,0.2)]">
+        <Network className="h-7 w-7 text-emerald-200" strokeWidth={1.4} />
+      </div>
+    </div>
+  );
+}
+
+function CharacterPortfolioVisual({ points }: { points: readonly string[] }) {
+  return (
+    <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
+      {characterPortfolio.map((character, index) => {
+        const { title, detail } = splitVisualPoint(points[index] ?? '');
+        return (
+          <div
+            key={character.src}
+            className="group overflow-hidden rounded-2xl border border-white/10 bg-neutral-950/60"
+          >
+            <div className="relative aspect-[2/3] overflow-hidden bg-gradient-to-b from-white/[0.04] to-transparent">
+              <Image
+                src={character.src}
+                alt={character.alt}
+                fill
+                sizes="(max-width: 640px) 44vw, 13vw"
+                className="object-contain object-bottom transition-transform duration-500 group-hover:scale-[1.025]"
+              />
+            </div>
+            <div className="border-t border-white/10 p-3">
+              <p className="text-xs font-medium text-neutral-200">{title}</p>
+              <p className="mt-1 text-[10px] leading-4 text-neutral-500">{detail}</p>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BusinessModelVisual({ points }: { points: readonly string[] }) {
+  return (
+    <div className="grid w-full grid-cols-2 gap-3">
+      {points.map((point, index) => {
+        const { title, detail } = splitVisualPoint(point);
+        const Icon = modelIcons[index] ?? Coins;
+        return (
+          <div
+            key={title}
+            className={`rounded-2xl border p-4 sm:p-5 ${
+              index === 2
+                ? 'border-emerald-300/25 bg-emerald-400/[0.08]'
+                : index === 3
+                  ? 'border-dashed border-amber-300/20 bg-amber-400/[0.05]'
+                  : 'border-white/10 bg-neutral-950/55'
+            }`}
+          >
+            <Icon className={index === 3 ? 'mb-8 h-5 w-5 text-amber-200' : 'mb-8 h-5 w-5 text-emerald-200'} strokeWidth={1.5} />
+            <p className="font-serif text-base text-neutral-100 sm:text-lg">{title}</p>
+            <p className="mt-1 text-[11px] leading-5 text-neutral-500">{detail}</p>
+            {index === 3 ? (
+              <span className="mt-3 inline-flex rounded-full border border-amber-300/15 px-2 py-1 text-[9px] uppercase tracking-widest text-amber-200/70">
+                Future direction
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DefensibilityVisual({ points }: { points: readonly string[] }) {
+  return (
+    <div className="grid w-full grid-cols-2 gap-2">
+      {points.map((point, index) => {
+        const { title, detail } = splitVisualPoint(point);
+        const Icon = moatIcons[index] ?? ShieldCheck;
+        return (
+          <div
+            key={title}
+            className="rounded-2xl border border-white/10 bg-neutral-950/70 p-4 shadow-xl shadow-black/20 backdrop-blur-md sm:p-5"
+          >
+            <div className="mb-6 flex items-center justify-between">
+              <Icon className="h-5 w-5 text-emerald-200" strokeWidth={1.5} />
+              <span className="font-mono text-[9px] text-neutral-600">
+                SYSTEM {String(index + 1).padStart(2, '0')}
+              </span>
+            </div>
+            <p className="font-serif text-base text-neutral-100">{title}</p>
+            <p className="mt-1 text-[10px] leading-4 text-neutral-500">{detail}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function GoToMarketVisual({ points }: { points: readonly string[] }) {
+  const icons = [School, UsersRound, Network];
+
+  return (
+    <div className="relative grid w-full gap-3">
+      <div className="absolute bottom-8 left-6 top-8 w-px bg-gradient-to-b from-emerald-300/70 via-emerald-300/30 to-amber-300/30" />
+      {points.map((point, index) => {
+        const { title, detail } = splitVisualPoint(point);
+        const Icon = icons[index] ?? Rocket;
+        return (
+          <div
+            key={title}
+            className="relative ml-12 rounded-2xl border border-white/10 bg-neutral-950/60 p-4 backdrop-blur-md sm:p-5"
+          >
+            <span className="absolute -left-[3.15rem] top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full border border-emerald-300/25 bg-neutral-950 text-emerald-200">
+              <Icon className="h-4 w-4" strokeWidth={1.5} />
+            </span>
+            <span className="text-[9px] uppercase tracking-[0.2em] text-emerald-300/60">{title}</span>
+            <p className="mt-2 font-serif text-lg text-neutral-100">{detail}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RoadmapVisual({ points }: { points: readonly string[] }) {
+  const icons = [ShieldCheck, Rocket, Network];
+
+  return (
+    <div className="grid w-full gap-3 sm:grid-cols-3">
+      {points.map((point, index) => {
+        const { title, detail } = splitVisualPoint(point);
+        const Icon = icons[index] ?? Sparkles;
+        return (
+          <div
+            key={title}
+            className={`relative min-h-64 overflow-hidden rounded-2xl border p-5 ${
+              index === 0
+                ? 'border-emerald-300/25 bg-emerald-400/[0.08]'
+                : 'border-white/10 bg-neutral-950/55'
+            }`}
+          >
+            <span className="absolute right-3 top-3 font-mono text-5xl text-white/[0.035]">
+              0{index + 1}
+            </span>
+            <Icon className={index === 2 ? 'mb-20 h-5 w-5 text-amber-200' : 'mb-20 h-5 w-5 text-emerald-200'} strokeWidth={1.5} />
+            <p className="text-[10px] uppercase tracking-[0.2em] text-emerald-300/70">{title}</p>
+            <p className="mt-3 text-sm leading-6 text-neutral-300">{detail}</p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CollaborationAskVisual({ points }: { points: readonly string[] }) {
+  const icons = [Handshake, School, CircleDollarSign];
+
+  return (
+    <div className="relative mx-auto flex min-h-[22rem] w-full max-w-2xl items-center justify-center">
+      <div className="absolute h-64 w-64 rounded-full border border-emerald-300/10 shadow-[0_0_110px_rgba(16,185,129,0.15)]" />
+      <div className="relative grid w-full grid-cols-3 gap-3">
+        {points.map((point, index) => {
+          const { title, detail } = splitVisualPoint(point);
+          const Icon = icons[index] ?? Handshake;
+          return (
+            <div
+              key={title}
+              className="rounded-2xl border border-white/10 bg-neutral-950/70 p-4 text-center backdrop-blur-md"
+            >
+              <span className={`mx-auto flex h-11 w-11 items-center justify-center rounded-full ${
+                index === 2
+                  ? 'bg-amber-400/10 text-amber-200'
+                  : 'bg-emerald-400/10 text-emerald-200'
+              }`}>
+                <Icon className="h-5 w-5" strokeWidth={1.5} />
+              </span>
+              <p className="mt-5 font-serif text-base text-neutral-100">{title}</p>
+              <p className="mt-2 text-[10px] leading-4 text-neutral-500">{detail}</p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -594,6 +899,8 @@ export default function LearnVisual({ slide }: LearnVisualProps) {
   }
 
   switch (slide.visualType) {
+    case 'hero-promise':
+      return <HeroPromiseVisual points={points} />;
     case 'statement':
       return <StatementVisual />;
     case 'audiences':
@@ -608,6 +915,8 @@ export default function LearnVisual({ slide }: LearnVisualProps) {
       return <CalmVisual />;
     case 'guided-space':
       return <GuidedSpaceVisual />;
+    case 'product-system':
+      return <ProductSystemVisual points={points} />;
     case 'story-equation':
       return <EquationVisual points={points} />;
     case 'timeline':
@@ -622,6 +931,20 @@ export default function LearnVisual({ slide }: LearnVisualProps) {
       return <PlaybackVisual points={points} />;
     case 'story-controls':
       return <ControlsVisual points={points} />;
+    case 'platform-flywheel':
+      return <PlatformFlywheelVisual points={points} />;
+    case 'character-portfolio':
+      return <CharacterPortfolioVisual points={points} />;
+    case 'business-model':
+      return <BusinessModelVisual points={points} />;
+    case 'defensibility':
+      return <DefensibilityVisual points={points} />;
+    case 'go-to-market':
+      return <GoToMarketVisual points={points} />;
+    case 'roadmap':
+      return <RoadmapVisual points={points} />;
+    case 'collaboration-ask':
+      return <CollaborationAskVisual points={points} />;
     case 'best-practices':
       return <PracticeVisual points={points} />;
     case 'use-cases':

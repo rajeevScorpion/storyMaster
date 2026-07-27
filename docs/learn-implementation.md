@@ -1,58 +1,70 @@
-# Kissago `/learn` implementation report
+# Kissago `/learn` presentation report
 
-## Codebase audit
+## Combined presentation
 
-- **Framework and routing:** Next.js 15 App Router with React 19. Public pages are a mix of server and client components. The learning shell is a static route with a client-side interaction layer.
-- **Visual system:** The product uses Tailwind CSS v4 utilities rather than a separate token package. Its established palette is neutral-950/900 surfaces, emerald creation and action states, amber warmth, white borders at low opacity, and sparse shadow-based glow.
-- **Typography:** Inter is exposed as `--font-sans`; Playfair Display is exposed as `--font-serif`. Kissago already uses the serif for story-led headings and the sans face for controls and supporting copy.
-- **Shared components:** `KissagoLogo` is reused directly. Existing route and button conventions are composed with `next/link`, the same surface utilities, and the same rounded control language. Existing story components are intentionally not embedded because they depend on live auth, store, and story data.
-- **Motion:** The application already ships `motion/react`. Existing entrances favor opacity, small translation, and short spring or easing transitions. The route uses the same package and disables spatial movement when reduced motion is requested.
-- **Theme:** The current product is globally dark (`bg-neutral-950`); there is no user-facing light-mode switch or alternate token set to integrate.
-- **Responsive foundations:** Existing safe-area variables and dynamic viewport conventions are reused. The new route adds isolated mobile portrait and short landscape layouts without changing global CSS.
-- **Product routes:** `/` is the live creation entry and `/gallery` is the available public exploration route. No separate guided-demo route exists, so no unavailable CTA is shown.
-- **Screenshot opportunities:** Idea entry, beat structure, character setup, playback, and scene refinement exist in the product, but the supplied pack contains no privacy-reviewed stable captures. The implementation includes typed screenshot slots and deliberately uses code-native product-flow compositions as the fallback.
+The original learning journey and `assets/kissago-pitch-deck.html` are now one 20-slide presentation for product collaborators, pilot partners and investors. The story is organised into four sections:
 
-## Reuse and architecture map
+| Section | Slides | Purpose |
+| --- | ---: | --- |
+| The Opportunity | 1–5 | Establish the creative gap and the need for guided, responsible storytelling |
+| The Product | 6–12 | Demonstrate the beat-based workflow from idea to controllable audiovisual story |
+| The Platform | 13–17 | Explain continuity, audiences, business model and defensibility |
+| Build With Us | 18–20 | Present go-to-market, roadmap and the collaboration ask |
 
-| Concern | Reused | New, route-scoped implementation |
+Claims are deliberately time-bounded. Coins and paid tiers are described as part of the current product system; marketplace economics, creator rewards, multilingual dubbing and interactive story formats are presented as future directions.
+
+## Asset use
+
+All eight new supplied images were reviewed, converted to responsive WebP assets and assigned to the part of the narrative they support:
+
+| Supplied asset | Presentation use |
+| --- | --- |
+| Background 1 | Opening promise: prompt to narrated story world |
+| Background 2 | Product system: story beats, characters, narration and export |
+| Background 3 | Platform defensibility and the orchestration/rendering pipeline |
+| Background 4 | Audience network: parents, educators, creators and communities |
+| Four transparent character illustrations | “One engine, many story identities” portfolio |
+
+The original PNG files remain in `Kissago_Learn_Prompt_Pack/assets`. Optimised runtime files live under `public/learn/backgrounds` and `public/learn/illustrations`. Run `node scripts/optimize-learn-assets.mjs` to rebuild them from the source pack.
+
+## Reuse and architecture
+
+| Concern | Reused | Route-scoped implementation |
 | --- | --- | --- |
-| Identity | `KissagoLogo` | Learn top bar and presentation treatment |
-| Typography and color | Global Inter/Playfair variables, neutral/emerald/amber utilities | Semantic emerald/ember slide accents |
-| Motion | `motion/react`, existing easing character | Active-slide entrances and reduced-motion fallback |
-| Routing | Next.js App Router and `next/link` | `/learn`, `/tutorial` redirect, stable hashes |
-| Media | `next/image` | Optimized learning backgrounds and screenshot-slot registry |
-| Navigation | Native browser history and scroll behavior | Snap viewport, chapter progress, explicit controls, wheel/keyboard/touch support |
+| Identity | `KissagoLogo` | Presentation top bar and closing ask |
+| Typography and colour | Global Inter/Playfair variables and neutral/emerald/amber palette | Editorial slide hierarchy and semantic accents |
+| Motion | `motion/react` | Active-slide entrances with reduced-motion fallback |
+| Routing | Next.js App Router and `next/link` | `/learn`, `/tutorial` redirect and stable hashes |
+| Media | `next/image` | Eleven optimised backgrounds, four portrait illustrations and screenshot slots |
+| Navigation | Native history and scrolling | Snap viewport, section progress, keyboard, wheel, touch and explicit controls |
 
-The slide copy and ordering live in `lib/learn/content.ts`. Navigation parsing and clamping are isolated in `lib/learn/navigation.ts` and covered by unit tests. `LearnExperience` owns route state and input handling; `LearnVisual` owns reusable visual compositions.
+Slide content and section ranges live in `lib/learn/content.ts`. Navigation parsing and clamping remain isolated in `lib/learn/navigation.ts`. `LearnExperience` owns presentation state and input handling; `LearnVisual` owns the reusable product and investor-facing compositions.
 
-## Implemented behavior
+## Implemented behaviour
 
-- 18 slides across the requested Why, How, and Build chapters.
-- Native horizontal scrolling with CSS snap and touch swipe.
-- Left/right arrows, Page Up/Page Down, Home/End, previous/next controls, and carefully scoped vertical-wheel translation.
-- Stable `#slide-01` through `#slide-18` links plus named slide and chapter hash parsing.
-- Push-state navigation for explicit controls and replace-state synchronization for native swipe/scroll.
-- `/tutorial` redirects to `/learn`; browser fragments are retained by the redirecting browser.
-- Optional `?present=1` presentation mode with Escape to exit.
-- Chapter and whole-journey progress, current-slide announcement, semantic slide labels, focus styles, inert off-screen slides, and expandable secondary context.
-- Mobile-safe internal vertical scrolling so copy and visuals remain readable instead of being scaled down.
-- Seven supplied backgrounds converted to 33–62 KB WebP assets; only the first two are eagerly loaded and all other images remain lazy.
-- Typed authentic-screenshot slots through `LEARN_SCREENSHOT_ASSETS`. Empty slots render complete code-native fallbacks and never imply a nonexistent product screen.
+- 20 responsive slides with stable `#slide-01` through `#slide-20` links and named section hashes.
+- Native horizontal snap, touch swipe, arrow keys, Page Up/Page Down, Home/End and on-screen controls.
+- Weighted four-section progress so segment widths match their slide counts.
+- Push-state navigation for explicit actions and replace-state synchronisation for native scrolling.
+- Optional `?present=1` fullscreen presentation mode with Escape to exit.
+- Semantic slide labels, live current-slide announcement, visible focus states and inert off-screen slides.
+- Mobile-safe internal scrolling so text and visuals remain readable without scaling the deck down.
+- Direct calls to the live product and public story gallery on the final collaboration slide.
+- Typed authentic-screenshot slots. Empty slots retain complete code-native product-flow visuals and never imply unavailable product screens.
 
 ## Validation
 
 - `npm test`: **57 files and 348 tests passed**.
 - `npx tsc --noEmit`: **passed**.
 - `npm run lint`: **passed with no errors**. One pre-existing `react-hooks/exhaustive-deps` warning remains in `components/story/AdvancedOptions.tsx:211`.
-- `npm run build`: **passed**. `/learn` is statically generated at 13.9 KB route size and 165 KB first-load JavaScript in the validation build.
-- Route smoke test: `/learn` returned **200** and `/tutorial` returned **307** to `/learn`.
-- Browser review: checked at 1440 × 900 desktop and narrow mobile layouts, including direct entry to slide 6 and redirect-plus-fragment behavior.
+- `npm run build`: **passed**. `/learn` is statically generated at 17.3 KB route size and 168 KB first-load JavaScript in the validation build.
+- Browser review: checked the opening, product-system, character-portfolio, platform-defensibility and closing-partner slides at 1440 × 900, plus the character portfolio at 500 × 900.
 
 Final captures:
 
 - `docs/screenshots/learn-desktop.png`
 - `docs/screenshots/learn-mobile.png`
 
-## Known limitation and asset handoff
+## Screenshot handoff
 
-Authentic in-product screenshots were not added because the pack's screenshot directory is empty and generating captures from live authenticated data would risk unstable or private content. To add approved captures later, place optimized files under `public/learn/screenshots` and register their source, alt text, and caption in `LEARN_SCREENSHOT_ASSETS`. The corresponding slides will automatically replace their fallback composition.
+The pack still contains no privacy-reviewed in-product screenshots. To add approved captures later, place optimised files under `public/learn/screenshots` and register their source, alt text and caption in `LEARN_SCREENSHOT_ASSETS`. The corresponding slides will automatically replace their code-native fallback without changing the presentation structure.

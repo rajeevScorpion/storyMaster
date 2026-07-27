@@ -10,8 +10,9 @@ import {
 describe('learn navigation', () => {
   it('resolves numbered, named, and chapter hashes', () => {
     expect(findLearnSlideIndex('#slide-08', LEARN_SLIDES, LEARN_CHAPTERS)).toBe(7);
-    expect(findLearnSlideIndex('#calm-attention', LEARN_SLIDES, LEARN_CHAPTERS)).toBe(5);
-    expect(findLearnSlideIndex('#build', LEARN_SLIDES, LEARN_CHAPTERS)).toBe(15);
+    expect(findLearnSlideIndex('#meaning-needs-direction', LEARN_SLIDES, LEARN_CHAPTERS)).toBe(3);
+    expect(findLearnSlideIndex('#platform', LEARN_SLIDES, LEARN_CHAPTERS)).toBe(12);
+    expect(findLearnSlideIndex('#partner', LEARN_SLIDES, LEARN_CHAPTERS)).toBe(17);
   });
 
   it('falls back safely for invalid hashes', () => {
@@ -21,8 +22,8 @@ describe('learn navigation', () => {
 
   it('uses stable zero-padded hashes and clamps indexes', () => {
     expect(getLearnSlideHash(LEARN_SLIDES[0])).toBe('#slide-01');
-    expect(getLearnSlideHash(LEARN_SLIDES[17])).toBe('#slide-18');
+    expect(getLearnSlideHash(LEARN_SLIDES[19])).toBe('#slide-20');
     expect(clampLearnSlideIndex(-2, LEARN_SLIDES.length)).toBe(0);
-    expect(clampLearnSlideIndex(28, LEARN_SLIDES.length)).toBe(17);
+    expect(clampLearnSlideIndex(28, LEARN_SLIDES.length)).toBe(19);
   });
 });

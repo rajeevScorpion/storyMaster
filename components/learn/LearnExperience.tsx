@@ -344,7 +344,7 @@ export default function LearnExperience() {
             href="/"
             className={`${NAV_BUTTON_CLASS} learn-secondary-action ${styles.topActionLabel}`}
           >
-            Start creating
+            Experience product
             <ArrowRight className="h-4 w-4" />
           </Link>
           <button
@@ -359,7 +359,15 @@ export default function LearnExperience() {
         </div>
       </header>
 
-      <div className={styles.chapterProgress} aria-hidden="true">
+      <div
+        className={styles.chapterProgress}
+        style={{
+          gridTemplateColumns: LEARN_CHAPTERS
+            .map((chapter) => `${chapter.range[1] - chapter.range[0] + 1}fr`)
+            .join(' '),
+        }}
+        aria-hidden="true"
+      >
         {LEARN_CHAPTERS.map((chapter) => {
           const [start, end] = chapter.range;
           const progress =
@@ -380,7 +388,7 @@ export default function LearnExperience() {
         ref={viewportRef}
         className={styles.viewport}
         onScroll={handleViewportScroll}
-        aria-label="Kissago learning journey"
+        aria-label="Kissago collaborator and investor presentation"
       >
         {LEARN_SLIDES.map((slide, index) => {
           const isActive = index === activeIndex;
@@ -466,10 +474,10 @@ export default function LearnExperience() {
                     </details>
                   ) : null}
 
-                  {slide.visualType === 'cta' ? (
+                  {slide.visualType === 'cta' || slide.visualType === 'collaboration-ask' ? (
                     <div className={styles.ctaRow}>
                       <Link href="/" className={PRIMARY_ACTION_CLASS}>
-                        Start creating
+                        Experience product
                         <ArrowRight className="h-4 w-4" />
                       </Link>
                       <Link
@@ -477,7 +485,7 @@ export default function LearnExperience() {
                         className={`${NAV_BUTTON_CLASS} min-h-12 px-6`}
                       >
                         <Play className="h-4 w-4" />
-                        Explore stories
+                        Explore community stories
                       </Link>
                     </div>
                   ) : null}

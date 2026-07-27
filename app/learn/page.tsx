@@ -3,9 +3,9 @@ import type { Metadata } from 'next';
 import LearnExperience from '@/components/learn/LearnExperience';
 
 export const metadata: Metadata = {
-  title: 'Learn how Kissago works',
+  title: 'Kissago — Product and Partner Presentation',
   description:
-    'See how Kissago turns an idea into a narrated visual story through one guided creative journey.',
+    'Explore the opportunity, product, platform and partnership vision behind Kissago’s guided storytelling system.',
 };
 
 export default function LearnPage() {

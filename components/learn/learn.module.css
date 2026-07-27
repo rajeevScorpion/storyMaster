@@ -64,7 +64,7 @@
   right: max(1rem, calc(var(--safe-right) + 1rem));
   left: max(1rem, calc(var(--safe-left) + 1rem));
   display: grid;
-  grid-template-columns: 7fr 8fr 3fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.35rem;
   max-width: 76rem;
   margin: 0 auto;
