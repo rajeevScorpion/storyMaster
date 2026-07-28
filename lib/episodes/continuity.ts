@@ -3,7 +3,13 @@
 // prompt, and skipping portrait regeneration for carried characters.
 
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
-import type { Character, StoryboardPlan, StoryConfig } from '@/lib/types/story';
+import type {
+  Character,
+  SeedPlan,
+  SourceFidelity,
+  StoryboardPlan,
+  StoryConfig,
+} from '@/lib/types/story';
 
 /**
  * Deep-inherits the parent story's full StoryConfig (visual settings,
@@ -19,6 +25,44 @@ export function buildEpisodeConfig(parentConfig: StoryConfig | null | undefined)
     storyKind: 'story',
     authoring: { mode: 'prompt' },
   };
+}
+
+export function getEpisodeAuthoringDefaults(
+  seriesConfig: StoryConfig | null | undefined
+): { mode: 'prompt' | 'seeded'; sourceFidelity: SourceFidelity } {
+  const normalized = normalizeStoryConfig(seriesConfig ?? undefined);
+  return {
+    mode: normalized.authoring.mode === 'seeded' ? 'seeded' : 'prompt',
+    sourceFidelity: normalized.authoring.sourceFidelity || 'strictly_follow',
+  };
+}
+
+export interface SeededEpisodeAuthoring {
+  sourceText: string;
+  guidanceText?: string;
+  sourceFidelity: SourceFidelity;
+  seedPlan?: SeedPlan;
+}
+
+/**
+ * Replaces only the fresh episode's authoring block with a confirmed seeded
+ * source. Every inherited series setting remains untouched.
+ */
+export function buildSeededEpisodeConfig(
+  inheritedConfig: StoryConfig,
+  authoring: SeededEpisodeAuthoring
+): StoryConfig {
+  return normalizeStoryConfig({
+    ...inheritedConfig,
+    storyKind: 'story',
+    authoring: {
+      mode: 'seeded',
+      sourceText: authoring.sourceText,
+      guidanceText: authoring.guidanceText,
+      sourceFidelity: authoring.sourceFidelity,
+      seedPlan: authoring.seedPlan,
+    },
+  });
 }
 
 const EPISODE_TITLE_MARKER = 'EPISODE TITLE REQUIREMENT:';

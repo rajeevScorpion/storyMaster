@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   appendEpisodeTitleImageInstruction,
   buildEpisodeConfig,
+  buildSeededEpisodeConfig,
   filterCarriedPortraitTasks,
+  getEpisodeAuthoringDefaults,
 } from './continuity';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from '@/lib/ai/story-config';
 import type { Character, PortraitTask, StoryboardPlan, StoryConfig } from '@/lib/types/story';
@@ -14,6 +16,11 @@ function makeParentConfig(): StoryConfig {
     ageGroup: 'kids_8_12',
     settingCountry: 'india',
     maxBeats: 8,
+    imageGenerationMode: 'generate',
+    imageDeliveryMode: 'stateful',
+    imageContinuityStrategy: 'provider_stateful',
+    isVerticalStory: true,
+    aspectRatio: '9:16',
     visualSettings: {
       preset: 'watercolor_fable',
       theme: 'mysterious',
@@ -26,6 +33,13 @@ function makeParentConfig(): StoryConfig {
       sourceText: 'A long source text…',
       guidanceText: 'Keep it gentle.',
       sourceFidelity: 'preserve_closely',
+    },
+    narrationVoice: {
+      mode: 'user_selected',
+      genderBucket: 'female',
+      voiceId: 'Kore',
+      languageCode: 'hi-IN',
+      accent: 'indian',
     },
   } as StoryConfig);
 }
@@ -90,6 +104,73 @@ describe('buildEpisodeConfig', () => {
     expect(buildEpisodeConfig(reelParent).storyKind).toBe('story');
     expect(buildEpisodeConfig(null).storyKind).toBe('story');
     expect(buildEpisodeConfig(undefined).authoring.mode).toBe('prompt');
+  });
+});
+
+describe('buildSeededEpisodeConfig', () => {
+  it('changes only authoring while preserving inherited episode settings', () => {
+    const inherited = buildEpisodeConfig(makeParentConfig());
+    const seeded = buildSeededEpisodeConfig(inherited, {
+      sourceText: 'Mira follows the river home.',
+      guidanceText: 'Mira wears the same blue coat.',
+      sourceFidelity: 'strictly_follow',
+      seedPlan: {
+        beatCount: 1,
+        beats: [{
+          beatIndex: 1,
+          title: 'The River Home',
+          storyText: 'Mira follows the river home.',
+          sceneSummary: 'Mira returns beside the river.',
+          isEnding: true,
+          options: [],
+        }],
+      },
+    });
+
+    expect(seeded.authoring.mode).toBe('seeded');
+    expect(seeded.authoring.sourceFidelity).toBe('strictly_follow');
+    expect(seeded.authoring.sourceText).toBe('Mira follows the river home.');
+    expect(seeded.authoring.seedPlan?.beats).toHaveLength(1);
+    expect(seeded.language).toBe(inherited.language);
+    expect(seeded.ageGroup).toBe(inherited.ageGroup);
+    expect(seeded.maxBeats).toBe(inherited.maxBeats);
+    expect(seeded.visualSettings).toEqual(inherited.visualSettings);
+    expect(seeded.narrationVoice).toEqual(inherited.narrationVoice);
+    expect(seeded.imageGenerationMode).toBe(inherited.imageGenerationMode);
+    expect(seeded.imageDeliveryMode).toBe(inherited.imageDeliveryMode);
+    expect(seeded.storyTextOverlay).toEqual(inherited.storyTextOverlay);
+    expect(seeded.storyTransition).toEqual(inherited.storyTransition);
+  });
+});
+
+describe('getEpisodeAuthoringDefaults', () => {
+  it('defaults a Strictly Follow seed series to seeded episode authoring', () => {
+    const config = normalizeStoryConfig({
+      authoring: {
+        mode: 'seeded',
+        sourceText: 'Episode one source.',
+        sourceFidelity: 'strictly_follow',
+      },
+    });
+
+    expect(getEpisodeAuthoringDefaults(config)).toEqual({
+      mode: 'seeded',
+      sourceFidelity: 'strictly_follow',
+    });
+  });
+
+  it('keeps prompt-origin series on the episode-idea path', () => {
+    const config = normalizeStoryConfig({
+      authoring: {
+        mode: 'prompt',
+        sourceFidelity: 'balanced_adaptation',
+      },
+    });
+
+    expect(getEpisodeAuthoringDefaults(config)).toEqual({
+      mode: 'prompt',
+      sourceFidelity: 'balanced_adaptation',
+    });
   });
 });
 
