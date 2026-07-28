@@ -7534,7 +7534,7 @@ function StoryScreenInner({
                                     title={isActive ? 'Active character sheet' : 'Use this sheet'}
                                   >
                                     <Image
-                                      src={entry.url}
+                                      src={resolveRenderableGeneratedReferenceUrl(entry.url) ?? entry.url}
                                       alt={`${activeCharacterSheetTarget.characterName} reference sheet`}
                                       fill
                                       className="object-cover"

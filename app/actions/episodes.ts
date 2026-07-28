@@ -298,12 +298,13 @@ export async function prepareEpisodeContinuation(input: {
       ...character,
       ...(roster?.portraitUrl ? { portraitUrl: roster.portraitUrl } : {}),
       ...(roster?.referenceSheetUrl
-        ? {
-            referenceSheetUrl: roster.referenceSheetUrl,
-            ...(roster.referenceSheetStorageKey
-              ? { referenceSheetStorageKey: roster.referenceSheetStorageKey }
-              : {}),
-          }
+        ? { referenceSheetUrl: roster.referenceSheetUrl }
+        : {}),
+      ...(roster?.referenceSheetStorageKey
+        ? { referenceSheetStorageKey: roster.referenceSheetStorageKey }
+        : {}),
+      ...(roster?.referenceSheetUploadedAt
+        ? { referenceSheetUploadedAt: roster.referenceSheetUploadedAt }
         : {}),
       ...(roster?.masterId ? { masterId: roster.masterId } : {}),
       sourceStoryId: character.sourceStoryId ?? story.id,

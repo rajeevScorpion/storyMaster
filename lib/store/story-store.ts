@@ -125,6 +125,7 @@ import { uploadNodeAssets, replaceBase64WithUrls, stripBase64FromStoryMap, uploa
 import { createClient as createBrowserClient } from '@/lib/supabase/client';
 import type { PricingBillableActionAuthorization } from '@/lib/types/pricing';
 import type { ImageCompressionMetadata } from '@/lib/media/imageUploadOptimization';
+import { getDurableR2Reference } from '@/lib/media/character-reference';
 import { mergeRefreshedStoryMapAssetUrls } from '@/lib/media/refresh-merge';
 import {
   normalizeBeatMediaFields,
@@ -468,7 +469,10 @@ function buildReferenceFromValue(
   const base: ReferenceImage = value.startsWith('data:')
     ? { type, dataUrl: value }
     : { type, url: value };
-  if (extras?.storageKey) base.storageKey = extras.storageKey;
+  const durableR2Reference =
+    getDurableR2Reference(value)
+    ?? getDurableR2Reference(extras?.storageKey);
+  if (durableR2Reference) base.storageKey = durableR2Reference;
   if (extras?.name?.trim()) base.name = extras.name.trim();
   return base;
 }
@@ -7481,25 +7485,30 @@ export const useStoryStore = create<StoryState>()(
               const persistedGallery: CharacterSheetGalleryEntry[] = optimisticGallery.map((entry) =>
                 entry.storageKey === storageKey ? { ...entry, storageKey: persistedStorageKey, url: uploadedUrl } : entry
               );
-              await setCharacterReferenceSheetRecord(session.savedStoryId, characterId, {
-                url: uploadedUrl,
-                storageKey: persistedStorageKey,
-                uploadedAt,
-                gallery: persistedGallery,
-                cap,
-              });
+              const persistedSheet = await setCharacterReferenceSheetRecord(
+                session.savedStoryId,
+                characterId,
+                {
+                  url: uploadedUrl,
+                  storageKey: persistedStorageKey,
+                  uploadedAt,
+                  gallery: persistedGallery,
+                  cap,
+                }
+              );
 
               const latestSession = get().session;
               if (!latestSession) return;
-              // Keep the local preview URL in memory because the private bucket
-              // needs a server-signed URL to render after a reload.
+              // Keep browser-readable signed URLs in memory while retaining
+              // their durable storage keys. A later full save canonicalizes
+              // these URLs back to r2:// references instead of erasing them.
               updateStoreSaveUi({
                 session: applyCharacterPatchEverywhere(latestSession, characterId, (existing) => ({
                   ...existing,
-                  referenceSheetUrl: isDataUrl(existing.referenceSheetUrl) ? existing.referenceSheetUrl : imageDataUrl,
-                  referenceSheetStorageKey: storageKey,
-                  referenceSheetUploadedAt: uploadedAt,
-                  referenceSheetGallery: optimisticGallery,
+                  referenceSheetUrl: persistedSheet.referenceSheetUrl,
+                  referenceSheetStorageKey: persistedSheet.referenceSheetStorageKey,
+                  referenceSheetUploadedAt: persistedSheet.referenceSheetUploadedAt,
+                  referenceSheetGallery: persistedSheet.referenceSheetGallery,
                 })),
                 saveStatus: 'saved',
               });

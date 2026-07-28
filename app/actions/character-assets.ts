@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl } from '@/lib/supabase/storage';
+import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import type { Character, CharacterSheetGalleryEntry, StoryMap } from '@/lib/types/story';
 
 type UploadPatch = {
@@ -292,11 +293,36 @@ export async function setCharacterReferenceSheetRecord(
     gallery: CharacterSheetGalleryEntry[];
     cap: number;
   }
-): Promise<void> {
+): Promise<{
+  referenceSheetUrl: string;
+  referenceSheetStorageKey: string;
+  referenceSheetUploadedAt: string;
+  referenceSheetGallery: CharacterSheetGalleryEntry[];
+}> {
   await updateCharacterReferenceSheetInternal(storyId, characterId, {
     kind: 'upload',
     ...payload,
   });
+
+  // The database keeps canonical storage references. Return fresh signed
+  // display URLs to the client so browser rendering never requires replacing
+  // canonical state with a temporary data URL.
+  const supabase = await createClient();
+  const canonicalUrls = [
+    payload.url,
+    ...payload.gallery.map((entry) => entry.url),
+  ];
+  const signed = await signMixedUrls(supabase, canonicalUrls, 'story-assets', 3600);
+
+  return {
+    referenceSheetUrl: signed.get(payload.url) ?? payload.url,
+    referenceSheetStorageKey: payload.storageKey,
+    referenceSheetUploadedAt: payload.uploadedAt,
+    referenceSheetGallery: payload.gallery.map((entry) => ({
+      ...entry,
+      url: signed.get(entry.url) ?? entry.url,
+    })),
+  };
 }
 
 export async function selectCharacterReferenceSheetRecord(
