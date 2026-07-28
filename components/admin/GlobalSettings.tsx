@@ -1970,9 +1970,9 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
             </p>
 
             <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-              <p className="text-sm font-medium text-neutral-100 mb-1">Shared authoring word cap</p>
+              <p className="text-sm font-medium text-neutral-100 mb-1">Story authoring word cap</p>
               <p className="text-xs text-neutral-400 mb-3">
-                Applies to prompt mode prompts and seeded mode source text plus extra guidance. Titles are excluded.
+                Applies to Quick Story and Reel prompts. Seed Story source text has a fixed 500-word limit, and its extra visual guidance has a separate fixed 150-word limit. Titles are excluded.
               </p>
               <div className="flex items-center gap-3">
                 <input

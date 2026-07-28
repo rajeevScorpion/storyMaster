@@ -247,9 +247,9 @@ Core rules:
 4. If the source contains more scenes than beats, merge scenes cleanly without losing causal clarity.
 5. If the source contains fewer scenes than beats, subdivide for pacing without inventing major new plot points.
 6. Respect the requested fidelity mode: {{sourceFidelity}}.
-7. Honor optional guidance when present, but never contradict the source text.
+7. Treat Extra Guidance only as visual reference for character appearance, scenes, locations, and world details. Never use it to change the plot, events, dialogue, or source wording.
 8. Accept prose, scene lists, rough notes, or script/dialogue formatting without requiring cleanup from the user.
-9. Write every user-facing field in {{language}}.
+9. Write generated metadata in {{language}}. In strictly_follow mode, storyText must remain in the source's original language and wording even when it differs from {{language}}.
 10. Keep each beat preview-ready: concise, readable, image-friendly, and narration-friendly.
 11. Each non-ending beat must include exactly 3 options.
 12. Exactly one option per non-ending beat must have isCanonical = true.
@@ -260,6 +260,8 @@ Core rules:
 17. Do not add random lore, surprise characters, or off-tone twists that are not grounded in the source.
 18. Keep the output safe for the requested story configuration.
 19. Preserve one-to-one character identity from scene to scene. Do not introduce duplicate copies of a named character unless the source explicitly calls for it.
+20. When Source Fidelity is strictly_follow, use Strict Follow Source Segments as authoritative: beat N storyText must equal segment N exactly. Do not translate, correct, summarize, expand, contract, censor, polish, or paraphrase those segments.
+21. In strictly_follow mode, generate only the titles, scene summaries, canonical transition options, and alternate branch options around the supplied segments. The segments themselves are the complete canonical narration.
 
 Return JSON with exactly these keys:
 - beatCount
@@ -294,6 +296,9 @@ Extra Guidance:
 Source Text:
 {{sourceText}}
 
+Strict Follow Source Segments (authoritative when populated):
+{{strictSourceSegments}}
+
 Create the canonical beat plan now.`;
 
 export const SEEDED_BEAT_MATERIALIZATION_PROMPT_DEFAULT = `You are Kissago's seeded beat materializer.
@@ -306,7 +311,7 @@ Core rules:
 3. Keep the provided option ids, labels, intents, and canonical ordering intact.
 4. Fill in the remaining runtime fields needed by Kissago: characters, continuityNotes, imagePrompt, clues, nextBeatGoal, endingForecast, newCharacterIds, changedCharacterIds.
 5. Treat {{storyState}} as the highest continuity authority.
-6. Use the source text and optional guidance to preserve character intent and story meaning.
+6. Use Extra Guidance only to resolve visual details such as character appearance, locations, scenes, and world design. Never use it to alter the seeded storyText, plot, events, or dialogue.
 7. Write story-facing text in {{language}}.
 8. Keep continuityNotes in English.
 9. Keep imagePrompt in English.
@@ -322,6 +327,7 @@ Core rules:
 19. If a named character is absent from the seeded beat, omit them instead of visually cloning them into the moment.
 20. Preserve one-to-one character identity across all later storyboard panels for this beat.
 21. Return storyTextParts as exactly 4 hidden narration chunks that split the final storyText into near-equal spoken-duration parts for storyboard sync. Preserve the source wording and do not show this split to the user.
+22. When Source Fidelity is strictly_follow, the Seed Beat Outline storyText is verbatim user-authored narration. Do not translate, correct, polish, shorten, expand, or paraphrase it.
 
 Return a JSON object with these keys:
 - title
@@ -460,6 +466,7 @@ Core rules:
 20. Use Hidden Story Text Parts as the timing spine for the four panels: part 1 maps to topLeft, part 2 to topRight, part 3 to bottomLeft, and part 4 to bottomRight.
 21. Each frame should visualize the narrative content and emotional beat of its matching storyTextPart. Do not let one part's action drift into a different panel unless the story explicitly requires overlap.
 22. For each frame, set charactersPresent to the exact display names (from {{characters}}) of the named characters actually visible in that panel. Use an empty array for scenery-only panels. Do not list a character who is absent from the panel, and use the character's canonical name exactly.
+23. Read Seed Authoring Context when present. For a seeded strictly_follow story, visualize the beat literally and faithfully without adding, replacing, or reinterpreting narrative events. Extra visual guidance may clarify appearance, setting, or world details only.
 
 Frame design rules:
 - topLeft should establish the beat or its opening emotional note
@@ -526,6 +533,9 @@ Continuity Notes:
 
 Visual Style:
 {{visualStyle}}
+
+Seed Authoring Context:
+{{seedAuthoringContext}}
 
 Beat Number:
 {{beatNumber}}
@@ -709,10 +719,10 @@ Requirements:
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
   reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the reel draft schema { beatCount, beats: [...] } exactly: produce all beats in one response. Each beat carries only beatIndex, title, storyText, sceneSummary, imagePrompt. Do not return options, characters, continuityNotes, clues, or any branching fields. Reels are linear inspirational quote sequences, not stories.',
-  seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it.',
-  seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration.',
+  seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it. When Source Fidelity is strictly_follow, copy each authoritative Strict Follow Source Segment into its matching storyText field exactly.',
+  seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. Extra Guidance is visual-only and must never alter the seeded story.',
   story_bible_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve established canon from the previous bible; never invent characters, places, or rules absent from the inputs. Keep every field compact enough to reuse as prompt context.',
-  visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only. Align topLeft, topRight, bottomLeft, and bottomRight to storyTextParts 1, 2, 3, and 4 when provided.',
+  visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only. Align topLeft, topRight, bottomLeft, and bottomRight to storyTextParts 1, 2, 3, and 4 when provided. When Seed Authoring Context says strictly_follow, visualize the authored beat literally; use Extra Guidance only for visual details.',
   reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly. Optimize the four frames for vertical reel pacing as abstract/symbolic visuals that complement an inspirational quote. portraitTasks MUST be an empty array — reels have no recurring characters.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
   reel_image_generation: 'Return only the final reel image prompt as plain text. Do not add explanations, numbering, or markdown. Never request text inside the generated image. Prefer abstract, symbolic, no-face vertical reel visuals unless the brief explicitly requires otherwise.',
@@ -766,9 +776,10 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'storyConfig', label: 'Story Config', description: 'Formatted story configuration and pacing context.', required: true },
       { key: 'workingTitle', label: 'Working Title', description: 'Optional author-supplied title for the source story.', required: false },
       { key: 'sourceFidelity', label: 'Source Fidelity', description: 'Requested preservation mode for the source material.', required: true },
-      { key: 'guidanceText', label: 'Extra Guidance', description: 'Optional extra author guidance for adaptation.', required: false },
+      { key: 'guidanceText', label: 'Extra Visual Guidance', description: 'Optional character, scene, location, or world details for visual interpretation.', required: false },
       { key: 'sourceText', label: 'Source Text', description: 'User-authored source story, script, or beat notes.', required: true },
       { key: 'beatCount', label: 'Beat Count', description: 'Target number of beats in the canonical plan.', required: true },
+      { key: 'strictSourceSegments', label: 'Strict Source Segments', description: 'Authoritative verbatim beat text used only by Strictly Follow mode.', required: false },
     ],
     defaultPrompt: SEED_PLAN_GENERATION_PROMPT_DEFAULT,
   },
@@ -781,7 +792,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'storyConfig', label: 'Story Config', description: 'Formatted story configuration and pacing context.', required: true },
       { key: 'storyState', label: 'Story State', description: 'Compact story bible snapshot used for continuity.', required: true },
       { key: 'sourceText', label: 'Source Text', description: 'User-authored source story, script, or beat notes.', required: true },
-      { key: 'guidanceText', label: 'Extra Guidance', description: 'Optional extra author guidance for adaptation.', required: false },
+      { key: 'guidanceText', label: 'Extra Visual Guidance', description: 'Optional character, scene, location, or world details for visual interpretation.', required: false },
       { key: 'seedBeat', label: 'Seed Beat Outline', description: 'Confirmed canonical seed beat outline as JSON.', required: true },
     ],
     defaultPrompt: SEEDED_BEAT_MATERIALIZATION_PROMPT_DEFAULT,
@@ -803,6 +814,7 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'newCharacterIds', label: 'New Character Ids', description: 'JSON array of newly introduced named character ids.', required: true },
       { key: 'changedCharacterIds', label: 'Changed Character Ids', description: 'JSON array of character ids with meaningful visible changes.', required: true },
       { key: 'previousStoryboardContext', label: 'Previous Storyboard Context', description: 'Summary of the previous storyboard for continuity.', required: true },
+      { key: 'seedAuthoringContext', label: 'Seed Authoring Context', description: 'Seed mode, fidelity, and optional visual-only guidance.', required: false },
     ],
     defaultPrompt: VISUAL_STORYBOARD_COMPOSER_PROMPT_DEFAULT,
   },

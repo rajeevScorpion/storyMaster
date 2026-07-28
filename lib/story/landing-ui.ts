@@ -13,6 +13,7 @@ import {
   DEFAULT_ENABLED_STORY_LANGUAGE_IDS,
   type StoryLanguageOption,
 } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_AUTHORING_WORD_CAP } from '@/lib/story/authoring-limits';
 
 export interface LandingSetupSettings {
   freePlusCharacterSheetsEnabled: boolean;
@@ -45,7 +46,7 @@ export const FALLBACK_REEL_SETUP: ReelStorySetupSettings = {
 
 export const DEFAULT_LANDING_INITIAL_DATA: LandingInitialData = {
   setupSettings: DEFAULT_LANDING_SETUP_SETTINGS,
-  authoringWordCap: 500,
+  authoringWordCap: DEFAULT_STORY_AUTHORING_WORD_CAP,
   reelSetup: FALLBACK_REEL_SETUP,
   narrationVoiceConfig: null,
   storyLanguageOptions: getEnabledStoryLanguageOptions(DEFAULT_ENABLED_STORY_LANGUAGE_IDS),

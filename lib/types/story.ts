@@ -250,7 +250,11 @@ export type StoryPalette =
   | 'neon';
 
 export type StoryDetailLevel = 'simple' | 'balanced' | 'lush';
-export type SourceFidelity = 'preserve_closely' | 'balanced_adaptation' | 'creative_expansion';
+export type SourceFidelity =
+  | 'strictly_follow'
+  | 'preserve_closely'
+  | 'balanced_adaptation'
+  | 'creative_expansion';
 export type StoryAspectRatio = '16:9' | '9:16';
 
 export interface VisualSettings {

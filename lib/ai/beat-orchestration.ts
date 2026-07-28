@@ -79,6 +79,7 @@ export const VERTICAL_STORY_PROMPT_INSTRUCTION = [
 
 const STORY_TEXT_PART_COUNT = 4;
 const STORY_TEXT_PARTS_PLACEHOLDER = /{{\s*storyTextParts\s*}}/;
+const SEED_AUTHORING_CONTEXT_PLACEHOLDER = /{{\s*seedAuthoringContext\s*}}/;
 
 const STORY_TEXT_PARTS_OUTPUT_CONTRACT = [
   'Storyboard narration sync contract:',
@@ -230,6 +231,45 @@ function appendStoryTextPartsComposerContract(
     'Hidden Story Text Parts for storyboard timing:',
     JSON.stringify(storyTextParts),
     'Use part 1 for topLeft, part 2 for topRight, part 3 for bottomLeft, and part 4 for bottomRight.',
+  ].join('\n');
+}
+
+export function formatSeedAuthoringContext(
+  storyConfig: StoryConfig,
+  beatOrigin?: StoryBeat['originKind']
+): string {
+  const normalizedConfig = normalizeStoryConfig(storyConfig);
+  if (normalizedConfig.authoring.mode !== 'seeded') {
+    return '';
+  }
+
+  const sourceFidelity = normalizedConfig.authoring.sourceFidelity || 'strictly_follow';
+  return JSON.stringify({
+    sourceMode: 'seed_story',
+    sourceFidelity,
+    strictFollow: sourceFidelity === 'strictly_follow',
+    beatOrigin: beatOrigin || 'generated',
+    strictCanonicalBeat: sourceFidelity === 'strictly_follow' && beatOrigin === 'seeded_canonical',
+    guidanceRole: 'visual_details_only',
+    extraVisualGuidance: normalizedConfig.authoring.guidanceText?.trim() || null,
+  });
+}
+
+function appendSeedAuthoringContextComposerContract(
+  prompt: string,
+  template: string,
+  seedAuthoringContext: string
+): string {
+  if (!seedAuthoringContext || SEED_AUTHORING_CONTEXT_PLACEHOLDER.test(template)) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    '',
+    'Seed Authoring Context:',
+    seedAuthoringContext,
+    'When strictFollow is true, visualize the authored beat literally. Extra visual guidance may clarify appearance, setting, and world details only; it must not add or reinterpret story events.',
   ].join('\n');
 }
 
@@ -568,6 +608,7 @@ export async function composeStoryboardPlan(
         : getDefaultPromptBody(promptTask);
       const previousBeat = sessionState?.beats?.[sessionState.beats.length - 1];
       const storyTextParts = normalizeStoryTextParts(beat.storyTextParts, beat.storyText);
+      const seedAuthoringContext = formatSeedAuthoringContext(storyConfig, beat.originKind);
       const resolvedComposerPrompt = resolvePromptTemplate(composerTemplate, {
         storyText: beat.storyText,
         storyTextParts: JSON.stringify(storyTextParts),
@@ -585,10 +626,18 @@ export async function composeStoryboardPlan(
         newCharacterIds: JSON.stringify(resolveNewCharacterIds(beat, sessionState)),
         changedCharacterIds: JSON.stringify(resolveChangedCharacterIds(beat)),
         previousStoryboardContext: summarizePreviousStoryboard(previousBeat),
+        seedAuthoringContext,
       });
-      const prompt = isReel
+      const promptWithTextParts = isReel
         ? resolvedComposerPrompt
         : appendStoryTextPartsComposerContract(resolvedComposerPrompt, composerTemplate, storyTextParts);
+      const prompt = isReel
+        ? promptWithTextParts
+        : appendSeedAuthoringContextComposerContract(
+            promptWithTextParts,
+            composerTemplate,
+            seedAuthoringContext
+          );
 
       let text = '';
       try {
@@ -734,8 +783,8 @@ export function formatStoryConfig(sessionState: Partial<StorySession> | null): s
     `- Detail: ${cfg.visualSettings.detail}`,
     `- Authoring Mode: ${cfg.authoring.mode}`,
     `- Source Text: ${seedSourceText ? 'present' : 'absent'}`,
-    `- Source Guidance: ${cfg.authoring.guidanceText?.trim() ? 'present' : 'absent'}`,
-    `- Source Fidelity: ${cfg.authoring.sourceFidelity || 'balanced_adaptation'}`,
+    `- Extra Visual Guidance: ${cfg.authoring.guidanceText?.trim() ? 'present' : 'absent'}`,
+    `- Source Fidelity: ${cfg.authoring.sourceFidelity || 'strictly_follow'}`,
     `- Canonical Seed Plan: ${seedPlan ? 'present' : 'absent'}`,
     `- Authored Prelude: ${prelude ? 'present' : 'absent'}`,
     `- Character References: ${cfg.portraitReferences.mode === 'character_sheet' ? 'character sheet' : 'single portrait'}`,

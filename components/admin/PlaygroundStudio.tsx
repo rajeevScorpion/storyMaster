@@ -651,6 +651,7 @@ export default function PlaygroundStudio({
           <textarea value={inputs.storyConfig || ''} onChange={(event) => setInputs((current) => ({ ...current, storyConfig: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Formatted story config" />
           <textarea value={inputs.guidanceText || ''} onChange={(event) => setInputs((current) => ({ ...current, guidanceText: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Extra guidance" />
           <textarea value={inputs.sourceText || ''} onChange={(event) => setInputs((current) => ({ ...current, sourceText: event.target.value }))} rows={8} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Source story / script / beat notes" />
+          <textarea value={inputs.strictSourceSegments || ''} onChange={(event) => setInputs((current) => ({ ...current, strictSourceSegments: event.target.value }))} rows={6} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Strict source segments JSON (Strictly Follow only)" />
         </div>
       );
     }
@@ -674,7 +675,10 @@ export default function PlaygroundStudio({
         <div className="grid gap-3">
           <textarea value={inputs.storyText || ''} onChange={(event) => setInputs((current) => ({ ...current, storyText: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Beat story text" />
           {!isReelVisual && (
-            <textarea value={inputs.storyTextParts || ''} onChange={(event) => setInputs((current) => ({ ...current, storyTextParts: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Hidden storyTextParts JSON array" />
+            <>
+              <textarea value={inputs.storyTextParts || ''} onChange={(event) => setInputs((current) => ({ ...current, storyTextParts: event.target.value }))} rows={5} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Hidden storyTextParts JSON array" />
+              <textarea value={inputs.seedAuthoringContext || ''} onChange={(event) => setInputs((current) => ({ ...current, seedAuthoringContext: event.target.value }))} rows={4} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 font-mono text-sm text-neutral-100" placeholder="Seed authoring context JSON (optional)" />
+            </>
           )}
           <textarea value={inputs.sceneSummary || ''} onChange={(event) => setInputs((current) => ({ ...current, sceneSummary: event.target.value }))} rows={2} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Scene summary" />
           <textarea value={inputs.imageIntent || ''} onChange={(event) => setInputs((current) => ({ ...current, imageIntent: event.target.value }))} rows={3} className="w-full rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100" placeholder="Story writer visual intent" />

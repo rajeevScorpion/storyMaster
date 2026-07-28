@@ -2,6 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from './story-config';
 
 describe('story config normalization', () => {
+  it('uses Strictly Follow as the default source fidelity', () => {
+    expect(DEFAULT_STORY_CONFIG.authoring.sourceFidelity).toBe('strictly_follow');
+    expect(normalizeStoryConfig({
+      authoring: {
+        mode: 'seeded',
+        sourceText: 'An authored story stays intact.',
+      },
+    }).authoring.sourceFidelity).toBe('strictly_follow');
+  });
+
+  it('preserves every supported source fidelity mode', () => {
+    for (const sourceFidelity of [
+      'strictly_follow',
+      'preserve_closely',
+      'balanced_adaptation',
+      'creative_expansion',
+    ] as const) {
+      expect(normalizeStoryConfig({
+        authoring: {
+          mode: 'seeded',
+          sourceText: 'Source text',
+          sourceFidelity,
+        },
+      }).authoring.sourceFidelity).toBe(sourceFidelity);
+    }
+  });
+
   it('preserves generated image mode', () => {
     const config = normalizeStoryConfig({
       imageGenerationMode: 'generate',

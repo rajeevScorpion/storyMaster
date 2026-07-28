@@ -180,6 +180,11 @@ export const SOURCE_FIDELITY_OPTIONS: Array<{
   description: string;
 }> = [
   {
+    value: 'strictly_follow',
+    label: 'Strictly Follow',
+    description: 'Keep the source wording unchanged and only divide it into the selected number of beats.',
+  },
+  {
     value: 'preserve_closely',
     label: 'Preserve Closely',
     description: 'Stay as close as possible to the source wording and scene intent while structuring it into beats.',
@@ -209,7 +214,7 @@ export const DEFAULT_AUTHORING: StoryAuthoringConfig = {
   workingTitle: '',
   sourceText: '',
   guidanceText: '',
-  sourceFidelity: 'balanced_adaptation',
+  sourceFidelity: 'strictly_follow',
   seedPlan: undefined,
 };
 
@@ -634,12 +639,13 @@ function normalizeAuthoringMode(value?: string | null): StoryAuthoringConfig['mo
 
 function normalizeSourceFidelity(value?: string | null): SourceFidelity {
   switch (value) {
+    case 'strictly_follow':
     case 'preserve_closely':
+    case 'balanced_adaptation':
     case 'creative_expansion':
       return value;
-    case 'balanced_adaptation':
     default:
-      return DEFAULT_AUTHORING.sourceFidelity ?? 'balanced_adaptation';
+      return DEFAULT_AUTHORING.sourceFidelity ?? 'strictly_follow';
   }
 }
 
