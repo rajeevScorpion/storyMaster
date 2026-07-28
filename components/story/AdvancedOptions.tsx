@@ -22,6 +22,7 @@ import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
+import { SEED_GUIDANCE_WORD_CAP, SEED_SOURCE_WORD_CAP } from '@/lib/story/authoring-limits';
 
 const LANGUAGE_OPTIONS: FilterDropdownOption[] = STORY_LANGUAGE_OPTIONS.map((option) => ({
   value: option.value,
@@ -109,7 +110,6 @@ interface AdvancedOptionsProps {
   isSeedMode?: boolean;
   sourceFidelity?: SourceFidelity;
   onSourceFidelityChange?: (value: SourceFidelity) => void;
-  authoringWordCap?: number;
   pricingStoryLengthCap?: number;
   pricingStoryLengthUiLimitsEnabled?: boolean;
   currentPlanLabel?: string;
@@ -162,9 +162,8 @@ export default function AdvancedOptions({
   visualSettings,
   onVisualSettingsChange,
   isSeedMode = false,
-  sourceFidelity = 'balanced_adaptation',
+  sourceFidelity = 'strictly_follow',
   onSourceFidelityChange,
-  authoringWordCap = 500,
   pricingStoryLengthCap = 8,
   pricingStoryLengthUiLimitsEnabled = false,
   currentPlanLabel = 'free',
@@ -928,7 +927,7 @@ export default function AdvancedOptions({
                   <InfoPopover title="Seed preservation" ariaLabel="Show seed preservation details">
                     <p>{sourceFidelityDescription}</p>
                     <p>
-                      Prompt text, seeded source text, and extra guidance share a {authoringWordCap}-word limit.
+                      Seed source text has a fixed {SEED_SOURCE_WORD_CAP}-word limit. Extra visual guidance has a separate {SEED_GUIDANCE_WORD_CAP}-word limit and cannot change the story.
                     </p>
                   </InfoPopover>
                 </div>

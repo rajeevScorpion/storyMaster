@@ -1,0 +1,1065 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#090716" />
+  <meta name="description" content="Kissago — an AI-powered visual storytelling platform for children, families, educators and creators." />
+  <title>Kissago — Pitch Deck</title>
+  <style>
+    :root {
+      --ink: #f8f3ff;
+      --muted: rgba(244, 237, 255, .68);
+      --muted-2: rgba(244, 237, 255, .45);
+      --night: #080611;
+      --night-2: #0e0920;
+      --violet: #8a5cff;
+      --violet-2: #b99cff;
+      --gold: #ffd06a;
+      --gold-2: #fff0bd;
+      --cyan: #81e7ff;
+      --rose: #ff83c7;
+      --line: rgba(255,255,255,.13);
+      --glass: rgba(16, 11, 34, .58);
+      --glass-strong: rgba(13, 9, 28, .82);
+      --shadow: 0 24px 90px rgba(0,0,0,.42);
+      --radius: 26px;
+      --serif: Georgia, "Times New Roman", serif;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--night); color: var(--ink); }
+    body {
+      overflow: hidden;
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    button, a { font: inherit; }
+    a { color: inherit; }
+    button { color: inherit; }
+
+    .noise,
+    .aurora,
+    .stars {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 30;
+    }
+
+    .noise {
+      opacity: .12;
+      mix-blend-mode: soft-light;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.24'/%3E%3C/svg%3E");
+    }
+
+    .aurora {
+      opacity: .58;
+      filter: blur(80px);
+      background:
+        radial-gradient(circle at 18% 12%, rgba(132, 75, 255, .18), transparent 31%),
+        radial-gradient(circle at 87% 14%, rgba(255, 186, 74, .12), transparent 30%),
+        radial-gradient(circle at 48% 100%, rgba(46, 195, 255, .10), transparent 34%);
+    }
+
+    .stars {
+      opacity: .36;
+      background-image:
+        radial-gradient(circle, rgba(255,255,255,.9) 0 1px, transparent 1.3px),
+        radial-gradient(circle, rgba(255,217,123,.8) 0 1px, transparent 1.3px);
+      background-size: 88px 88px, 131px 131px;
+      background-position: 12px 18px, 37px 54px;
+      animation: driftStars 26s linear infinite;
+    }
+
+    @keyframes driftStars { to { transform: translate3d(-88px, 0, 0); } }
+
+    .deck {
+      position: relative;
+      z-index: 2;
+      height: 100dvh;
+      width: 100vw;
+      display: flex;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-snap-type: x mandatory;
+      scroll-behavior: smooth;
+      overscroll-behavior-x: contain;
+      scrollbar-width: none;
+    }
+    .deck::-webkit-scrollbar { display: none; }
+
+    .slide {
+      position: relative;
+      isolation: isolate;
+      flex: 0 0 100vw;
+      width: 100vw;
+      min-height: 100dvh;
+      scroll-snap-align: start;
+      scroll-snap-stop: always;
+      overflow: hidden;
+      padding: clamp(92px, 10vh, 128px) clamp(28px, 6vw, 92px) clamp(92px, 10vh, 124px);
+      display: grid;
+      align-items: center;
+    }
+
+    .slide::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background:
+        linear-gradient(90deg, rgba(4,3,10,.92) 0%, rgba(5,4,13,.76) 42%, rgba(5,4,13,.18) 74%, rgba(5,4,13,.58) 100%),
+        linear-gradient(180deg, rgba(6,4,15,.08), rgba(6,4,15,.58));
+    }
+
+    .slide--center { text-align: center; }
+    .slide--center .eyebrow,
+    .slide--center .lede { margin-inline: auto; }
+
+    .backdrop {
+      position: absolute;
+      inset: -3%;
+      z-index: -3;
+      width: 106%;
+      height: 106%;
+      object-fit: cover;
+      filter: saturate(.92) contrast(1.04) brightness(.84);
+      transform: scale(1.025);
+      transition: transform 1.6s cubic-bezier(.2,.75,.2,1), filter 1.6s ease;
+    }
+    .slide.is-active .backdrop { transform: scale(1); filter: saturate(1.04) contrast(1.04) brightness(.9); }
+
+    .backdrop--right { object-position: 68% 50%; }
+    .backdrop--center { object-position: 50% 50%; }
+
+    .vignette {
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      background: radial-gradient(circle at 70% 44%, transparent 15%, rgba(4,3,10,.14) 52%, rgba(4,3,10,.74) 100%);
+    }
+
+    .topbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 60;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 24px;
+      padding: 22px clamp(24px, 4vw, 58px);
+      background: linear-gradient(180deg, rgba(6,4,15,.76), transparent);
+      pointer-events: none;
+    }
+
+    .brand,
+    .top-meta { pointer-events: auto; }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 15px;
+      font-weight: 750;
+      letter-spacing: .02em;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,208,106,.45);
+      border-radius: 12px;
+      color: var(--gold);
+      background: linear-gradient(145deg, rgba(255,208,106,.18), rgba(138,92,255,.12));
+      box-shadow: inset 0 0 24px rgba(255,208,106,.05), 0 8px 28px rgba(0,0,0,.25);
+    }
+
+    .top-meta {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+
+    .top-meta .dot { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 12px var(--gold); }
+
+    .slide-grid {
+      width: min(1240px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(320px, .98fr);
+      align-items: center;
+      gap: clamp(36px, 6vw, 96px);
+    }
+
+    .slide-grid--wide { width: min(1320px, 100%); }
+    .slide-grid--reverse .visual { order: -1; }
+
+    .copy { position: relative; z-index: 3; max-width: 760px; }
+    .copy--narrow { max-width: 630px; }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: fit-content;
+      margin: 0 0 18px;
+      color: var(--gold-2);
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: .17em;
+      text-transform: uppercase;
+    }
+    .eyebrow::before { content: ""; width: 34px; height: 1px; background: linear-gradient(90deg, var(--gold), transparent); }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2 {
+      font-family: var(--serif);
+      font-weight: 500;
+      letter-spacing: -.045em;
+      line-height: .98;
+      text-wrap: balance;
+    }
+    h1 { font-size: clamp(60px, 8.1vw, 126px); margin-bottom: 24px; }
+    h2 { font-size: clamp(42px, 5.4vw, 78px); margin-bottom: 24px; }
+    h3 { font-size: clamp(20px, 2.1vw, 29px); margin-bottom: 10px; letter-spacing: -.025em; }
+
+    .gradient-text {
+      color: transparent;
+      background: linear-gradient(108deg, #fff 0%, var(--gold-2) 42%, #d7c8ff 75%, #fff 100%);
+      background-clip: text;
+      -webkit-background-clip: text;
+    }
+
+    .lede {
+      max-width: 760px;
+      margin-bottom: 34px;
+      color: var(--muted);
+      font-size: clamp(17px, 1.55vw, 22px);
+      line-height: 1.55;
+      text-wrap: pretty;
+    }
+
+    .hero-caption {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 26px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 10px 15px;
+      color: rgba(255,255,255,.74);
+      background: rgba(11,7,24,.5);
+      backdrop-filter: blur(18px);
+      font-size: 13px;
+      box-shadow: inset 0 1px rgba(255,255,255,.04);
+    }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 13px; }
+    .button {
+      min-height: 48px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      padding: 0 19px;
+      color: white;
+      background: rgba(255,255,255,.05);
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform .25s ease, border-color .25s ease, background .25s ease, box-shadow .25s ease;
+    }
+    .button:hover { transform: translateY(-2px); border-color: rgba(255,255,255,.27); background: rgba(255,255,255,.09); }
+    .button--primary {
+      color: #1a1020;
+      border-color: transparent;
+      background: linear-gradient(135deg, var(--gold-2), var(--gold));
+      box-shadow: 0 12px 38px rgba(255,201,91,.22);
+      font-weight: 760;
+    }
+    .button--primary:hover { box-shadow: 0 16px 44px rgba(255,201,91,.32); }
+
+    .metric-line {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 12px;
+      margin-top: 30px;
+    }
+    .metric {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(12,8,26,.56);
+      backdrop-filter: blur(18px);
+    }
+    .metric strong { display: block; margin-bottom: 4px; color: var(--gold-2); font-size: 20px; }
+    .metric span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .visual { position: relative; min-height: 500px; display: grid; place-items: center; perspective: 1400px; }
+
+    .glass-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(160deg, rgba(255,255,255,.095), rgba(255,255,255,.025));
+      box-shadow: var(--shadow), inset 0 1px rgba(255,255,255,.09);
+      backdrop-filter: blur(24px) saturate(1.2);
+    }
+
+    .story-window {
+      width: min(560px, 100%);
+      overflow: hidden;
+      transform: rotateY(-7deg) rotateX(2deg);
+      transition: transform .7s cubic-bezier(.2,.8,.2,1);
+    }
+    .slide.is-active .story-window { transform: rotateY(-3deg) rotateX(0); }
+    .story-window img { display: block; width: 100%; aspect-ratio: 16/10; object-fit: cover; }
+    .story-window .window-meta { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; }
+    .window-title { font-size: 13px; color: var(--muted); }
+    .window-dots { display: flex; gap: 5px; }
+    .window-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 10px rgba(255,208,106,.7); }
+
+    .float-card {
+      position: absolute;
+      min-width: 190px;
+      padding: 18px;
+      transform: translate3d(var(--tx,0), var(--ty,0), 0) rotate(var(--r, 0deg));
+      transition: transform .65s cubic-bezier(.2,.8,.2,1);
+    }
+    .float-card small { display: block; color: var(--gold); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; margin-bottom: 7px; }
+    .float-card strong { display: block; font-size: 15px; }
+    .float-card p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .float-card--one { left: -2%; top: 13%; --r: -5deg; }
+    .float-card--two { right: -1%; bottom: 10%; --r: 5deg; }
+    .float-card--three { left: 11%; bottom: 1%; --r: 2deg; }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 15px;
+      width: min(650px, 100%);
+    }
+    .card {
+      position: relative;
+      min-height: 175px;
+      padding: 24px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: linear-gradient(145deg, rgba(255,255,255,.075), rgba(255,255,255,.025));
+      box-shadow: inset 0 1px rgba(255,255,255,.05), 0 18px 54px rgba(0,0,0,.23);
+      transition: transform .45s cubic-bezier(.2,.8,.2,1), border-color .3s ease, background .3s ease;
+    }
+    .card::after {
+      content: "";
+      position: absolute;
+      width: 120px;
+      height: 120px;
+      right: -55px;
+      bottom: -65px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(138,92,255,.23), transparent 70%);
+    }
+    .card:hover { transform: translateY(-7px) rotateX(2deg); border-color: rgba(255,208,106,.3); background: rgba(255,255,255,.08); }
+    .card .num { color: var(--gold); font-family: var(--serif); font-size: 30px; margin-bottom: 20px; }
+    .card p { margin: 0; color: var(--muted); line-height: 1.48; font-size: 14px; }
+
+    .question-stack { display: grid; gap: 13px; width: min(690px, 100%); }
+    .question {
+      display: grid;
+      grid-template-columns: 68px 1fr;
+      gap: 18px;
+      align-items: center;
+      padding: 17px 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(13,8,29,.66);
+      backdrop-filter: blur(20px);
+      transform: translateX(22px);
+      opacity: .45;
+      transition: transform .7s cubic-bezier(.2,.8,.2,1), opacity .7s ease, border-color .3s ease;
+    }
+    .slide.is-active .question { transform: translateX(0); opacity: 1; }
+    .slide.is-active .question:nth-child(2) { transition-delay: .08s; }
+    .slide.is-active .question:nth-child(3) { transition-delay: .16s; }
+    .slide.is-active .question:nth-child(4) { transition-delay: .24s; }
+    .question-index { font-family: var(--serif); font-size: 31px; color: var(--gold); }
+    .question p { margin: 0; color: rgba(255,255,255,.85); line-height: 1.45; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(132px, 1fr));
+      gap: 12px;
+      align-items: stretch;
+      width: min(1320px, 100%);
+      margin: 40px auto 0;
+    }
+    .flow-step {
+      position: relative;
+      min-height: 210px;
+      padding: 22px 20px;
+      border: 1px solid var(--line);
+      border-radius: 23px;
+      background: linear-gradient(160deg, rgba(255,255,255,.08), rgba(255,255,255,.025));
+      box-shadow: 0 20px 60px rgba(0,0,0,.24);
+      transition: transform .5s cubic-bezier(.2,.8,.2,1), border-color .3s ease;
+    }
+    .flow-step:hover { transform: translateY(-9px); border-color: rgba(255,208,106,.34); }
+    .flow-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -18px;
+      z-index: 3;
+      color: rgba(255,208,106,.7);
+      font-size: 20px;
+    }
+    .flow-step .flow-icon { width: 44px; height: 44px; display: grid; place-items: center; margin-bottom: 24px; border-radius: 14px; color: var(--gold); background: rgba(255,208,106,.1); border: 1px solid rgba(255,208,106,.22); }
+    .flow-step strong { display: block; margin-bottom: 10px; font-size: 17px; }
+    .flow-step p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+    .feature-orbit {
+      position: relative;
+      width: min(570px, 86vw);
+      aspect-ratio: 1;
+      display: grid;
+      place-items: center;
+    }
+    .feature-orbit::before,
+    .feature-orbit::after {
+      content: "";
+      position: absolute;
+      inset: 10%;
+      border: 1px solid rgba(185,156,255,.18);
+      border-radius: 50%;
+      animation: orbitSpin 28s linear infinite;
+    }
+    .feature-orbit::after { inset: 23%; border-style: dashed; animation-direction: reverse; animation-duration: 19s; }
+    @keyframes orbitSpin { to { transform: rotate(360deg); } }
+    .orbit-core {
+      position: relative;
+      z-index: 2;
+      width: 190px;
+      height: 190px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      border-radius: 50%;
+      border: 1px solid rgba(255,208,106,.3);
+      background: radial-gradient(circle at 40% 35%, rgba(255,208,106,.28), rgba(138,92,255,.18) 42%, rgba(10,7,23,.88) 72%);
+      box-shadow: 0 0 80px rgba(138,92,255,.22), inset 0 0 50px rgba(255,208,106,.08);
+    }
+    .orbit-core strong { display: block; font-family: var(--serif); font-size: 31px; }
+    .orbit-core span { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; }
+    .orbit-item {
+      position: absolute;
+      width: 154px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(13,9,29,.8);
+      box-shadow: 0 16px 46px rgba(0,0,0,.28);
+      backdrop-filter: blur(20px);
+    }
+    .orbit-item strong { font-size: 13px; }
+    .orbit-item span { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; line-height: 1.35; }
+    .orbit-item:nth-of-type(2) { top: 4%; left: 35%; }
+    .orbit-item:nth-of-type(3) { top: 24%; right: -1%; }
+    .orbit-item:nth-of-type(4) { bottom: 16%; right: 4%; }
+    .orbit-item:nth-of-type(5) { bottom: 4%; left: 33%; }
+    .orbit-item:nth-of-type(6) { bottom: 18%; left: 0; }
+    .orbit-item:nth-of-type(7) { top: 22%; left: -1%; }
+
+    .flywheel {
+      width: min(620px, 100%);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      transform: rotate(-2deg);
+    }
+    .flywheel .card:nth-child(2), .flywheel .card:nth-child(3) { transform: translateY(20px); }
+    .flywheel .card:nth-child(2):hover, .flywheel .card:nth-child(3):hover { transform: translateY(10px); }
+
+    .audience-grid,
+    .model-grid,
+    .moat-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 14px;
+      width: min(660px, 100%);
+    }
+
+    .audience-card {
+      min-height: 190px;
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: rgba(12,8,27,.63);
+      backdrop-filter: blur(22px);
+      transition: transform .4s ease, border-color .4s ease;
+    }
+    .audience-card:hover { transform: translateY(-6px); border-color: rgba(255,208,106,.3); }
+    .audience-card .icon { font-size: 25px; margin-bottom: 24px; }
+    .audience-card p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.48; }
+
+    .model-card {
+      padding: 21px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.022));
+    }
+    .model-card span { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 50%; background: rgba(255,208,106,.11); color: var(--gold); margin-bottom: 18px; font-weight: 800; }
+    .model-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+    .roadmap {
+      position: relative;
+      width: min(660px, 100%);
+      display: grid;
+      gap: 16px;
+      padding-left: 44px;
+    }
+    .roadmap::before { content: ""; position: absolute; left: 18px; top: 22px; bottom: 22px; width: 1px; background: linear-gradient(var(--gold), var(--violet), var(--cyan)); }
+    .roadmap-step { position: relative; padding: 22px 22px 22px 25px; border: 1px solid var(--line); border-radius: 20px; background: rgba(13,9,29,.66); backdrop-filter: blur(20px); }
+    .roadmap-step::before { content: ""; position: absolute; left: -35px; top: 28px; width: 12px; height: 12px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 18px rgba(255,208,106,.75); }
+    .roadmap-step:nth-child(2)::before { background: var(--violet-2); box-shadow: 0 0 18px rgba(185,156,255,.75); }
+    .roadmap-step:nth-child(3)::before { background: var(--cyan); box-shadow: 0 0 18px rgba(129,231,255,.7); }
+    .roadmap-step small { display: block; color: var(--gold); letter-spacing: .15em; text-transform: uppercase; margin-bottom: 6px; }
+    .roadmap-step p { margin: 0; color: var(--muted); line-height: 1.45; font-size: 14px; }
+
+    .moat-card {
+      min-height: 170px;
+      padding: 22px;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: rgba(12,8,27,.66);
+      backdrop-filter: blur(20px);
+      transition: transform .4s ease;
+    }
+    .moat-card:hover { transform: scale(1.025); }
+    .moat-card .num { color: var(--gold); font-family: var(--serif); font-size: 24px; }
+    .moat-card p { margin: 9px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+
+    .ask-panel {
+      width: min(980px, 100%);
+      margin: 0 auto;
+      padding: clamp(30px, 5vw, 60px);
+      text-align: center;
+      border: 1px solid rgba(255,208,106,.24);
+      border-radius: 36px;
+      background: linear-gradient(145deg, rgba(255,255,255,.085), rgba(255,255,255,.025));
+      box-shadow: 0 40px 120px rgba(0,0,0,.42), inset 0 1px rgba(255,255,255,.08);
+      backdrop-filter: blur(28px);
+    }
+    .ask-panel .eyebrow { margin-inline: auto; }
+    .ask-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 34px 0; }
+    .ask-grid > div { padding: 20px 16px; border: 1px solid var(--line); border-radius: 18px; background: rgba(8,5,19,.36); }
+    .ask-grid strong { display: block; margin-bottom: 6px; }
+    .ask-grid span { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity .8s ease, transform .8s cubic-bezier(.2,.8,.2,1);
+    }
+    .slide.is-active .reveal { opacity: 1; transform: translateY(0); }
+    .slide.is-active .delay-1 { transition-delay: .08s; }
+    .slide.is-active .delay-2 { transition-delay: .16s; }
+    .slide.is-active .delay-3 { transition-delay: .24s; }
+
+    .bottom-ui {
+      position: fixed;
+      left: clamp(20px, 4vw, 58px);
+      right: clamp(20px, 4vw, 58px);
+      bottom: calc(20px + env(safe-area-inset-bottom));
+      z-index: 70;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 22px;
+      pointer-events: none;
+    }
+
+    .progress-wrap,
+    .controls,
+    .slide-count { pointer-events: auto; }
+
+    .progress-wrap { display: flex; align-items: center; gap: 12px; max-width: 380px; }
+    .progress-track { flex: 1; height: 3px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.14); cursor: pointer; }
+    .progress-fill { width: 8.333%; height: 100%; background: linear-gradient(90deg, var(--gold), var(--violet-2)); box-shadow: 0 0 16px rgba(255,208,106,.5); transition: width .35s ease; }
+    .progress-label { color: var(--muted-2); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; white-space: nowrap; }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(10,7,23,.62);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 14px 50px rgba(0,0,0,.28);
+    }
+    .control {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      cursor: pointer;
+      transition: background .2s ease, transform .2s ease;
+    }
+    .control:hover { background: rgba(255,255,255,.08); transform: scale(1.05); }
+    .control:disabled { opacity: .28; cursor: default; transform: none; }
+
+    .slide-count { justify-self: end; color: var(--muted); font-family: var(--serif); font-size: 15px; }
+    .slide-count strong { color: var(--ink); font-size: 22px; font-weight: 500; }
+
+    .hint {
+      position: absolute;
+      right: clamp(26px, 5vw, 72px);
+      bottom: 94px;
+      z-index: 3;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: rgba(255,255,255,.56);
+      font-size: 11px;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    .hint i { width: 42px; height: 1px; background: linear-gradient(90deg, rgba(255,255,255,.25), var(--gold)); animation: hintPulse 1.8s ease-in-out infinite; }
+    @keyframes hintPulse { 50% { transform: scaleX(1.35); transform-origin: right; } }
+
+    .mobile-note { display: none; }
+
+    @media (max-width: 980px) {
+      .slide { padding-inline: 26px; align-items: start; overflow-y: auto; }
+      .slide-grid { grid-template-columns: 1fr; gap: 28px; }
+      .slide-grid--reverse .visual { order: initial; }
+      .visual { min-height: 420px; }
+      h1 { font-size: clamp(52px, 14vw, 86px); }
+      h2 { font-size: clamp(39px, 10vw, 66px); }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .flow-step:last-child { grid-column: span 2; }
+      .flow-step:not(:last-child)::after { display: none; }
+      .top-meta { display: none; }
+      .bottom-ui { grid-template-columns: 1fr auto; }
+      .slide-count { display: none; }
+      .hint { display: none; }
+    }
+
+    @media (max-width: 650px) {
+      .slide { padding-top: 92px; padding-bottom: 106px; }
+      .topbar { padding: 18px 20px; }
+      .brand-mark { width: 34px; height: 34px; }
+      .lede { font-size: 16px; }
+      .metric-line, .card-grid, .audience-grid, .model-grid, .moat-grid, .ask-grid { grid-template-columns: 1fr; }
+      .visual { min-height: 360px; }
+      .float-card { min-width: 155px; padding: 14px; }
+      .float-card--one { left: -3%; }
+      .float-card--two { right: -2%; }
+      .question { grid-template-columns: 48px 1fr; }
+      .flow { grid-template-columns: 1fr; }
+      .flow-step:last-child { grid-column: auto; }
+      .feature-orbit { transform: scale(.8); margin: -42px 0; }
+      .flywheel { transform: none; }
+      .flywheel .card:nth-child(2), .flywheel .card:nth-child(3) { transform: none; }
+      .progress-wrap { display: none; }
+      .bottom-ui { display: flex; justify-content: center; }
+      .mobile-note { display: block; color: var(--muted-2); font-size: 11px; text-align: center; margin-top: 18px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="aurora"></div>
+  <div class="stars"></div>
+  <div class="noise"></div>
+
+  <header class="topbar">
+    <a class="brand" href="#slide-1" data-go="0" aria-label="Go to opening slide">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span>Kissago</span>
+    </a>
+    <div class="top-meta"><span>Pitch deck</span><span class="dot"></span><span>Collaborators &amp; investors</span></div>
+  </header>
+
+  <main class="deck" id="deck" aria-label="Kissago pitch presentation">
+    <section class="slide is-active" id="slide-1" data-title="Kissago">
+      <img class="backdrop backdrop--right" src="assets/hero-world.png" alt="A magical story world emerging from a digital tablet" />
+      <div class="vignette"></div>
+      <div class="slide-grid slide-grid--wide">
+        <div class="copy copy--narrow">
+          <div class="eyebrow reveal">From prompt to story-world</div>
+          <h1 class="gradient-text reveal delay-1">Kissago</h1>
+          <p class="lede reveal delay-2">A playful AI storytelling platform that turns an idea into characters, scenes, narration and shareable video.</p>
+          <div class="actions reveal delay-3">
+            <button class="button button--primary" data-go="1">Enter the story <span aria-hidden="true">→</span></button>
+            <button class="button" data-go="3">See the product</button>
+          </div>
+          <div class="hero-caption reveal delay-3">
+            <span class="pill">Story creation</span>
+            <span class="pill">Character consistency</span>
+            <span class="pill">Narrated video</span>
+          </div>
+        </div>
+      </div>
+      <div class="hint"><span>Scroll or use arrows</span><i></i></div>
+    </section>
+
+    <section class="slide" id="slide-2" data-title="The problem">
+      <div class="slide-grid">
+        <div class="copy">
+          <div class="eyebrow reveal">The problem</div>
+          <h2 class="reveal delay-1">The creative gap is not imagination.</h2>
+          <p class="lede reveal delay-2">People have ideas. The friction begins when they try to shape those ideas into a finished story.</p>
+          <div class="metric-line reveal delay-3">
+            <div class="metric"><strong>Start</strong><span>Easy to imagine a story.</span></div>
+            <div class="metric"><strong>Build</strong><span>Hard to coordinate the tools.</span></div>
+            <div class="metric"><strong>Finish</strong><span>Even harder to create a shareable result.</span></div>
+          </div>
+        </div>
+        <div class="visual">
+          <div class="card-grid">
+            <article class="card reveal"><div class="num">01</div><h3>Fragmented tools</h3><p>Writing, image generation, voice, editing and export all live in separate workflows.</p></article>
+            <article class="card reveal delay-1"><div class="num">02</div><h3>Inconsistent characters</h3><p>Stories break when the same character looks different from beat to beat.</p></article>
+            <article class="card reveal delay-2"><div class="num">03</div><h3>Too hard to finish</h3><p>Most users can start a story, but cannot turn it into something watchable and shareable.</p></article>
+            <article class="card reveal delay-3"><div class="num">04</div><h3>Wrong creative interface</h3><p>Blank editors and prompt boxes feel like software, not a guided act of imagination.</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide slide--center" id="slide-3" data-title="The questions">
+      <div>
+        <div class="eyebrow reveal">The questions worth asking</div>
+        <h2 class="reveal delay-1">What if storytelling behaved less like software<br />and more like a guided creative playground?</h2>
+        <div class="question-stack" style="margin: 36px auto 0; text-align:left;">
+          <div class="question"><div class="question-index">01</div><p>Can a child move from idea to scene without learning prompt engineering?</p></div>
+          <div class="question"><div class="question-index">02</div><p>Can characters stay consistent while the story changes?</p></div>
+          <div class="question"><div class="question-index">03</div><p>Can a teacher turn a concept into a visual learning story?</p></div>
+          <div class="question"><div class="question-index">04</div><p>Can creators build episodic story-worlds without a production team?</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-4" data-title="The product">
+      <img class="backdrop backdrop--center" src="assets/story-ui.png" alt="A cinematic concept interface showing story cards, characters and narration controls" />
+      <div class="vignette"></div>
+      <div class="slide-grid">
+        <div class="copy copy--narrow">
+          <div class="eyebrow reveal">The product</div>
+          <h2 class="reveal delay-1">Kissago is a beat-based story engine.</h2>
+          <p class="lede reveal delay-2">It breaks storytelling into small creative decisions and turns them into a finished audiovisual story.</p>
+          <div class="hero-caption reveal delay-3">
+            <span class="pill">Input an idea</span>
+            <span class="pill">Build the world</span>
+            <span class="pill">Publish the story</span>
+          </div>
+        </div>
+        <div class="visual">
+          <div class="story-window glass-card reveal delay-1">
+            <img src="assets/story-ui.png" alt="Kissago visual story creation interface" />
+            <div class="window-meta"><span class="window-title">A guided creation system — not just a story generator.</span><span class="window-dots"><i></i><i></i><i></i></span></div>
+          </div>
+          <div class="float-card float-card--one glass-card parallax" data-depth="1.25"><small>Input</small><strong>Idea + references</strong><p>Prompt, voice, theme, characters or world.</p></div>
+          <div class="float-card float-card--two glass-card parallax" data-depth="1.5"><small>Output</small><strong>Story + video</strong><p>Narration, motion, overlays and export.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide slide--center" id="slide-5" data-title="Experience flow">
+      <div>
+        <div class="eyebrow reveal">The experience</div>
+        <h2 class="reveal delay-1">Idea → world → video.</h2>
+        <p class="lede reveal delay-2">A clean journey that hides complexity and keeps the user in creative flow.</p>
+        <div class="flow">
+          <article class="flow-step reveal"><div class="flow-icon">✦</div><strong>Idea</strong><p>A sentence, voice input, theme or selected template.</p></article>
+          <article class="flow-step reveal delay-1"><div class="flow-icon">◫</div><strong>Story beats</strong><p>Kissago structures the story into scenes and choices.</p></article>
+          <article class="flow-step reveal delay-2"><div class="flow-icon">◉</div><strong>Characters</strong><p>Named characters, references and a persistent story bible.</p></article>
+          <article class="flow-step reveal delay-3"><div class="flow-icon">▶</div><strong>Scenes</strong><p>Images, narration, overlay text, pacing and effects.</p></article>
+          <article class="flow-step reveal delay-3"><div class="flow-icon">↗</div><strong>Share</strong><p>Export video, continue an episode or print story pages.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-6" data-title="Feature system">
+      <div class="slide-grid slide-grid--reverse">
+        <div class="copy">
+          <div class="eyebrow reveal">Core feature system</div>
+          <h2 class="reveal delay-1">Designed for finished stories, not only generated text.</h2>
+          <p class="lede reveal delay-2">Each feature protects creative flow, continuity and the ability to reach a meaningful output.</p>
+          <div class="actions reveal delay-3"><button class="button" data-go="6">See the story-world flywheel <span>→</span></button></div>
+        </div>
+        <div class="visual">
+          <div class="feature-orbit reveal">
+            <div class="orbit-core"><div><strong>Kissago</strong><span>Creative system</span></div></div>
+            <div class="orbit-item"><strong>Beat structure</strong><span>Scene-by-scene pacing</span></div>
+            <div class="orbit-item"><strong>Character references</strong><span>Consistent visual identity</span></div>
+            <div class="orbit-item"><strong>Regeneration</strong><span>Fine control over each beat</span></div>
+            <div class="orbit-item"><strong>Video export</strong><span>Narration, movement and text</span></div>
+            <div class="orbit-item"><strong>Episodes</strong><span>Branch and continue the world</span></div>
+            <div class="orbit-item"><strong>Print + dialogue</strong><span>Story pages and script mode</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-7" data-title="Story-world flywheel">
+      <img class="backdrop backdrop--center" src="assets/pipeline.png" alt="A fantasy technology workflow connecting books, characters, narration, video and sharing" />
+      <div class="vignette"></div>
+      <div class="slide-grid">
+        <div class="copy copy--narrow">
+          <div class="eyebrow reveal">The product flywheel</div>
+          <h2 class="reveal delay-1">One finished story becomes the beginning of a reusable world.</h2>
+          <p class="lede reveal delay-2">Kissago preserves characters, settings, choices and episodes — turning one-off generation into creative continuity.</p>
+        </div>
+        <div class="visual">
+          <div class="flywheel">
+            <article class="card reveal"><div class="num">01</div><h3>Create</h3><p>Turn an idea into a finished story.</p></article>
+            <article class="card reveal delay-1"><div class="num">02</div><h3>Remember</h3><p>Store characters, worlds and narrative context.</p></article>
+            <article class="card reveal delay-2"><div class="num">03</div><h3>Continue</h3><p>Build episodes, branches and alternate formats.</p></article>
+            <article class="card reveal delay-3"><div class="num">04</div><h3>Share</h3><p>Grow discovery through videos, pages and creator worlds.</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-8" data-title="Who it serves">
+      <img class="backdrop backdrop--center" src="assets/community.png" alt="Families, children, educators and creators gathered around magical visual stories" />
+      <div class="vignette"></div>
+      <div class="slide-grid slide-grid--reverse">
+        <div class="copy copy--narrow">
+          <div class="eyebrow reveal">Who Kissago serves first</div>
+          <h2 class="reveal delay-1">Consumer joy, educational value and creator expansion.</h2>
+          <p class="lede reveal delay-2">The same engine supports play, learning and creative production — without changing the core product.</p>
+        </div>
+        <div class="visual">
+          <div class="audience-grid">
+            <article class="audience-card reveal"><div class="icon">☾</div><h3>Parents &amp; children</h3><p>Bedtime stories, creative play and safe visual storytelling.</p></article>
+            <article class="audience-card reveal delay-1"><div class="icon">✎</div><h3>Schools &amp; educators</h3><p>Concept explanation, language learning and class storytelling.</p></article>
+            <article class="audience-card reveal delay-2"><div class="icon">◈</div><h3>Creators &amp; studios</h3><p>Rapid story reels, character worlds and episodic formats.</p></article>
+            <article class="audience-card reveal delay-3"><div class="icon">✦</div><h3>Design schools</h3><p>Storytelling as a visual thinking and portfolio skill.</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-9" data-title="Business model">
+      <div class="slide-grid">
+        <div class="copy">
+          <div class="eyebrow reveal">Business model</div>
+          <h2 class="reveal delay-1">Coins, tiers and a future creator economy.</h2>
+          <p class="lede reveal delay-2">The model aligns platform cost with successful creative output — without confusing feature gates.</p>
+          <div class="hero-caption reveal delay-3"><span class="pill">Usage-linked revenue</span><span class="pill">Tiered export quality</span><span class="pill">Creator upside</span></div>
+        </div>
+        <div class="visual">
+          <div class="model-grid">
+            <article class="model-card reveal"><span>F</span><h3>Free discovery</h3><p>Low-friction trial with limited generation and exports.</p></article>
+            <article class="model-card reveal delay-1"><span>+</span><h3>Paid tiers</h3><p>More coins, better export quality and longer asset retention.</p></article>
+            <article class="model-card reveal delay-2"><span>K</span><h3>Coin economy</h3><p>Generation, print pages, HQ export and model selection map to coins.</p></article>
+            <article class="model-card reveal delay-3"><span>↗</span><h3>Creator extension</h3><p>Creators earn through views and later redeem within controlled policies.</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-10" data-title="Go-to-market">
+      <div class="slide-grid slide-grid--reverse">
+        <div class="copy">
+          <div class="eyebrow reveal">Go-to-market</div>
+          <h2 class="reveal delay-1">Start where storytelling already matters.</h2>
+          <p class="lede reveal delay-2">Begin with focused pilots, then convert usage into repeatable parent, school and creator loops.</p>
+          <p class="reveal delay-3" style="color:var(--gold-2); font-family:var(--serif); font-size:21px; line-height:1.45;">The early aim is not broad acquisition. It is proof of repeated story creation and share-worthy output.</p>
+        </div>
+        <div class="visual">
+          <div class="roadmap">
+            <article class="roadmap-step reveal"><small>Phase 1</small><h3>School pilots</h3><p>Creative writing, language practice, class storytelling and visual thinking modules.</p></article>
+            <article class="roadmap-step reveal delay-1"><small>Phase 2</small><h3>Parent + creator loops</h3><p>Child-safe family stories, creator invitations and shareable episodic formats.</p></article>
+            <article class="roadmap-step reveal delay-2"><small>Phase 3</small><h3>Marketplace layer</h3><p>Curated templates, character worlds, creator rewards and institutional packs.</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide" id="slide-11" data-title="Defensibility">
+      <div class="slide-grid">
+        <div class="copy">
+          <div class="eyebrow reveal">Why Kissago can be defensible</div>
+          <h2 class="reveal delay-1">The advantage is the product system around AI, not a single model call.</h2>
+          <p class="lede reveal delay-2">Kissago becomes stronger as stories, characters, templates and creator worlds accumulate.</p>
+        </div>
+        <div class="visual">
+          <div class="moat-grid">
+            <article class="moat-card reveal"><div class="num">01</div><h3>Story memory</h3><p>Characters, worlds, choices and episodes become reusable context.</p></article>
+            <article class="moat-card reveal delay-1"><div class="num">02</div><h3>Multi-model orchestration</h3><p>Use the best model for image, video, narration and text as quality shifts.</p></article>
+            <article class="moat-card reveal delay-2"><div class="num">03</div><h3>Rendering pipeline</h3><p>Client/server export control, quality tiers and share-ready output.</p></article>
+            <article class="moat-card reveal delay-3"><div class="num">04</div><h3>Creative UX layer</h3><p>Pacing, regeneration, print, dialogue mode and safe guided choices.</p></article>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide slide--center" id="slide-12" data-title="The ask">
+      <img class="backdrop backdrop--center" src="assets/hero-world.png" alt="A luminous magical story world" />
+      <div class="vignette"></div>
+      <div class="ask-panel reveal">
+        <div class="eyebrow">The ask</div>
+        <h2>Help us turn Kissago into a story creation network.</h2>
+        <p class="lede">We are looking for collaborators, pilots and capital aligned with creative learning and AI media.</p>
+        <div class="ask-grid">
+          <div><strong>Now</strong><span>Stabilise creation flow, export quality and the core experience.</span></div>
+          <div><strong>Next</strong><span>School pilots, creator templates, dialogue mode and print packs.</span></div>
+          <div><strong>Later</strong><span>Marketplace, multilingual dubbing, role-play and interactive stories.</span></div>
+        </div>
+        <div class="actions" style="justify-content:center;">
+          <button class="button button--primary" data-go="0">Replay the deck</button>
+          <button class="button" data-go="3">Return to product</button>
+        </div>
+        <p class="mobile-note">Swipe horizontally to navigate the deck.</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="bottom-ui" aria-label="Presentation controls">
+    <div class="progress-wrap">
+      <span class="progress-label">Story progress</span>
+      <div class="progress-track" id="progressTrack" role="slider" aria-label="Presentation progress" aria-valuemin="1" aria-valuemax="12" aria-valuenow="1" tabindex="0"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+    <div class="controls">
+      <button class="control" id="prev" aria-label="Previous slide">←</button>
+      <button class="control" id="next" aria-label="Next slide">→</button>
+    </div>
+    <div class="slide-count"><strong id="currentNumber">01</strong> / 12</div>
+  </div>
+
+  <script>
+    (() => {
+      const deck = document.getElementById('deck');
+      const slides = [...document.querySelectorAll('.slide')];
+      const prev = document.getElementById('prev');
+      const next = document.getElementById('next');
+      const currentNumber = document.getElementById('currentNumber');
+      const progressFill = document.getElementById('progressFill');
+      const progressTrack = document.getElementById('progressTrack');
+      const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let activeIndex = 0;
+      let wheelLock = false;
+
+      const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+      const goTo = (index, behavior = reduceMotion ? 'auto' : 'smooth') => {
+        activeIndex = clamp(index, 0, slides.length - 1);
+        slides[activeIndex].scrollIntoView({ behavior, inline: 'start', block: 'nearest' });
+        updateUI(activeIndex);
+      };
+
+      const updateUI = (index) => {
+        activeIndex = index;
+        slides.forEach((slide, i) => slide.classList.toggle('is-active', i === index));
+        currentNumber.textContent = String(index + 1).padStart(2, '0');
+        progressFill.style.width = `${((index + 1) / slides.length) * 100}%`;
+        progressTrack.setAttribute('aria-valuenow', String(index + 1));
+        prev.disabled = index === 0;
+        next.disabled = index === slides.length - 1;
+        document.title = `Kissago — ${slides[index].dataset.title}`;
+        history.replaceState(null, '', `#slide-${index + 1}`);
+      };
+
+      const observer = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter(entry => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        const index = slides.indexOf(visible.target);
+        if (index >= 0 && visible.intersectionRatio > .55) updateUI(index);
+      }, { root: deck, threshold: [.55, .7, .9] });
+
+      slides.forEach(slide => observer.observe(slide));
+
+      document.querySelectorAll('[data-go]').forEach(el => {
+        el.addEventListener('click', event => {
+          event.preventDefault();
+          goTo(Number(el.dataset.go));
+        });
+      });
+
+      prev.addEventListener('click', () => goTo(activeIndex - 1));
+      next.addEventListener('click', () => goTo(activeIndex + 1));
+
+      window.addEventListener('keydown', event => {
+        if (['ArrowRight', 'PageDown', ' '].includes(event.key)) { event.preventDefault(); goTo(activeIndex + 1); }
+        if (['ArrowLeft', 'PageUp'].includes(event.key)) { event.preventDefault(); goTo(activeIndex - 1); }
+        if (event.key === 'Home') { event.preventDefault(); goTo(0); }
+        if (event.key === 'End') { event.preventDefault(); goTo(slides.length - 1); }
+      });
+
+      deck.addEventListener('wheel', event => {
+        const horizontalIntent = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+        if (horizontalIntent || Math.abs(event.deltaY) < 20 || wheelLock) return;
+        event.preventDefault();
+        wheelLock = true;
+        goTo(activeIndex + (event.deltaY > 0 ? 1 : -1));
+        setTimeout(() => { wheelLock = false; }, 650);
+      }, { passive: false });
+
+      progressTrack.addEventListener('click', event => {
+        const rect = progressTrack.getBoundingClientRect();
+        const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+        goTo(Math.round(ratio * (slides.length - 1)));
+      });
+
+      progressTrack.addEventListener('keydown', event => {
+        if (event.key === 'ArrowRight') goTo(activeIndex + 1);
+        if (event.key === 'ArrowLeft') goTo(activeIndex - 1);
+      });
+
+      slides.forEach(slide => {
+        slide.addEventListener('pointermove', event => {
+          if (reduceMotion || matchMedia('(max-width: 760px)').matches) return;
+          const rect = slide.getBoundingClientRect();
+          const x = (event.clientX - rect.left) / rect.width - .5;
+          const y = (event.clientY - rect.top) / rect.height - .5;
+          slide.querySelectorAll('.parallax').forEach(el => {
+            const depth = Number(el.dataset.depth || 1);
+            el.style.setProperty('--tx', `${x * 18 * depth}px`);
+            el.style.setProperty('--ty', `${y * 14 * depth}px`);
+          });
+        });
+        slide.addEventListener('pointerleave', () => {
+          slide.querySelectorAll('.parallax').forEach(el => {
+            el.style.setProperty('--tx', '0px');
+            el.style.setProperty('--ty', '0px');
+          });
+        });
+      });
+
+      const hashIndex = Number(location.hash.replace('#slide-', '')) - 1;
+      if (Number.isInteger(hashIndex) && hashIndex >= 0 && hashIndex < slides.length) {
+        requestAnimationFrame(() => goTo(hashIndex, 'auto'));
+      } else {
+        updateUI(0);
+      }
+    })();
+  </script>
+</body>
+</html>

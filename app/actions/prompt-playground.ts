@@ -191,10 +191,11 @@ async function runSeedPlanGenerationTest(
     language: inputs.language || 'english',
     storyConfig: inputs.storyConfig || '{}',
     workingTitle: inputs.workingTitle || '',
-    sourceFidelity: inputs.sourceFidelity || 'balanced_adaptation',
+    sourceFidelity: inputs.sourceFidelity || 'strictly_follow',
     guidanceText: inputs.guidanceText || '',
     sourceText: inputs.sourceText || '',
     beatCount: inputs.beatCount || '6',
+    strictSourceSegments: inputs.strictSourceSegments || '',
   });
 
   const start = Date.now();
@@ -366,6 +367,7 @@ async function runVisualPromptTest(
     newCharacterIds: inputs.newCharacterIds || '[]',
     changedCharacterIds: inputs.changedCharacterIds || '[]',
     previousStoryboardContext: inputs.previousStoryboardContext || 'None yet - first beat',
+    seedAuthoringContext: inputs.seedAuthoringContext || '',
   });
 
   const start = Date.now();

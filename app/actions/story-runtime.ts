@@ -41,6 +41,12 @@ import {
 } from '@/lib/constants/media';
 import type { Character, PortraitReferenceConfig } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import { splitStrictSeedSource } from '@/lib/ai/strict-seed-segmentation';
+import {
+  SEED_GUIDANCE_WORD_CAP,
+  SEED_SOURCE_WORD_CAP,
+  countAuthoringWords,
+} from '@/lib/story/authoring-limits';
 import type {
   ImageContinuityProviderState,
   ImageContinuityStrategy,
@@ -105,6 +111,19 @@ export {
 } from '@/lib/ai/beat-orchestration';
 export type { StoryModelOverrides, StoryboardImagePromptOptions } from '@/lib/ai/beat-orchestration';
 
+function appendExtraVisualGuidanceContract(prompt: string, guidanceText?: string): string {
+  if (!guidanceText?.trim()) {
+    return prompt;
+  }
+
+  return [
+    prompt,
+    '',
+    'Extra Guidance Role:',
+    'Extra Guidance contains visual reference details only. Use it for character appearance, scenes, locations, and world design; never use it to change source wording, dialogue, plot, or events.',
+  ].join('\n');
+}
+
 export interface SeedPlanPreviewInput {
   storyConfig: StoryConfig;
   sourceText: string;
@@ -117,6 +136,13 @@ export interface SeedPlanPreviewInput {
 }
 
 export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Promise<SeedPlan> {
+  if (countAuthoringWords(input.sourceText) > SEED_SOURCE_WORD_CAP) {
+    throw new Error(`Source text must be ${SEED_SOURCE_WORD_CAP} words or fewer.`);
+  }
+  if (countAuthoringWords(input.guidanceText || '') > SEED_GUIDANCE_WORD_CAP) {
+    throw new Error(`Extra guidance must be ${SEED_GUIDANCE_WORD_CAP} words or fewer.`);
+  }
+
   const storyConfig = normalizeStoryConfig({
     ...input.storyConfig,
     authoring: {
@@ -127,19 +153,36 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
       sourceFidelity: input.sourceFidelity,
     },
   });
+  const strictSourceSegments = storyConfig.authoring.sourceFidelity === 'strictly_follow'
+    ? splitStrictSeedSource(storyConfig.authoring.sourceText || '', input.beatCount)
+    : null;
   const seedPlanTemplateCandidate = input.modelOverrides?.seedPlanPrompt || getDefaultPromptBody('seed_plan_generation');
   const seedPlanTemplate = validatePromptTemplate('seed_plan_generation', seedPlanTemplateCandidate).isValid
     ? seedPlanTemplateCandidate
     : getDefaultPromptBody('seed_plan_generation');
-  const prompt = resolvePromptTemplate(seedPlanTemplate, {
+  const resolvedPrompt = resolvePromptTemplate(seedPlanTemplate, {
     language: storyConfig.language,
     storyConfig: formatStoryConfig({ storyConfig, currentBeat: 0 }),
     workingTitle: storyConfig.authoring.workingTitle || '',
-    sourceFidelity: storyConfig.authoring.sourceFidelity || 'balanced_adaptation',
+    sourceFidelity: storyConfig.authoring.sourceFidelity || 'strictly_follow',
     guidanceText: storyConfig.authoring.guidanceText || '',
     sourceText: storyConfig.authoring.sourceText || '',
     beatCount: input.beatCount,
+    strictSourceSegments: strictSourceSegments ? JSON.stringify(strictSourceSegments) : '',
   });
+  const strictPrompt = strictSourceSegments && !/\{\{\s*strictSourceSegments\s*\}\}/u.test(seedPlanTemplate)
+    ? [
+        resolvedPrompt,
+        '',
+        'Strict Follow Source Segments (authoritative):',
+        JSON.stringify(strictSourceSegments),
+        'Copy segment N exactly into beat N storyText. Do not rewrite, translate, correct, expand, or shorten any segment.',
+      ].join('\n')
+    : resolvedPrompt;
+  const prompt = appendExtraVisualGuidanceContract(
+    strictPrompt,
+    storyConfig.authoring.guidanceText
+  );
 
   const text = await callGeminiText({
     task: 'seed_plan_generation',
@@ -161,7 +204,17 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
     throw new Error(`Seed plan returned ${normalizedPlan.beats.length} beats, expected ${input.beatCount}.`);
   }
 
-  return normalizedPlan;
+  if (!strictSourceSegments) {
+    return normalizedPlan;
+  }
+
+  return {
+    ...normalizedPlan,
+    beats: normalizedPlan.beats.map((beat, index) => ({
+      ...beat,
+      storyText: strictSourceSegments[index],
+    })),
+  };
 }
 
 export async function materializeSeededBeat(
@@ -182,14 +235,19 @@ export async function materializeSeededBeat(
   const materializationTemplate = validatePromptTemplate('seeded_beat_materialization', materializationTemplateCandidate).isValid
     ? materializationTemplateCandidate
     : getDefaultPromptBody('seeded_beat_materialization');
-  const basePrompt = appendStoryTextPartsOutputContract(resolvePromptTemplate(materializationTemplate, {
-    language: storyConfig.language,
-    storyConfig: formatStoryConfig(normalizedSessionState),
-    storyState: formatStoryState(normalizedSessionState),
-    sourceText: getSeedSourceText(storyConfig),
-    guidanceText: storyConfig.authoring.guidanceText || '',
-    seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
-  }));
+  const basePrompt = appendStoryTextPartsOutputContract(
+    appendExtraVisualGuidanceContract(
+      resolvePromptTemplate(materializationTemplate, {
+        language: storyConfig.language,
+        storyConfig: formatStoryConfig(normalizedSessionState),
+        storyState: formatStoryState(normalizedSessionState),
+        sourceText: getSeedSourceText(storyConfig),
+        guidanceText: storyConfig.authoring.guidanceText || '',
+        seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
+      }),
+      storyConfig.authoring.guidanceText
+    )
+  );
 
   const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
     const text = await callGeminiText({
@@ -201,7 +259,13 @@ export async function materializeSeededBeat(
     });
 
     try {
-      return mergeSeededBeatWithGeneratedFields(seedBeat, JSON.parse(text) as StoryBeat);
+      const mergedBeat = mergeSeededBeatWithGeneratedFields(seedBeat, JSON.parse(text) as StoryBeat);
+      return storyConfig.authoring.sourceFidelity === 'strictly_follow'
+        ? {
+            ...mergedBeat,
+            storyTextParts: normalizeStoryTextParts(undefined, mergedBeat.storyText),
+          }
+        : mergedBeat;
     } catch {
       throw new Error(`Failed to parse seeded beat JSON: ${text.slice(0, 200)}`);
     }

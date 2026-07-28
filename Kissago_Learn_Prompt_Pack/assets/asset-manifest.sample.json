@@ -1,0 +1,78 @@
+{
+  "backgrounds": [
+    {
+      "key": "bg-01-story-seed",
+      "path": "assets/backgrounds/bg-01-story-seed.webp",
+      "status": "pending",
+      "decorative": true
+    },
+    {
+      "key": "bg-02-fragmented-creation",
+      "path": "assets/backgrounds/bg-02-fragmented-creation.webp",
+      "status": "pending",
+      "decorative": true
+    },
+    {
+      "key": "bg-03-calm-attention",
+      "path": "assets/backgrounds/bg-03-calm-attention.webp",
+      "status": "pending",
+      "decorative": true
+    },
+    {
+      "key": "bg-04-story-convergence",
+      "path": "assets/backgrounds/bg-04-story-convergence.webp",
+      "status": "pending",
+      "decorative": true
+    },
+    {
+      "key": "bg-05-character-continuity",
+      "path": "assets/backgrounds/bg-05-character-continuity.webp",
+      "status": "pending",
+      "decorative": true
+    },
+    {
+      "key": "bg-06-episodic-world",
+      "path": "assets/backgrounds/bg-06-episodic-world.webp",
+      "status": "pending",
+      "decorative": true
+    },
+    {
+      "key": "bg-07-create-invitation",
+      "path": "assets/backgrounds/bg-07-create-invitation.webp",
+      "status": "pending",
+      "decorative": true
+    }
+  ],
+  "screenshots": [
+    {
+      "key": "idea-entry-desktop",
+      "path": "assets/screenshots/idea-entry-desktop.png",
+      "status": "pending"
+    },
+    {
+      "key": "idea-entry-mobile",
+      "path": "assets/screenshots/idea-entry-mobile.png",
+      "status": "pending"
+    },
+    {
+      "key": "character-setup",
+      "path": "assets/screenshots/character-setup.png",
+      "status": "pending"
+    },
+    {
+      "key": "story-beats",
+      "path": "assets/screenshots/story-beats.png",
+      "status": "pending"
+    },
+    {
+      "key": "scene-editing",
+      "path": "assets/screenshots/scene-editing.png",
+      "status": "pending"
+    },
+    {
+      "key": "story-playback",
+      "path": "assets/screenshots/story-playback.png",
+      "status": "pending"
+    }
+  ]
+}

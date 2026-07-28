@@ -61,6 +61,11 @@ import type {
   NarrationGenderBucket,
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
+import {
+  SEED_GUIDANCE_WORD_CAP,
+  SEED_SOURCE_WORD_CAP,
+  countAuthoringWords,
+} from '@/lib/story/authoring-limits';
 
 interface LandingScreenProps {
   onBegin?: (
@@ -70,15 +75,6 @@ interface LandingScreenProps {
   ) => void;
   initialData?: LandingInitialData | null;
   initialPricing?: PricingRuntimeContext | null;
-}
-
-function countWords(value: string): number {
-  const normalized = value.trim();
-  if (!normalized) {
-    return 0;
-  }
-
-  return normalized.split(/\s+/).length;
 }
 
 type CreationMode = 'prompt' | 'seeded' | 'reel';
@@ -171,7 +167,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [workingTitle, setWorkingTitle] = useState(DEFAULT_STORY_CONFIG.authoring.workingTitle || '');
   const [sourceText, setSourceText] = useState(DEFAULT_STORY_CONFIG.authoring.sourceText || '');
   const [guidanceText, setGuidanceText] = useState(DEFAULT_STORY_CONFIG.authoring.guidanceText || '');
-  const [sourceFidelity, setSourceFidelity] = useState<SourceFidelity>(DEFAULT_STORY_CONFIG.authoring.sourceFidelity || 'balanced_adaptation');
+  const [sourceFidelity, setSourceFidelity] = useState<SourceFidelity>(DEFAULT_STORY_CONFIG.authoring.sourceFidelity || 'strictly_follow');
   const [seedPreview, setSeedPreview] = useState<SeedPlan | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isGeneratingPreview, setIsGeneratingPreview] = useState(false);
@@ -532,7 +528,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setWorkingTitle(config.authoring.workingTitle || '');
             setSourceText(config.authoring.sourceText || '');
             setGuidanceText(config.authoring.guidanceText || '');
-            setSourceFidelity(config.authoring.sourceFidelity || 'balanced_adaptation');
+            setSourceFidelity(config.authoring.sourceFidelity || 'strictly_follow');
             setSeedPreview(config.authoring.seedPlan || null);
             setImageGenerationMode(config.imageGenerationMode || DEFAULT_STORY_CONFIG.imageGenerationMode);
             setImageDeliveryMode(config.imageDeliveryMode || DEFAULT_STORY_CONFIG.imageDeliveryMode || 'live');
@@ -561,12 +557,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   }, []);
 
   const previewSeedPlanCoinCost = (pricing.actionCosts.preview_seed_plan ?? 0) * 10;
-  const authoringWordCount = countWords(
-    creationMode === 'seeded'
-      ? `${sourceText} ${guidanceText}`
-      : prompt
-  );
-  const isOverAuthoringWordCap = authoringWordCount > authoringWordCap;
+  const promptWordCount = countAuthoringWords(prompt);
+  const sourceWordCount = countAuthoringWords(sourceText);
+  const guidanceWordCount = countAuthoringWords(guidanceText);
+  const isOverSourceWordCap = creationMode === 'seeded'
+    ? sourceWordCount > SEED_SOURCE_WORD_CAP
+    : promptWordCount > authoringWordCap;
+  const isOverGuidanceWordCap = creationMode === 'seeded'
+    && guidanceWordCount > SEED_GUIDANCE_WORD_CAP;
+  const isOverAuthoringWordCap = isOverSourceWordCap || isOverGuidanceWordCap;
   const storyIdeaWordCount = countMeaningfulWords(prompt);
   const hasMinimumStoryIdea = storyIdeaWordCount >= MIN_STORY_IDEA_WORDS;
   // Drives the go button's halo + hover response, so the glow only ever appears
@@ -862,6 +861,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
 
   const handleGeneratePreview = async () => {
     if (!sourceText.trim() || isGeneratingPreview || isLoading || isOverAuthoringWordCap) {
+      return;
+    }
+    if (sourceFidelity === 'strictly_follow' && sourceWordCount < effectiveMaxBeats) {
+      setPreviewError(
+        `Strictly Follow needs at least ${effectiveMaxBeats} words to create ${effectiveMaxBeats} non-empty beats.`
+      );
       return;
     }
 
@@ -1470,17 +1475,23 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   ) : (
                     <div className="space-y-4 p-4 md:p-5">
                       <div className="grid gap-3 md:grid-cols-[minmax(0,0.7fr)_minmax(0,0.3fr)]">
-                        <textarea
-                          value={sourceText}
-                          onChange={(e) => {
-                            setSourceText(e.target.value);
-                            clearSeedPreview();
-                          }}
-                          rows={7}
-                          placeholder="Paste a scene list, script excerpt, rough beat notes, or a short story that Kissago should turn into the original path."
-                          className="min-h-44 rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
-                          disabled={isLoading || isGeneratingPreview}
-                        />
+                        <div className="space-y-1.5">
+                          <textarea
+                            value={sourceText}
+                            onChange={(e) => {
+                              setSourceText(e.target.value);
+                              clearSeedPreview();
+                            }}
+                            rows={7}
+                            placeholder="Paste a scene list, script excerpt, rough beat notes, or a short story that Kissago should turn into the original path."
+                            className="min-h-44 w-full rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
+                            disabled={isLoading || isGeneratingPreview}
+                            aria-invalid={isOverSourceWordCap}
+                          />
+                          <p className={`px-1 text-right text-[11px] ${isOverSourceWordCap ? 'text-rose-400' : 'text-neutral-500'}`}>
+                            Story: {sourceWordCount} / {SEED_SOURCE_WORD_CAP} words
+                          </p>
+                        </div>
                         <div className="space-y-3">
                           <input
                             type="text"
@@ -1493,17 +1504,23 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             className="min-h-12 w-full rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
                             disabled={isLoading || isGeneratingPreview}
                           />
-                          <textarea
-                            value={guidanceText}
-                            onChange={(e) => {
-                              setGuidanceText(e.target.value);
-                              clearSeedPreview();
-                            }}
-                            rows={6}
-                            placeholder="Extra guidance (optional). For example: keep the tone cozy, preserve dialogue closely, or emphasize a certain visual mood."
-                            className="min-h-32 w-full rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
-                            disabled={isLoading || isGeneratingPreview}
-                          />
+                          <div className="space-y-1.5">
+                            <textarea
+                              value={guidanceText}
+                              onChange={(e) => {
+                                setGuidanceText(e.target.value);
+                                clearSeedPreview();
+                              }}
+                              rows={6}
+                              placeholder="Extra visual guidance (optional). Describe characters, scenes, locations, or world details to help Kissago interpret the story visually."
+                              className="min-h-32 w-full rounded-2xl border border-white/10 bg-neutral-800/80 px-4 py-3 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
+                              disabled={isLoading || isGeneratingPreview}
+                              aria-invalid={isOverGuidanceWordCap}
+                            />
+                            <p className={`px-1 text-right text-[11px] ${isOverGuidanceWordCap ? 'text-rose-400' : 'text-neutral-500'}`}>
+                              Extra guidance: {guidanceWordCount} / {SEED_GUIDANCE_WORD_CAP} words
+                            </p>
+                          </div>
                         </div>
                       </div>
 
@@ -1513,13 +1530,20 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             Seeded Authoring
                           </p>
                           <p className="mt-1 text-sm text-neutral-300">
-                            Kissago will structure your source into {effectiveMaxBeats} beats, keep that path as the original route, and still allow alternate branches afterward.
+                            {sourceFidelity === 'strictly_follow'
+                              ? `Kissago will keep your story wording unchanged, divide it into ${effectiveMaxBeats} beats, and allow alternate branches afterward.`
+                              : `Kissago will structure your source into ${effectiveMaxBeats} beats, keep that path as the original route, and still allow alternate branches afterward.`}
                           </p>
                         </div>
                         <div className="flex flex-col items-start gap-2 md:items-end">
-                          <span className={`text-xs ${isOverAuthoringWordCap ? 'text-rose-400' : 'text-neutral-500'}`}>
-                            {authoringWordCount} / {authoringWordCap} words
-                          </span>
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                            <span className={isOverSourceWordCap ? 'text-rose-400' : 'text-neutral-500'}>
+                              Story {sourceWordCount} / {SEED_SOURCE_WORD_CAP}
+                            </span>
+                            <span className={isOverGuidanceWordCap ? 'text-rose-400' : 'text-neutral-500'}>
+                              Guidance {guidanceWordCount} / {SEED_GUIDANCE_WORD_CAP}
+                            </span>
+                          </div>
                           <div className="flex flex-wrap gap-2">
                             {seedPreview && (
                               <button
@@ -1599,7 +1623,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
               <div className="space-y-1 text-center">
                 <p className={`text-xs font-sans ${isOverAuthoringWordCap ? 'text-rose-400' : 'text-neutral-500'}`}>
                   {creationMode === 'seeded'
-                    ? `Source text and extra guidance share a ${authoringWordCap}-word limit.`
+                    ? `Source text is limited to ${SEED_SOURCE_WORD_CAP} words. Extra visual guidance has a separate ${SEED_GUIDANCE_WORD_CAP}-word limit.`
                     : isReelMode
                       ? `Reel prompts use the ${authoringWordCap}-word authoring limit.`
                       : `Prompt text shares the ${authoringWordCap}-word authoring limit.`}
@@ -1682,7 +1706,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   setSourceFidelity(value);
                   clearSeedPreview();
                 }}
-                authoringWordCap={authoringWordCap}
                 pricingStoryLengthCap={storyLengthCap}
                 pricingStoryLengthUiLimitsEnabled={storyLengthUiEnabled}
                 currentPlanLabel={pricing.snapshot.planKey}
@@ -1772,7 +1795,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 <p className="text-xs uppercase tracking-[0.22em] text-emerald-300">Seed Preview</p>
                 <h2 className="mt-2 text-2xl font-serif text-neutral-100">Confirm the original beat path</h2>
                 <p className="mt-2 max-w-2xl text-sm leading-relaxed text-neutral-400">
-                  Edit the beat titles and beat text if needed, then start the story. The first option on each non-ending beat stays reserved for the original seeded path.
+                  {sourceFidelity === 'strictly_follow'
+                    ? 'Your source wording has been kept unchanged and divided into beats. You can still edit your own text before starting; the first option on each non-ending beat stays reserved for the original path.'
+                    : 'Edit the beat titles and beat text if needed, then start the story. The first option on each non-ending beat stays reserved for the original seeded path.'}
                 </p>
               </div>
               <div className="text-sm text-neutral-500">{seedPreview.beatCount} beats</div>
