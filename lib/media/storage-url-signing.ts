@@ -4,6 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { parseR2Reference, parseR2UrlLikeReference } from '@/lib/media/r2-reference';
+import { recoverCharacterReferenceSheet } from '@/lib/media/character-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { StoryBeat, StoryMap, Character } from '@/lib/types/story';
 
@@ -75,6 +76,14 @@ function addUrl(list: string[], value: string | undefined | null) {
   if (value) list.push(value);
 }
 
+function getCharacterReferenceStorageContext() {
+  return {
+    r2PrivateBucket: process.env.R2_PRIVATE_BUCKET_NAME,
+    supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    supabaseBucket: 'story-assets',
+  };
+}
+
 export async function signStoryMapAssetUrls(
   supabase: SupabaseClient,
   storyMap: StoryMap,
@@ -87,8 +96,30 @@ export async function signStoryMapAssetUrls(
   const characterSheetEntries: StoryMapCharacterEntry[] = [];
   const characterSheetGalleryEntries: StoryMapCharacterGalleryEntry[] = [];
   const urls: string[] = [];
+  const referenceStorageContext = getCharacterReferenceStorageContext();
+  const hydratedStoryMap: StoryMap = {
+    ...storyMap,
+    nodes: Object.fromEntries(
+      Object.entries(storyMap.nodes).map(([nodeId, node]) => [
+        nodeId,
+        {
+          ...node,
+          data: {
+            ...node.data,
+            characters: (node.data.characters ?? []).map((character) =>
+              recoverCharacterReferenceSheet(
+                character,
+                undefined,
+                referenceStorageContext
+              )
+            ),
+          },
+        },
+      ])
+    ),
+  };
 
-  for (const [nodeId, node] of Object.entries(storyMap.nodes)) {
+  for (const [nodeId, node] of Object.entries(hydratedStoryMap.nodes)) {
     for (const field of ['imageUrl', 'audioUrl'] as const) {
       const url = node.data[field];
       if (!url) continue;
@@ -115,12 +146,15 @@ export async function signStoryMapAssetUrls(
     });
   }
 
-  if (urls.length === 0) return storyMap;
+  if (urls.length === 0) return hydratedStoryMap;
 
   const signed = await signMixedUrls(supabase, urls, bucket, expiresIn);
-  if (signed.size === 0) return storyMap;
+  if (signed.size === 0) return hydratedStoryMap;
 
-  const cloned: StoryMap = { ...storyMap, nodes: { ...storyMap.nodes } };
+  const cloned: StoryMap = {
+    ...hydratedStoryMap,
+    nodes: { ...hydratedStoryMap.nodes },
+  };
 
   for (const entry of fieldEntries) {
     const signedUrl = signed.get(entry.url);
@@ -213,18 +247,27 @@ export async function signCharacterRosterReferenceSheetUrls<T extends Character>
 ): Promise<T[]> {
   if (!characters || characters.length === 0) return characters ?? [];
 
+  const referenceStorageContext = getCharacterReferenceStorageContext();
+  const hydratedCharacters = characters.map((character) =>
+    recoverCharacterReferenceSheet(
+      character,
+      undefined,
+      referenceStorageContext,
+      { synthesizeGallery: true }
+    ) as T
+  );
   const urls: string[] = [];
-  characters.forEach((character) => {
+  hydratedCharacters.forEach((character) => {
     addUrl(urls, character.portraitUrl);
     addUrl(urls, character.referenceSheetUrl);
     character.referenceSheetGallery?.forEach((entry) => addUrl(urls, entry.url));
   });
-  if (urls.length === 0) return characters;
+  if (urls.length === 0) return hydratedCharacters;
 
   const signed = await signMixedUrls(supabase, urls, bucket, expiresIn);
-  if (signed.size === 0) return characters;
+  if (signed.size === 0) return hydratedCharacters;
 
-  return characters.map((character) => ({
+  return hydratedCharacters.map((character) => ({
     ...character,
     portraitUrl: character.portraitUrl
       ? signed.get(character.portraitUrl) ?? character.portraitUrl

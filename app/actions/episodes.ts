@@ -12,7 +12,7 @@ import { getFeatureFlag, getModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { resolvePromptTemplate, LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import { storyBibleGenerationSchema } from '@/lib/ai/generation-schemas';
-import { buildEpisodeConfig } from '@/lib/episodes/continuity';
+import { buildEpisodeConfig, getEpisodeAuthoringDefaults } from '@/lib/episodes/continuity';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { signCharacterRosterReferenceSheetUrls } from '@/lib/media/storage-url-signing';
 import { collectNamedCharactersForNode, getBeatsToNode } from '@/lib/utils/story-map';
@@ -298,12 +298,13 @@ export async function prepareEpisodeContinuation(input: {
       ...character,
       ...(roster?.portraitUrl ? { portraitUrl: roster.portraitUrl } : {}),
       ...(roster?.referenceSheetUrl
-        ? {
-            referenceSheetUrl: roster.referenceSheetUrl,
-            ...(roster.referenceSheetStorageKey
-              ? { referenceSheetStorageKey: roster.referenceSheetStorageKey }
-              : {}),
-          }
+        ? { referenceSheetUrl: roster.referenceSheetUrl }
+        : {}),
+      ...(roster?.referenceSheetStorageKey
+        ? { referenceSheetStorageKey: roster.referenceSheetStorageKey }
+        : {}),
+      ...(roster?.referenceSheetUploadedAt
+        ? { referenceSheetUploadedAt: roster.referenceSheetUploadedAt }
         : {}),
       ...(roster?.masterId ? { masterId: roster.masterId } : {}),
       sourceStoryId: character.sourceStoryId ?? story.id,
@@ -409,9 +410,8 @@ export async function prepareEpisodeContinuation(input: {
   // 5. Signed URLs so carried portraits are fetchable as reference images.
   const signedCarried = await signCharacterRosterReferenceSheetUrls(supabase, carried);
 
-  const inheritedConfig = bible?.configSnapshot
-    ? buildEpisodeConfig(bible.configSnapshot)
-    : buildEpisodeConfig(parentConfig);
+  const seriesConfig = bible?.configSnapshot ?? parentConfig;
+  const inheritedConfig = buildEpisodeConfig(seriesConfig);
 
   return {
     branchId: branch.id,
@@ -422,6 +422,7 @@ export async function prepareEpisodeContinuation(input: {
     bible,
     journalSummary: buildJournalSummary(journalEvents),
     inheritedConfig,
+    authoringDefaults: getEpisodeAuthoringDefaults(seriesConfig),
   };
 }
 

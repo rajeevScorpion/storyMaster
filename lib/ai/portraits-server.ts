@@ -3,6 +3,7 @@ import 'server-only';
 import sharp from 'sharp';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { putR2Object } from '@/lib/media/r2-server';
+import { getDurableR2Reference } from '@/lib/media/character-reference';
 import { recordMediaAsset } from '@/lib/media/media-assets';
 import { generateSelectedImage } from '@/app/actions/image-generation';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
@@ -95,7 +96,10 @@ function buildReferenceFromValue(
   const base: ServerReferenceImage = value.startsWith('data:')
     ? { type, dataUrl: value }
     : { type, url: value };
-  if (extras?.storageKey) base.storageKey = extras.storageKey;
+  const durableR2Reference =
+    getDurableR2Reference(value)
+    ?? getDurableR2Reference(extras?.storageKey);
+  if (durableR2Reference) base.storageKey = durableR2Reference;
   if (extras?.name?.trim()) base.name = extras.name.trim();
   return base;
 }

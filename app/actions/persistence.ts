@@ -39,6 +39,7 @@ import {
   sanitizeGalleryForBlob,
   serializeGalleryRows,
 } from '@/lib/media/image-versions';
+import { recoverCharacterReferenceSheet } from '@/lib/media/character-reference';
 import { resolveValidatedPublishQuality } from '@/lib/story/publish-quality';
 import {
   generateShareToken,
@@ -46,6 +47,41 @@ import {
   type StorylinePublishQuality,
   type StorylineVisibility,
 } from '@/lib/story/visibility';
+
+const CHARACTER_REFERENCE_STORAGE_CONTEXT = {
+  r2PrivateBucket: process.env.R2_PRIVATE_BUCKET_NAME,
+  supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  supabaseBucket: 'story-assets',
+};
+
+function prepareCharacterReferenceForPersistence(
+  character: Character,
+  fallback?: Character,
+  options: { synthesizeGallery?: boolean } = {}
+): Character {
+  const recovered = recoverCharacterReferenceSheet(
+    character,
+    fallback,
+    CHARACTER_REFERENCE_STORAGE_CONTEXT,
+    options
+  );
+  const referenceSheetUrl = recovered.referenceSheetUrl
+    ? normalizeStorageUrl(recovered.referenceSheetUrl, 'story-assets')
+    : undefined;
+  const referenceSheetGallery = (recovered.referenceSheetGallery ?? [])
+    .map((entry) => ({
+      ...entry,
+      url: normalizeStorageUrl(entry.url, 'story-assets'),
+    }))
+    .filter((entry) => Boolean(entry.url));
+
+  return {
+    ...recovered,
+    referenceSheetUrl,
+    referenceSheetGallery:
+      referenceSheetGallery.length > 0 ? referenceSheetGallery : undefined,
+  };
+}
 
 /**
  * Strip base64 data URLs from a StoryMap before saving to DB.
@@ -55,6 +91,9 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
   const nodes: StoryMap['nodes'] = {};
   for (const [id, node] of Object.entries(storyMap.nodes)) {
     const existingBeat = existingStoryMap?.nodes?.[id]?.data;
+    const existingCharactersById = new Map(
+      (existingBeat?.characters ?? []).map((character) => [character.id, character])
+    );
     const persistedImageUrl = resolvePersistedImageUrlForSave(node.data, existingBeat);
     const persistedAudioUrl = resolvePersistedAudioUrlForSave(node.data, existingBeat);
     const cleanedGallery = sanitizeGalleryForBlob(node.data.imageGallery, (url) =>
@@ -72,32 +111,22 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
           ? normalizeStorageUrl(persistedAudioUrl, 'story-assets')
           : undefined,
         imageGallery: cleanedGallery,
-        // Strip portrait base64 + drop any leftover reference-sheet data URLs.
-        // The persisted storage URL stays on the character; if the client only
-        // had a base64 (unsaved upload), drop it so the JSONB row stays small.
+        // Strip portrait base64. Reference-sheet previews are replaced by their
+        // durable URL/fallback/storage-key pointer so later saves cannot erase
+        // an upload that already reached private storage.
         characters: node.data.characters.map(c => {
-          const cleanedGallery = (c.referenceSheetGallery ?? [])
-            .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
-            .map((entry) => ({
-              url: normalizeStorageUrl(entry.url, 'story-assets'),
-              storageKey: entry.storageKey,
-              uploadedAt: entry.uploadedAt,
-              ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
-            }));
+          const recovered = prepareCharacterReferenceForPersistence(
+            c,
+            existingCharactersById.get(c.id)
+          );
           return {
-            ...c,
+            ...recovered,
             portraitUrl: c.portraitUrl?.startsWith('data:')
               ? undefined
               : c.portraitUrl
                 ? normalizeStorageUrl(c.portraitUrl, 'story-assets')
                 : undefined,
             portraitBase64: undefined,
-            referenceSheetUrl: c.referenceSheetUrl?.startsWith('data:')
-              ? undefined
-              : c.referenceSheetUrl
-                ? normalizeStorageUrl(c.referenceSheetUrl, 'story-assets')
-                : undefined,
-            referenceSheetGallery: cleanedGallery.length > 0 ? cleanedGallery : undefined,
           };
         }),
       },
@@ -106,30 +135,27 @@ function stripBase64(storyMap: StoryMap, existingStoryMap?: StoryMap | null): St
   return { ...storyMap, nodes };
 }
 
-function sanitizeSessionCharacters(session: StorySession): StorySession['characters'] {
+function sanitizeSessionCharacters(
+  session: StorySession,
+  fallbackCharacters: Character[] = []
+): StorySession['characters'] {
+  const fallbackById = new Map(
+    fallbackCharacters.map((character) => [character.id, character])
+  );
   return (session.characters || []).map((character) => {
-    const cleanedGallery = (character.referenceSheetGallery ?? [])
-      .filter((entry) => Boolean(entry?.url) && !entry.url.startsWith('data:'))
-      .map((entry) => ({
-        url: normalizeStorageUrl(entry.url, 'story-assets'),
-        storageKey: entry.storageKey,
-        uploadedAt: entry.uploadedAt,
-        ...(entry.optimizationMetadata ? { optimizationMetadata: entry.optimizationMetadata } : {}),
-      }));
+    const recovered = prepareCharacterReferenceForPersistence(
+      character,
+      fallbackById.get(character.id),
+      { synthesizeGallery: true }
+    );
     return {
-      ...character,
+      ...recovered,
       portraitUrl: character.portraitUrl?.startsWith('data:')
         ? undefined
         : character.portraitUrl
           ? normalizeStorageUrl(character.portraitUrl, 'story-assets')
           : undefined,
       portraitBase64: undefined,
-      referenceSheetUrl: character.referenceSheetUrl?.startsWith('data:')
-        ? undefined
-        : character.referenceSheetUrl
-          ? normalizeStorageUrl(character.referenceSheetUrl, 'story-assets')
-          : undefined,
-      referenceSheetGallery: cleanedGallery.length > 0 ? cleanedGallery : undefined,
     };
   });
 }
@@ -155,6 +181,14 @@ function mergeCharactersWithFallback(
       ...character,
       portraitUrl: character.portraitUrl || existing?.portraitUrl,
       portraitBase64: character.portraitBase64 || existing?.portraitBase64,
+      referenceSheetUrl:
+        character.referenceSheetUrl || existing?.referenceSheetUrl,
+      referenceSheetStorageKey:
+        character.referenceSheetStorageKey || existing?.referenceSheetStorageKey,
+      referenceSheetUploadedAt:
+        character.referenceSheetUploadedAt || existing?.referenceSheetUploadedAt,
+      referenceSheetGallery:
+        character.referenceSheetGallery ?? existing?.referenceSheetGallery,
     });
   }
 
@@ -749,6 +783,7 @@ export async function saveStory(
   if (authError || !user) throw new Error('Not authenticated');
 
   let existingStoryMap: StoryMap | null = null;
+  let existingStoryCharacters: Character[] = [];
   const existingBeatUrlMap = new Map<string, {
     imageUrl?: string;
     audioUrl?: string;
@@ -758,7 +793,7 @@ export async function saveStory(
   if (session.savedStoryId) {
     const { data: existingStory, error: existingStoryError } = await supabase
       .from('stories')
-      .select('story_map')
+      .select('story_map, characters')
       .eq('id', session.savedStoryId)
       .eq('user_id', user.id)
       .maybeSingle();
@@ -771,6 +806,8 @@ export async function saveStory(
     if (rawExistingStoryMap && typeof rawExistingStoryMap === 'object' && 'nodes' in rawExistingStoryMap) {
       existingStoryMap = rawExistingStoryMap as unknown as StoryMap;
     }
+    existingStoryCharacters =
+      (existingStory?.characters ?? []) as unknown as Character[];
 
     const { data: existingBeatRows, error: existingBeatRowsError } = await supabase
       .from('beats')
@@ -874,7 +911,10 @@ export async function saveStory(
     is_vertical_story: storyOrientation.isVerticalStory,
     aspect_ratio: storyOrientation.aspectRatio,
     story_map: cleanMap as unknown as Record<string, unknown>,
-    characters: sanitizeSessionCharacters(session) as unknown as Record<string, unknown>[],
+    characters: sanitizeSessionCharacters(
+      session,
+      existingStoryCharacters
+    ) as unknown as Record<string, unknown>[],
     setting: session.setting as unknown as Record<string, unknown>,
     status: session.status,
     narrator_voice: session.narratorVoice || null,

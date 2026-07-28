@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { verifyUserCanReadMediaObject } from '@/lib/media/media-access';
 import { getServerPipelineAvailability } from '@/lib/media/processing-mode';
 import { putR2Object, createR2SignedGetUrl, deleteR2Object, getR2ObjectBuffer } from '@/lib/media/r2-server';
 import { toR2Reference, isR2Reference, parseR2Reference } from '@/lib/media/r2-reference';
@@ -54,11 +55,10 @@ async function getCurrentUserId(): Promise<string | null> {
 
 /**
  * Resolve private r2:// reference keys to base64 data URLs for the client image
- * pipeline (which runs in the browser and cannot read the private bucket). Only
- * keys under the caller's own path segment (`/{userId}/`) are resolved — this
- * covers both direct-input source keys (references/{userId}/...) and adopted
- * canonical keys (stories/references/{userId}/...). Anything else resolves to
- * null so a foreign or malformed key is silently skipped, not leaked.
+ * pipeline (which runs in the browser and cannot read the private bucket).
+ * Keys under the caller's own path segment (`/{userId}/`) are resolved
+ * directly. Story-scoped character sheets are resolved only after the normal
+ * media-access check. Foreign or malformed keys resolve to null.
  *
  * Keys are used immediately at generation time, so returning inline base64 (vs a
  * TTL'd signed URL that could expire mid-session) is deliberate — it is what
@@ -68,14 +68,26 @@ export async function resolveReferenceImageKeys(
   keys: string[]
 ): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {};
-  const userId = await getCurrentUserId();
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  const userId = authError ? null : user?.id ?? null;
   const unique = Array.from(new Set(keys.filter((k) => typeof k === 'string' && k.length > 0)));
   await Promise.all(
     unique.map(async (key) => {
       out[key] = null;
       if (!userId || !isR2Reference(key)) return;
       const parsed = parseR2Reference(key);
-      if (!parsed || !parsed.objectKey.includes(`/${userId}/`)) return;
+      if (!parsed) return;
+      const belongsToUserPath = parsed.objectKey.includes(`/${userId}/`);
+      if (!belongsToUserPath) {
+        const access = await verifyUserCanReadMediaObject(supabase, {
+          objectKey: parsed.objectKey,
+        });
+        if (!access.allowed) return;
+      }
       const object = await getR2ObjectBuffer(key).catch(() => null);
       if (!object) return;
       out[key] = `data:${object.contentType ?? 'image/webp'};base64,${object.buffer.toString('base64')}`;

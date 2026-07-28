@@ -1,7 +1,7 @@
 // Pack 2: episodic branching — a branch is the spine connecting a chain of
 // episode stories; the bible and journal hang off the branch.
 
-import type { Character, StoryConfig } from './story';
+import type { Character, SourceFidelity, StoryConfig } from './story';
 
 export interface EpisodeBranch {
   id: string;
@@ -59,6 +59,10 @@ export interface EpisodeContinuationSeed {
   bible: SeriesBible | null;
   journalSummary: string;
   inheritedConfig: StoryConfig;
+  authoringDefaults: {
+    mode: 'prompt' | 'seeded';
+    sourceFidelity: SourceFidelity;
+  };
 }
 
 export interface EpisodeLink {
