@@ -37,7 +37,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentTimeMsRef = useRef(0);
   const prevNodeIdRef = useRef<string | undefined>(nodeId);
-  const playbackStateRef = useRef(playbackState);
+  const wantsPlaybackRef = useRef(false);
+  const playAttemptIdRef = useRef(0);
+  const playAttemptAudioRef = useRef<HTMLAudioElement | null>(null);
   const volumeRef = useRef(volume);
   const isMutedRef = useRef(isMuted);
   const onEndedRef = useRef(options.onEnded);
@@ -55,11 +57,6 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     currentTimeMsRef.current = normalizedTimeMs;
     setCurrentTimeMs(normalizedTimeMs);
   }, []);
-
-  // Keep volumeRef and isMutedRef in sync
-  useEffect(() => {
-    playbackStateRef.current = playbackState;
-  }, [playbackState]);
 
   useEffect(() => {
     volumeRef.current = volume;
@@ -103,6 +100,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   }, []);
 
   const handleEnded = useCallback(() => {
+    wantsPlaybackRef.current = false;
+    playAttemptIdRef.current += 1;
+    playAttemptAudioRef.current = null;
     setPlaybackState('idle');
     if (audioRef.current) onProgressRef.current?.(audioRef.current.duration * 1000);
     onEndedRef.current?.();
@@ -111,6 +111,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
   // Stop and reset when node changes
   useEffect(() => {
     if (prevNodeIdRef.current !== nodeId) {
+      wantsPlaybackRef.current = false;
+      playAttemptIdRef.current += 1;
+      playAttemptAudioRef.current = null;
       lastAudioSwapRef.current = null;
       if (audioRef.current) {
         audioRef.current.pause();
@@ -126,9 +129,48 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     }
   }, [nodeId, updateCurrentTimeMs]);
 
+  const attemptPlayback = useCallback((audio: HTMLAudioElement) => {
+    if (
+      audioRef.current !== audio
+      || !wantsPlaybackRef.current
+      || playAttemptAudioRef.current === audio
+    ) {
+      return;
+    }
+
+    const attemptId = ++playAttemptIdRef.current;
+    playAttemptAudioRef.current = audio;
+    // Reflect the user's first click immediately. A rejected browser play
+    // request rolls this back below, while a media URL swap preserves intent.
+    setPlaybackState('playing');
+
+    void audio.play().then(() => {
+      if (
+        audioRef.current !== audio
+        || playAttemptIdRef.current !== attemptId
+        || !wantsPlaybackRef.current
+      ) {
+        audio.pause();
+        return;
+      }
+      setPlaybackState('playing');
+    }).catch(() => {
+      if (audioRef.current !== audio || playAttemptIdRef.current !== attemptId) return;
+      wantsPlaybackRef.current = false;
+      setPlaybackState(audio.currentTime > 0 ? 'paused' : 'idle');
+    }).finally(() => {
+      if (playAttemptAudioRef.current === audio) {
+        playAttemptAudioRef.current = null;
+      }
+    });
+  }, []);
+
   // Create/update Audio element when audioUrl changes
   useEffect(() => {
     if (!audioUrl) {
+      wantsPlaybackRef.current = false;
+      playAttemptIdRef.current += 1;
+      playAttemptAudioRef.current = null;
       lastAudioSwapRef.current = null;
       audioRef.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting playback UI when the audio URL (external resource) is cleared
@@ -152,6 +194,9 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     const initialPlaybackTimeMs = swapSnapshot?.timeMs ?? initialTimeMsRef.current;
     const shouldResumeAfterSwap = swapSnapshot?.resume === true;
     let resumeAttempted = false;
+    if (shouldResumeAfterSwap) {
+      wantsPlaybackRef.current = true;
+    }
 
     const applyInitialTime = (durationMs: number) => {
       const initialTimeMs = Math.max(0, Math.min(initialPlaybackTimeMs, durationMs || initialPlaybackTimeMs));
@@ -163,9 +208,15 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
     };
 
     const resumePlayback = () => {
-      if (!shouldResumeAfterSwap || resumeAttempted || audioRef.current !== audio) return;
+      if (
+        (!shouldResumeAfterSwap && !wantsPlaybackRef.current)
+        || resumeAttempted
+        || audioRef.current !== audio
+      ) {
+        return;
+      }
       resumeAttempted = true;
-      audio.play().then(() => setPlaybackState('playing')).catch(() => {});
+      attemptPlayback(audio);
     };
 
     const syncMetadata = () => {
@@ -199,8 +250,14 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       if (audioRef.current === audio) {
         lastAudioSwapRef.current = {
           timeMs: audio.currentTime * 1000,
-          resume: playbackStateRef.current === 'playing' && !audio.paused && !audio.ended,
+          // Preserve an in-flight first-click/AUTO request as well as playback
+          // that has already started. Cached-media resolution can otherwise
+          // replace the URL between play() and its promise resolving.
+          resume: wantsPlaybackRef.current && !audio.ended,
         };
+      }
+      if (playAttemptAudioRef.current === audio) {
+        playAttemptAudioRef.current = null;
       }
       if (audio.currentTime > 0) onProgressRef.current?.(audio.currentTime * 1000);
       audio.pause();
@@ -210,17 +267,19 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
       audio.removeEventListener('canplay', handleReadyToPlay);
       audio.removeEventListener('timeupdate', syncTime);
     };
-  }, [audioUrl, handleEnded, updateCurrentTimeMs]);
+  }, [attemptPlayback, audioUrl, handleEnded, updateCurrentTimeMs]);
 
   useEffect(() => {
     if (playbackState !== 'playing') return;
     let frameId = 0;
     const syncFrame = () => {
       const audio = audioRef.current;
-      if (!audio || audio.paused || audio.ended || playbackStateRef.current !== 'playing') {
+      if (!audio || audio.ended || !wantsPlaybackRef.current) {
         return;
       }
-      updateCurrentTimeMs(audio.currentTime * 1000);
+      if (!audio.paused) {
+        updateCurrentTimeMs(audio.currentTime * 1000);
+      }
       frameId = window.requestAnimationFrame(syncFrame);
     };
     frameId = window.requestAnimationFrame(syncFrame);
@@ -251,37 +310,57 @@ export function useAudioPlayer(audioUrl?: string, nodeId?: string, options: UseA
 
   const togglePlayPause = useCallback(() => {
     const audio = audioRef.current;
-    if (!audio) return;
-
-    if (playbackState === 'playing') {
+    const shouldPause = wantsPlaybackRef.current || Boolean(audio && !audio.paused && !audio.ended);
+    if (shouldPause) {
+      wantsPlaybackRef.current = false;
+      playAttemptIdRef.current += 1;
+      playAttemptAudioRef.current = null;
+      if (!audio) {
+        setPlaybackState('paused');
+        return;
+      }
       audio.pause();
       onProgressRef.current?.(audio.currentTime * 1000);
       setPlaybackState('paused');
     } else {
-      audio.play().then(() => setPlaybackState('playing')).catch(() => {});
+      wantsPlaybackRef.current = true;
+      if (audio) attemptPlayback(audio);
     }
-  }, [playbackState]);
+  }, [attemptPlayback]);
 
   const play = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || !audio.paused) return;
-    audio.play().then(() => setPlaybackState('playing')).catch(() => {});
-  }, []);
-
-  const pause = useCallback(() => {
+    wantsPlaybackRef.current = true;
     const audio = audioRef.current;
     if (!audio) return;
-    audio.pause();
-    onProgressRef.current?.(audio.currentTime * 1000);
+    if (!audio.paused && !audio.ended) {
+      setPlaybackState('playing');
+      return;
+    }
+    attemptPlayback(audio);
+  }, [attemptPlayback]);
+
+  const pause = useCallback(() => {
+    wantsPlaybackRef.current = false;
+    playAttemptIdRef.current += 1;
+    playAttemptAudioRef.current = null;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      onProgressRef.current?.(audio.currentTime * 1000);
+    }
     setPlaybackState('paused');
   }, []);
 
   const stop = useCallback(() => {
+    wantsPlaybackRef.current = false;
+    playAttemptIdRef.current += 1;
+    playAttemptAudioRef.current = null;
     const audio = audioRef.current;
-    if (!audio) return;
-    audio.pause();
-    onProgressRef.current?.(audio.currentTime * 1000);
-    audio.currentTime = 0;
+    if (audio) {
+      audio.pause();
+      onProgressRef.current?.(audio.currentTime * 1000);
+      audio.currentTime = 0;
+    }
     updateCurrentTimeMs(0, { force: true });
     setPlaybackState('idle');
   }, [updateCurrentTimeMs]);

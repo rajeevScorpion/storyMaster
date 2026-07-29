@@ -2,7 +2,7 @@
 
 import { toMediaFetchUrl } from '@/lib/media/client';
 
-const DEFAULT_AUDIO_PRELOAD_TIMEOUT_MS = 8000;
+const DEFAULT_AUDIO_PRELOAD_TIMEOUT_MS = 12000;
 const MAX_PRELOADED_AUDIO = 12;
 
 type AudioPreloadEntry = {
@@ -72,8 +72,6 @@ export function preloadAudioForPlayback(
 
     cleanup = () => {
       audio.removeEventListener('canplaythrough', onReady);
-      audio.removeEventListener('canplay', onReady);
-      audio.removeEventListener('loadeddata', onReady);
       audio.removeEventListener('error', onError);
       if (timer !== null) window.clearTimeout(timer);
       timer = null;
@@ -93,16 +91,19 @@ export function preloadAudioForPlayback(
     const onError = () => settle(false);
 
     audio.addEventListener('canplaythrough', onReady);
-    audio.addEventListener('canplay', onReady);
-    audio.addEventListener('loadeddata', onReady);
     audio.addEventListener('error', onError);
 
     timer = window.setTimeout(() => {
-      settle(audio.readyState >= 2);
+      // Keep a partially buffered element only if it can already begin
+      // playback; otherwise let the player create a fresh request.
+      settle(audio.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA);
     }, Math.max(1000, timeoutMs));
 
     audio.src = src;
     audio.load();
+    if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+      settle(true);
+    }
   });
 
   audioPreloadEntries.set(src, entry);
