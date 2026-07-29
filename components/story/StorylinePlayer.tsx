@@ -78,9 +78,9 @@ import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
 
-const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cursor-pointer';
+const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cursor-pointer motion-safe:hover:scale-110 motion-safe:active:scale-95';
 const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
-const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer';
+const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer motion-safe:hover:scale-110 motion-safe:active:scale-95';
 const DESKTOP_CONTROL_ICON_CLASS = 'w-5 h-5';
 
 function StoryMediaLoadingFallback({ className = '' }: { className?: string }) {
@@ -669,12 +669,17 @@ export default function StorylinePlayer({
 
   // Auto-play narration when beat changes and autoPlay is on
   const prevIndexRef = useRef(currentIndex);
-  const pendingAutoPlayIndexRef = useRef<number | null>(null);
+  const pendingAutoPlayIndexRef = useRef<number | null>(autoPlay ? currentIndex : null);
+  const previousAutoPlayRef = useRef(autoPlay);
   useEffect(() => {
     if (prevIndexRef.current !== currentIndex) {
       prevIndexRef.current = currentIndex;
       pendingAutoPlayIndexRef.current = currentIndex;
     }
+    if (autoPlay && !previousAutoPlayRef.current) {
+      pendingAutoPlayIndexRef.current = currentIndex;
+    }
+    previousAutoPlayRef.current = autoPlay;
     if (!autoPlay) {
       pendingAutoPlayIndexRef.current = null;
       return;
