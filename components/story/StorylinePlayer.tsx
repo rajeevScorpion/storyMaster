@@ -39,10 +39,10 @@ import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { useStoryVideoExport } from '@/lib/hooks/useStoryVideoExport';
 import {
-  authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
+import { authorizeCurrentUserVideoExport } from '@/app/actions/video-export';
 import { checkIsAdmin } from '@/app/actions/admin';
 import { getStoryboardSettings } from '@/app/actions/admin';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
@@ -206,7 +206,7 @@ export default function StorylinePlayer({
   const storylineHasAllBeatImages = currentBeats.every((beat) => Boolean(beat.imageUrl));
   const canDownload = videoDownloadGlobalOn
     && storylineHasAllBeatImages
-    && (adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads));
+    && (adminBypassed || pricing.snapshot.canAccessDownloads);
   const videoExportPreset = pricing.snapshot.videoExportPreset;
   const showVideoWatermark = resolveVideoExportWatermarkVisibility(
     videoExportPreset,
@@ -1050,7 +1050,6 @@ export default function StorylinePlayer({
           <VideoExportDialog
             open={exportDialogOpen}
             onClose={() => setExportDialogOpen(false)}
-            coinCost={pricing.actionCosts?.export_video_future ?? null}
             onSelect={async (enginePreset: ResolvedExportPreset) => {
               setExportDialogOpen(false);
               if (isExporting) return;
@@ -1066,8 +1065,8 @@ export default function StorylinePlayer({
               };
               // Admin bypass skips billing; regular users go through beat authorization
               if (!adminBypassed) {
-                const auth = await authorizeCurrentUserBillableAction({
-                  actionKey: 'export_video_future',
+                const auth = await authorizeCurrentUserVideoExport({
+                  presetId: enginePreset.id,
                   idempotencyKey: `export-${storylineId}-${Date.now()}`,
                   relatedStorylineId: storylineId,
                 });

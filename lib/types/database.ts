@@ -10,6 +10,7 @@ import type {
   PricingAuditActionType,
   PricingAuditEntityType,
   PricingCatalogStatus,
+  PricingCostFamily,
   PricingMarketKey,
   PromotionMarketScope,
 } from './pricing';
@@ -544,6 +545,13 @@ export interface DbPricingActionCost {
   action_key: PricingActionKey | string;
   beat_cost: number;
   is_active: boolean;
+  display_name: string | null;
+  cost_family: PricingCostFamily;
+  billing_unit: string;
+  free_enabled: boolean;
+  plus_enabled: boolean;
+  studio_enabled: boolean;
+  metadata_json: Record<string, unknown>;
   effective_from: string;
   effective_to: string | null;
   updated_at: string;

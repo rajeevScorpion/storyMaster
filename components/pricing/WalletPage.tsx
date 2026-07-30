@@ -293,6 +293,21 @@ export default function WalletPage() {
   const [checkoutBusyKey, setCheckoutBusyKey] = useState<string | null>(null);
   const [razorpayReady, setRazorpayReady] = useState(false);
 
+  useEffect(() => {
+    if (
+      !pricingLoading
+      && pricingData.controls.indiaOnlyBetaEnabled
+      && pricingData.snapshot.pricingMarketKey !== 'IN'
+    ) {
+      setMarketOverride('IN');
+    }
+  }, [
+    pricingData.controls.indiaOnlyBetaEnabled,
+    pricingData.snapshot.pricingMarketKey,
+    pricingLoading,
+    setMarketOverride,
+  ]);
+
   const loadWalletData = useCallback(async () => {
     setWalletLoading(true);
     setWalletError(null);
@@ -493,18 +508,23 @@ export default function WalletPage() {
 
           <div className="rounded-2xl border border-white/10 bg-white/5 p-2 backdrop-blur-md">
             <p className="px-2 pb-2 text-[11px] uppercase tracking-[0.18em] text-neutral-500">Checkout market</p>
-            <div className="grid grid-cols-2 gap-2">
+            <div className={`grid gap-2 ${pricingData.controls.indiaOnlyBetaEnabled ? 'grid-cols-1' : 'grid-cols-2'}`}>
               <MarketButton
                 label="India"
                 active={pricingData.snapshot.pricingMarketKey === 'IN'}
                 onClick={() => setMarketOverride('IN')}
               />
-              <MarketButton
-                label="Outside India"
-                active={pricingData.snapshot.pricingMarketKey === 'ROW'}
-                onClick={() => setMarketOverride('ROW')}
-              />
+              {!pricingData.controls.indiaOnlyBetaEnabled && (
+                <MarketButton
+                  label="Outside India"
+                  active={pricingData.snapshot.pricingMarketKey === 'ROW'}
+                  onClick={() => setMarketOverride('ROW')}
+                />
+              )}
             </div>
+            {pricingData.controls.indiaOnlyBetaEnabled && (
+              <p className="px-2 pt-2 text-[11px] text-neutral-500">India-only beta</p>
+            )}
           </div>
         </motion.div>
 

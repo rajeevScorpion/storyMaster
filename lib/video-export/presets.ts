@@ -193,6 +193,7 @@ export type ExportPresetAvailability = 'available' | 'locked';
 
 export interface ResolvedExportPreset extends ExportPresetDefinition {
   availability: ExportPresetAvailability;
+  coinCost?: number;
 }
 
 // Tier authority: enabled presets visible to the plan, with tier-locked ones

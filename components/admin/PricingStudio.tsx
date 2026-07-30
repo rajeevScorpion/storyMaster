@@ -34,6 +34,7 @@ import {
   updatePricingRuntimeSettings,
   type PricingAdminState,
 } from '@/app/actions/pricing-admin';
+import { saveAdminImageModelRegistryRecord } from '@/app/actions/image-models';
 import type { DbPricingPromotion, DbPricingTopupPack } from '@/lib/types/database';
 import { PRICING_NAV_ITEMS, findPricingNavItem, type AdminNavChild } from '@/lib/admin/nav';
 import AdminToggle from '@/components/admin/AdminToggle';
@@ -126,11 +127,19 @@ type PromotionEditorState = {
 type ActionCostDraft = {
   coinCost: string;
   isActive: boolean;
+  freeEnabled: boolean;
+  plusEnabled: boolean;
+  studioEnabled: boolean;
 };
 
 type RuntimeDraft = {
   enabled: boolean;
   value: string;
+};
+
+type InlineMutationFeedback = {
+  status: 'success' | 'error';
+  message: string;
 };
 
 export type PricingStudioSection =
@@ -153,6 +162,135 @@ const WORKSHOP_CARD_GROUPS: { label: string; ids: string[] }[] = [
 ];
 const COIN_RUNTIME_SETTING_KEYS = new Set(['pricing_migration_grant_beats']);
 const LEGACY_TOPUP_PACK_KEYS = new Set(['beats_25', 'beats_80', 'beats_200']);
+const ACTION_COST_GROUP_DEFINITIONS = [
+  {
+    id: 'stories',
+    title: 'Stories',
+    description: 'Interactive and audio-story creation, continuation, narration, covers, and reference processing.',
+    operationGroups: [
+      {
+        id: 'story-creation',
+        title: 'Creation and continuation',
+        actionKeys: [
+          'start_story_initial_beat',
+          'start_story_initial_beat_prompt_only',
+          'continue_story_new_beat',
+          'continue_story_new_beat_prompt_only',
+          'preview_seed_plan',
+        ],
+      },
+      {
+        id: 'story-narration',
+        title: 'Narration and text timing',
+        actionKeys: [
+          'generate_story_narration',
+          'align_story_text_overlay',
+        ],
+      },
+      {
+        id: 'story-covers',
+        title: 'Covers and sharing visuals',
+        actionKeys: [
+          'generate_social_share_cover',
+          'generate_audio_story_cover',
+        ],
+      },
+      {
+        id: 'story-references',
+        title: 'Character and world references',
+        actionKeys: [
+          'adopt_character_reference',
+          'adopt_world_reference',
+          'visualize_world_reference',
+          'analyze_direct_reference',
+        ],
+      },
+    ],
+  },
+  {
+    id: 'reels',
+    title: 'Reels',
+    description: 'Short-form reel creation, narration, and reel-specific visual assets.',
+    operationGroups: [
+      {
+        id: 'reel-creation',
+        title: 'Reel creation',
+        actionKeys: [
+          'start_reel_full_generation',
+          'start_reel_full_generation_prompt_only',
+        ],
+      },
+      {
+        id: 'reel-narration',
+        title: 'Narration',
+        actionKeys: ['generate_reel_narration'],
+      },
+      {
+        id: 'reel-visuals',
+        title: 'Thumbnails and visuals',
+        actionKeys: ['generate_reel_thumbnail'],
+      },
+    ],
+  },
+  {
+    id: 'shared',
+    title: 'Shared operations',
+    description: 'Meters used across stories and reels, or by platform-wide media workflows.',
+    operationGroups: [
+      {
+        id: 'shared-images',
+        title: 'Image generation',
+        actionKeys: [
+          'image_generation',
+          'regenerate_image',
+          'batch_image_generation',
+        ],
+      },
+      {
+        id: 'shared-audio',
+        title: 'Narration utilities',
+        actionKeys: [
+          'generate_narration_preview',
+          'regenerate_narration',
+        ],
+      },
+      {
+        id: 'shared-transcription',
+        title: 'Speech and transcription',
+        actionKeys: ['transcribe_audio_stt'],
+      },
+      {
+        id: 'shared-export',
+        title: 'Video export',
+        actionKeys: [
+          'export_video_sd',
+          'export_video_hd',
+          'export_video_future',
+        ],
+      },
+    ],
+  },
+] as const;
+const IMAGE_MODEL_RATE_GROUP_DEFINITIONS = [
+  {
+    id: 'story-image-models',
+    title: 'Story image models',
+    description: 'Per-image rates for story scenes and story visual generation.',
+    taskKeys: ['image_generation'],
+  },
+  {
+    id: 'reel-image-models',
+    title: 'Reel image models',
+    description: 'Per-image rates for vertical reel visuals.',
+    taskKeys: ['reel_image_generation'],
+  },
+  {
+    id: 'portrait-image-models',
+    title: 'Character and reference models',
+    description: 'Per-image rates for portraits and supporting identity assets.',
+    taskKeys: ['portrait_generation'],
+  },
+] as const;
 const VIDEO_EXPORT_WATERMARK_MODE_LABELS: Record<VideoExportWatermarkMode, string> = {
   auto: 'Auto',
   always: 'Always show',
@@ -410,12 +548,116 @@ function defaultPromotionEditor(): PromotionEditorState {
   };
 }
 
+type GroupedActionCostSection = {
+  id: string;
+  title: string;
+  description: string;
+  operationGroups: Array<{
+    id: string;
+    title: string;
+    actions: PricingAdminState['actionCosts'];
+  }>;
+};
+
+function buildGroupedActionCosts(
+  actionCosts: PricingAdminState['actionCosts']
+): GroupedActionCostSection[] {
+  const actionsByKey = new Map(actionCosts.map((action) => [action.action_key, action]));
+  const assignedKeys = new Set<string>();
+  const sections: GroupedActionCostSection[] = ACTION_COST_GROUP_DEFINITIONS.map((section) => ({
+    id: section.id,
+    title: section.title,
+    description: section.description,
+    operationGroups: section.operationGroups
+      .map((operationGroup) => {
+        const actions = operationGroup.actionKeys.flatMap((actionKey) => {
+          const action = actionsByKey.get(actionKey);
+          if (!action) return [];
+          assignedKeys.add(actionKey);
+          return [action];
+        });
+        return {
+          id: operationGroup.id,
+          title: operationGroup.title,
+          actions,
+        };
+      })
+      .filter((operationGroup) => operationGroup.actions.length > 0),
+  })).filter((section) => section.operationGroups.length > 0);
+
+  const uncategorized = actionCosts
+    .filter((action) => !assignedKeys.has(action.action_key))
+    .sort((left, right) =>
+      (left.display_name || left.action_key).localeCompare(right.display_name || right.action_key)
+    );
+  if (uncategorized.length > 0) {
+    const sharedSection = sections.find((section) => section.id === 'shared');
+    const fallbackGroup = {
+      id: 'shared-other',
+      title: 'Other operations',
+      actions: uncategorized,
+    };
+    if (sharedSection) {
+      sharedSection.operationGroups.push(fallbackGroup);
+    } else {
+      sections.push({
+        id: 'shared',
+        title: 'Shared operations',
+        description: 'Meters used across stories and reels, or by platform-wide media workflows.',
+        operationGroups: [fallbackGroup],
+      });
+    }
+  }
+
+  return sections;
+}
+
+type GroupedImageModelRateSection = {
+  id: string;
+  title: string;
+  description: string;
+  models: PricingAdminState['imageModelRates'];
+};
+
+function buildGroupedImageModelRates(
+  imageModelRates: PricingAdminState['imageModelRates']
+): GroupedImageModelRateSection[] {
+  const assignedIds = new Set<string>();
+  const groups: GroupedImageModelRateSection[] = IMAGE_MODEL_RATE_GROUP_DEFINITIONS.map((definition) => {
+    const allowedTaskKeys = new Set<string>(definition.taskKeys);
+    const models = imageModelRates.filter((model) => {
+      if (!allowedTaskKeys.has(model.taskKey)) return false;
+      assignedIds.add(model.id);
+      return true;
+    });
+    return {
+      id: definition.id,
+      title: definition.title,
+      description: definition.description,
+      models,
+    };
+  }).filter((group) => group.models.length > 0);
+
+  const uncategorized = imageModelRates.filter((model) => !assignedIds.has(model.id));
+  if (uncategorized.length > 0) {
+    groups.push({
+      id: 'other-image-models',
+      title: 'Other image models',
+      description: 'Additional model rates not yet assigned to a specific content workflow.',
+      models: uncategorized,
+    });
+  }
+
+  return groups;
+}
+
 export default function PricingStudio({ section = 'workshop' }: { section?: PricingStudioSection }) {
   const [state, setState] = useState<PricingAdminState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [inlineMutationFeedback, setInlineMutationFeedback] = useState<Record<string, InlineMutationFeedback>>({});
 
   const [selectedPlanKey, setSelectedPlanKey] = useState<PlanKey>('free');
   const [selectedPlanMarket, setSelectedPlanMarket] = useState<PricingMarketKey>('ROW');
@@ -428,6 +670,7 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
   const [topupEditor, setTopupEditor] = useState<TopupEditorState>(defaultTopupEditor('ROW'));
 
   const [actionCostDrafts, setActionCostDrafts] = useState<Record<string, ActionCostDraft>>({});
+  const [imageModelCoinDrafts, setImageModelCoinDrafts] = useState<Record<string, string>>({});
   const [runtimeDrafts, setRuntimeDrafts] = useState<Record<string, RuntimeDraft>>({});
   const [promotionEditor, setPromotionEditor] = useState<PromotionEditorState>(defaultPromotionEditor());
   const [recoveryDrafts, setRecoveryDrafts] = useState({
@@ -532,6 +775,15 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     ) ?? false;
   }, [selectedTopupMarket, state]);
 
+  const groupedActionCosts = useMemo(
+    () => buildGroupedActionCosts(state?.actionCosts ?? []),
+    [state?.actionCosts]
+  );
+  const groupedImageModelRates = useMemo(
+    () => buildGroupedImageModelRates(state?.imageModelRates ?? []),
+    [state?.imageModelRates]
+  );
+
   async function refreshState() {
     setLoading(true);
     setError(null);
@@ -548,7 +800,16 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
   function hydrateState(next: PricingAdminState) {
     setState(next);
     setActionCostDrafts(Object.fromEntries(
-      next.actionCosts.map((row) => [row.action_key, { coinCost: String(beatsToCoins(row.beat_cost)), isActive: row.is_active }])
+      next.actionCosts.map((row) => [row.action_key, {
+        coinCost: String(beatsToCoins(row.beat_cost)),
+        isActive: row.is_active,
+        freeEnabled: row.free_enabled ?? true,
+        plusEnabled: row.plus_enabled ?? true,
+        studioEnabled: row.studio_enabled ?? true,
+      }])
+    ));
+    setImageModelCoinDrafts(Object.fromEntries(
+      next.imageModelRates.map((row) => [row.id, String(row.coinCostPerImage)])
     ));
     setRuntimeDrafts(Object.fromEntries(
       next.runtimeSettings.map((row) => [row.key, { enabled: row.enabled, value: storedValueToEditorValue(row.key, row.value) }])
@@ -582,20 +843,54 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
     key: string,
     action: () => Promise<T>,
     onSuccess: (result: T) => void | Promise<void>,
-    successMessage: string | ((result: T) => string)
+    successMessage: string | ((result: T) => string),
+    options?: { inlineFeedbackKey?: string }
   ) {
+    const inlineFeedbackKey = options?.inlineFeedbackKey;
     setBusyKey(key);
     setError(null);
     setMessage(null);
+    if (inlineFeedbackKey) {
+      setInlineMutationFeedback((current) => {
+        const next = { ...current };
+        delete next[inlineFeedbackKey];
+        return next;
+      });
+    }
     try {
       const result = await action();
       await onSuccess(result);
-      setMessage(typeof successMessage === 'function' ? successMessage(result) : successMessage);
+      const nextMessage = typeof successMessage === 'function' ? successMessage(result) : successMessage;
+      if (inlineFeedbackKey) {
+        setInlineMutationFeedback((current) => ({
+          ...current,
+          [inlineFeedbackKey]: { status: 'success', message: nextMessage },
+        }));
+      } else {
+        setMessage(nextMessage);
+      }
     } catch (err: any) {
-      setError(err.message || 'Something went wrong');
+      const nextError = err.message || 'Something went wrong';
+      if (inlineFeedbackKey) {
+        setInlineMutationFeedback((current) => ({
+          ...current,
+          [inlineFeedbackKey]: { status: 'error', message: nextError },
+        }));
+      } else {
+        setError(nextError);
+      }
     } finally {
       setBusyKey(null);
     }
+  }
+
+  function clearInlineMutationFeedback(key: string) {
+    setInlineMutationFeedback((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   if (loading) {
@@ -1105,61 +1400,252 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
       )}
 
       {section === 'action-costs' && (
-      <SectionCard title="Action Costs" description="Immediate-save coin costs for billable actions." icon={Sparkles}>
-        <div className="grid gap-4 md:grid-cols-2">
-          {state.actionCosts.map((action) => {
-            const draft = actionCostDrafts[action.action_key] ?? { coinCost: String(beatsToCoins(action.beat_cost)), isActive: action.is_active };
+      <SectionCard
+        title="Metering and Entitlements"
+        description="The authoritative coin rate and tier gate for every costly operation."
+        icon={Sparkles}
+      >
+        <div className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+          Plan access and wallet balance are separate checks. Coins never unlock a disabled tier. Image generation uses the selected image model rate; this row controls its tier access.
+        </div>
+        <div className="space-y-8">
+          {groupedActionCosts.map((contentSection) => (
+            <section key={contentSection.id} className="rounded-2xl border border-white/10 bg-neutral-950/35 p-5">
+              <div className="border-b border-white/10 pb-4">
+                <p className="text-xs font-medium uppercase tracking-[0.2em] text-emerald-300/80">
+                  {contentSection.title}
+                </p>
+                <p className="mt-1 text-sm text-neutral-400">{contentSection.description}</p>
+              </div>
+              <div className="mt-5 space-y-6">
+                {contentSection.operationGroups.map((operationGroup) => (
+                  <div key={operationGroup.id}>
+                    <div className="mb-3 flex items-center gap-2">
+                      <h3 className="text-sm font-medium text-neutral-200">{operationGroup.title}</h3>
+                      <span className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-neutral-500">
+                        {operationGroup.actions.length}
+                      </span>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      {operationGroup.actions.map((action) => {
+            const feedbackKey = `action:${action.action_key}`;
+            const feedback = inlineMutationFeedback[feedbackKey];
+            const draft = actionCostDrafts[action.action_key] ?? {
+              coinCost: String(beatsToCoins(action.beat_cost)),
+              isActive: action.is_active,
+              freeEnabled: action.free_enabled ?? true,
+              plusEnabled: action.plus_enabled ?? true,
+              studioEnabled: action.studio_enabled ?? true,
+            };
+            const rateStrategy = typeof action.metadata_json?.rateStrategy === 'string'
+              ? action.metadata_json.rateStrategy
+              : null;
             return (
               <div key={action.id} className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-                <p className="text-sm font-medium text-neutral-100 break-all">{action.action_key}</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-neutral-100">
+                      {action.display_name || action.action_key}
+                    </p>
+                    <p className="mt-1 break-all text-xs text-neutral-500">{action.action_key}</p>
+                  </div>
+                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-neutral-400">
+                    {action.cost_family || 'other'} · {action.billing_unit || 'operation'}
+                  </span>
+                </div>
                 <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
                   <input
                     type="number"
                     min="0"
                     step="1"
                     value={draft.coinCost}
-                    onChange={(event) => setActionCostDrafts((current) => ({
-                      ...current,
-                      [action.action_key]: { ...draft, coinCost: event.target.value },
-                    }))}
-                    className="w-28 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+                    onChange={(event) => {
+                      clearInlineMutationFeedback(feedbackKey);
+                      setActionCostDrafts((current) => ({
+                        ...current,
+                        [action.action_key]: { ...draft, coinCost: event.target.value },
+                      }));
+                    }}
+                    disabled={rateStrategy === 'image_model_registry'}
+                    className="w-28 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
                   />
-                  <span className="text-xs text-neutral-500">coins</span>
+                  <span className="text-xs text-neutral-500">
+                    {rateStrategy === 'image_model_registry' ? 'model-priced' : 'coins'}
+                  </span>
                   <AdminToggle
                     checked={draft.isActive}
-                    onToggle={() => setActionCostDrafts((current) => ({
-                      ...current,
-                      [action.action_key]: { ...draft, isActive: !draft.isActive },
-                    }))}
+                    onToggle={() => {
+                      clearInlineMutationFeedback(feedbackKey);
+                      setActionCostDrafts((current) => ({
+                        ...current,
+                        [action.action_key]: { ...draft, isActive: !draft.isActive },
+                      }));
+                    }}
                     ariaLabel={`Toggle ${action.action_key}`}
                   />
                   <span className="text-xs text-neutral-500">{draft.isActive ? 'Active' : 'Inactive'}</span>
                 </div>
-                <div className="mt-4">
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  {([
+                    ['freeEnabled', 'Free'],
+                    ['plusEnabled', 'Plus'],
+                    ['studioEnabled', 'Studio'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-neutral-950/50 px-2.5 py-2">
+                      <span className="text-xs text-neutral-400">{label}</span>
+                      <AdminToggle
+                        checked={draft[key]}
+                        onToggle={() => {
+                          clearInlineMutationFeedback(feedbackKey);
+                          setActionCostDrafts((current) => ({
+                            ...current,
+                            [action.action_key]: { ...draft, [key]: !draft[key] },
+                          }));
+                        }}
+                        ariaLabel={`Allow ${action.action_key} for ${label}`}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
                   <ActionButton
-                    busy={busyKey === `action:${action.action_key}`}
+                    busy={busyKey === feedbackKey}
                     label="Save Cost"
                     icon={Save}
                     onClick={() => void runMutation(
-                      `action:${action.action_key}`,
+                      feedbackKey,
                       () => {
                         const coinCost = parseActionCoinCost(draft.coinCost);
                         return savePricingActionCost({
                           actionKey: action.action_key,
                           beatCost: coinsToActionBeats(coinCost),
                           isActive: draft.isActive,
+                          displayName: action.display_name,
+                          costFamily: action.cost_family,
+                          billingUnit: action.billing_unit,
+                          freeEnabled: draft.freeEnabled,
+                          plusEnabled: draft.plusEnabled,
+                          studioEnabled: draft.studioEnabled,
+                          metadata: action.metadata_json,
                           effectiveFrom: action.effective_from,
                           effectiveTo: action.effective_to,
                         });
                       },
                       hydrateState,
-                      `${action.action_key} updated`
+                      'Saved',
+                      { inlineFeedbackKey: feedbackKey }
                     )}
                   />
+                  {feedback && (
+                    <span
+                      role="status"
+                      aria-live="polite"
+                      className={`inline-flex min-w-0 items-center gap-1.5 text-xs ${
+                        feedback.status === 'success' ? 'text-emerald-300' : 'text-rose-300'
+                      }`}
+                    >
+                      {feedback.status === 'success' && <CheckCircle size={14} className="shrink-0" />}
+                      <span className="break-words">{feedback.message}</span>
+                    </span>
+                  )}
                 </div>
               </div>
             );
-          })}
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+        <div className="mt-6 rounded-xl border border-white/10 bg-neutral-900/50 p-4">
+          <div className="mb-4">
+            <h3 className="text-sm font-medium text-neutral-100">Image model rate overrides</h3>
+            <p className="mt-1 text-xs text-neutral-500">
+              These per-image rates are consumed by the same coin-economy gateway and override the zero-cost image entitlement row above.
+            </p>
+          </div>
+          <div className="space-y-5">
+            {groupedImageModelRates.map((modelGroup) => (
+              <div key={modelGroup.id}>
+                <div className="mb-3">
+                  <h4 className="text-sm font-medium text-neutral-200">{modelGroup.title}</h4>
+                  <p className="mt-1 text-xs text-neutral-500">{modelGroup.description}</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {modelGroup.models.map((model) => {
+              const feedbackKey = `image-rate:${model.id}`;
+              const feedback = inlineMutationFeedback[feedbackKey];
+              const value = imageModelCoinDrafts[model.id] ?? String(model.coinCostPerImage);
+              return (
+                <div key={model.id} className="rounded-xl border border-white/10 bg-neutral-950/50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-neutral-200">{model.displayName}</p>
+                      <p className="mt-1 truncate text-xs text-neutral-500">{model.taskKey} · {model.providerKey}</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider ${
+                      model.isEnabled ? 'bg-emerald-500/10 text-emerald-300' : 'bg-white/5 text-neutral-500'
+                    }`}>
+                      {model.isEnabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={value}
+                      onChange={(event) => {
+                        clearInlineMutationFeedback(feedbackKey);
+                        setImageModelCoinDrafts((current) => ({
+                          ...current,
+                          [model.id]: event.target.value,
+                        }));
+                      }}
+                      className="w-28 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100"
+                    />
+                    <span className="text-xs text-neutral-500">coins / image</span>
+                    <ActionButton
+                      busy={busyKey === feedbackKey}
+                      label="Save"
+                      icon={Save}
+                      onClick={() => void runMutation(
+                        feedbackKey,
+                        async () => {
+                          const coinCostPerImage = parseActionCoinCost(value);
+                          await saveAdminImageModelRegistryRecord({
+                            id: model.id,
+                            coinCostPerImage,
+                          });
+                          return getPricingAdminState();
+                        },
+                        hydrateState,
+                        'Saved',
+                        { inlineFeedbackKey: feedbackKey }
+                      )}
+                    />
+                    {feedback && (
+                      <span
+                        role="status"
+                        aria-live="polite"
+                        className={`inline-flex min-w-0 items-center gap-1.5 text-xs ${
+                          feedback.status === 'success' ? 'text-emerald-300' : 'text-rose-300'
+                        }`}
+                      >
+                        {feedback.status === 'success' && <CheckCircle size={14} className="shrink-0" />}
+                        <span className="break-words">{feedback.message}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </SectionCard>
       )}

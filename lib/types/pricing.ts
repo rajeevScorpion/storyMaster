@@ -57,8 +57,27 @@ export const PRICING_ACTION_KEYS = [
   'adopt_world_reference',
   'visualize_world_reference',
   'analyze_direct_reference',
+  'image_generation',
+  'generate_story_narration',
+  'generate_reel_narration',
+  'generate_narration_preview',
+  'align_story_text_overlay',
+  'transcribe_audio_stt',
+  'export_video_sd',
+  'export_video_hd',
 ] as const;
 export type PricingActionKey = (typeof PRICING_ACTION_KEYS)[number];
+
+export const PRICING_COST_FAMILIES = [
+  'text',
+  'image',
+  'tts',
+  'alignment',
+  'export',
+  'reference',
+  'other',
+] as const;
+export type PricingCostFamily = (typeof PRICING_COST_FAMILIES)[number];
 
 export const PRICING_AUDIT_ENTITY_TYPES = [
   'plan_version',
@@ -93,6 +112,7 @@ export const PRICING_RUNTIME_FLAG_KEYS = [
   'pricing_tester_studio_duration_days',
   'pricing_routing_provider_in',
   'pricing_routing_provider_row',
+  'pricing_india_only_beta_enabled',
 ] as const;
 export type PricingRuntimeFlagKey = (typeof PRICING_RUNTIME_FLAG_KEYS)[number];
 
@@ -254,6 +274,16 @@ export const PRICING_RUNTIME_SETTING_DEFINITIONS: readonly PricingRuntimeSetting
     enabledHelp: 'When this is on, Kissago uses the provider below for outside-India checkout.',
     disabledHelp: 'When this is off, Kissago uses the built-in outside-India checkout provider.',
   },
+  {
+    key: 'pricing_india_only_beta_enabled',
+    kind: 'boolean',
+    defaultEnabled: true,
+    defaultValue: null,
+    label: 'India-Only Beta',
+    description: 'Limits paid beta checkout to India while the first public test is running.',
+    enabledHelp: 'When this is on, only India plan and coin-pack checkout can start.',
+    disabledHelp: 'When this is off, checkout availability follows the configured market providers.',
+  },
 ] as const;
 
 export const VIDEO_EXPORT_VERTICAL_RESOLUTIONS = ['720x1280', '1080x1920'] as const;
@@ -311,6 +341,7 @@ export interface PricingRuntimeControls {
   testerStudioDurationDays: number;
   routingProviderIn: BillingProvider;
   routingProviderRow: BillingProvider;
+  indiaOnlyBetaEnabled: boolean;
 }
 
 export interface EffectivePricingSnapshot {
@@ -345,6 +376,7 @@ export interface PricingRuntimeContext {
   controls: PricingRuntimeControls;
   snapshot: EffectivePricingSnapshot;
   actionCosts: Record<string, number>;
+  meterEntitlements: Record<string, boolean>;
 }
 
 export interface PricingPlanOfferCard {
@@ -432,7 +464,10 @@ export interface PricingWalletPageData {
 export type PricingAuthorizationDeniedReason =
   | 'sign_in_required'
   | 'insufficient_balance'
-  | 'checkout_unavailable';
+  | 'checkout_unavailable'
+  | 'tier_locked'
+  | 'feature_disabled'
+  | 'pricing_unavailable';
 
 export type PricingAuthorizationMode = 'soft' | 'shadow' | 'hard';
 

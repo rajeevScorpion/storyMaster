@@ -19,7 +19,7 @@ const PRICING_MARKET_STORAGE_KEY = 'kissago_pricing_market_override';
 
 // Bump the version suffix whenever the PricingRuntimeContext shape changes so
 // stale snapshots from an older deploy are discarded instead of painted.
-const PRICING_SNAPSHOT_STORAGE_KEY = 'kissago_pricing_runtime_snapshot_v1';
+const PRICING_SNAPSHOT_STORAGE_KEY = 'kissago_pricing_runtime_snapshot_v2';
 const PRICING_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface StoredPricingSnapshot {
@@ -86,6 +86,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     testerStudioDurationDays: 90,
     routingProviderIn: 'razorpay',
     routingProviderRow: 'stripe',
+    indiaOnlyBetaEnabled: true,
   },
   actionCosts: {
     start_story_initial_beat: 1,
@@ -101,6 +102,15 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     generate_audio_story_cover: 1,
     generate_reel_thumbnail: 1,
     export_video_future: 5,
+  },
+  meterEntitlements: {
+    image_generation: false,
+    generate_story_narration: true,
+    generate_reel_narration: true,
+    generate_narration_preview: true,
+    align_story_text_overlay: true,
+    export_video_sd: true,
+    export_video_hd: false,
   },
   snapshot: {
     pricingMarketKey: 'IN',

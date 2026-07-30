@@ -68,6 +68,7 @@ export function buildPricingRuntimeControls(
     testerStudioDurationDays: getIntegerControl(rows, 'pricing_tester_studio_duration_days'),
     routingProviderIn: getProviderControl(rows, 'pricing_routing_provider_in'),
     routingProviderRow: getProviderControl(rows, 'pricing_routing_provider_row'),
+    indiaOnlyBetaEnabled: getBooleanControl(rows, 'pricing_india_only_beta_enabled'),
   };
 }
 

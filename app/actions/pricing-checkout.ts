@@ -1,6 +1,7 @@
 'use server';
 
 import { createRazorpayOrder, createRazorpayPlan, createRazorpaySubscription, getRazorpayKeyId } from '@/lib/billing/razorpay';
+import { getFeatureFlag } from '@/lib/ai/model-config';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type {
@@ -35,6 +36,7 @@ export async function prepareRazorpayCheckoutInternal(
 
   if (input.kind === 'subscription') {
     const version = await loadPlanVersionForCheckout(supabase, input.planVersionId, options.pricingMarketKey ?? null);
+    await assertBetaMarketAllowed(version.pricing_market_key);
     const plan = await loadPlanById(supabase, version.plan_id);
 
     if (plan.plan_key === 'free' || version.price_minor <= 0) {
@@ -107,6 +109,7 @@ export async function prepareRazorpayCheckoutInternal(
   }
 
   const topup = await loadTopupPackForCheckout(supabase, input.topupPackId, options.pricingMarketKey ?? null);
+  await assertBetaMarketAllowed(topup.pricing_market_key);
   if (topup.price_minor <= 0) {
     throw new Error('This coin pack is not purchasable');
   }
@@ -156,6 +159,12 @@ export async function prepareRazorpayCheckoutInternal(
     userName: auth.userName,
     userEmail: auth.userEmail,
   };
+}
+
+async function assertBetaMarketAllowed(pricingMarketKey: PricingMarketKey): Promise<void> {
+  if (pricingMarketKey !== 'IN' && await getFeatureFlag('pricing_india_only_beta_enabled', true)) {
+    throw new Error('Kissago paid beta checkout is currently available in India only.');
+  }
 }
 
 async function getAuthenticatedUser(): Promise<{

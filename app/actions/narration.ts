@@ -1,7 +1,7 @@
 'use server';
 
 import { GoogleGenAI } from '@google/genai';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
@@ -41,6 +41,13 @@ import {
 } from '@/lib/ai/narration-voice-settings';
 import { getAllowedAccentIdsForPlan, isEnglishNarrationLanguage, narrationLanguageDisplayName } from '@/lib/ai/narration-accents';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
+import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
+import { pricingAuthorizationMessage } from '@/lib/pricing/coin-economy.shared';
+import {
+  finalizeBillableAction,
+  releaseBillableAction,
+} from '@/lib/pricing/enforcement';
+import type { PricingActionKey } from '@/lib/types/pricing';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
@@ -65,6 +72,73 @@ const NARRATION_SAMPLE_BUCKET = 'narration-voice-samples';
 const VOICE_SAMPLE_BATCH_SIZE = 6;
 const VOICE_SAMPLE_BATCH_DELAY_MS = 65_000;
 const VOICE_SAMPLE_MAX_ATTEMPTS = 3;
+
+async function resolveNarrationBillingUserId(explicitUserId?: string | null): Promise<string> {
+  if (explicitUserId) return explicitUserId;
+  const supabase = await createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) throw new Error('Sign in to generate narration.');
+  return user.id;
+}
+
+async function runMeteredNarrationOperation<T>(input: {
+  userId?: string | null;
+  meterKey: Extract<
+    PricingActionKey,
+    'generate_story_narration' | 'generate_reel_narration' | 'generate_narration_preview'
+  >;
+  idempotencyKey?: string;
+  storyId?: string | null;
+  nodeId?: string | null;
+  metadata?: Record<string, unknown>;
+  run: (userId: string) => Promise<T>;
+}): Promise<T> {
+  const userId = await resolveNarrationBillingUserId(input.userId);
+  const authorization = await authorizeCoinOperationForUser({
+    userId,
+    operationKey: input.meterKey,
+    idempotencyKey: input.idempotencyKey ?? `${input.meterKey}:${randomUUID()}`,
+    components: [{ meterKey: input.meterKey }],
+    relatedStoryId: input.storyId ?? null,
+    relatedNodeId: input.nodeId ?? null,
+    metadata: input.metadata,
+  });
+
+  if (authorization.status === 'denied') {
+    throw new Error(pricingAuthorizationMessage(authorization));
+  }
+
+  let result: T;
+  try {
+    result = await input.run(userId);
+  } catch (error) {
+    if (authorization.status === 'allowed' && authorization.reservationId) {
+      await releaseBillableAction({
+        userId,
+        reservationId: authorization.reservationId,
+        reason: 'narration_provider_failed',
+        releaseStatus: 'failed',
+        metadata: {
+          meterKey: input.meterKey,
+          message: error instanceof Error ? error.message : 'Narration provider failed',
+        },
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
+
+  if (authorization.status === 'allowed' && authorization.reservationId) {
+    await finalizeBillableAction({
+      userId,
+      reservationId: authorization.reservationId,
+      storyId: input.storyId ?? null,
+      relatedEntityId: input.nodeId ?? null,
+      metadata: { meterKey: input.meterKey },
+    });
+  }
+
+  return result;
+}
 
 function narrationNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -1459,9 +1533,24 @@ export async function generateAndPersistNarration(
     // When present, upload + persist on behalf of `userId` via the service-role
     // client (background worker path). Absent for the interactive path.
     serverAuth?: { userId: string };
+    billingIdempotencyKey?: string;
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata?: BeatNarrationMetadata }> {
-  return timeNarrationStep(
+  const meterKey = options.taskKey === 'reel_tts'
+    ? 'generate_reel_narration' as const
+    : 'generate_story_narration' as const;
+  return runMeteredNarrationOperation({
+    userId: options.serverAuth?.userId,
+    meterKey,
+    idempotencyKey: options.billingIdempotencyKey,
+    storyId: savedStoryId,
+    nodeId,
+    metadata: {
+      generationMode: options.generationMode ?? 'final',
+      language,
+      providerTaskKey: options.taskKey ?? 'tts',
+    },
+    run: () => timeNarrationStep(
     'narration.generate_and_persist',
     {
       storyId: savedStoryId,
@@ -1673,7 +1762,8 @@ export async function generateAndPersistNarration(
         }),
       };
     }
-  );
+    ),
+  });
 }
 
 /**
@@ -1691,9 +1781,17 @@ export async function generateNarrationOnly(
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
     accent?: string | null;
+    billingIdempotencyKey?: string;
   } = {}
 ): Promise<string> {
-  return timeNarrationStep(
+  const meterKey = options.taskKey === 'reel_tts'
+    ? 'generate_reel_narration' as const
+    : 'generate_story_narration' as const;
+  return runMeteredNarrationOperation({
+    meterKey,
+    idempotencyKey: options.billingIdempotencyKey,
+    metadata: { language, providerTaskKey: options.taskKey ?? 'tts' },
+    run: () => timeNarrationStep(
     'narration.generate_only',
     {
       language,
@@ -1704,7 +1802,8 @@ export async function generateNarrationOnly(
       const wavBuffer = pcmToWavBuffer(result.pcmBase64);
       return `data:audio/wav;base64,${wavBuffer.toString('base64')}`;
     }
-  );
+    ),
+  });
 }
 
 export async function generateReelNarrationOnly(
@@ -1723,9 +1822,22 @@ export async function generateReelNarrationOnly(
     previewScope?: 'sample' | 'full';
     panelPauseMs?: number;
     logUserId?: string | null;
+    billingIdempotencyKey?: string;
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata: BeatNarrationMetadata }> {
-  return timeNarrationStep(
+  const meterKey = options.generationMode === 'preview'
+    ? 'generate_narration_preview' as const
+    : 'generate_reel_narration' as const;
+  return runMeteredNarrationOperation({
+    userId: options.logUserId,
+    meterKey,
+    idempotencyKey: options.billingIdempotencyKey,
+    metadata: {
+      language,
+      generationMode: options.generationMode ?? 'preview',
+      previewScope: options.previewScope ?? 'sample',
+    },
+    run: () => timeNarrationStep(
     'narration.generate_reel_only',
     {
       language,
@@ -1755,7 +1867,8 @@ export async function generateReelNarrationOnly(
         }),
       };
     }
-  );
+    ),
+  });
 }
 
 /**
