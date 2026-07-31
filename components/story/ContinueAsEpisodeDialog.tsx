@@ -174,6 +174,9 @@ export default function ContinueAsEpisodeDialog({
     if (authorization.reason === 'sign_in_required') {
       return 'Sign in to preview a seeded episode.';
     }
+    if (authorization.reason === 'account_restricted') {
+      return 'This account is currently restricted and cannot generate episode previews.';
+    }
 
     const availableCoins = authorization.availableCoins.toLocaleString();
     if (authorization.reason === 'checkout_unavailable') {

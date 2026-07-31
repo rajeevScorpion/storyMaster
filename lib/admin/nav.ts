@@ -330,6 +330,32 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
 
 export const ADMIN_NAV: AdminNavGroup[] = [
   {
+    id: 'operations',
+    label: 'Operations',
+    items: [
+      {
+        label: 'User management',
+        href: '/admin/users',
+        icon: UsersRound,
+        childGroups: [
+          {
+            id: 'users',
+            label: null,
+            items: [
+              {
+                id: 'cohorts',
+                label: 'Promotional cohorts',
+                href: '/admin/users/cohorts',
+                icon: Megaphone,
+                description: 'Reward a previewed, rule-based audience with audited promotional coins.',
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  },
+  {
     id: 'content',
     label: 'Content',
     items: [

@@ -1618,6 +1618,16 @@ function buildPricingErrorStateForAction(
     };
   }
 
+  if (authorization.reason === 'account_restricted') {
+    return {
+      error: 'This account is currently restricted and cannot create or generate content.',
+      errorAction: {
+        label: 'View account status',
+        href: '/account-restricted',
+      },
+    };
+  }
+
   const availableCoins = authorization.availableCoins.toLocaleString();
 
   if (authorization.reason === 'checkout_unavailable') {

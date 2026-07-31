@@ -860,6 +860,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     if (authorization.reason === 'sign_in_required') {
       return 'Sign in to preview a seeded story plan.';
     }
+    if (authorization.reason === 'account_restricted') {
+      return 'This account is currently restricted and cannot generate story previews.';
+    }
 
     const availableCoins = authorization.availableCoins.toLocaleString();
     if (authorization.reason === 'checkout_unavailable') {

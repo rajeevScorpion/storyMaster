@@ -463,6 +463,7 @@ export interface PricingWalletPageData {
 
 export type PricingAuthorizationDeniedReason =
   | 'sign_in_required'
+  | 'account_restricted'
   | 'insufficient_balance'
   | 'checkout_unavailable'
   | 'tier_locked'

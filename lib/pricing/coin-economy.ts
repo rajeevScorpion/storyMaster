@@ -17,6 +17,7 @@ import {
   type PricingActionKey,
   type PricingBillableActionAuthorization,
 } from '@/lib/types/pricing';
+import { getEffectiveUserModeration } from '@/lib/admin/user-moderation';
 
 export interface AuthorizeCoinOperationInput {
   userId: string | null;
@@ -84,6 +85,18 @@ export async function authorizeCoinOperationForUser(
       coinCost: quote.totalCoinCost,
       availableBeats: 0,
       availableCoins: 0,
+    };
+  }
+
+  const moderation = await getEffectiveUserModeration(input.userId);
+  if (moderation.status === 'blocked' || moderation.status === 'suspended') {
+    return {
+      status: 'denied',
+      reason: 'account_restricted',
+      beatCost: quote.totalBeatCost,
+      coinCost: quote.totalCoinCost,
+      availableBeats: context.availableBeats,
+      availableCoins: beatsToCoins(context.availableBeats),
     };
   }
 

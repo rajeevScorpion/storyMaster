@@ -98,6 +98,11 @@ describe('admin nav config', () => {
     expect(SETTINGS_NAV_ITEMS.some((item) => item.href === '/admin/help')).toBe(false);
   });
 
+  it('includes user management as a top-level Operations item', () => {
+    const operations = ADMIN_NAV.find((group) => group.id === 'operations');
+    expect(operations?.items.find((item) => item.href === '/admin/users')).toBeDefined();
+  });
+
   it('resolves items by id', () => {
     expect(findSettingsNavItem('storyboard')?.href).toBe('/admin/settings/storyboard');
     expect(findSettingsNavItem('nonexistent')).toBeUndefined();
