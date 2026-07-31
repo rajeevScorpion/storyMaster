@@ -11,12 +11,10 @@ export default function VideoExportDialog({
   open,
   onClose,
   onSelect,
-  coinCost,
 }: {
   open: boolean;
   onClose: () => void;
   onSelect: (preset: ResolvedExportPreset) => void;
-  coinCost?: number | null;
 }) {
   const [presets, setPresets] = useState<ResolvedExportPreset[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -117,18 +115,18 @@ export default function VideoExportDialog({
                           ? preset.upgradePromptText || 'Available on Plus and above'
                           : preset.description}
                       </span>
+                      {typeof preset.coinCost === 'number' && preset.coinCost > 0 && (
+                        <span className={`mt-2 flex items-center gap-1.5 text-xs ${locked ? 'text-neutral-600' : 'text-amber-200'}`}>
+                          <Coins className="h-3.5 w-3.5" />
+                          {preset.coinCost} coins
+                        </span>
+                      )}
                     </button>
                   );
                 })
               )}
             </div>
 
-            {typeof coinCost === 'number' && coinCost > 0 && (
-              <p className="mt-3 flex items-center gap-1.5 text-xs text-neutral-400">
-                <Coins className="h-3.5 w-3.5 text-amber-300" />
-                Exporting costs {coinCost} {coinCost === 1 ? 'beat' : 'beats'}.
-              </p>
-            )}
           </motion.div>
         </motion.div>
       )}

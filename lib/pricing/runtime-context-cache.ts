@@ -65,3 +65,7 @@ export function invalidatePricingRuntimeCacheForUser(userId: string): void {
     }
   }
 }
+
+export function invalidateAllPricingRuntimeCaches(): void {
+  cache.clear();
+}

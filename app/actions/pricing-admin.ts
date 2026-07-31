@@ -38,6 +38,8 @@ import {
   type PromotionMarketScope,
   normalizeVideoExportPreset,
 } from '@/lib/types/pricing';
+import { listImageModelRegistry } from '@/lib/ai/image-models';
+import type { ImageModelRegistryRecord } from '@/lib/ai/image-models.shared';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -69,6 +71,7 @@ export interface PricingAdminState {
   actionCosts: DbPricingActionCost[];
   promotions: DbPricingPromotion[];
   runtimeSettings: PricingAdminRuntimeSetting[];
+  imageModelRates: ImageModelRegistryRecord[];
 }
 
 export interface PricingAuditPageInput {
@@ -135,6 +138,13 @@ export interface SavePricingActionCostInput {
   actionKey: PricingActionKey | string;
   beatCost: number;
   isActive: boolean;
+  displayName?: string | null;
+  costFamily?: DbPricingActionCost['cost_family'];
+  billingUnit?: string;
+  freeEnabled?: boolean;
+  plusEnabled?: boolean;
+  studioEnabled?: boolean;
+  metadata?: JsonRecord;
   effectiveFrom?: string;
   effectiveTo?: string | null;
 }
@@ -746,6 +756,13 @@ export async function savePricingActionCost(input: SavePricingActionCostInput): 
       action_key: input.actionKey.trim(),
       beat_cost: beatCost,
       is_active: input.isActive,
+      display_name: normalizeText(input.displayName) ?? existing?.display_name ?? null,
+      cost_family: input.costFamily ?? existing?.cost_family ?? 'other',
+      billing_unit: normalizeText(input.billingUnit) ?? existing?.billing_unit ?? 'operation',
+      free_enabled: input.freeEnabled ?? existing?.free_enabled ?? true,
+      plus_enabled: input.plusEnabled ?? existing?.plus_enabled ?? true,
+      studio_enabled: input.studioEnabled ?? existing?.studio_enabled ?? true,
+      metadata_json: input.metadata ?? existing?.metadata_json ?? {},
       effective_from: input.effectiveFrom ?? timestamp,
       effective_to: input.effectiveTo ?? null,
       updated_at: timestamp,
@@ -767,6 +784,7 @@ export async function savePricingActionCost(input: SavePricingActionCostInput): 
     afterJson: data as DbPricingActionCost,
   });
 
+  invalidatePricingGlobalsCache();
   return getPricingAdminStateInternal(supabase);
 }
 
@@ -989,13 +1007,14 @@ export async function expirePricingReservations(): Promise<ExpirePricingReservat
 }
 
 async function getPricingAdminStateInternal(supabase: AdminClient): Promise<PricingAdminState> {
-  const [plansResult, versionsResult, topupsResult, actionCostsResult, promotionsResult, runtimeSettings] = await Promise.all([
+  const [plansResult, versionsResult, topupsResult, actionCostsResult, promotionsResult, runtimeSettings, imageModelRates] = await Promise.all([
     supabase.from('pricing_plans').select('*').order('tier_rank', { ascending: true }).order('name', { ascending: true }),
     supabase.from('pricing_plan_versions').select('*').order('plan_id', { ascending: true }).order('pricing_market_key', { ascending: true }).order('billing_interval', { ascending: true }).order('status', { ascending: true }),
     supabase.from('pricing_topup_packs').select('*').order('pricing_market_key', { ascending: true }).order('beat_amount', { ascending: true }).order('status', { ascending: true }),
     supabase.from('pricing_action_costs').select('*').order('action_key', { ascending: true }),
     supabase.from('pricing_promotions').select('*').order('created_at', { ascending: false }),
     getPricingRuntimeSettingsInternal(supabase),
+    listImageModelRegistry('studio').catch(() => []),
   ]);
 
   throwIfQueryFailed(plansResult.error, 'Failed to load pricing plans');
@@ -1022,6 +1041,7 @@ async function getPricingAdminStateInternal(supabase: AdminClient): Promise<Pric
     actionCosts: (actionCostsResult.data ?? []) as DbPricingActionCost[],
     promotions: (promotionsResult.data ?? []) as DbPricingPromotion[],
     runtimeSettings,
+    imageModelRates,
   };
 }
 

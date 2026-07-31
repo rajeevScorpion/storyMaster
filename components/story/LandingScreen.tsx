@@ -229,6 +229,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     accent: string;
   }>(() => getDefaultNarrationVoiceSelection(initialLandingData.narrationVoiceConfig));
   const storyLengthUiEnabled = pricing.controls.pricingStoryLengthUiLimitsEnabled;
+  const imageGenerationAllowed = pricing.meterEntitlements?.image_generation === true;
+  const imageEntitlementReady = !pricingRuntime.isLoading || Boolean(initialPricing);
   const storyLengthCap = storyLengthUiEnabled ? Math.max(3, pricing.snapshot.storyLengthCap) : 8;
   const isReelMode = creationMode === 'reel';
   const reelMaxBeats = reelBeatCount;
@@ -256,6 +258,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const selectedReelVisualStyle = reelVisualStyleCards.find((style) => style.id === reelVisualStyleId)
     ?? reelVisualStyleCards.find((style) => !style.isLocked)
     ?? null;
+
+  useEffect(() => {
+    if (imageEntitlementReady && !imageGenerationAllowed && imageGenerationMode !== 'prompt_only') {
+      setImageGenerationMode('prompt_only');
+      setImageDeliveryMode('live');
+      setEpisodicCharacters(false);
+    }
+  }, [imageEntitlementReady, imageGenerationAllowed, imageGenerationMode]);
 
   // Pack 2 character mixing: bring saved library characters into a new story
   // (picker + @name mentions in the prompt). Snapshot + masters come from the
@@ -1338,14 +1348,15 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                                   <button
                                     type="button"
                                     onClick={() => setImageGenerationMode('generate')}
-                                    className={`px-1 transition-colors ${
+                                    disabled={!imageGenerationAllowed}
+                                    className={`px-1 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                                       imageGenerationMode === 'generate'
                                         ? 'bg-emerald-500/25 text-white'
                                         : 'text-neutral-400 hover:bg-neutral-700/60'
                                     }`}
                                     aria-pressed={imageGenerationMode === 'generate'}
                                   >
-                                    AI
+                                    {imageGenerationAllowed ? 'AI' : 'AI · Plus'}
                                   </button>
                                 </div>
                               </div>
@@ -1715,6 +1726,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 onCreatorReferenceQualityChange={(value) => setUseCreatorOneKCharacterSheet(value === '1K')}
                 storyPromptOnlyModeEnabled={setupSettings.storyPromptOnlyModeEnabled}
                 imageGenerationMode={imageGenerationMode}
+                imageGenerationAllowed={imageGenerationAllowed}
                 onImageGenerationModeChange={setImageGenerationMode}
                 batchImageDeliveryEnabled
                 imageDeliveryMode={imageDeliveryMode}

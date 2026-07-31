@@ -18,7 +18,8 @@ import {
   isReferenceKind,
 } from '@/lib/references/reference-storage';
 import { ReferenceError } from '@/lib/references/reference-errors';
-import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
+import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
+import { finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { buildSeedCharacters, type SeedCharacterInput } from '@/lib/references/seed';
 import { buildDirectSeed, type DirectSeedInput } from '@/lib/references/direct-seed';
 import { analyzeCharacterReference, analyzeWorldReference } from '@/lib/ai/reference-analysis';
@@ -531,10 +532,11 @@ export async function loadDirectReferenceSeed(
 async function analyzeDirectReference(userId: string, input: DirectSeedInput): Promise<string | null> {
   let reservationId: string | null = null;
   try {
-    const auth = await authorizeBillableAction({
+    const auth = await authorizeCoinOperationForUser({
       userId,
-      actionKey: 'analyze_direct_reference',
+      operationKey: 'analyze_direct_reference',
       idempotencyKey: `refanalyze:${input.sourceId}`,
+      components: [{ meterKey: 'analyze_direct_reference' }],
       metadata: { feature: 'reference_direct_input' },
     });
     if (auth.status === 'denied') return null;
@@ -652,10 +654,18 @@ async function reserveAdoptionCoins(input: {
   actionKey: PricingActionKey;
   idempotencyKey: string;
 }): Promise<string | null> {
-  const auth = await authorizeBillableAction({
+  const auth = await authorizeCoinOperationForUser({
     userId: input.userId,
-    actionKey: input.actionKey,
+    operationKey: input.actionKey,
     idempotencyKey: input.idempotencyKey,
+    components: [
+      { meterKey: input.actionKey },
+      {
+        meterKey: 'image_generation',
+        unitBeatCostOverride: 0,
+        metadata: { entitlementOnly: true },
+      },
+    ],
     metadata: { feature: 'reference_personalization' },
   });
   if (auth.status === 'denied') throw new ReferenceError('REFERENCE_INSUFFICIENT_COINS');

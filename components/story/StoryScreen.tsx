@@ -69,10 +69,10 @@ import {
 } from '@/app/actions/reel-narration';
 import { useReelVideoExport } from '@/lib/hooks/useReelVideoExport';
 import {
-  authorizeCurrentUserBillableAction,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
+import { authorizeCurrentUserVideoExport } from '@/app/actions/video-export';
 import { getActiveGalleryStorageKey, getBeatDisplayImageUrl, hasBeatImpossibleImageState, normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import type { StoryBeat, StoryNode, StorySession } from '@/lib/types/story';
 import { resolveVideoExportWatermarkVisibility, type PricingRuntimeContext } from '@/lib/types/pricing';
@@ -2964,7 +2964,7 @@ function StoryScreenInner({
   const narrationIsResolving = Boolean(normalizedCurrentBeat.audioUrl && !currentBeatPlaybackAudioUrl && audioIsResolving);
   const videoDownloadGlobalOn = cycleSettings.videoDownloadEnabled;
   const adminBypassed = cycleSettings.videoDownloadAdminBypass && isAdminUser;
-  const canAccessVideoExport = adminBypassed || (pricing.controls.pricingSnapshotEnabled && pricing.snapshot.canAccessDownloads);
+  const canAccessVideoExport = adminBypassed || pricing.snapshot.canAccessDownloads;
   const videoExportPreset = pricing.snapshot.videoExportPreset;
   const showVideoWatermark = resolveVideoExportWatermarkVisibility(
     videoExportPreset,
@@ -4408,8 +4408,8 @@ function StoryScreenInner({
 
     const exportTitle = session.title || 'kissago-reel';
     if (!adminBypassed) {
-      const auth = await authorizeCurrentUserBillableAction({
-        actionKey: 'export_video_future',
+      const auth = await authorizeCurrentUserVideoExport({
+        presetId: enginePreset?.id ?? 'sd',
         idempotencyKey: `export-reel-${session.savedStoryId ?? currentNodeId}-${Date.now()}`,
         relatedStoryId: session.savedStoryId ?? null,
         relatedNodeId: currentNodeId,
@@ -7940,7 +7940,6 @@ function StoryScreenInner({
       <VideoExportDialog
         open={reelExportDialogOpen}
         onClose={() => setReelExportDialogOpen(false)}
-        coinCost={pricing.actionCosts?.export_video_future ?? null}
         onSelect={(enginePreset) => {
           setReelExportDialogOpen(false);
           void handleExportReelVideo(enginePreset);

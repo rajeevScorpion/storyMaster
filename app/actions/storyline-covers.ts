@@ -16,7 +16,8 @@ import type { ImageModelSelection, ImageTaskKey } from '@/lib/ai/image-models.sh
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { DEFAULT_IMAGE_MODEL_ID } from '@/lib/ai/model-config.shared';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
-import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
+import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
+import { finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -996,10 +997,18 @@ export async function generateDraftStoryCoverImage(input: {
   if (error || !user) throw new Error('Sign in to generate a cover.');
 
   const actionKey = coverGenerationActionKey(input.kind);
-  const authorization = await authorizeBillableAction({
+  const authorization = await authorizeCoinOperationForUser({
     userId: user.id,
-    actionKey,
+    operationKey: actionKey,
     idempotencyKey: `cover:${input.kind}:${input.storyId ?? 'draft'}:${randomUUID()}`,
+    components: [
+      { meterKey: actionKey },
+      {
+        meterKey: 'image_generation',
+        unitBeatCostOverride: 0,
+        metadata: { entitlementOnly: true },
+      },
+    ],
     relatedStoryId: input.storyId ?? null,
     relatedStorylineId: input.storylineId ?? null,
     metadata: {

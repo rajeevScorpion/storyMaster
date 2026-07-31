@@ -1,27 +1,18 @@
 import 'server-only';
 
-import { authorizeBillableAction } from '@/lib/pricing/enforcement';
-import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
+import { getPricingPolicyContextForUser } from '@/lib/pricing/enforcement';
+import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { resolveImageModelSnapshot } from '@/lib/ai/image-models';
 import { coinsToBeatCost, imageTaskForStoryKind, type ImageTaskKey } from '@/lib/ai/image-models.shared';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import type {
   AuthorizeBillableActionInput,
+  PricingActionKey,
   PricingBillableActionAuthorization,
 } from '@/lib/types/pricing';
 import type { StoryConfig } from '@/lib/types/story';
 
-const ACTION_COST_FALLBACKS: Record<string, number> = {
-  start_story_initial_beat: 1,
-  start_story_initial_beat_prompt_only: 0.5,
-  start_reel_full_generation: 3,
-  start_reel_full_generation_prompt_only: 1.5,
-  continue_story_new_beat: 1,
-  continue_story_new_beat_prompt_only: 0.5,
-  regenerate_image: 1,
-};
-
-function getPromptOnlyBaseActionKey(actionKey: string): string | null {
+function getPromptOnlyBaseActionKey(actionKey: PricingActionKey): PricingActionKey | null {
   switch (actionKey) {
     case 'start_story_initial_beat':
       return 'start_story_initial_beat_prompt_only';
@@ -34,10 +25,6 @@ function getPromptOnlyBaseActionKey(actionKey: string): string | null {
     default:
       return actionKey.endsWith('_prompt_only') ? actionKey : null;
   }
-}
-
-function getActionBeatCost(actionCosts: Record<string, number>, actionKey: string): number {
-  return Number(actionCosts[actionKey] ?? ACTION_COST_FALLBACKS[actionKey] ?? 0);
 }
 
 export type AuthorizeImageModelBillableActionInput = AuthorizeBillableActionInput & {
@@ -58,10 +45,11 @@ export async function authorizeImageModelBillableActionForUser(
   const storyConfig = normalizeStoryConfig(input.storyConfig);
 
   if (storyConfig.imageGenerationMode === 'prompt_only') {
-    return authorizeBillableAction({
+    return authorizeCoinOperationForUser({
       userId,
-      actionKey: input.actionKey,
+      operationKey: input.actionKey,
       idempotencyKey: input.idempotencyKey,
+      components: [{ meterKey: input.actionKey }],
       relatedStoryId: input.relatedStoryId ?? null,
       relatedNodeId: input.relatedNodeId ?? null,
       relatedStorylineId: input.relatedStorylineId ?? null,
@@ -69,35 +57,62 @@ export async function authorizeImageModelBillableActionForUser(
     });
   }
 
-  const pricing = await getPricingRuntimeContext();
+  const pricing = await getPricingPolicyContextForUser(userId);
+  if (pricing.planKey === 'free') {
+    const freeTierGate = await authorizeCoinOperationForUser({
+      userId,
+      operationKey: input.actionKey,
+      idempotencyKey: input.idempotencyKey,
+      components: [{
+        meterKey: 'image_generation',
+        unitBeatCostOverride: 0,
+      }],
+      relatedStoryId: input.relatedStoryId ?? null,
+      relatedNodeId: input.relatedNodeId ?? null,
+      relatedStorylineId: input.relatedStorylineId ?? null,
+      metadata: {
+        ...(input.metadata ?? {}),
+        entitlementCheckOnly: true,
+      },
+    });
+    if (freeTierGate.status === 'denied') return freeTierGate;
+  }
+
   const taskKey = input.taskKey ?? imageTaskForStoryKind(storyConfig.storyKind);
   const imageModelSnapshot = await resolveImageModelSnapshot({
     taskKey,
     selection: storyConfig.imageModelSelection ?? null,
-    currentPlanKey: pricing.snapshot.planKey,
+    currentPlanKey: pricing.planKey,
   });
   const imageCount = Math.max(1, Math.round(input.imageCount ?? 1));
   const promptOnlyActionKey = getPromptOnlyBaseActionKey(input.actionKey);
-  const baseBeatCost = promptOnlyActionKey
-    ? getActionBeatCost(pricing.actionCosts, promptOnlyActionKey)
-    : 0;
-  const modelBeatCost = coinsToBeatCost(imageModelSnapshot.coinCostPerImage * imageCount);
-  const requestedBeatCost = Number((baseBeatCost + modelBeatCost).toFixed(2));
+  const modelUnitBeatCost = coinsToBeatCost(imageModelSnapshot.coinCostPerImage);
 
-  return authorizeBillableAction({
+  return authorizeCoinOperationForUser({
     userId,
-    actionKey: input.actionKey,
+    operationKey: input.actionKey,
     idempotencyKey: input.idempotencyKey,
+    components: [
+      ...(promptOnlyActionKey
+        ? [{ meterKey: promptOnlyActionKey }]
+        : []),
+      {
+        meterKey: 'image_generation',
+        quantity: imageCount,
+        unitBeatCostOverride: modelUnitBeatCost,
+        metadata: {
+          taskKey,
+          imageModelSnapshot,
+        },
+      },
+    ],
     relatedStoryId: input.relatedStoryId ?? null,
     relatedNodeId: input.relatedNodeId ?? null,
     relatedStorylineId: input.relatedStorylineId ?? null,
-    requestedBeatCostOverride: requestedBeatCost,
     metadata: {
       ...(input.metadata ?? {}),
-      billingPolicy: 'image_model_registry',
-      baseBeatCost,
+      billingPolicy: 'coin_economy_gateway',
       imageCount,
-      modelBeatCost,
       imageModelSnapshot,
     },
   });

@@ -325,6 +325,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
           storyTextParts: node.data.storyTextParts as StoryTextParts | undefined,
           overlayConfig: config.storyTextOverlay,
           serverAuth: { userId: job.user_id },
+          billingIdempotencyKey: `narration-batch:${job.id}:${nodeId}:${Date.now()}`,
         }
       );
     } catch (error) {

@@ -165,6 +165,7 @@ export async function getPricingRuntimeContext(
     controls,
     snapshot,
     actionCosts: buildActionCostMap(globals.actionCosts),
+    meterEntitlements: buildMeterEntitlementMap(globals.actionCosts, snapshot.planKey),
   };
 
   setCachedPricingRuntimeContext(cacheKey, context);
@@ -451,6 +452,9 @@ function buildActionCostMap(rows: DbPricingActionCost[]): Record<string, number>
   const costs = new Map<string, number>();
 
   for (const row of rows) {
+    if (!row.is_active) {
+      continue;
+    }
     if (costs.has(row.action_key)) {
       continue;
     }
@@ -463,4 +467,18 @@ function buildActionCostMap(rows: DbPricingActionCost[]): Record<string, number>
   }
 
   return Object.fromEntries(costs);
+}
+
+function buildMeterEntitlementMap(
+  rows: DbPricingActionCost[],
+  planKey: PlanKey
+): Record<string, boolean> {
+  return Object.fromEntries(rows.map((row) => {
+    const tierEnabled = planKey === 'studio'
+      ? row.studio_enabled
+      : planKey === 'plus'
+      ? row.plus_enabled
+      : row.free_enabled;
+    return [row.action_key, row.is_active && tierEnabled !== false];
+  }));
 }

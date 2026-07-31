@@ -1,6 +1,7 @@
 'use server';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'crypto';
 
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
@@ -27,6 +28,9 @@ import {
 } from '@/lib/story-overlay/styles';
 import { getR2ObjectBuffer } from '@/lib/media/r2-server';
 import { createClient } from '@/lib/supabase/server';
+import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
+import { pricingAuthorizationMessage } from '@/lib/pricing/coin-economy.shared';
+import { finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type { DbBeat } from '@/lib/types/database';
 import type {
@@ -95,12 +99,20 @@ type StoryTextOverlaySourceBeat = Pick<
 >;
 
 interface LoadedStoryTextOverlayBeat {
+  userId: string;
   storyId: string;
   beatId: string | null;
   nodeId: string;
   beatNumber: number | null;
   storyConfig: StoryConfig;
   beat: StoryTextOverlaySourceBeat;
+}
+
+async function getCurrentOverlayUserId(): Promise<string> {
+  const supabase = await createClient();
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error || !user) throw new Error('Sign in to generate text overlay timing.');
+  return user.id;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -286,6 +298,92 @@ async function buildStoryOverlayTiming(input: {
   }
 }
 
+async function buildMeteredStoryOverlayTiming(input: {
+  userId: string;
+  storyId?: string | null;
+  nodeId?: string | null;
+  idempotencyKey?: string;
+  audioUrl: string;
+  storyText: string;
+  storyTextParts?: StoryTextParts;
+  supabase?: SupabaseClient;
+  costTelemetry?: CostTelemetryContext | null;
+  audioSeconds?: number | null;
+  fallbackOnDenied?: boolean;
+}): Promise<{
+  captions: StoryTextOverlayCaption[];
+  alignment: StoryTextOverlayAlignment;
+}> {
+  const authorization = await authorizeCoinOperationForUser({
+    userId: input.userId,
+    operationKey: 'align_story_text_overlay',
+    idempotencyKey: input.idempotencyKey ?? `align-story-text:${randomUUID()}`,
+    components: [{ meterKey: 'align_story_text_overlay' }],
+    relatedStoryId: input.storyId ?? null,
+    relatedNodeId: input.nodeId ?? null,
+    metadata: {
+      transcriptCharacterCount: input.storyText.length,
+      audioSeconds: input.audioSeconds ?? null,
+    },
+  });
+
+  if (authorization.status === 'denied') {
+    if (!input.fallbackOnDenied) {
+      throw new Error(pricingAuthorizationMessage(authorization));
+    }
+    const message = pricingAuthorizationMessage(authorization);
+    return {
+      captions: buildStoryTextOverlayCaptions({
+        storyText: input.storyText,
+        storyTextParts: input.storyTextParts,
+      }),
+      alignment: buildStoryTextOverlayAlignment({
+        source: 'none',
+        textHighlightSupported: false,
+        alignedWordCount: 0,
+        error: message,
+      }),
+    };
+  }
+
+  let overlay: Awaited<ReturnType<typeof buildStoryOverlayTiming>>;
+  try {
+    overlay = await buildStoryOverlayTiming(input);
+  } catch (error) {
+    if (authorization.status === 'allowed' && authorization.reservationId) {
+      await releaseBillableAction({
+        userId: input.userId,
+        reservationId: authorization.reservationId,
+        reason: 'alignment_failed',
+        releaseStatus: 'failed',
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
+
+  if (authorization.status === 'allowed' && authorization.reservationId) {
+    if (isSyncedAlignment(overlay.alignment)) {
+      await finalizeBillableAction({
+        userId: input.userId,
+        reservationId: authorization.reservationId,
+        storyId: input.storyId ?? null,
+        relatedEntityId: input.nodeId ?? null,
+        metadata: { alignmentSource: overlay.alignment.source },
+      });
+    } else {
+      await releaseBillableAction({
+        userId: input.userId,
+        reservationId: authorization.reservationId,
+        reason: 'alignment_provider_fallback',
+        releaseStatus: 'failed',
+        metadata: { alignmentSource: overlay.alignment.source },
+      });
+    }
+  }
+
+  return overlay;
+}
+
 function getStoryTextPartsFromMap(storyMap: unknown, nodeId: string): StoryTextParts | undefined {
   if (!storyMap || typeof storyMap !== 'object' || !('nodes' in storyMap)) return undefined;
   const node = (storyMap as StoryMap).nodes?.[nodeId];
@@ -404,6 +502,7 @@ async function loadSavedStoryOverlayBeat(
   const mapBeat = mapNode?.data;
 
   return {
+    userId: user.id,
     storyId,
     beatId: beat.id || null,
     nodeId,
@@ -445,7 +544,10 @@ async function generateAndPersistOverlayForLoadedBeat(
     throw new Error('Generate narration before generating text overlay timing.');
   }
 
-  const overlay = await buildStoryOverlayTiming({
+  const overlay = await buildMeteredStoryOverlayTiming({
+    userId: source.userId,
+    storyId: source.storyId,
+    nodeId: source.nodeId,
     audioUrl: source.beat.audioUrl,
     storyText: source.beat.storyText,
     storyTextParts: source.beat.storyTextParts,
@@ -582,6 +684,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     // Background worker path: persist on behalf of `userId` via the service-role
     // client. Absent for the interactive path (unchanged behaviour).
     serverAuth?: { userId: string };
+    billingIdempotencyKey?: string;
   } = {}
 ): Promise<StoryOverlayNarrationResult> {
   const overlayConfig = normalizeOverlayConfig(options.overlayConfig);
@@ -598,11 +701,18 @@ export async function generateAndPersistStoryNarrationWithOverlay(
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
       accent: options.accent,
+      billingIdempotencyKey: options.billingIdempotencyKey,
       ...(options.serverAuth ? { serverAuth: options.serverAuth } : {}),
     }
   );
 
-  const overlay = await buildStoryOverlayTiming({
+  const overlay = await buildMeteredStoryOverlayTiming({
+    userId: options.serverAuth?.userId ?? await getCurrentOverlayUserId(),
+    storyId: savedStoryId,
+    nodeId,
+    idempotencyKey: options.billingIdempotencyKey
+      ? `${options.billingIdempotencyKey}:alignment`
+      : undefined,
     audioUrl: narration.audioUrl,
     storyText,
     storyTextParts: options.storyTextParts,
@@ -610,6 +720,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     audioSeconds: narration.narrationMetadata?.durationMs
       ? narration.narrationMetadata.durationMs / 1000
       : null,
+    fallbackOnDenied: true,
   });
 
   try {
@@ -668,11 +779,13 @@ export async function generateStoryNarrationOnlyWithOverlay(
       accent: options.accent,
     }
   );
-  const overlay = await buildStoryOverlayTiming({
+  const overlay = await buildMeteredStoryOverlayTiming({
+    userId: await getCurrentOverlayUserId(),
     audioUrl,
     storyText,
     storyTextParts: options.storyTextParts,
     costTelemetry,
+    fallbackOnDenied: true,
   });
 
   return {

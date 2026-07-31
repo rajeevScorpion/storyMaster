@@ -119,6 +119,7 @@ interface AdvancedOptionsProps {
   onCreatorReferenceQualityChange?: (value: PortraitReferenceQuality) => void;
   storyPromptOnlyModeEnabled?: boolean;
   imageGenerationMode?: 'generate' | 'prompt_only';
+  imageGenerationAllowed?: boolean;
   onImageGenerationModeChange?: (value: 'generate' | 'prompt_only') => void;
   batchImageDeliveryEnabled?: boolean;
   imageDeliveryMode?: 'live' | 'batch' | 'stateful';
@@ -173,6 +174,7 @@ export default function AdvancedOptions({
   onCreatorReferenceQualityChange,
   storyPromptOnlyModeEnabled = false,
   imageGenerationMode = 'generate',
+  imageGenerationAllowed = true,
   onImageGenerationModeChange,
   batchImageDeliveryEnabled = false,
   imageDeliveryMode = 'live',
@@ -237,7 +239,7 @@ export default function AdvancedOptions({
     value: option.id,
     label: option.label,
   }));
-  const storyboardImagesEnabled = imageGenerationMode !== 'prompt_only';
+  const storyboardImagesEnabled = imageGenerationAllowed && imageGenerationMode !== 'prompt_only';
   const imageModelOptions = imageModelPicker?.options ?? [];
   const selectedImageModelKey = imageModelSelection?.modelKey || imageModelPicker?.selectedModelKey || imageModelPicker?.defaultModelKey || '';
   const selectedImageModel = imageModelOptions.find((option) => option.modelKey === selectedImageModelKey)
@@ -488,7 +490,7 @@ export default function AdvancedOptions({
                       </InfoPopover>
                     </div>
                     <p className="mt-1 text-xs text-neutral-500">
-                      {storyboardImagesEnabled ? 'On' : 'Off'}
+                      {imageGenerationAllowed ? (storyboardImagesEnabled ? 'On' : 'Off') : 'Off for this plan'}
                     </p>
                   </div>
                   <button
@@ -496,7 +498,8 @@ export default function AdvancedOptions({
                     onClick={() => onImageGenerationModeChange?.(
                       storyboardImagesEnabled ? 'prompt_only' : 'generate'
                     )}
-                    className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors ${
+                    disabled={!imageGenerationAllowed}
+                    className={`inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0.5 transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                       storyboardImagesEnabled
                         ? 'justify-end border-emerald-400/60 bg-emerald-500/25'
                         : 'justify-start border-white/10 bg-neutral-800'

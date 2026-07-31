@@ -22,11 +22,11 @@ import {
   coinsToBeatCost,
 } from '@/lib/ai/image-models.shared';
 import {
-  authorizeBillableAction,
   finalizeBillableAction,
   releaseBillableAction,
   resolvePlanKeyForUser,
 } from '@/lib/pricing/enforcement';
+import { authorizeCoinOperationForUser, quoteCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { processAndStoreImageVariants } from '@/lib/media/variant-pipeline';
 import { parseR2Reference } from '@/lib/media/r2-reference';
@@ -67,6 +67,26 @@ interface StoryRow {
   user_id: string;
   story_map: StoryMap | null;
   story_config: Partial<StoryConfig> | null;
+}
+
+async function assertImageGenerationEntitled(userId: string): Promise<PlanKey> {
+  const planKey = await resolvePlanKeyForUser(userId);
+  const quote = await quoteCoinOperationForUser({
+    userId,
+    operationKey: 'batch_image_generation',
+    components: [{
+      meterKey: 'image_generation',
+      unitBeatCostOverride: 0,
+    }],
+  });
+  if (!quote.allowed) {
+    throw new Error(
+      quote.deniedReason === 'tier_locked'
+        ? 'AI image generation is not included in the Free beta plan. Generate images externally and upload them instead.'
+        : 'AI image generation is currently unavailable.'
+    );
+  }
+  return planKey;
 }
 
 export interface SubmitStoryImageBatchResult {
@@ -300,17 +320,18 @@ export async function submitStoryImageBatch(input: {
     };
   }
 
+  const currentPlanKey = await assertImageGenerationEntitled(user.id);
   const task = imageTaskForStoryKind(config.storyKind);
   const snapshot = await resolveImageModelSnapshot({
     taskKey: task,
     selection: config.imageModelSelection ?? null,
-    currentPlanKey: 'free',
+    currentPlanKey,
   });
   const provider = resolveBatchProvider(snapshot.providerKey);
   // Re-resolve for the fallback provider if the selected one can't batch.
   const batchSnapshot = provider === snapshot.providerKey
     ? snapshot
-    : await resolveImageModelSnapshot({ taskKey: task, selection: null, currentPlanKey: 'free' });
+    : await resolveImageModelSnapshot({ taskKey: task, selection: null, currentPlanKey });
 
   // Generate any missing character portraits live now so batched beats keep
   // continuity (Gemini resend_refs). OpenAI /images/generations ignores refs.
@@ -347,15 +368,19 @@ export async function submitStoryImageBatch(input: {
   // isn't configured (no `batch_image_generation` cost / hard enforcement off),
   // this yields a null reservation and we proceed; a genuine balance shortfall
   // blocks the submission.
-  const discountedCoins = batchSnapshot.coinCostPerImage * items.length * IMAGE_BATCH_DISCOUNT_MULTIPLIER;
   let reservationId: string | null = null;
   try {
-    const authorization = await authorizeBillableAction({
+    const authorization = await authorizeCoinOperationForUser({
       userId: user.id,
-      actionKey: 'batch_image_generation',
+      operationKey: 'batch_image_generation',
       idempotencyKey: `batch_image_generation:${story.id}:${Date.now()}`,
+      components: [{
+        meterKey: 'image_generation',
+        quantity: items.length,
+        unitBeatCostOverride: coinsToBeatCost(batchSnapshot.coinCostPerImage * IMAGE_BATCH_DISCOUNT_MULTIPLIER),
+        metadata: { generationMode: 'batch', provider },
+      }],
       relatedStoryId: story.id,
-      requestedBeatCostOverride: coinsToBeatCost(discountedCoins),
       metadata: { scope, imageCount: items.length, provider, estimatedCostUsd },
     });
     if (authorization.status === 'denied') {
@@ -368,7 +393,11 @@ export async function submitStoryImageBatch(input: {
     if (error instanceof Error && error.message === 'NOT_ENOUGH_COINS') {
       throw new Error('You do not have enough coins to generate these visuals.');
     }
-    console.warn('Batch coin authorization skipped:', error instanceof Error ? error.message : error);
+    throw new Error(
+      `Unable to authorize coins for batch image generation: ${
+        error instanceof Error ? error.message : 'unknown pricing error'
+      }`
+    );
   }
 
   // Create the job + item rows first so a submission failure is recoverable.
@@ -829,11 +858,12 @@ export async function submitStoryStatefulVisuals(input: {
     };
   }
 
+  const currentPlanKey = await assertImageGenerationEntitled(user.id);
   const task = imageTaskForStoryKind(config.storyKind);
   const snapshot = await resolveImageModelSnapshot({
     taskKey: task,
     selection: config.imageModelSelection ?? null,
-    currentPlanKey: 'free',
+    currentPlanKey,
   });
   // Stateful continuity only exists on gemini/openai; other providers still run
   // sequentially but generateSelectedImage will fall back to resend_refs.
@@ -847,15 +877,19 @@ export async function submitStoryStatefulVisuals(input: {
   const estimatedCostUsd = Number((regularPerImageUsd * targetNodes.length).toFixed(6));
 
   // Reserve coins at the FULL regular rate (stateful gets no batch discount).
-  const regularCoins = snapshot.coinCostPerImage * targetNodes.length;
   let reservationId: string | null = null;
   try {
-    const authorization = await authorizeBillableAction({
+    const authorization = await authorizeCoinOperationForUser({
       userId: user.id,
-      actionKey: 'batch_image_generation',
+      operationKey: 'batch_image_generation',
       idempotencyKey: `stateful_image_generation:${story.id}:${Date.now()}`,
+      components: [{
+        meterKey: 'image_generation',
+        quantity: targetNodes.length,
+        unitBeatCostOverride: coinsToBeatCost(snapshot.coinCostPerImage),
+        metadata: { generationMode: 'stateful', provider },
+      }],
       relatedStoryId: story.id,
-      requestedBeatCostOverride: coinsToBeatCost(regularCoins),
       metadata: { scope, imageCount: targetNodes.length, provider, estimatedCostUsd, generationMode: 'stateful' },
     });
     if (authorization.status === 'denied') {
@@ -868,7 +902,11 @@ export async function submitStoryStatefulVisuals(input: {
     if (error instanceof Error && error.message === 'NOT_ENOUGH_COINS') {
       throw new Error('You do not have enough coins to generate these visuals.');
     }
-    console.warn('Stateful coin authorization skipped:', error instanceof Error ? error.message : error);
+    throw new Error(
+      `Unable to authorize coins for stateful image generation: ${
+        error instanceof Error ? error.message : 'unknown pricing error'
+      }`
+    );
   }
 
   const { data: jobRow, error: jobError } = await admin

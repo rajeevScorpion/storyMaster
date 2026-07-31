@@ -3,7 +3,10 @@ import 'server-only';
 import { fetchRazorpaySubscription } from '@/lib/billing/razorpay';
 import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
-import { invalidatePricingRuntimeCacheForUser } from '@/lib/pricing/runtime-context-cache';
+import {
+  invalidateAllPricingRuntimeCaches,
+  invalidatePricingRuntimeCacheForUser,
+} from '@/lib/pricing/runtime-context-cache';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type {
   DbBeatGrant,
@@ -112,6 +115,7 @@ let cachedPricingGlobals: CachedPricingGlobals | null = null;
 
 export function invalidatePricingGlobalsCache(): void {
   cachedPricingGlobals = null;
+  invalidateAllPricingRuntimeCaches();
 }
 
 function beatsToCoins(value: number): number {
@@ -624,6 +628,29 @@ export async function resolvePlanKeyForUser(userId: string): Promise<PlanKey> {
   }
 }
 
+export async function getPricingPolicyContextForUser(userId: string | null): Promise<{
+  planKey: PlanKey;
+  availableBeats: number;
+  actionCosts: DbPricingActionCost[];
+}> {
+  const supabase = createAdminClient();
+  const globals = await loadCachedPricingGlobals(supabase);
+  if (!userId) {
+    return {
+      planKey: 'free',
+      availableBeats: 0,
+      actionCosts: globals.actionCosts,
+    };
+  }
+
+  const state = await loadPricingState(supabase, userId);
+  return {
+    planKey: state.snapshot.planKey,
+    availableBeats: state.snapshot.availableTotalBeats,
+    actionCosts: globals.actionCosts,
+  };
+}
+
 async function loadPricingState(
   supabase: AdminClient,
   userId: string,
@@ -731,7 +758,6 @@ export async function loadCachedPricingGlobals(supabase: AdminClient): Promise<C
     supabase
       .from('pricing_action_costs')
       .select('*')
-      .eq('is_active', true)
       .order('effective_from', { ascending: false }),
   ]);
 

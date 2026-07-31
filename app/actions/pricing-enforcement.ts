@@ -2,12 +2,12 @@
 
 import { createClient } from '@/lib/supabase/server';
 import {
-  authorizeBillableAction,
   ensureFreeAllowanceForUser,
   expireStaleReservations,
   finalizeBillableAction,
   releaseBillableAction,
 } from '@/lib/pricing/enforcement';
+import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { authorizeImageModelBillableActionForUser } from '@/lib/pricing/image-aware-authorize';
 import type { ImageTaskKey } from '@/lib/ai/image-models.shared';
 import type {
@@ -38,10 +38,11 @@ export async function authorizeCurrentUserBillableAction(
   input: AuthorizeBillableActionInput
 ): Promise<PricingBillableActionAuthorization> {
   const userId = await getCurrentUserId();
-  return authorizeBillableAction({
+  return authorizeCoinOperationForUser({
     userId,
-    actionKey: input.actionKey,
+    operationKey: input.actionKey,
     idempotencyKey: input.idempotencyKey,
+    components: [{ meterKey: input.actionKey }],
     relatedStoryId: input.relatedStoryId ?? null,
     relatedNodeId: input.relatedNodeId ?? null,
     relatedStorylineId: input.relatedStorylineId ?? null,
