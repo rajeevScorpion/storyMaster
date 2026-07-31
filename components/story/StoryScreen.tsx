@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
+import { resolveStoryContinuationDisplayQuote } from '@/lib/pricing/story-continuation.shared';
 import { deleteStory } from '@/app/actions/persistence';
 import { saveCharacterToLibrary } from '@/app/actions/character-library';
 import type { CharacterMaster } from '@/lib/types/character-library';
@@ -39,6 +40,7 @@ import RegenerateImageDialog from './RegenerateImageDialog';
 import ImageVersionHistoryDialog from './ImageVersionHistoryDialog';
 import CustomOptionInput from './CustomOptionInput';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import { canDeleteCustomOption } from '@/lib/beat-control/custom-options';
 import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { findChildForOption, getCurrentNode, getNodesByBeatNumber, hasActiveDescendants } from '@/lib/utils/story-map';
 import type { TimelineImpact } from '@/app/actions/beat-control';
@@ -1813,17 +1815,12 @@ export default function StoryScreen() {
 
   const currentBeat = normalizeBeatMediaFields(currentNode.data);
   const isEnding = currentBeat.isEnding;
-  const isPromptOnlyStory = session.storyConfig.imageGenerationMode === 'prompt_only';
   const isReelStory = session.storyConfig.storyKind === 'reel';
-  const continueCoinCost = isReelStory
-    ? 0
-    : (
-        pricing.actionCosts[
-          isPromptOnlyStory
-            ? 'continue_story_new_beat_prompt_only'
-            : 'continue_story_new_beat'
-        ] ?? (isPromptOnlyStory ? 0.5 : 1)
-      ) * 10;
+  const continuationQuote = resolveStoryContinuationDisplayQuote(
+    session.storyConfig,
+    pricing.actionCosts
+  );
+  const continueCoinCost = isReelStory ? 0 : continuationQuote.coinCost;
   const showCoinHint = pricing.controls.pricingHardEnforcementEnabled || pricing.controls.pricingCheckoutEnabled;
 
   const hasExistingBranch = (optionId: string) =>
@@ -1875,6 +1872,7 @@ export default function StoryScreen() {
       pricing={pricing}
       isAdminUser={isAdminUser}
       continueCoinCost={continueCoinCost}
+      continueIncludesImage={continuationQuote.includesImage}
       showCoinHint={showCoinHint}
       setPromptOnlyBeatImage={setPromptOnlyBeatImage}
       selectPromptOnlyBeatImage={selectPromptOnlyBeatImage}
@@ -1930,6 +1928,7 @@ function StoryScreenInner({
   pricing,
   isAdminUser,
   continueCoinCost,
+  continueIncludesImage,
   showCoinHint,
   setPromptOnlyBeatImage,
   selectPromptOnlyBeatImage,
@@ -1945,7 +1944,7 @@ function StoryScreenInner({
   currentBeat: NonNullable<ReturnType<typeof useStoryStore.getState>['session']>['beats'][number];
   isEnding: boolean;
   isLoading: boolean;
-  continueStory: (optionId: string) => void;
+  continueStory: (optionId: string) => Promise<void>;
   navigateToNode: (nodeId: string) => void;
   resetStory: () => void;
   onRestart: () => void;
@@ -2020,6 +2019,7 @@ function StoryScreenInner({
   pricing: PricingRuntimeContext;
   isAdminUser: boolean;
   continueCoinCost: number;
+  continueIncludesImage: boolean;
   showCoinHint: boolean;
   setPromptOnlyBeatImage: (nodeId: string, imageDataUrl: string, options?: { maxImagesPerBeat?: number; optimizationMetadata?: ImageCompressionMetadata; storageExtension?: string; uploadBody?: File | Blob | string }) => Promise<void>;
   selectPromptOnlyBeatImage: (nodeId: string, storageKey: string) => Promise<void>;
@@ -2102,6 +2102,13 @@ function StoryScreenInner({
   const [showRegenerateImage, setShowRegenerateImage] = useState(false);
   const [showImageVersions, setShowImageVersions] = useState(false);
   const [showNarrationRegenConfirm, setShowNarrationRegenConfirm] = useState(false);
+  const [pendingExplorationOptionId, setPendingExplorationOptionId] = useState<string | null>(null);
+  const [pendingCustomOptionDelete, setPendingCustomOptionDelete] = useState<{
+    optionId: string;
+    label: string;
+  } | null>(null);
+  const [deletingCustomOptionId, setDeletingCustomOptionId] = useState<string | null>(null);
+  const [customOptionDeleteError, setCustomOptionDeleteError] = useState<string | null>(null);
   const [optionsRegenState, setOptionsRegenState] = useState<
     | { step: 'confirm' }
     | { step: 'rewrite_confirm'; impact: TimelineImpact; message: string }
@@ -2115,6 +2122,7 @@ function StoryScreenInner({
     !session.explorationMode && !session.sourceStoryOwnerId && Boolean(session.savedStoryId);
   const beatIsLocked = hasActiveDescendants(session.storyMap, currentNodeId);
   const regenerateOptionsForNode = useStoryStore((state) => state.regenerateOptionsForNode);
+  const deleteCustomOptionForNode = useStoryStore((state) => state.deleteCustomOptionForNode);
   const beatControlSettings = useStoryStore((state) => state.beatControlSettings);
 
   // Pack 2 character universe: save-to-library affordance in the character
@@ -2707,6 +2715,9 @@ function StoryScreenInner({
       ]
     : currentBeat.options;
   const customOptionCount = orderedOptions.filter((option) => option.source === 'user_custom').length;
+  const pendingExplorationOption = pendingExplorationOptionId
+    ? orderedOptions.find((option) => option.id === pendingExplorationOptionId) ?? null
+    : null;
   const savedReelPanelTexts = useMemo(
     () => getReelPanelTexts({
       storyText: normalizedCurrentBeat.storyText,
@@ -3948,11 +3959,56 @@ function StoryScreenInner({
     }
   }, [isAudioReady]);
 
+  const requestStoryContinuation = useCallback(
+    (optionId: string) => {
+      if (hasExistingBranch(optionId)) {
+        void continueStory(optionId);
+        return;
+      }
+      setPendingExplorationOptionId(optionId);
+    },
+    [continueStory, hasExistingBranch]
+  );
+
+  const confirmCustomOptionDelete = useCallback(async () => {
+    if (!pendingCustomOptionDelete || deletingCustomOptionId) return;
+
+    setDeletingCustomOptionId(pendingCustomOptionDelete.optionId);
+    setCustomOptionDeleteError(null);
+    try {
+      const result = await deleteCustomOptionForNode(
+        currentNodeId,
+        pendingCustomOptionDelete.optionId
+      );
+      if (result.status === 'deleted') {
+        setPendingCustomOptionDelete(null);
+      } else {
+        setCustomOptionDeleteError(result.error);
+      }
+    } catch {
+      setCustomOptionDeleteError('Failed to delete your custom choice. Please try again.');
+    } finally {
+      setDeletingCustomOptionId(null);
+    }
+  }, [
+    currentNodeId,
+    deleteCustomOptionForNode,
+    deletingCustomOptionId,
+    pendingCustomOptionDelete,
+  ]);
+
+  useEffect(() => {
+    setPendingExplorationOptionId(null);
+    setPendingCustomOptionDelete(null);
+    setCustomOptionDeleteError(null);
+    setDeletingCustomOptionId(null);
+  }, [currentNodeId]);
+
   const { focusedOptionIndex, focusMode } = useKeyboardNavigation({
     storyMap: session.storyMap,
     options: orderedOptions,
     onNavigateNode: handleManualNavigateToNode,
-    onSelectOption: continueStory,
+    onSelectOption: requestStoryContinuation,
     onToggleMinimized: () => {
       if (!isReelStory) {
         const collapseBoth = !isMinimized || !areOptionsMinimized;
@@ -6980,47 +7036,87 @@ function StoryScreenInner({
                           const explored = hasExistingBranch(option.id);
                           const isFocused = focusMode === 'options' && focusedOptionIndex === index;
                           const isCanonical = option.id === currentBeat.canonicalOptionId;
+                          const showDeleteControl =
+                            canUseBeatControls
+                            && beatControlSettings.customOptionsEnabled
+                            && canDeleteCustomOption(option, explored);
                           return (
-                            <motion.button
+                            <motion.div
                               key={option.id}
-                              ref={(el) => { optionRefs.current[index] = el; }}
                               initial={{ opacity: 0, x: 20 }}
                               animate={{ opacity: 1, x: 0 }}
                               transition={{ delay: index * 0.1 }}
-                              onClick={() => continueStory(option.id)}
-                              disabled={isLoading}
-                              className={`w-full text-left group backdrop-blur-md rounded-2xl p-4 md:p-6 transition-all duration-300 flex items-center justify-between ${
+                              className={`group flex w-full items-stretch overflow-hidden rounded-2xl border text-left backdrop-blur-md transition-all duration-300 ${
                                 explored
-                                  ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40 glow-pulse-mild'
-                                  : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'
+                                  ? 'border-emerald-400/35 bg-neutral-900/60 hover:border-emerald-300/55 hover:bg-neutral-800 glow-pulse-mild'
+                                  : 'border-white/5 bg-neutral-900/60 hover:border-white/20 hover:bg-neutral-800'
                               } ${isFocused ? 'ring-2 ring-emerald-400/50 border-emerald-500/40' : ''}`}
                             >
-                              <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <p className="text-base md:text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
-                                    {option.label}
+                              <button
+                                ref={(el) => { optionRefs.current[index] = el; }}
+                                type="button"
+                                onClick={() => requestStoryContinuation(option.id)}
+                                disabled={isLoading}
+                                className="flex min-w-0 flex-1 items-center justify-between gap-3 p-4 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/70 disabled:cursor-wait md:p-6"
+                                aria-label={`${explored ? 'Reopen' : 'Explore'} choice: ${option.label}`}
+                              >
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-base md:text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
+                                      {option.label}
+                                    </p>
+                                    {isCanonical && (
+                                      <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-300">
+                                        Original path
+                                      </span>
+                                    )}
+                                    {option.source === 'user_custom' && (
+                                      <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-sky-300">
+                                        Yours
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="mt-1 line-clamp-2 text-xs font-sans uppercase tracking-wider text-neutral-300/90 [text-shadow:0_1px_2px_rgb(0_0_0/0.8)] transition-colors group-hover:text-neutral-100">
+                                    {option.intent}
                                   </p>
-                                  {isCanonical && (
-                                    <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-300">
-                                      Original path
-                                    </span>
-                                  )}
-                                  {option.source === 'user_custom' && (
-                                    <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-sky-300">
-                                      Yours
-                                    </span>
-                                  )}
                                 </div>
-                                <p className="mt-1 line-clamp-2 text-xs font-sans uppercase tracking-wider text-neutral-300/90 [text-shadow:0_1px_2px_rgb(0_0_0/0.8)] transition-colors group-hover:text-neutral-100">
-                                  {option.intent}
-                                </p>
-                              </div>
-                              {explored ? (
-                                <Check className="w-4 h-4 text-emerald-500/60" />
-                              ) : (
-                                <ArrowRight className="w-5 h-5 text-neutral-600 group-hover:text-emerald-400 transition-colors transform group-hover:translate-x-1" />
+                                {explored ? (
+                                  <span
+                                    className="motion-safe:animate-pulse flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-emerald-300/75 bg-emerald-400/20 text-emerald-100 shadow-[0_0_18px_rgba(52,211,153,0.6)]"
+                                    title="Explored path"
+                                    aria-label="Explored path"
+                                  >
+                                    <Check className="h-4 w-4" strokeWidth={3} />
+                                  </span>
+                                ) : (
+                                  <ArrowRight className="w-5 h-5 shrink-0 text-neutral-500 group-hover:text-emerald-300 transition-colors transform group-hover:translate-x-1" />
+                                )}
+                              </button>
+                              {showDeleteControl && (
+                                <div className="flex shrink-0 items-center pr-3 md:pr-4">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCustomOptionDeleteError(null);
+                                      setPendingCustomOptionDelete({
+                                        optionId: option.id,
+                                        label: option.label,
+                                      });
+                                    }}
+                                    disabled={isLoading || deletingCustomOptionId === option.id}
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-rose-400/25 bg-rose-500/10 text-rose-200 transition-colors hover:border-rose-300/50 hover:bg-rose-500/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300/70 disabled:cursor-wait disabled:opacity-50"
+                                    aria-label={`Delete custom choice: ${option.label}`}
+                                    title="Delete custom choice"
+                                  >
+                                    {deletingCustomOptionId === option.id ? (
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="h-4 w-4" />
+                                    )}
+                                  </button>
+                                </div>
                               )}
-                            </motion.button>
+                            </motion.div>
                           );
                         })}
                         {optionsRegenError && (
@@ -7916,6 +8012,62 @@ function StoryScreenInner({
         onClose={() => setShowStoryEffects(false)}
         onSave={(config) => updateStoryEffects(currentNodeId, config)}
         onApplyAll={applyStoryEffectsToAll}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingExplorationOption)}
+        title="Explore this path?"
+        message={
+          <span>
+            Continue with &ldquo;{pendingExplorationOption?.label}&rdquo; and create a new{' '}
+            {continueIncludesImage ? 'beat with an image' : 'text-only beat without an image'}.
+            <span className="mt-2 block text-neutral-200">
+              This exploration will use{' '}
+              <strong className="font-semibold text-emerald-300">
+                {continueCoinCost.toLocaleString()} coins
+              </strong>{' '}
+              based on the current admin pricing.
+            </span>
+            <span className="mt-1 block text-xs text-neutral-500">
+              Once explored, you can reopen this path for free.
+            </span>
+          </span>
+        }
+        confirmLabel={
+          continueCoinCost > 0
+            ? `Explore for ${continueCoinCost.toLocaleString()} coins`
+            : 'Explore for free'
+        }
+        onConfirm={() => {
+          const optionId = pendingExplorationOption?.id;
+          setPendingExplorationOptionId(null);
+          if (optionId) void continueStory(optionId);
+        }}
+        onCancel={() => setPendingExplorationOptionId(null)}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingCustomOptionDelete)}
+        title="Delete custom choice?"
+        message={
+          <span>
+            Remove &ldquo;{pendingCustomOptionDelete?.label}&rdquo; from this beat? This cannot be
+            undone.
+            {customOptionDeleteError && (
+              <span className="mt-2 block text-xs text-rose-300">
+                {customOptionDeleteError}
+              </span>
+            )}
+          </span>
+        }
+        confirmLabel="Delete choice"
+        tone="danger"
+        busy={Boolean(deletingCustomOptionId)}
+        onConfirm={() => void confirmCustomOptionDelete()}
+        onCancel={() => {
+          setPendingCustomOptionDelete(null);
+          setCustomOptionDeleteError(null);
+        }}
       />
 
       {/* Pack 1 beat-control dialogs */}

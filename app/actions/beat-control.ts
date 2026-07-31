@@ -21,6 +21,7 @@ import {
 } from '@/lib/media/image-versions';
 import {
   collectNamedCharactersForNode,
+  findChildForOption,
   getBeatsToNode,
   getChoiceHistoryToNode,
   getDescendantNodeIds,
@@ -595,6 +596,10 @@ export type AddCustomOptionResult =
   | { status: 'invalid_mentions'; unknownMentions: string[]; availableCharacters: string[] }
   | { status: 'failed'; error: string };
 
+export type DeleteCustomOptionResult =
+  | { status: 'deleted'; optionId: string }
+  | { status: 'failed'; error: string };
+
 export async function addCustomOption(input: {
   storyId: string;
   nodeId: string;
@@ -651,6 +656,43 @@ export async function addCustomOption(input: {
     return {
       status: 'failed',
       error: error instanceof Error ? error.message : 'Failed to add your option.',
+    };
+  }
+}
+
+export async function deleteCustomOption(input: {
+  storyId: string;
+  nodeId: string;
+  optionId: string;
+}): Promise<DeleteCustomOptionResult> {
+  try {
+    await requireFeature('beat_custom_options_enabled', 'Custom options');
+    const { storyMap } = await requireOwnedStory(input.storyId);
+    const node = storyMap.nodes[input.nodeId];
+    if (!node) return { status: 'failed', error: 'Beat not found in this story.' };
+
+    const option = node.data.options?.find((candidate) => candidate.id === input.optionId);
+    if (!option || option.source !== 'user_custom') {
+      return { status: 'failed', error: 'Only your custom choices can be deleted.' };
+    }
+    if (findChildForOption(storyMap, input.nodeId, input.optionId)) {
+      return {
+        status: 'failed',
+        error: 'This choice has already been explored and can no longer be deleted.',
+      };
+    }
+
+    await persistNodeOptions(
+      input.storyId,
+      input.nodeId,
+      (node.data.options ?? []).filter((candidate) => candidate.id !== input.optionId),
+      storyMap
+    );
+    return { status: 'deleted', optionId: input.optionId };
+  } catch (error) {
+    return {
+      status: 'failed',
+      error: error instanceof Error ? error.message : 'Failed to delete your custom choice.',
     };
   }
 }

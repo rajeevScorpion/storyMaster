@@ -80,11 +80,13 @@ import { normalizeReelNarrationSettings, type ReelNarrationSettings } from '@/li
 import { getStoryboardSettings, getStoryAssetSignedUrlSwapEnabled, getStoryModelOverrides } from '@/app/actions/admin';
 import {
   addCustomOption as addCustomOptionAction,
+  deleteCustomOption as deleteCustomOptionAction,
   editBeatText as editBeatTextAction,
   getBeatControlRuntimeSettings,
   regenerateBeatOptions as regenerateBeatOptionsAction,
   restoreBeatImageVersion as restoreBeatImageVersionAction,
   type AddCustomOptionResult,
+  type DeleteCustomOptionResult,
   type EditBeatTextResult,
   type RegenerateBeatOptionsResult,
   type RestoreBeatImageVersionResult,
@@ -298,6 +300,7 @@ interface StoryState {
   editBeatTextForNode: (nodeId: string, newText: string, confirmTimelineRewrite?: boolean) => Promise<EditBeatTextResult>;
   regenerateOptionsForNode: (nodeId: string, confirmTimelineRewrite?: boolean) => Promise<RegenerateBeatOptionsResult>;
   addCustomOptionForNode: (nodeId: string, optionText: string) => Promise<AddCustomOptionResult>;
+  deleteCustomOptionForNode: (nodeId: string, optionId: string) => Promise<DeleteCustomOptionResult>;
   restoreImageVersionForNode: (nodeId: string, storageKey: string) => Promise<RestoreBeatImageVersionResult>;
   submitImageBatch: (scope?: ImageBatchScope) => Promise<void>;
   submitStatefulVisuals: (scope?: ImageBatchScope) => Promise<void>;
@@ -6776,6 +6779,44 @@ export const useStoryStore = create<StoryState>()(
                 [nodeId]: {
                   ...node,
                   data: { ...node.data, options: [...(node.data.options ?? []), result.option] },
+                },
+              },
+            };
+            set({ session: deriveSessionFields(latest, patchedMap), saveStatus: 'saved' });
+          }
+        }
+        return result;
+      },
+
+      deleteCustomOptionForNode: async (nodeId: string, optionId: string) => {
+        const { session } = get();
+        if (!session?.savedStoryId) {
+          return {
+            status: 'failed',
+            error: 'Save the story before deleting a custom choice.',
+          } as DeleteCustomOptionResult;
+        }
+        const result = await deleteCustomOptionAction({
+          storyId: session.savedStoryId,
+          nodeId,
+          optionId,
+        });
+        if (result.status === 'deleted') {
+          const latest = get().session;
+          const node = latest?.storyMap.nodes[nodeId];
+          if (latest && node) {
+            const patchedMap: StoryMap = {
+              ...latest.storyMap,
+              nodes: {
+                ...latest.storyMap.nodes,
+                [nodeId]: {
+                  ...node,
+                  data: {
+                    ...node.data,
+                    options: (node.data.options ?? []).filter(
+                      (option) => option.id !== result.optionId
+                    ),
+                  },
                 },
               },
             };
