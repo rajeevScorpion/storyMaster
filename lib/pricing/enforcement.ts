@@ -24,7 +24,6 @@ import {
   COINS_PER_BEAT,
   PRICING_RUNTIME_SETTING_DEFINITIONS,
   type AuthorizeBillableActionInput,
-  type BillingInterval,
   type FinalizeBillableActionInput,
   type FinalizeBillableActionResult,
   type PlanKey,
@@ -56,11 +55,18 @@ interface LoadedPricingState {
   snapshot: ReturnType<typeof buildPricingRuntimeContextData>['snapshot'];
 }
 
-interface EnsureFreeAllowanceResult {
+interface EnsureFreeWelcomeGrantResult {
   granted: boolean;
   grantId: string | null;
   beatsGranted: number;
   expiresAt: string | null;
+}
+
+interface ApplyFreeWelcomeGrantRpcRow {
+  grant_id: string | null;
+  granted: boolean;
+  beats_granted: number | string | null;
+  expires_at: string | null;
 }
 
 interface RpcAuthorizeSpendRow {
@@ -158,7 +164,7 @@ async function timeEnforcementStep<T>(
   }
 }
 
-export async function ensureFreeAllowanceForUser(
+export async function ensureFreeWelcomeGrantForUser(
   userId: string,
   options: {
     pricingMarketKey?: PricingMarketKey | null;
@@ -166,7 +172,7 @@ export async function ensureFreeAllowanceForUser(
     supabase?: AdminClient;
     preloadedState?: LoadedPricingState | null;
   } = {}
-): Promise<EnsureFreeAllowanceResult> {
+): Promise<EnsureFreeWelcomeGrantResult> {
   const supabase = options.supabase ?? createAdminClient();
   const state = options.preloadedState ?? await loadPricingState(supabase, userId, options);
 
@@ -179,79 +185,26 @@ export async function ensureFreeAllowanceForUser(
     };
   }
 
-  const freeVersion = findPublishedPlanVersion(
-    state.plans,
-    state.planVersions,
-    'free',
-    state.snapshot.pricingMarketKey,
-    'monthly'
-  );
+  const result = await supabase.rpc('apply_free_welcome_grant', {
+    p_user_id: userId,
+  });
 
-  if (!freeVersion) {
-    return {
-      granted: false,
-      grantId: null,
-      beatsGranted: 0,
-      expiresAt: null,
-    };
+  throwIfQueryFailed(result.error, 'Failed to apply the free welcome grant policy');
+
+  const row = ((result.data as ApplyFreeWelcomeGrantRpcRow[] | null)?.[0] ?? null);
+  if (!row) {
+    throw new Error('Free welcome grant policy did not return a result');
   }
 
-  const authUserResult = await supabase.auth.admin.getUserById(userId);
-  if (authUserResult.error || !authUserResult.data.user) {
-    throw new Error(`Failed to load auth user for free allowance: ${authUserResult.error?.message || 'missing user'}`);
+  if (row.granted) {
+    invalidatePricingRuntimeCacheForUser(userId);
   }
-
-  const cycle = computeCurrentMonthlyCycle(authUserResult.data.user.created_at, new Date());
-  const sourceRefId = `free_allowance:${cycle.start.toISOString()}`;
-
-  const existingResult = await supabase
-    .from('beat_grants')
-    .select('id, expires_at')
-    .eq('user_id', userId)
-    .eq('source_type', 'free_allowance')
-    .eq('source_ref_id', sourceRefId)
-    .maybeSingle();
-
-  throwIfQueryFailed(existingResult.error, 'Failed to check current free allowance grant');
-
-  if (existingResult.data) {
-    return {
-      granted: false,
-      grantId: existingResult.data.id,
-      beatsGranted: 0,
-      expiresAt: existingResult.data.expires_at,
-    };
-  }
-
-  const insertResult = await supabase
-    .from('beat_grants')
-    .insert({
-      user_id: userId,
-      source_type: 'free_allowance',
-      source_ref_id: sourceRefId,
-      currency_code: freeVersion.currency_code,
-      beats_total: freeVersion.monthly_included_beats,
-      beats_remaining: freeVersion.monthly_included_beats,
-      expires_at: cycle.end.toISOString(),
-      metadata_json: {
-        planVersionId: freeVersion.id,
-        pricingMarketKey: state.snapshot.pricingMarketKey,
-        cycleStart: cycle.start.toISOString(),
-        cycleEnd: cycle.end.toISOString(),
-      },
-    })
-    .select('id')
-    .single();
-
-  throwIfQueryFailed(insertResult.error, 'Failed to create free allowance grant');
-
-  invalidatePricingRuntimeCacheForUser(userId);
 
   return {
-    granted: true,
-    grantId: insertResult.data?.id ?? null,
-    beatsGranted: freeVersion.monthly_included_beats,
-    expiresAt: cycle.end.toISOString(),
+    granted: Boolean(row.granted),
+    grantId: row.grant_id ?? null,
+    beatsGranted: asBeatAmount(row.beats_granted),
+    expiresAt: row.expires_at ?? null,
   };
 }
 
@@ -298,7 +251,7 @@ export async function authorizeBillableAction(input: {
         countryCode: input.countryCode,
       });
 
-      const shouldEnsureFreeAllowance =
+      const shouldEnsureFreeWelcomeGrant =
         state.snapshot.planKey === 'free' &&
         (
           state.controls.pricingSnapshotEnabled ||
@@ -306,8 +259,8 @@ export async function authorizeBillableAction(input: {
           state.controls.pricingHardEnforcementEnabled
         );
 
-      if (shouldEnsureFreeAllowance) {
-        const grantResult = await ensureFreeAllowanceForUser(input.userId, {
+      if (shouldEnsureFreeWelcomeGrant) {
+        const grantResult = await ensureFreeWelcomeGrantForUser(input.userId, {
           pricingMarketKey: input.pricingMarketKey,
           countryCode: input.countryCode,
           supabase,
@@ -817,53 +770,6 @@ async function logShadowMeteringAttempt(
 function isAdminBypassEnabledForUser(userId: string, controls: PricingRuntimeControls): boolean {
   const adminUserId = process.env.ADMIN_USER_ID;
   return Boolean(controls.pricingAdminBypassEnabled && adminUserId && adminUserId === userId);
-}
-
-function findPublishedPlanVersion(
-  plans: DbPricingPlan[],
-  versions: DbPricingPlanVersion[],
-  planKey: PlanKey,
-  pricingMarketKey: PricingMarketKey,
-  billingInterval: BillingInterval
-): DbPricingPlanVersion | null {
-  const plan = plans.find((candidate) => candidate.plan_key === planKey);
-  if (!plan) {
-    return null;
-  }
-
-  return versions.find((candidate) =>
-    candidate.plan_id === plan.id &&
-    candidate.status === 'published' &&
-    candidate.pricing_market_key === pricingMarketKey &&
-    candidate.billing_interval === billingInterval
-  ) ?? null;
-}
-
-function computeCurrentMonthlyCycle(anchorIso: string, now: Date): { start: Date; end: Date } {
-  const anchor = new Date(anchorIso);
-  const monthOffset = (now.getUTCFullYear() - anchor.getUTCFullYear()) * 12 + (now.getUTCMonth() - anchor.getUTCMonth());
-
-  let cycleStart = addUtcMonths(anchor, monthOffset);
-  if (cycleStart.getTime() > now.getTime()) {
-    cycleStart = addUtcMonths(anchor, monthOffset - 1);
-  }
-
-  const cycleEnd = addUtcMonths(cycleStart, 1);
-  return { start: cycleStart, end: cycleEnd };
-}
-
-function addUtcMonths(anchor: Date, months: number): Date {
-  const year = anchor.getUTCFullYear();
-  const month = anchor.getUTCMonth() + months;
-  const day = anchor.getUTCDate();
-  const hours = anchor.getUTCHours();
-  const minutes = anchor.getUTCMinutes();
-  const seconds = anchor.getUTCSeconds();
-  const milliseconds = anchor.getUTCMilliseconds();
-  const lastDayOfTargetMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-  const safeDay = Math.min(day, lastDayOfTargetMonth);
-
-  return new Date(Date.UTC(year, month, safeDay, hours, minutes, seconds, milliseconds));
 }
 
 async function getProviderSubscriptionIdFromBillingOrder(

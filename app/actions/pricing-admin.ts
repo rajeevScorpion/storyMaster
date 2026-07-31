@@ -1,7 +1,7 @@
 'use server';
 
 import {
-  ensureFreeAllowanceForUser,
+  ensureFreeWelcomeGrantForUser,
   expireStaleReservations,
   invalidatePricingGlobalsCache,
   reconcileRazorpaySubscription,
@@ -191,13 +191,13 @@ export interface ReconcilePricingTopupResult {
   grantedCoins: number;
 }
 
-export interface RefreshFreeAllowanceInput {
+export interface EnsureFreeWelcomeGrantInput {
   userId: string;
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
 }
 
-export interface RefreshFreeAllowanceResult {
+export interface EnsureFreeWelcomeGrantResult {
   granted: boolean;
   grantId: string | null;
   grantedCoins: number;
@@ -978,16 +978,16 @@ export async function reconcilePricingTopup(
   };
 }
 
-export async function refreshUserFreeAllowance(
-  input: RefreshFreeAllowanceInput
-): Promise<RefreshFreeAllowanceResult> {
+export async function ensureUserFreeWelcomeGrant(
+  input: EnsureFreeWelcomeGrantInput
+): Promise<EnsureFreeWelcomeGrantResult> {
   await verifyAdmin();
 
   if (!input.userId.trim()) {
     throw new Error('User id is required');
   }
 
-  const result = await ensureFreeAllowanceForUser(input.userId.trim(), {
+  const result = await ensureFreeWelcomeGrantForUser(input.userId.trim(), {
     pricingMarketKey: input.pricingMarketKey ?? null,
     countryCode: normalizeText(input.countryCode),
   });
@@ -1261,6 +1261,9 @@ function validatePlanDraftInput(input: SavePricingPlanDraftInput): void {
   assertInteger(input.tierRank, 'Tier rank', 1);
   assertInteger(input.priceMinor, 'Price', 0);
   assertInteger(input.monthlyIncludedBeats, 'Monthly included beats', 0);
+  if (input.planKey.trim() === 'free' && input.monthlyIncludedBeats !== 0) {
+    throw new Error('Free account credits are managed by the operational welcome policy, not a monthly plan allowance');
+  }
   assertNumber(input.carryForwardCapMultiplier, 'Carry forward cap multiplier', 0);
   assertInteger(input.storyLengthCap, 'Story length cap', 1);
   assertInteger(input.gracePeriodDays, 'Grace period days', 0);

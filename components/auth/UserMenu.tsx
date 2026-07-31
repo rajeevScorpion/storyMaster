@@ -60,7 +60,10 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
   const displayName = user.user_metadata?.full_name || user.email || 'User';
   const totalCoins = beatsToCoins(pricing.snapshot.availableTotalBeats);
   const monthlyAllowanceCoins = beatsToCoins(pricing.snapshot.monthlyIncludedBeats);
-  const showAllowancePreview = !pricing.controls.pricingSnapshotEnabled;
+  const showAllowancePreview =
+    !pricing.controls.pricingSnapshotEnabled &&
+    pricing.snapshot.planKey !== 'free' &&
+    monthlyAllowanceCoins > 0;
   const displayCoins = showAllowancePreview ? monthlyAllowanceCoins : totalCoins;
   const refillLabel = pricing.snapshot.nextResetAt
     ? new Date(pricing.snapshot.nextResetAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })

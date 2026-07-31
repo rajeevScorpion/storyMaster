@@ -118,7 +118,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     planKey: 'free',
     planTierRank: 1,
     planVersionId: null,
-    monthlyIncludedBeats: 12,
+    monthlyIncludedBeats: 0,
     billingProvider: null,
     billingInterval: null,
     billingCountryCode: null,

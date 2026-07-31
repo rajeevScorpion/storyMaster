@@ -98,6 +98,11 @@ describe('admin nav config', () => {
     expect(SETTINGS_NAV_ITEMS.some((item) => item.href === '/admin/help')).toBe(false);
   });
 
+  it('includes operational policies as a top-level Configuration item', () => {
+    const configuration = ADMIN_NAV.find((group) => group.id === 'configuration');
+    expect(configuration?.items.find((item) => item.href === '/admin/policies')).toBeDefined();
+  });
+
   it('includes user management as a top-level Operations item', () => {
     const operations = ADMIN_NAV.find((group) => group.id === 'operations');
     expect(operations?.items.find((item) => item.href === '/admin/users')).toBeDefined();

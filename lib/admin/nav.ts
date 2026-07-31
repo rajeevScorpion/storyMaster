@@ -27,6 +27,7 @@ import {
   Settings,
   Settings2,
   ShieldAlert,
+  ScrollText,
   SlidersHorizontal,
   Sparkles,
   UserRound,
@@ -388,6 +389,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     label: 'Configuration',
     items: [
       { label: 'Global Settings', href: '/admin/settings', icon: Settings, childGroups: SETTINGS_CHILD_GROUPS },
+      { label: 'Operational policies', href: '/admin/policies', icon: ScrollText },
       { label: 'Admin manual', href: '/admin/help', icon: LifeBuoy },
     ],
   },

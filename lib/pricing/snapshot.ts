@@ -126,8 +126,6 @@ function buildEffectivePricingSnapshotWithControls(
     input.beatReservations ?? [],
     now
   );
-  const freeAllowanceResetAt = selectFreeAllowanceResetAt(input.beatGrants ?? [], now);
-
   if (!selectedPlan || !selectedVersion) {
     return buildFallbackFreeSnapshot(resolvedMarket, controls, currentCustomer?.country_code ?? input.countryCode ?? null);
   }
@@ -152,7 +150,7 @@ function buildEffectivePricingSnapshotWithControls(
     isInGracePeriod,
     currentPeriodEndsAt: activeSubscription?.current_period_end ?? null,
     gracePeriodEndsAt: activeSubscription?.grace_period_ends_at ?? null,
-    nextResetAt: activeSubscription?.current_period_end ?? freeAllowanceResetAt,
+    nextResetAt: activeSubscription?.current_period_end ?? null,
     storyLengthCap: selectedVersion.story_length_cap,
     canAccessDownloads: Boolean(selectedPlan.feature_flags_json?.canAccessDownloads ?? false),
     canAccessUnbrandedExports: Boolean(selectedPlan.feature_flags_json?.canAccessUnbrandedExports ?? false),
@@ -178,7 +176,7 @@ function buildFallbackFreeSnapshot(
     planKey: 'free',
     planTierRank: 1,
     planVersionId: null,
-    monthlyIncludedBeats: 12,
+    monthlyIncludedBeats: 0,
     billingProvider: null,
     billingInterval: null,
     billingCountryCode,
@@ -368,23 +366,6 @@ function getRoutingProviderForMarket(
   return pricingMarketKey === 'IN'
     ? controls.routingProviderIn
     : controls.routingProviderRow;
-}
-
-function selectFreeAllowanceResetAt(
-  beatGrants: DbBeatGrant[],
-  now: Date
-): string | null {
-  const activeFreeGrants = beatGrants
-    .filter((grant) =>
-      grant.source_type === 'free_allowance' &&
-      grant.expires_at &&
-      new Date(grant.expires_at).getTime() > now.getTime()
-    )
-    .sort((left, right) =>
-      new Date(left.expires_at!).getTime() - new Date(right.expires_at!).getTime()
-    );
-
-  return activeFreeGrants[0]?.expires_at ?? null;
 }
 
 function getBooleanControl(

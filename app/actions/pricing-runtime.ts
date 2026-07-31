@@ -1,6 +1,6 @@
 'use server';
 
-import { ensureFreeAllowanceForUser, expireStaleReservations, loadCachedPricingGlobals } from '@/lib/pricing/enforcement';
+import { ensureFreeWelcomeGrantForUser, expireStaleReservations, loadCachedPricingGlobals } from '@/lib/pricing/enforcement';
 import {
   buildPricingRuntimeCacheKey,
   getCachedPricingRuntimeContext,
@@ -119,7 +119,7 @@ export async function getPricingRuntimeContext(
       withWalletBase.controls.pricingSnapshotEnabled &&
       withWalletBase.snapshot.planKey === 'free'
     ) {
-      const grantResult = await ensureFreeAllowanceForUser(userId, {
+      const grantResult = await ensureFreeWelcomeGrantForUser(userId, {
         pricingMarketKey: input.pricingMarketKey ?? null,
         countryCode: input.countryCode ?? null,
         supabase,
@@ -139,8 +139,8 @@ export async function getPricingRuntimeContext(
             .order('created_at', { ascending: false }),
         ]);
 
-        throwIfQueryFailed(grantsReload.error, 'Failed to reload beat grants after free allowance');
-        throwIfQueryFailed(reservationsReload.error, 'Failed to reload beat reservations after free allowance');
+        throwIfQueryFailed(grantsReload.error, 'Failed to reload beat grants after the welcome grant');
+        throwIfQueryFailed(reservationsReload.error, 'Failed to reload beat reservations after the welcome grant');
 
         beatGrants = (grantsReload.data ?? []) as DbBeatGrant[];
         beatReservations = (reservationsReload.data ?? []) as DbBeatSpendReservation[];
@@ -367,7 +367,7 @@ function buildWalletActivity(
 function getGrantTitle(sourceType: DbBeatGrant['source_type']): string {
   switch (sourceType) {
     case 'free_allowance':
-      return 'Free monthly refill';
+      return 'Welcome coins added';
     case 'subscription':
     case 'carry_forward':
       return 'Monthly refill';
@@ -387,7 +387,7 @@ function getGrantTitle(sourceType: DbBeatGrant['source_type']): string {
 function getGrantSubtitle(sourceType: DbBeatGrant['source_type']): string {
   switch (sourceType) {
     case 'free_allowance':
-      return 'Included with your free plan';
+      return 'One-time credit for joining Kissago';
     case 'subscription':
       return 'Included with your active plan';
     case 'carry_forward':

@@ -583,7 +583,7 @@ function grantLabel(sourceType: string): string {
     promotion: 'Promotional coins',
     admin_adjustment: 'Admin coin grant',
     migration_grant: 'Migration grant',
-    free_allowance: 'Free monthly refill',
+    free_allowance: 'Free welcome coins',
   };
   return labels[sourceType] ?? 'Coin grant';
 }

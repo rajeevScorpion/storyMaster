@@ -26,7 +26,7 @@ import {
   publishPricingTopupPack,
   reconcilePricingSubscription,
   reconcilePricingTopup,
-  refreshUserFreeAllowance,
+  ensureUserFreeWelcomeGrant,
   savePricingActionCost,
   savePricingPlanDraft,
   savePricingPromotion,
@@ -489,7 +489,7 @@ function defaultProviderForMarket(market: PricingMarketKey): BillingProvider {
 
 function defaultPlanEditor(planKey: PlanKey, market: PricingMarketKey): PlanEditorState {
   const defaultsByPlan: Record<PlanKey, { beats: number; cap: number; tier: number }> = {
-    free: { beats: 12, cap: 4, tier: 1 },
+    free: { beats: 0, cap: 4, tier: 1 },
     plus: { beats: 100, cap: 8, tier: 2 },
     studio: { beats: 300, cap: 8, tier: 3 },
   };
@@ -1078,7 +1078,17 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
               <InputField label="Name"><input value={planEditor.name} onChange={(event) => setPlanEditor((current) => ({ ...current, name: event.target.value }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Tier Rank"><input type="number" value={planEditor.tierRank} onChange={(event) => setPlanEditor((current) => ({ ...current, tierRank: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Price (minor units)"><input type="number" value={planEditor.priceMinor} onChange={(event) => setPlanEditor((current) => ({ ...current, priceMinor: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
-              <InputField label="Monthly Included Coins"><input type="number" step="10" value={planEditor.monthlyIncludedCoins} onChange={(event) => setPlanEditor((current) => ({ ...current, monthlyIncludedCoins: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
+              <InputField label={selectedPlanKey === 'free' ? 'Monthly Included Coins (policy-managed)' : 'Monthly Included Coins'}>
+                <input
+                  type="number"
+                  step="10"
+                  value={planEditor.monthlyIncludedCoins}
+                  disabled={selectedPlanKey === 'free'}
+                  title={selectedPlanKey === 'free' ? 'Free accounts use the one-time welcome policy.' : undefined}
+                  onChange={(event) => setPlanEditor((current) => ({ ...current, monthlyIncludedCoins: Number(event.target.value) || 0 }))}
+                  className={`${INPUT_CLASS} disabled:cursor-not-allowed disabled:opacity-50`}
+                />
+              </InputField>
               <InputField label="Story Length Cap"><input type="number" value={planEditor.storyLengthCap} onChange={(event) => setPlanEditor((current) => ({ ...current, storyLengthCap: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Grace Period Days"><input type="number" value={planEditor.gracePeriodDays} onChange={(event) => setPlanEditor((current) => ({ ...current, gracePeriodDays: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
               <InputField label="Carry Forward Cap Multiplier"><input type="number" step="0.1" value={planEditor.carryForwardCapMultiplier} onChange={(event) => setPlanEditor((current) => ({ ...current, carryForwardCapMultiplier: Number(event.target.value) || 0 }))} className={INPUT_CLASS} /></InputField>
@@ -1864,9 +1874,9 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
           </div>
 
           <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-            <p className="text-sm font-medium text-neutral-100">Refresh a free monthly refill</p>
+            <p className="text-sm font-medium text-neutral-100">Ensure free welcome coins</p>
             <p className="mt-1 text-xs leading-relaxed text-neutral-500">
-              Use this when a free tester account should have its monthly refill, but the wallet has not picked it up yet.
+              Use this only when a free account should have received its one-time welcome coins, but the wallet has not picked them up yet.
             </p>
             <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px]">
               <InputField label="User ID">
@@ -1891,18 +1901,18 @@ export default function PricingStudio({ section = 'workshop' }: { section?: Pric
             <div className="mt-4">
               <ActionButton
                 busy={busyKey === 'recovery:free-grant'}
-                label="Refresh free refill"
+                label="Ensure welcome grant"
                 icon={RotateCcw}
                 onClick={() => void runMutation(
                   'recovery:free-grant',
-                  () => refreshUserFreeAllowance({
+                  () => ensureUserFreeWelcomeGrant({
                     userId: recoveryDrafts.freeGrantUserId,
                     pricingMarketKey: recoveryDrafts.freeGrantMarket,
                   }),
                   () => {},
                   (result) => result.granted
-                    ? `A free monthly refill of ${formatWholeNumber(result.grantedCoins)} coins was added.`
-                    : 'This user already has the current monthly free refill.'
+                    ? `A one-time welcome grant of ${formatWholeNumber(result.grantedCoins)} coins was added.`
+                    : 'This user already received a free-account grant, or the welcome policy is paused.'
                 )}
               />
             </div>

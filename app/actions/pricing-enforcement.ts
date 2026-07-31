@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import {
-  ensureFreeAllowanceForUser,
+  ensureFreeWelcomeGrantForUser,
   expireStaleReservations,
   finalizeBillableAction,
   releaseBillableAction,
@@ -89,7 +89,7 @@ export async function releaseCurrentUserBillableAction(
   });
 }
 
-export async function ensureCurrentUserFreeAllowance() {
+export async function ensureCurrentUserFreeWelcomeGrant() {
   const userId = await getCurrentUserId();
   if (!userId) {
     return {
@@ -100,7 +100,7 @@ export async function ensureCurrentUserFreeAllowance() {
     };
   }
 
-  return ensureFreeAllowanceForUser(userId);
+  return ensureFreeWelcomeGrantForUser(userId);
 }
 
 export async function expireCurrentPricingReservations(): Promise<number> {
