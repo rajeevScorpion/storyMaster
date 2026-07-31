@@ -2041,6 +2041,13 @@ function StoryScreenInner({
       : '';
 
   const [isMinimized, setIsMinimized] = useState(false);
+  const [areOptionsMinimized, setAreOptionsMinimized] = useState(false);
+  const [optionsScrollState, setOptionsScrollState] = useState({
+    overflowing: false,
+    atTop: true,
+    atBottom: true,
+  });
+  const [optionsScrollHintDismissed, setOptionsScrollHintDismissed] = useState(false);
   const [activeReelEditorSection, setActiveReelEditorSection] = useState<ReelEditorSection>('text');
   const [reelMobilePreviewMode, setReelMobilePreviewMode] = useState<ReelMobilePreviewMode>('work');
   const [reelEditorNavigationMessage, setReelEditorNavigationMessage] = useState<string | null>(null);
@@ -2278,7 +2285,8 @@ function StoryScreenInner({
     pxPerSecond: cycleSettings.loadingReaderScrollSpeedPxPerSecond,
   });
   const thumbRef = useRef<HTMLDivElement>(null);
-  const autoMinimizedForLoadingRef = useRef(false);
+  const autoMinimizedForLoadingRef = useRef({ story: false, options: false });
+  const previousCustomOptionCountRef = useRef({ nodeId: currentNodeId, count: -1 });
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
   const handleScroll = useCallback(() => {
@@ -2698,6 +2706,7 @@ function StoryScreenInner({
         ...currentBeat.options.filter((option) => option.id !== currentBeat.canonicalOptionId),
       ]
     : currentBeat.options;
+  const customOptionCount = orderedOptions.filter((option) => option.source === 'user_custom').length;
   const savedReelPanelTexts = useMemo(
     () => getReelPanelTexts({
       storyText: normalizedCurrentBeat.storyText,
@@ -3945,7 +3954,11 @@ function StoryScreenInner({
     onNavigateNode: handleManualNavigateToNode,
     onSelectOption: continueStory,
     onToggleMinimized: () => {
-      if (!isReelStory) setIsMinimized(prev => !prev);
+      if (!isReelStory) {
+        const collapseBoth = !isMinimized || !areOptionsMinimized;
+        setIsMinimized(collapseBoth);
+        setAreOptionsMinimized(collapseBoth);
+      }
     },
     onToggleNarration: () => {
       if (isReelStory) {
@@ -3973,16 +3986,24 @@ function StoryScreenInner({
     const frame = requestAnimationFrame(() => {
       if (isLoading) {
         setIsMinimized((current) => {
-          autoMinimizedForLoadingRef.current = !current;
+          autoMinimizedForLoadingRef.current.story = !current;
+          return true;
+        });
+        setAreOptionsMinimized((current) => {
+          autoMinimizedForLoadingRef.current.options = !current;
           return true;
         });
         return;
       }
 
-      if (autoMinimizedForLoadingRef.current) {
-        autoMinimizedForLoadingRef.current = false;
+      if (autoMinimizedForLoadingRef.current.story) {
+        autoMinimizedForLoadingRef.current.story = false;
         setIsMinimized(false);
         setActiveReaderPanel('story');
+      }
+      if (autoMinimizedForLoadingRef.current.options) {
+        autoMinimizedForLoadingRef.current.options = false;
+        setAreOptionsMinimized(false);
       }
     });
 
@@ -4076,6 +4097,78 @@ function StoryScreenInner({
       });
     }
   }, [focusedOptionIndex]);
+
+  const updateOptionsScrollState = useCallback(() => {
+    const element = optionsContainerRef.current;
+    if (!element) return;
+    const next = {
+      overflowing: element.clientHeight > 0 && element.scrollHeight > element.clientHeight + 1,
+      atTop: element.scrollTop <= 1,
+      atBottom: element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+    };
+    setOptionsScrollState((current) =>
+      current.overflowing === next.overflowing
+      && current.atTop === next.atTop
+      && current.atBottom === next.atBottom
+        ? current
+        : next
+    );
+  }, []);
+
+  const handleOptionsScroll = useCallback(() => {
+    updateOptionsScrollState();
+    if ((optionsContainerRef.current?.scrollTop ?? 0) > 4) {
+      setOptionsScrollHintDismissed(true);
+    }
+  }, [updateOptionsScrollState]);
+
+  useEffect(() => {
+    const element = optionsContainerRef.current;
+    if (!element || areOptionsMinimized) return;
+
+    const frameId = window.requestAnimationFrame(updateOptionsScrollState);
+    const resizeObserver = new ResizeObserver(updateOptionsScrollState);
+    const mutationObserver = new MutationObserver(() => {
+      window.requestAnimationFrame(updateOptionsScrollState);
+    });
+    resizeObserver.observe(element);
+    mutationObserver.observe(element, { childList: true, subtree: true, characterData: true });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver.disconnect();
+      mutationObserver.disconnect();
+    };
+  }, [
+    activeReaderPanel,
+    areOptionsMinimized,
+    currentNodeId,
+    orderedOptions.length,
+    updateOptionsScrollState,
+  ]);
+
+  useEffect(() => {
+    setOptionsScrollHintDismissed(false);
+  }, [currentNodeId]);
+
+  useEffect(() => {
+    const previous = previousCustomOptionCountRef.current;
+    previousCustomOptionCountRef.current = { nodeId: currentNodeId, count: customOptionCount };
+    if (
+      previous.count < 0
+      || previous.nodeId !== currentNodeId
+      || customOptionCount <= previous.count
+    ) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const element = optionsContainerRef.current;
+      element?.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+      updateOptionsScrollState();
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [currentNodeId, customOptionCount, updateOptionsScrollState]);
 
   const backgroundImageOpacity = isVerticalStory
     ? (isLoading ? 'opacity-95 md:opacity-70' : (isMinimized ? 'opacity-90 md:opacity-60' : 'opacity-90 md:opacity-40'))
@@ -6044,7 +6137,7 @@ function StoryScreenInner({
         </div>
 
         <div className="mb-3 flex items-center gap-2 md:hidden">
-          {!isReelStory && !isMinimized && (
+          {!isReelStory && (
             <>
               <div className="min-w-0 flex-1 overflow-x-auto scrollbar-none">
                 <Timeline
@@ -6100,7 +6193,7 @@ function StoryScreenInner({
             className={`${storyTextColumnClassName} flex-col items-center relative ${
               isReelStory && isMinimized
                 ? 'hidden'
-                : !isMinimized && visibleReaderPanel === 'story'
+                : visibleReaderPanel === 'story'
                 ? 'flex'
                 : 'hidden md:flex'
             }`}
@@ -6162,8 +6255,9 @@ function StoryScreenInner({
               <div className="ml-auto flex items-center gap-2">
               <button
                 onClick={() => setIsMinimized(!isMinimized)}
-                className="hidden p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
+                className="p-2 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors"
                 title={isMinimized ? 'Expand story' : 'Minimize story'}
+                aria-expanded={!isMinimized}
               >
                 {isMinimized ? (
                   <ChevronUp className="w-5 h-5 text-neutral-300" />
@@ -6818,7 +6912,7 @@ function StoryScreenInner({
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6, delay: 0.2 }}
               className={`flex-col justify-end ${storyChoicesColumnClassName} ${
-                !isMinimized && activeReaderPanel === 'branches' ? 'flex' : 'hidden md:flex'
+                activeReaderPanel === 'branches' ? 'flex' : 'hidden md:flex'
               }`}
             >
               {/* Timeline — positioned above choices */}
@@ -6831,23 +6925,25 @@ function StoryScreenInner({
               </div>
 
               {/* Header with toggle */}
-              <div className="flex items-center justify-between mb-3 px-4 shrink-0">
-                <div>
-                  <h3 className="text-xs font-sans uppercase tracking-widest text-neutral-500">
+              <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-4">
+                <div className="min-w-0">
+                  <h3 className="text-xs font-sans uppercase tracking-widest text-white mix-blend-difference [text-shadow:0_1px_3px_rgb(0_0_0/0.85)]">
                     What happens next?
                   </h3>
                   {showCoinHint && (
-                    <p className="mt-1 text-[11px] font-sans text-neutral-500">
+                    <p className="mt-1 text-[11px] font-sans leading-relaxed text-white mix-blend-difference [text-shadow:0_1px_3px_rgb(0_0_0/0.9)]">
                       A new path uses {continueCoinCost.toLocaleString()} coins. Reopening an explored path stays free.
                     </p>
                   )}
                 </div>
                 <button
-                  onClick={() => setIsMinimized(!isMinimized)}
-                  className="hidden p-1.5 bg-white/5 hover:bg-white/10 rounded-full backdrop-blur-md transition-colors md:block"
-                  title={isMinimized ? 'Show options' : 'Hide options'}
+                  onClick={() => setAreOptionsMinimized((current) => !current)}
+                  className="shrink-0 rounded-full border border-white/10 bg-neutral-900/55 p-2 text-neutral-200 shadow-sm backdrop-blur-md transition-colors hover:bg-neutral-800/80 hover:text-white"
+                  title={areOptionsMinimized ? 'Show options' : 'Hide options'}
+                  aria-expanded={!areOptionsMinimized}
+                  aria-controls="story-choice-options"
                 >
-                  {isMinimized ? (
+                  {areOptionsMinimized ? (
                     <ChevronUp className="w-4 h-4 text-neutral-300" />
                   ) : (
                     <ChevronDown className="w-4 h-4 text-neutral-300" />
@@ -6856,77 +6952,101 @@ function StoryScreenInner({
               </div>
 
               {/* Scrollable options — shows ~2.5 cards with fade hint */}
-              <AnimatePresence>
-                {!isMinimized && (
+              <AnimatePresence initial={false}>
+                {!areOptionsMinimized && (
                   <motion.div
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: 'auto' }}
                     exit={{ opacity: 0, height: 0 }}
-                    transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-                    className="relative shrink-0 overflow-hidden md:max-h-none"
+                    transition={{ duration: 0.44, ease: [0.22, 1, 0.36, 1] }}
+                    id="story-choice-options"
+                    className="relative shrink-0 overflow-hidden"
                   >
                     <div
                       ref={optionsContainerRef}
-                      className="max-h-[min(42dvh,24rem)] overflow-y-auto scrollbar-none space-y-4 px-1 pt-3 md:max-h-none md:pt-1"
-                      style={{
-                        maskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 82%, transparent 100%)',
-                        WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 12%, black 82%, transparent 100%)',
-                      }}
+                      onScroll={handleOptionsScroll}
+                      className="max-h-[min(48dvh,28rem)] touch-pan-y overflow-y-auto overscroll-contain px-1 pb-1 pt-3 scrollbar-none md:max-h-[calc(min(74dvh,44rem)_-_5.5rem)] md:pt-1"
+                      style={
+                        optionsScrollState.overflowing && !optionsScrollState.atTop
+                          ? {
+                              maskImage: 'linear-gradient(to bottom, transparent 0, black 2.5rem, black 100%)',
+                              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0, black 2.5rem, black 100%)',
+                            }
+                          : undefined
+                      }
                     >
-                      {orderedOptions.map((option, index) => {
-                        const explored = hasExistingBranch(option.id);
-                        const isFocused = focusMode === 'options' && focusedOptionIndex === index;
-                        const isCanonical = option.id === currentBeat.canonicalOptionId;
-                        return (
-                          <motion.button
-                            key={option.id}
-                            ref={(el) => { optionRefs.current[index] = el; }}
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            transition={{ delay: index * 0.1 }}
-                            onClick={() => continueStory(option.id)}
-                            disabled={isLoading}
-                            className={`w-full text-left group backdrop-blur-md rounded-2xl p-4 md:p-6 transition-all duration-300 flex items-center justify-between ${
-                              explored
-                                ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40 glow-pulse-mild'
-                                : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'
-                            } ${isFocused ? 'ring-2 ring-emerald-400/50 border-emerald-500/40' : ''}`}
-                          >
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-base md:text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
-                                  {option.label}
+                      <div className="flex flex-col gap-4">
+                        {orderedOptions.map((option, index) => {
+                          const explored = hasExistingBranch(option.id);
+                          const isFocused = focusMode === 'options' && focusedOptionIndex === index;
+                          const isCanonical = option.id === currentBeat.canonicalOptionId;
+                          return (
+                            <motion.button
+                              key={option.id}
+                              ref={(el) => { optionRefs.current[index] = el; }}
+                              initial={{ opacity: 0, x: 20 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ delay: index * 0.1 }}
+                              onClick={() => continueStory(option.id)}
+                              disabled={isLoading}
+                              className={`w-full text-left group backdrop-blur-md rounded-2xl p-4 md:p-6 transition-all duration-300 flex items-center justify-between ${
+                                explored
+                                  ? 'bg-neutral-900/60 hover:bg-neutral-800 border border-emerald-500/20 hover:border-emerald-500/40 glow-pulse-mild'
+                                  : 'bg-neutral-900/60 hover:bg-neutral-800 border border-white/5 hover:border-white/20'
+                              } ${isFocused ? 'ring-2 ring-emerald-400/50 border-emerald-500/40' : ''}`}
+                            >
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-base md:text-lg font-serif text-neutral-200 group-hover:text-white transition-colors">
+                                    {option.label}
+                                  </p>
+                                  {isCanonical && (
+                                    <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-300">
+                                      Original path
+                                    </span>
+                                  )}
+                                  {option.source === 'user_custom' && (
+                                    <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-sky-300">
+                                      Yours
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 line-clamp-2 text-xs font-sans uppercase tracking-wider text-neutral-300/90 [text-shadow:0_1px_2px_rgb(0_0_0/0.8)] transition-colors group-hover:text-neutral-100">
+                                  {option.intent}
                                 </p>
-                                {isCanonical && (
-                                  <span className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-emerald-300">
-                                    Original path
-                                  </span>
-                                )}
-                                {option.source === 'user_custom' && (
-                                  <span className="rounded-full border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-[0.18em] text-sky-300">
-                                    Yours
-                                  </span>
-                                )}
                               </div>
-                              <p className="text-xs font-sans text-neutral-500 mt-1 uppercase tracking-wider line-clamp-2">
-                                {option.intent}
-                              </p>
-                            </div>
-                            {explored ? (
-                              <Check className="w-4 h-4 text-emerald-500/60" />
-                            ) : (
-                              <ArrowRight className="w-5 h-5 text-neutral-600 group-hover:text-emerald-400 transition-colors transform group-hover:translate-x-1" />
-                            )}
-                          </motion.button>
-                        );
-                      })}
-                      {optionsRegenError && (
-                        <p className="px-1 text-xs leading-snug text-rose-300">{optionsRegenError}</p>
-                      )}
-                      {canUseBeatControls && !isReelStory && beatControlSettings.customOptionsEnabled && (
-                        <CustomOptionInput nodeId={currentNodeId} disabled={isLoading} />
-                      )}
+                              {explored ? (
+                                <Check className="w-4 h-4 text-emerald-500/60" />
+                              ) : (
+                                <ArrowRight className="w-5 h-5 text-neutral-600 group-hover:text-emerald-400 transition-colors transform group-hover:translate-x-1" />
+                              )}
+                            </motion.button>
+                          );
+                        })}
+                        {optionsRegenError && (
+                          <p className="px-1 text-xs leading-snug text-rose-300">{optionsRegenError}</p>
+                        )}
+                        {canUseBeatControls && !isReelStory && beatControlSettings.customOptionsEnabled && (
+                          <div>
+                            <CustomOptionInput nodeId={currentNodeId} disabled={isLoading} />
+                          </div>
+                        )}
+                      </div>
                     </div>
+                    <AnimatePresence>
+                      {optionsScrollState.overflowing
+                        && optionsScrollState.atTop
+                        && !optionsScrollHintDismissed && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 4 }}
+                            className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/10 bg-neutral-900/90 px-3 py-1.5 text-[10px] font-sans uppercase tracking-wider text-neutral-200 shadow-lg backdrop-blur-md"
+                          >
+                            Scroll for more <ChevronDown className="ml-1 inline h-3 w-3" />
+                          </motion.div>
+                        )}
+                    </AnimatePresence>
                   </motion.div>
                 )}
               </AnimatePresence>

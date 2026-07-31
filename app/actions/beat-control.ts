@@ -34,6 +34,10 @@ import {
   normalizeMaxImageVersionsPerBeat,
   type BeatControlRuntimeSettings,
 } from '@/lib/beat-control/settings';
+import {
+  MAX_CUSTOM_OPTIONS_PER_BEAT,
+  countCustomOptions,
+} from '@/lib/beat-control/custom-options';
 import type {
   BeatImageGalleryEntry,
   Option,
@@ -607,6 +611,12 @@ export async function addCustomOption(input: {
     const { userId, storyMap } = await requireOwnedStory(input.storyId);
     const node = storyMap.nodes[input.nodeId];
     if (!node) return { status: 'failed', error: 'Beat not found in this story.' };
+    if (countCustomOptions(node.data.options) >= MAX_CUSTOM_OPTIONS_PER_BEAT) {
+      return {
+        status: 'failed',
+        error: `You can add up to ${MAX_CUSTOM_OPTIONS_PER_BEAT} custom choices to each beat.`,
+      };
+    }
 
     const characters = collectNamedCharactersForNode(storyMap, input.nodeId);
     const parsed = parseCharacterMentions(optionText, characters.map((c) => c.name));
