@@ -31,6 +31,7 @@ export default function FilterDropdown({
   size = 'compact',
   mode = 'popover',
   ariaLabel,
+  contextLabel,
 }: {
   value: string;
   options: FilterDropdownOption[];
@@ -39,6 +40,8 @@ export default function FilterDropdown({
   size?: DropdownSize;
   mode?: DropdownMode;
   ariaLabel?: string;
+  /** Small field name shown beside the selected value inside the trigger. */
+  contextLabel?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [opensUp, setOpensUp] = useState(false);
@@ -200,8 +203,15 @@ export default function FilterDropdown({
         aria-haspopup="listbox"
         aria-label={ariaLabel}
       >
-        <span className={fullWidth ? 'min-w-0 flex-1 truncate' : ''}>
-          {selected?.label || options[0]?.label}
+        <span className={fullWidth ? 'flex min-w-0 flex-1 items-center justify-between gap-3' : ''}>
+          <span className={fullWidth ? 'min-w-0 truncate' : ''}>
+            {selected?.label || options[0]?.label}
+          </span>
+          {contextLabel && (
+            <span className="mr-1 shrink-0 whitespace-nowrap text-[10px] font-normal tracking-wide text-neutral-500">
+              {contextLabel}
+            </span>
+          )}
         </span>
         <ChevronDown
           className={`h-3.5 w-3.5 shrink-0 transition-transform duration-200 ${
