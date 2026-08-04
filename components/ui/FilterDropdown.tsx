@@ -30,7 +30,8 @@ interface ScrollIndicator {
 }
 
 const SCROLL_TRACK_INSET = 4;
-const MIN_SCROLL_THUMB_HEIGHT = 24;
+const MIN_SCROLL_THUMB_HEIGHT = 20;
+const MAX_SCROLL_THUMB_HEIGHT = 32;
 
 export default function FilterDropdown({
   value,
@@ -139,6 +140,7 @@ export default function FilterDropdown({
 
     const height = Math.min(
       trackHeight,
+      MAX_SCROLL_THUMB_HEIGHT,
       Math.max(MIN_SCROLL_THUMB_HEIGHT, (element.clientHeight / element.scrollHeight) * trackHeight)
     );
     const top = (element.scrollTop / overflow) * (trackHeight - height);
@@ -243,7 +245,7 @@ export default function FilterDropdown({
           {scrollIndicator.visible && (
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute bottom-1 right-1 top-1 w-1 rounded-full bg-white/5"
+              className="pointer-events-none absolute bottom-1 right-1 top-1 w-1"
             >
               <span
                 className="absolute left-0 w-1 rounded-full bg-emerald-600/90"
