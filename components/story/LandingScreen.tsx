@@ -46,7 +46,7 @@ import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
-import { DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import { buildDefaultVisualSettings, DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
 import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
 import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
 import { loadReadyReferenceSeed, loadDirectReferenceSeed } from '@/app/actions/references';
@@ -161,7 +161,9 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [settingCountry, setSettingCountry] = useState('generic');
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
-  const [visualSettings, setVisualSettings] = useState<VisualSettings>(DEFAULT_STORY_CONFIG.visualSettings);
+  const [visualSettings, setVisualSettings] = useState<VisualSettings>(() => (
+    buildDefaultVisualSettings(initialLandingData.storyVisualCatalog)
+  ));
   const [creationMode, setCreationMode] = useState<CreationMode>('prompt');
   const [authoringMode, setAuthoringMode] = useState<StoryConfig['authoring']['mode']>(DEFAULT_STORY_CONFIG.authoring.mode);
   const [workingTitle, setWorkingTitle] = useState(DEFAULT_STORY_CONFIG.authoring.workingTitle || '');
@@ -1710,6 +1712,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   clearSeedPreview();
                 }}
                 visualSettings={visualSettings}
+                visualCatalog={initialLandingData.storyVisualCatalog}
                 onVisualSettingsChange={(next) => {
                   setVisualSettings(next);
                   clearSeedPreview();

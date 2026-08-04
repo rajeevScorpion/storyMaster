@@ -27,6 +27,18 @@ import type {
   WorldAdoptionMode,
 } from '@/lib/types/references';
 import {
+  BUILT_IN_STORY_VISUAL_CATALOG,
+  findStoryVisualOption,
+  getDefaultStoryVisualOption,
+  isStoryVisualCategory,
+  toStoryVisualOptionSnapshot,
+  type StoryVisualCatalog,
+  type StoryVisualCategory,
+  type StoryVisualOption,
+  type StoryVisualOptionSnapshot,
+  type StoryVisualOptionSnapshots,
+} from '@/lib/ai/story-visual-options.shared';
+import {
   DEFAULT_REEL_STORY_SETTINGS,
   getReelLegacyLengthForBeatCount,
   getReelLengthBeatCount,
@@ -53,36 +65,23 @@ import type {
 } from '@/lib/ai/narration-voices';
 
 export const VISUAL_PRESET_OPTIONS: Array<{ value: VisualStylePreset; label: string; description: string }> = [
-  { value: 'storybook_illustration', label: 'Storybook Illustration', description: 'Painterly storybook frames with warm character appeal.' },
-  { value: 'watercolor_fable', label: 'Watercolor Fable', description: 'Soft watercolor washes with dreamy edges and gentle textures.' },
-  { value: 'anime_cel', label: 'Anime Cel', description: 'Clean linework, expressive faces, and bold cel-shaded lighting.' },
-  { value: 'graphic_novel', label: 'Graphic Novel', description: 'Ink-forward panels with dramatic contrast and bold silhouettes.' },
-  { value: 'three_d_animated', label: '3D Animated', description: 'Polished animated-film look with dimensional characters and staging.' },
-  { value: 'cinematic_photo', label: 'Cinematic Photo', description: 'Stylized cinematic realism with controlled lighting and atmosphere.' },
+  ...BUILT_IN_STORY_VISUAL_CATALOG.styles.map((option) => ({
+    value: option.key,
+    label: option.label,
+    description: option.description,
+  })),
 ];
 
 export const STORY_THEME_OPTIONS: Array<{ value: StoryTheme; label: string }> = [
-  { value: 'whimsical', label: 'Whimsical' },
-  { value: 'cozy', label: 'Cozy' },
-  { value: 'epic', label: 'Epic' },
-  { value: 'mysterious', label: 'Mysterious' },
-  { value: 'dark_fantasy', label: 'Dark Fantasy' },
-  { value: 'futuristic', label: 'Futuristic' },
+  ...BUILT_IN_STORY_VISUAL_CATALOG.moods.map((option) => ({ value: option.key, label: option.label })),
 ];
 
 export const STORY_PALETTE_OPTIONS: Array<{ value: StoryPalette; label: string }> = [
-  { value: 'warm', label: 'Warm' },
-  { value: 'vibrant', label: 'Vibrant' },
-  { value: 'pastel', label: 'Pastel' },
-  { value: 'moody', label: 'Moody' },
-  { value: 'earthy', label: 'Earthy' },
-  { value: 'neon', label: 'Neon' },
+  ...BUILT_IN_STORY_VISUAL_CATALOG.palettes.map((option) => ({ value: option.key, label: option.label })),
 ];
 
 export const STORY_DETAIL_OPTIONS: Array<{ value: StoryDetailLevel; label: string }> = [
-  { value: 'simple', label: 'Simple' },
-  { value: 'balanced', label: 'Balanced' },
-  { value: 'lush', label: 'Lush' },
+  ...BUILT_IN_STORY_VISUAL_CATALOG.details.map((option) => ({ value: option.key, label: option.label })),
 ];
 
 export interface StoryLanguageOption {
@@ -203,8 +202,8 @@ export const SOURCE_FIDELITY_OPTIONS: Array<{
 
 export const DEFAULT_VISUAL_SETTINGS: VisualSettings = {
   preset: 'storybook_illustration',
-  theme: 'whimsical',
-  palette: 'warm',
+  theme: 'match_story',
+  palette: 'match_story',
   detail: 'balanced',
 };
 
@@ -267,37 +266,34 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   portraitReferences: DEFAULT_PORTRAIT_REFERENCE_CONFIG,
 };
 
-const PRESET_SUMMARIES: Record<VisualStylePreset, string> = {
-  storybook_illustration: 'storybook illustration with painterly textures and expressive character acting',
-  watercolor_fable: 'watercolor fable art with soft pigments, delicate edges, and airy paper texture',
-  anime_cel: 'anime cel art with crisp linework, expressive faces, and confident shape language',
-  graphic_novel: 'graphic novel art with bold inks, strong contrast, and cinematic framing',
-  three_d_animated: '3D animated film art with dimensional characters and polished lighting',
-  cinematic_photo: 'cinematic photo-real rendering with stylized realism and controlled depth',
-};
+const LEGACY_VISUAL_OPTIONS: StoryVisualOption[] = [
+  {
+    id: 'legacy:mood:whimsical', category: 'mood', key: 'whimsical', label: 'Whimsical', description: 'Playful and imaginative.',
+    visualPromptDefiner: 'Use buoyant poses, imaginative staging, curious reactions, and light compositional rhythm without adding unrelated fantasy objects.',
+    narrativePromptDefiner: 'Use playful curiosity and gentle surprise where the events support it, without naming the mood setting.', status: 'archived', sortOrder: 0, isDefault: false,
+  },
+  {
+    id: 'legacy:mood:epic', category: 'mood', key: 'epic', label: 'Epic', description: 'Grand and adventurous.',
+    visualPromptDefiner: 'Use a strong sense of scale, directional composition, purposeful poses, and readable stakes without inventing battles or spectacle.',
+    narrativePromptDefiner: 'Use purposeful momentum and a sense of meaningful stakes while preserving the requested plot.', status: 'archived', sortOrder: 0, isDefault: false,
+  },
+  {
+    id: 'legacy:mood:dark_fantasy', category: 'mood', key: 'dark_fantasy', label: 'Dark Fantasy', description: 'Elegant unease.',
+    visualPromptDefiner: 'Use elegant unease, restrained contrast, aged textures, and controlled shadow while remaining audience-appropriate and story-grounded.',
+    narrativePromptDefiner: 'Use restrained unease and moral uncertainty only where supported by the story and audience setting.', status: 'archived', sortOrder: 0, isDefault: false,
+  },
+  {
+    id: 'legacy:mood:futuristic', category: 'mood', key: 'futuristic', label: 'Futuristic', description: 'Forward-looking imagination.',
+    visualPromptDefiner: 'Use clean forward-looking design language only on technology and environments already established by the story; do not introduce futuristic objects.',
+    narrativePromptDefiner: 'Preserve any future-facing ideas already present, but do not change the era or add technology because of this legacy setting.', status: 'archived', sortOrder: 0, isDefault: false,
+  },
+];
 
-const THEME_SUMMARIES: Record<StoryTheme, string> = {
-  whimsical: 'whimsical and playful emotional tone',
-  cozy: 'cozy and intimate emotional tone',
-  epic: 'epic and adventurous emotional tone',
-  mysterious: 'mysterious and discovery-driven emotional tone',
-  dark_fantasy: 'dark fantasy emotional tone with elegant unease',
-  futuristic: 'futuristic emotional tone with forward-looking imagination',
-};
-
-const PALETTE_SUMMARIES: Record<StoryPalette, string> = {
-  warm: 'warm color palette with sunlit golds, ambers, and rich reds',
-  vibrant: 'vibrant color palette with saturated color separation',
-  pastel: 'pastel color palette with soft tonal transitions',
-  moody: 'moody color palette with deep shadows and selective highlights',
-  earthy: 'earthy color palette with natural greens, browns, and mineral tones',
-  neon: 'neon color palette with luminous accents and graphic contrast',
-};
-
-const DETAIL_SUMMARIES: Record<StoryDetailLevel, string> = {
-  simple: 'clean visual detail with readable shapes and restrained background complexity',
-  balanced: 'balanced visual detail with readable characters and selective environment richness',
-  lush: 'lush visual detail with layered environments, material texture, and cinematic atmosphere',
+const VISUAL_SETTING_FIELDS: Record<StoryVisualCategory, keyof Pick<VisualSettings, 'preset' | 'theme' | 'palette' | 'detail'>> = {
+  style: 'preset',
+  mood: 'theme',
+  palette: 'palette',
+  detail: 'detail',
 };
 
 type RawStoryConfig = Partial<StoryConfig> & {
@@ -325,11 +321,13 @@ type RawStoryConfig = Partial<StoryConfig> & {
 export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig {
   const storyKind = normalizeStoryKind(input?.storyKind ?? input?.story_kind);
   const reel = normalizeReelConfig(input?.reel, input?.language);
+  const resolvedOptions = normalizeStoryVisualOptionSnapshots(input?.visualSettings?.resolvedOptions);
   const visualSettings: VisualSettings = {
     preset: input?.visualSettings?.preset || DEFAULT_VISUAL_SETTINGS.preset,
     theme: input?.visualSettings?.theme || DEFAULT_VISUAL_SETTINGS.theme,
     palette: input?.visualSettings?.palette || DEFAULT_VISUAL_SETTINGS.palette,
     detail: input?.visualSettings?.detail || DEFAULT_VISUAL_SETTINGS.detail,
+    ...(resolvedOptions ? { resolvedOptions } : {}),
   };
 
   const rawAuthoring = input?.authoring;
@@ -485,12 +483,107 @@ export function deriveVisualStyleSummary(visualSettings?: Partial<VisualSettings
     ...visualSettings,
   };
 
+  const style = resolveStoryVisualOptionSnapshot(resolved, 'style');
+  const mood = resolveStoryVisualOptionSnapshot(resolved, 'mood');
+  const palette = resolveStoryVisualOptionSnapshot(resolved, 'palette');
+  const detail = resolveStoryVisualOptionSnapshot(resolved, 'detail');
+
   return [
-    PRESET_SUMMARIES[resolved.preset],
-    THEME_SUMMARIES[resolved.theme],
-    PALETTE_SUMMARIES[resolved.palette],
-    DETAIL_SUMMARIES[resolved.detail],
-  ].join(', ');
+    `Rendering: ${style.visualPromptDefiner}`,
+    `Emotional atmosphere: ${mood.visualPromptDefiner}`,
+    `Color and light: ${palette.visualPromptDefiner}`,
+    `Scene richness: ${detail.visualPromptDefiner}`,
+    'Scope boundary: apply these directions only to the visual treatment of story-grounded people, places, objects, and actions. Do not introduce objects, weather, technology, time of day, text, dialogue, or plot events merely to represent a style, mood, palette, or detail setting.',
+  ].join('\n');
+}
+
+/** Narrative-only mood direction. Rendering, palette, and detail never enter story prose prompts. */
+export function deriveNarrativeMoodSummary(visualSettings?: Partial<VisualSettings> | null): string {
+  const resolved: VisualSettings = {
+    ...DEFAULT_VISUAL_SETTINGS,
+    ...visualSettings,
+  };
+  const mood = resolveStoryVisualOptionSnapshot(resolved, 'mood');
+  return mood.narrativePromptDefiner
+    || 'Let the story request and established events determine the emotional tone. Do not force a named mood into the narration.';
+}
+
+export function buildDefaultVisualSettings(catalog: StoryVisualCatalog): VisualSettings {
+  const style = getDefaultStoryVisualOption(catalog, 'style');
+  const mood = getDefaultStoryVisualOption(catalog, 'mood');
+  const palette = getDefaultStoryVisualOption(catalog, 'palette');
+  const detail = getDefaultStoryVisualOption(catalog, 'detail');
+  return {
+    preset: style.key,
+    theme: mood.key,
+    palette: palette.key,
+    detail: detail.key,
+    resolvedOptions: {
+      style: toStoryVisualOptionSnapshot(style),
+      mood: toStoryVisualOptionSnapshot(mood),
+      palette: toStoryVisualOptionSnapshot(palette),
+      detail: toStoryVisualOptionSnapshot(detail),
+    },
+  };
+}
+
+export function selectStoryVisualOption(
+  visualSettings: VisualSettings,
+  catalog: StoryVisualCatalog,
+  category: StoryVisualCategory,
+  key: string
+): VisualSettings {
+  const option = findStoryVisualOption(catalog, category, key);
+  if (!option) return visualSettings;
+  const field = VISUAL_SETTING_FIELDS[category];
+  return {
+    ...visualSettings,
+    [field]: option.key,
+    resolvedOptions: {
+      ...(visualSettings.resolvedOptions ?? {}),
+      [category]: toStoryVisualOptionSnapshot(option),
+    },
+  };
+}
+
+export function resolveStoryVisualOptionSnapshot(
+  visualSettings: VisualSettings,
+  category: StoryVisualCategory
+): StoryVisualOptionSnapshot {
+  const selectedKey = String(visualSettings[VISUAL_SETTING_FIELDS[category]] || '');
+  const snapshot = visualSettings.resolvedOptions?.[category];
+  if (snapshot?.key === selectedKey && snapshot.category === category) {
+    return snapshot;
+  }
+
+  const builtIn = findStoryVisualOption(BUILT_IN_STORY_VISUAL_CATALOG, category, selectedKey)
+    ?? LEGACY_VISUAL_OPTIONS.find((option) => option.category === category && option.key === selectedKey)
+    ?? getDefaultStoryVisualOption(BUILT_IN_STORY_VISUAL_CATALOG, category);
+  return toStoryVisualOptionSnapshot(builtIn);
+}
+
+function normalizeStoryVisualOptionSnapshots(
+  input?: StoryVisualOptionSnapshots | null
+): StoryVisualOptionSnapshots | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const normalized: StoryVisualOptionSnapshots = {};
+  for (const category of ['style', 'mood', 'palette', 'detail'] as const) {
+    const raw = input[category] as Partial<StoryVisualOptionSnapshot> | undefined;
+    if (!raw || !isStoryVisualCategory(raw.category) || raw.category !== category) continue;
+    const key = sanitizeText(raw.key).slice(0, 80);
+    const visualPromptDefiner = sanitizeText(raw.visualPromptDefiner).slice(0, 1200);
+    if (!key || !visualPromptDefiner) continue;
+    normalized[category] = {
+      id: sanitizeText(raw.id).slice(0, 120) || `snapshot:${category}:${key}`,
+      category,
+      key,
+      label: sanitizeText(raw.label).slice(0, 120) || key,
+      description: sanitizeText(raw.description).slice(0, 240),
+      visualPromptDefiner,
+      narrativePromptDefiner: sanitizeText(raw.narrativePromptDefiner).slice(0, 1200) || null,
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 export function getPreludeText(config?: Partial<StoryConfig> | null): string {

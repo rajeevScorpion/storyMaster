@@ -86,11 +86,12 @@ import {
 // existing imports keep working.
 import {
   appendStoryTextPartsOutputContract,
+  appendNarrativeVisualBoundaryContract,
   buildFinalStoryboardImagePrompt,
   describeReelNoFaceRule,
   describeReelTextOverlayMode,
-  formatStoryConfig,
-  formatStoryState,
+  formatNarrativeStoryConfig,
+  formatNarrativeStoryState,
   getStoryboardLayoutHardRequirements,
   getStoryboardMaxDimensions,
   normalizeStoryboardAspectRatio,
@@ -160,16 +161,16 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
   const seedPlanTemplate = validatePromptTemplate('seed_plan_generation', seedPlanTemplateCandidate).isValid
     ? seedPlanTemplateCandidate
     : getDefaultPromptBody('seed_plan_generation');
-  const resolvedPrompt = resolvePromptTemplate(seedPlanTemplate, {
+  const resolvedPrompt = appendNarrativeVisualBoundaryContract(resolvePromptTemplate(seedPlanTemplate, {
     language: storyConfig.language,
-    storyConfig: formatStoryConfig({ storyConfig, currentBeat: 0 }),
+    storyConfig: formatNarrativeStoryConfig({ storyConfig, currentBeat: 0 }),
     workingTitle: storyConfig.authoring.workingTitle || '',
     sourceFidelity: storyConfig.authoring.sourceFidelity || 'strictly_follow',
     guidanceText: storyConfig.authoring.guidanceText || '',
     sourceText: storyConfig.authoring.sourceText || '',
     beatCount: input.beatCount,
     strictSourceSegments: strictSourceSegments ? JSON.stringify(strictSourceSegments) : '',
-  });
+  }));
   const strictPrompt = strictSourceSegments && !/\{\{\s*strictSourceSegments\s*\}\}/u.test(seedPlanTemplate)
     ? [
         resolvedPrompt,
@@ -235,17 +236,19 @@ export async function materializeSeededBeat(
   const materializationTemplate = validatePromptTemplate('seeded_beat_materialization', materializationTemplateCandidate).isValid
     ? materializationTemplateCandidate
     : getDefaultPromptBody('seeded_beat_materialization');
-  const basePrompt = appendStoryTextPartsOutputContract(
-    appendExtraVisualGuidanceContract(
-      resolvePromptTemplate(materializationTemplate, {
-        language: storyConfig.language,
-        storyConfig: formatStoryConfig(normalizedSessionState),
-        storyState: formatStoryState(normalizedSessionState),
-        sourceText: getSeedSourceText(storyConfig),
-        guidanceText: storyConfig.authoring.guidanceText || '',
-        seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
-      }),
-      storyConfig.authoring.guidanceText
+  const basePrompt = appendNarrativeVisualBoundaryContract(
+    appendStoryTextPartsOutputContract(
+      appendExtraVisualGuidanceContract(
+        resolvePromptTemplate(materializationTemplate, {
+          language: storyConfig.language,
+          storyConfig: formatNarrativeStoryConfig(normalizedSessionState),
+          storyState: formatNarrativeStoryState(normalizedSessionState),
+          sourceText: getSeedSourceText(storyConfig),
+          guidanceText: storyConfig.authoring.guidanceText || '',
+          seedBeat: JSON.stringify(reorderCanonicalOptions(seedBeat)),
+        }),
+        storyConfig.authoring.guidanceText
+      )
     )
   );
 

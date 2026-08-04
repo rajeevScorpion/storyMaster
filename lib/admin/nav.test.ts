@@ -12,6 +12,7 @@ import {
 const EXPECTED_SETTINGS_HREFS = [
   '/admin/settings',
   '/admin/settings/storyboard',
+  '/admin/settings/story-visuals',
   '/admin/settings/reels',
   '/admin/settings/reader',
   '/admin/settings/authoring',

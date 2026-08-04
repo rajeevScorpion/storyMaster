@@ -8,6 +8,7 @@ import type { StoryTransitionSettings } from '@/lib/story-transitions/settings';
 import type { StoryEffectConfig } from '@/lib/story-effects/settings';
 import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import type { ImageModelSelection, ImageProviderKey } from '@/lib/ai/image-models.shared';
+import type { StoryVisualOptionSnapshots } from '@/lib/ai/story-visual-options.shared';
 import type {
   StoryTextOverlayAlignment,
   StoryTextOverlayCaption,
@@ -225,7 +226,7 @@ export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'tee
 
 export type StoryLanguage = 'english' | 'hindi' | 'bangla' | 'urdu' | 'gujarati' | 'marathi';
 
-export type VisualStylePreset =
+export type BuiltInVisualStylePreset =
   | 'storybook_illustration'
   | 'watercolor_fable'
   | 'anime_cel'
@@ -233,7 +234,7 @@ export type VisualStylePreset =
   | 'three_d_animated'
   | 'cinematic_photo';
 
-export type StoryTheme =
+export type BuiltInStoryTheme =
   | 'whimsical'
   | 'cozy'
   | 'epic'
@@ -241,7 +242,7 @@ export type StoryTheme =
   | 'dark_fantasy'
   | 'futuristic';
 
-export type StoryPalette =
+export type BuiltInStoryPalette =
   | 'warm'
   | 'vibrant'
   | 'pastel'
@@ -249,7 +250,11 @@ export type StoryPalette =
   | 'earthy'
   | 'neon';
 
-export type StoryDetailLevel = 'simple' | 'balanced' | 'lush';
+export type BuiltInStoryDetailLevel = 'simple' | 'balanced' | 'lush';
+export type VisualStylePreset = BuiltInVisualStylePreset | (string & {});
+export type StoryTheme = BuiltInStoryTheme | (string & {});
+export type StoryPalette = BuiltInStoryPalette | (string & {});
+export type StoryDetailLevel = BuiltInStoryDetailLevel | (string & {});
 export type SourceFidelity =
   | 'strictly_follow'
   | 'preserve_closely'
@@ -262,6 +267,11 @@ export interface VisualSettings {
   theme: StoryTheme;
   palette: StoryPalette;
   detail: StoryDetailLevel;
+  /**
+   * Immutable prompt snapshots selected when the story is created. Dynamic
+   * admin catalog edits therefore never restyle a story halfway through.
+   */
+  resolvedOptions?: StoryVisualOptionSnapshots;
 }
 
 export type AuthoringMode = 'prompt' | 'seeded' | 'user_text';

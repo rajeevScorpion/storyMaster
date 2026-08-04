@@ -26,7 +26,9 @@ export const SCENE_LIMITS = {
   worldInvariant: 200,
   worldInvariants: 12,
   worldAnchor: 400,
-  style: 400,
+  // Story visual direction is a structured four-axis profile (rendering,
+  // atmosphere, color/light, richness). Preserve all four admin definers.
+  style: 2000,
   negativeConstraint: 60,
   negativeConstraints: 24,
   userDirective: 400,

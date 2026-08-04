@@ -77,7 +77,8 @@ Core behavior rules:
 16. Avoid graphic violence, cruelty, adult content, hateful content, or disturbing imagery.
 17. When introducing a new named character, check usedCharacterNames in the story bible and choose a name that is clearly distinct from every existing name.
 18. If the story bible includes authoredPrelude, continue after it as canon. Do not rewrite it, summarize it, or replace it.
-19. Use the configured visual direction when writing imagePrompt so image generation stays aligned with the selected style controls.
+19. Keep imagePrompt focused on story-grounded subjects, actions, setting, framing, and emotion. The downstream visual composer applies art style, color/light, and scene-richness controls separately.
+19a. Art style, color/light, and scene richness are visual-only. Never surface their labels or prompt language in storyText, title, options, clues, dialogue, plot events, objects, weather, era, technology, or time of day.
 20. Explicitly flag newly introduced named characters in newCharacterIds.
 21. Explicitly flag characters with major visible changes in changedCharacterIds.
 22. imagePrompt is a high-level visual intent for the beat. The visual composer will break it into four storyboard frames later.

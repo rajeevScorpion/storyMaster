@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatStoryBible, validateGeneratedBeat } from './story-bible';
+import { formatNarrativeStoryBible, formatStoryBible, validateGeneratedBeat } from './story-bible';
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
 
 function makeCharacter(name: string, overrides: Partial<Character> = {}): Character {
@@ -68,6 +68,23 @@ describe('validateGeneratedBeat — beat 1 with a pre-seeded roster (Pack 2)', (
     expect(flagIssues).toHaveLength(1);
     expect(flagIssues[0]).toContain('char-nia');
     expect(flagIssues[0]).not.toContain('char-milo');
+  });
+});
+
+describe('formatNarrativeStoryBible', () => {
+  it('omits visual direction and prior image prompt excerpts from writer context', () => {
+    const beat = makeValidBeat({ imagePrompt: 'A visual-only palette and rendering direction.' });
+    const narrative = JSON.parse(formatNarrativeStoryBible({
+      currentBeat: 1,
+      maxBeats: 6,
+      visualStyle: 'Rendering and palette instructions that must remain visual-only.',
+      beats: [beat],
+      characters: beat.characters,
+    }));
+
+    expect(narrative.visualDirection).toBeUndefined();
+    expect(narrative.recentBeats[0].imagePromptExcerpt).toBeUndefined();
+    expect(narrative.recentBeats[0].storyTextExcerpt).toContain('A story begins');
   });
 });
 

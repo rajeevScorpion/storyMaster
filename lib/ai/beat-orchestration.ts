@@ -15,9 +15,11 @@ import {
   buildPromptCharacterAnchors,
   buildValidationRepairNote,
   formatStoryBible,
+  formatNarrativeStoryBible,
   validateGeneratedBeat,
 } from '@/lib/ai/story-bible';
 import {
+  deriveNarrativeMoodSummary,
   deriveVisualStyleSummary,
   getPreludeText,
   getSeedPlan,
@@ -163,6 +165,16 @@ function toStoryTextParts(parts: string[]): StoryTextParts {
     compactWhitespace(parts[2] || ''),
     compactWhitespace(parts[3] || ''),
   ];
+}
+
+const NARRATIVE_VISUAL_BOUNDARY_CONTRACT = `Visual configuration boundary:
+- Story Mood Direction may guide pacing, emotional emphasis, and character reactions, but never repeat or announce a setting label merely to show compliance.
+- Art style, color and light, and scene richness are visual-only controls. They must not influence storyText, title, options, clues, dialogue, plot events, objects, weather, era, technology, or time of day.
+- Keep imagePrompt focused on story-grounded subjects, actions, setting, framing, and emotion. Do not include rendering-style, palette, lighting-preset, or detail-level labels; the downstream visual composer applies those separately.
+- Never echo visual configuration vocabulary into user-facing prose merely to show compliance.`;
+
+export function appendNarrativeVisualBoundaryContract(prompt: string): string {
+  return `${prompt}\n\n${NARRATIVE_VISUAL_BOUNDARY_CONTRACT}`;
 }
 
 function hasUsableStoryTextParts(value: unknown): value is string[] {
@@ -429,13 +441,15 @@ export async function generateStoryBeat(
   const storyTemplate = validatePromptTemplate('story_generation', storyTemplateCandidate).isValid
     ? storyTemplateCandidate
     : getDefaultPromptBody('story_generation');
-  const basePrompt = appendStoryTextPartsOutputContract(resolvePromptTemplate(storyTemplate, {
-    language: lang,
-    userPrompt,
-    storyConfig: formatStoryConfig(normalizedSessionState),
-    storyState: formatStoryState(normalizedSessionState, selectedOptionLabel),
-    selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
-  }));
+  const basePrompt = appendNarrativeVisualBoundaryContract(
+    appendStoryTextPartsOutputContract(resolvePromptTemplate(storyTemplate, {
+      language: lang,
+      userPrompt,
+      storyConfig: formatNarrativeStoryConfig(normalizedSessionState),
+      storyState: formatNarrativeStoryState(normalizedSessionState, selectedOptionLabel),
+      selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
+    }))
+  );
 
   try {
     const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => timeRuntimeStep(
@@ -765,7 +779,7 @@ export function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined)
   });
 }
 
-export function formatStoryConfig(sessionState: Partial<StorySession> | null): string {
+export function formatNarrativeStoryConfig(sessionState: Partial<StorySession> | null): string {
   const cfg = normalizeStoryConfig(sessionState?.storyConfig);
   const prelude = getPreludeText(cfg);
   const seedSourceText = getSeedSourceText(cfg);
@@ -777,10 +791,7 @@ export function formatStoryConfig(sessionState: Partial<StorySession> | null): s
     `- Setting/Country: ${cfg.settingCountry}`,
     `- Maximum Beats: ${cfg.maxBeats}`,
     `- Current Beat: ${((sessionState?.currentBeat || 0) + 1)} of ${cfg.maxBeats}`,
-    `- Style Preset: ${cfg.visualSettings.preset}`,
-    `- Theme: ${cfg.visualSettings.theme}`,
-    `- Palette: ${cfg.visualSettings.palette}`,
-    `- Detail: ${cfg.visualSettings.detail}`,
+    `- Story Mood Direction: ${deriveNarrativeMoodSummary(cfg.visualSettings)}`,
     `- Authoring Mode: ${cfg.authoring.mode}`,
     `- Source Text: ${seedSourceText ? 'present' : 'absent'}`,
     `- Extra Visual Guidance: ${cfg.authoring.guidanceText?.trim() ? 'present' : 'absent'}`,
@@ -789,23 +800,6 @@ export function formatStoryConfig(sessionState: Partial<StorySession> | null): s
     `- Authored Prelude: ${prelude ? 'present' : 'absent'}`,
     `- Character References: ${cfg.portraitReferences.mode === 'character_sheet' ? 'character sheet' : 'single portrait'}`,
     `- Character Reference Quality: ${cfg.portraitReferences.quality}`,
-    ...(cfg.storyKind === 'reel'
-      ? [
-          `- Reel Length: ${cfg.reel.length}`,
-          `- Reel Beat Count: ${cfg.reel.beatCount}`,
-          `- Reel Text Length: ${cfg.reel.textLength}`,
-          `- Reel Text Overlay: ${cfg.reel.textOverlayEnabled ? 'on' : 'off'}`,
-          `- Reel Mood Key: ${cfg.reel.moodKey}`,
-          `- Reel Visual Style Key: ${cfg.reel.visualStyleKey}`,
-          `- Reel Visual Style Id: ${cfg.reel.visualStyleId || 'none'}`,
-          `- Reel Narration Style Key: ${cfg.reel.narrationStyleKey}`,
-          `- Reel Narration Preset Id: ${cfg.reel.narrationSettings.presetId || 'none'}`,
-          `- Reel Narration Voice: ${cfg.reel.narrationSettings.voiceId}`,
-          `- Reel Narration Language: ${cfg.reel.narrationSettings.language}`,
-          '- Reel Orientation: 9:16',
-          '- Reel Storyboard Panels Per Beat: 4',
-        ]
-      : []),
   ].join('\n');
 }
 
@@ -814,6 +808,13 @@ export function formatStoryState(
   selectedOptionLabel?: string
 ): string {
   return formatStoryBible(sessionState, selectedOptionLabel);
+}
+
+export function formatNarrativeStoryState(
+  sessionState: Partial<StorySession> | null,
+  selectedOptionLabel?: string
+): string {
+  return formatNarrativeStoryBible(sessionState, selectedOptionLabel);
 }
 
 export function resolveNewCharacterIds(

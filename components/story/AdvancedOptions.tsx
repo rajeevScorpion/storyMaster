@@ -6,12 +6,16 @@ import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import type { ImageModelPickerState, ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   SOURCE_FIDELITY_OPTIONS,
-  STORY_DETAIL_OPTIONS,
+  resolveStoryVisualOptionSnapshot,
   STORY_LANGUAGE_OPTIONS,
-  STORY_PALETTE_OPTIONS,
-  STORY_THEME_OPTIONS,
-  VISUAL_PRESET_OPTIONS,
+  selectStoryVisualOption,
 } from '@/lib/ai/story-config';
+import {
+  BUILT_IN_STORY_VISUAL_CATALOG,
+  getStoryVisualOptions,
+  type StoryVisualCatalog,
+  type StoryVisualCategory,
+} from '@/lib/ai/story-visual-options.shared';
 import { isEnglishNarrationLanguage } from '@/lib/ai/narration-accents';
 import { resolveStoryNarrationLanguage } from '@/lib/ai/narration-voices';
 import { motion } from 'motion/react';
@@ -60,26 +64,6 @@ const SETTING_OPTIONS: FilterDropdownOption[] = SETTING_PRESETS.map((preset) => 
       : preset,
 }));
 
-const VISUAL_PRESET_DROPDOWN_OPTIONS: FilterDropdownOption[] = VISUAL_PRESET_OPTIONS.map((option) => ({
-  value: option.value,
-  label: option.label,
-}));
-
-const THEME_OPTIONS: FilterDropdownOption[] = STORY_THEME_OPTIONS.map((option) => ({
-  value: option.value,
-  label: option.label,
-}));
-
-const PALETTE_OPTIONS: FilterDropdownOption[] = STORY_PALETTE_OPTIONS.map((option) => ({
-  value: option.value,
-  label: option.label,
-}));
-
-const DETAIL_OPTIONS: FilterDropdownOption[] = STORY_DETAIL_OPTIONS.map((option) => ({
-  value: option.value,
-  label: option.label,
-}));
-
 const SOURCE_FIDELITY_DROPDOWN_OPTIONS: FilterDropdownOption[] = SOURCE_FIDELITY_OPTIONS.map((option) => ({
   value: option.value,
   label: option.label,
@@ -106,6 +90,7 @@ interface AdvancedOptionsProps {
   maxBeats: number;
   onMaxBeatsChange: (v: number) => void;
   visualSettings: VisualSettings;
+  visualCatalog?: StoryVisualCatalog;
   onVisualSettingsChange: (v: VisualSettings) => void;
   isSeedMode?: boolean;
   sourceFidelity?: SourceFidelity;
@@ -161,6 +146,7 @@ export default function AdvancedOptions({
   maxBeats,
   onMaxBeatsChange,
   visualSettings,
+  visualCatalog = BUILT_IN_STORY_VISUAL_CATALOG,
   onVisualSettingsChange,
   isSeedMode = false,
   sourceFidelity = 'strictly_follow',
@@ -250,7 +236,35 @@ export default function AdvancedOptions({
     label: `${option.displayName}${option.badge ? ` · ${option.badge}` : ''}`,
   }));
   const orientationLabel = isVerticalStory ? 'Portrait' : 'Landscape';
-  const visualPresetDescription = VISUAL_PRESET_OPTIONS.find((option) => option.value === visualSettings.preset)?.description || 'Choose the illustration style Kissago should use for storyboards.';
+  const optionsForCategory = (category: StoryVisualCategory, selectedKey: string) => {
+    const published = getStoryVisualOptions(visualCatalog, category);
+    const storedSnapshot = visualSettings.resolvedOptions?.[category];
+    const snapshot = storedSnapshot?.key === selectedKey
+      ? storedSnapshot
+      : resolveStoryVisualOptionSnapshot(visualSettings, category);
+    return published.some((option) => option.key === selectedKey) || snapshot?.key !== selectedKey
+      ? published
+      : [{
+          ...snapshot,
+          status: 'archived' as const,
+          sortOrder: -1,
+          isDefault: false,
+        }, ...published];
+  };
+  const styleCatalogOptions = optionsForCategory('style', visualSettings.preset);
+  const moodCatalogOptions = optionsForCategory('mood', visualSettings.theme);
+  const paletteCatalogOptions = optionsForCategory('palette', visualSettings.palette);
+  const detailCatalogOptions = optionsForCategory('detail', visualSettings.detail);
+  const visualPresetOptions: FilterDropdownOption[] = styleCatalogOptions.map((option) => ({ value: option.key, label: option.label }));
+  const moodOptions: FilterDropdownOption[] = moodCatalogOptions.map((option) => ({ value: option.key, label: option.label }));
+  const paletteOptions: FilterDropdownOption[] = paletteCatalogOptions.map((option) => ({ value: option.key, label: option.label }));
+  const detailOptions: FilterDropdownOption[] = detailCatalogOptions.map((option) => ({ value: option.key, label: option.label }));
+  const visualPresetDescription = styleCatalogOptions.find((option) => option.key === visualSettings.preset)?.description || 'Choose the illustration style Kissago should use for storyboards.';
+  const visualModifierDescriptions = [
+    moodCatalogOptions.find((option) => option.key === visualSettings.theme)?.description,
+    paletteCatalogOptions.find((option) => option.key === visualSettings.palette)?.description,
+    detailCatalogOptions.find((option) => option.key === visualSettings.detail)?.description,
+  ].filter(Boolean).join(' · ');
   const sourceFidelityDescription = SOURCE_FIDELITY_OPTIONS.find((option) => option.value === sourceFidelity)?.description || 'Choose how closely Kissago should preserve the source material.';
   // Guard against a stale config: after a language change the parent refetches
   // asynchronously, so the still-mounted config can belong to the *previous*
@@ -266,11 +280,8 @@ export default function AdvancedOptions({
   const selectedLanguageLabel =
     effectiveLanguageOptions.find((option) => option.value === language)?.label || 'this language';
 
-  const setVisualSetting = <K extends keyof VisualSettings,>(key: K, value: VisualSettings[K]) => {
-    onVisualSettingsChange({
-      ...visualSettings,
-      [key]: value,
-    });
+  const setVisualSetting = (category: StoryVisualCategory, value: string) => {
+    onVisualSettingsChange(selectStoryVisualOption(visualSettings, visualCatalog, category, value));
   };
 
   const stopSelectedVoiceSample = () => {
@@ -744,12 +755,12 @@ export default function AdvancedOptions({
             <div className="space-y-2">
               <FilterDropdown
                 value={visualSettings.preset}
-                options={VISUAL_PRESET_DROPDOWN_OPTIONS}
-                onChange={(value) => setVisualSetting('preset', value as VisualSettings['preset'])}
+                options={visualPresetOptions}
+                onChange={(value) => setVisualSetting('style', value)}
                 fullWidth
                 size="form"
                 mode="inline"
-                ariaLabel="Visual preset"
+                ariaLabel="Art style"
               />
               <p className="text-xs leading-relaxed text-neutral-500">{visualPresetDescription}</p>
             </div>
@@ -757,34 +768,37 @@ export default function AdvancedOptions({
             <div className="grid gap-3 sm:grid-cols-3">
               <FilterDropdown
                 value={visualSettings.theme}
-                options={THEME_OPTIONS}
-                onChange={(value) => setVisualSetting('theme', value as VisualSettings['theme'])}
+                options={moodOptions}
+                onChange={(value) => setVisualSetting('mood', value)}
                 fullWidth
                 size="form"
                 mode="inline"
-                ariaLabel="Theme"
+                ariaLabel="Story mood"
               />
 
               <FilterDropdown
                 value={visualSettings.palette}
-                options={PALETTE_OPTIONS}
-                onChange={(value) => setVisualSetting('palette', value as VisualSettings['palette'])}
+                options={paletteOptions}
+                onChange={(value) => setVisualSetting('palette', value)}
                 fullWidth
                 size="form"
                 mode="inline"
-                ariaLabel="Palette"
+                ariaLabel="Color and light"
               />
 
               <FilterDropdown
                 value={visualSettings.detail}
-                options={DETAIL_OPTIONS}
-                onChange={(value) => setVisualSetting('detail', value as VisualSettings['detail'])}
+                options={detailOptions}
+                onChange={(value) => setVisualSetting('detail', value)}
                 fullWidth
                 size="form"
                 mode="inline"
-                ariaLabel="Detail"
+                ariaLabel="Scene richness"
               />
             </div>
+            {visualModifierDescriptions && (
+              <p className="text-xs leading-relaxed text-neutral-500">{visualModifierDescriptions}</p>
+            )}
 
             <FilterDropdown
               value={language}

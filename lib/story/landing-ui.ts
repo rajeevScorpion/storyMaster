@@ -14,6 +14,12 @@ import {
   type StoryLanguageOption,
 } from '@/lib/ai/story-config';
 import { DEFAULT_STORY_AUTHORING_WORD_CAP } from '@/lib/story/authoring-limits';
+import {
+  BUILT_IN_STORY_VISUAL_CATALOG,
+  flattenStoryVisualCatalog,
+  normalizeStoryVisualCatalog,
+  type StoryVisualCatalog,
+} from '@/lib/ai/story-visual-options.shared';
 
 export interface LandingSetupSettings {
   freePlusCharacterSheetsEnabled: boolean;
@@ -29,6 +35,8 @@ export interface LandingInitialData {
   narrationVoiceConfig: NarrationVoiceClientConfig | null;
   /** Admin-enabled story languages offered in the picker (catalog order). */
   storyLanguageOptions: StoryLanguageOption[];
+  /** Published text-only visual choices for ordinary stories. */
+  storyVisualCatalog: StoryVisualCatalog;
 }
 
 export const DEFAULT_LANDING_SETUP_SETTINGS: LandingSetupSettings = {
@@ -50,6 +58,7 @@ export const DEFAULT_LANDING_INITIAL_DATA: LandingInitialData = {
   reelSetup: FALLBACK_REEL_SETUP,
   narrationVoiceConfig: null,
   storyLanguageOptions: getEnabledStoryLanguageOptions(DEFAULT_ENABLED_STORY_LANGUAGE_IDS),
+  storyVisualCatalog: BUILT_IN_STORY_VISUAL_CATALOG,
 };
 
 export function normalizeLandingInitialData(input?: Partial<LandingInitialData> | null): LandingInitialData {
@@ -73,6 +82,9 @@ export function normalizeLandingInitialData(input?: Partial<LandingInitialData> 
       input?.storyLanguageOptions && input.storyLanguageOptions.length > 0
         ? input.storyLanguageOptions
         : getEnabledStoryLanguageOptions(DEFAULT_ENABLED_STORY_LANGUAGE_IDS),
+    storyVisualCatalog: input?.storyVisualCatalog
+      ? normalizeStoryVisualCatalog(flattenStoryVisualCatalog(input.storyVisualCatalog))
+      : BUILT_IN_STORY_VISUAL_CATALOG,
   };
 }
 

@@ -1,7 +1,55 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_STORY_CONFIG, normalizeStoryConfig } from './story-config';
+import {
+  DEFAULT_STORY_CONFIG,
+  deriveNarrativeMoodSummary,
+  deriveVisualStyleSummary,
+  normalizeStoryConfig,
+} from './story-config';
 
 describe('story config normalization', () => {
+  it('defaults narrative mood and color to story-led adaptation', () => {
+    expect(DEFAULT_STORY_CONFIG.visualSettings.theme).toBe('match_story');
+    expect(DEFAULT_STORY_CONFIG.visualSettings.palette).toBe('match_story');
+    expect(deriveVisualStyleSummary(DEFAULT_STORY_CONFIG.visualSettings).length).toBeLessThanOrEqual(2000);
+  });
+
+  it('keeps visual-only palette language out of narrative mood direction', () => {
+    const settings = {
+      ...DEFAULT_STORY_CONFIG.visualSettings,
+      theme: 'mysterious',
+      palette: 'neon',
+    };
+    expect(deriveNarrativeMoodSummary(settings)).toContain('partial discovery');
+    expect(deriveNarrativeMoodSummary(settings).toLowerCase()).not.toContain('neon');
+    expect(deriveVisualStyleSummary(settings)).toContain('luminous cyan');
+    expect(deriveVisualStyleSummary(settings)).toContain('Scope boundary');
+  });
+
+  it('preserves dynamic option snapshots and uses them for stable direction', () => {
+    const config = normalizeStoryConfig({
+      visualSettings: {
+        preset: 'woven_fiber',
+        theme: 'quiet_focus',
+        palette: 'match_story',
+        detail: 'balanced',
+        resolvedOptions: {
+          style: {
+            id: 'style-custom', category: 'style', key: 'woven_fiber', label: 'Woven Fiber',
+            description: 'Tactile woven forms.', visualPromptDefiner: 'Render story-grounded forms with woven fiber texture.', narrativePromptDefiner: null,
+          },
+          mood: {
+            id: 'mood-custom', category: 'mood', key: 'quiet_focus', label: 'Quiet Focus',
+            description: 'Patient attention.', visualPromptDefiner: 'Use patient visual staging.', narrativePromptDefiner: 'Use patient pacing and attentive reactions.',
+          },
+        },
+      },
+    });
+
+    expect(config.visualSettings.resolvedOptions?.style?.key).toBe('woven_fiber');
+    expect(deriveVisualStyleSummary(config.visualSettings)).toContain('woven fiber texture');
+    expect(deriveNarrativeMoodSummary(config.visualSettings)).toBe('Use patient pacing and attentive reactions.');
+  });
+
   it('uses Strictly Follow as the default source fidelity', () => {
     expect(DEFAULT_STORY_CONFIG.authoring.sourceFidelity).toBe('strictly_follow');
     expect(normalizeStoryConfig({

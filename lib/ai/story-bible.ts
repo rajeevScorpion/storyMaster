@@ -107,6 +107,26 @@ export function formatStoryBible(
   return stringifyCompact(buildStoryBible(sessionState, selectedOptionLabel));
 }
 
+/**
+ * Story-writing context intentionally excludes visual rendering direction and
+ * prior image-prompt excerpts. Those fields encouraged visual labels such as
+ * palette names to echo into user-facing prose on later beats.
+ */
+export function formatNarrativeStoryBible(
+  sessionState: Partial<StorySession> | null,
+  selectedOptionLabel?: string
+): string {
+  const bible = buildStoryBible(sessionState, selectedOptionLabel);
+  const { visualDirection: _visualDirection, ...narrativeBible } = bible;
+  return stringifyCompact({
+    ...narrativeBible,
+    recentBeats: narrativeBible.recentBeats.map((beat) => {
+      const { imagePromptExcerpt: _imagePromptExcerpt, ...narrativeBeat } = beat;
+      return narrativeBeat;
+    }),
+  });
+}
+
 export function validateGeneratedBeat(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null
