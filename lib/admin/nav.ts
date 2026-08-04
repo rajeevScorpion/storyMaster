@@ -115,14 +115,6 @@ const SETTINGS_CHILD_GROUPS: AdminNavChildGroup[] = [
         description: 'Image output, panel timing, WebP processing, layout, and vignette controls.',
       },
       {
-        id: 'story-visuals',
-        label: 'Story visual options',
-        href: '/admin/settings/story-visuals',
-        icon: Palette,
-        description: 'Add, publish, order, default, and archive the text-only visual choices offered during story creation.',
-        staticSummary: 'Art styles, story moods, color and light, and scene richness',
-      },
-      {
         id: 'reels',
         label: 'Reel Story',
         href: '/admin/settings/reels',
@@ -379,6 +371,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     items: [
       { label: 'Image Models', href: '/admin/image-models', icon: Images },
       { label: 'Graphic Styles', href: '/admin/graphic-styles', icon: Palette },
+      { label: 'Story Visuals', href: '/admin/settings/story-visuals', icon: Brush },
       { label: 'Moods', href: '/admin/moods', icon: Wind },
       { label: 'Story Playground', href: '/admin/story-playground', icon: FlaskConical },
       { label: 'Reel Playground', href: '/admin/reel-playground', icon: Film },

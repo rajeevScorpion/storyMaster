@@ -12,7 +12,6 @@ import {
 const EXPECTED_SETTINGS_HREFS = [
   '/admin/settings',
   '/admin/settings/storyboard',
-  '/admin/settings/story-visuals',
   '/admin/settings/reels',
   '/admin/settings/reader',
   '/admin/settings/authoring',
@@ -107,6 +106,11 @@ describe('admin nav config', () => {
   it('includes user management as a top-level Operations item', () => {
     const operations = ADMIN_NAV.find((group) => group.id === 'operations');
     expect(operations?.items.find((item) => item.href === '/admin/users')).toBeDefined();
+  });
+
+  it('includes story visuals as a top-level Studio item', () => {
+    const studio = ADMIN_NAV.find((group) => group.id === 'studio');
+    expect(studio?.items.find((item) => item.href === '/admin/settings/story-visuals')).toBeDefined();
   });
 
   it('resolves items by id', () => {
