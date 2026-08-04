@@ -765,40 +765,60 @@ export default function AdvancedOptions({
               <p className="text-xs leading-relaxed text-neutral-500">{visualPresetDescription}</p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <FilterDropdown
-                value={visualSettings.theme}
-                options={moodOptions}
-                onChange={(value) => setVisualSetting('mood', value)}
-                fullWidth
-                size="form"
-                mode="inline"
-                ariaLabel="Story mood"
-              />
+            <div className="space-y-3 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
+              <h4 className="text-sm font-sans text-neutral-200">Visual direction</h4>
 
-              <FilterDropdown
-                value={visualSettings.palette}
-                options={paletteOptions}
-                onChange={(value) => setVisualSetting('palette', value)}
-                fullWidth
-                size="form"
-                mode="inline"
-                ariaLabel="Color and light"
-              />
+              <div className="space-y-2">
+                <h5 className="text-xs font-sans uppercase tracking-[0.14em] text-neutral-400">
+                  Story mood
+                </h5>
+                <FilterDropdown
+                  value={visualSettings.theme}
+                  options={moodOptions}
+                  onChange={(value) => setVisualSetting('mood', value)}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Story mood"
+                />
+              </div>
 
-              <FilterDropdown
-                value={visualSettings.detail}
-                options={detailOptions}
-                onChange={(value) => setVisualSetting('detail', value)}
-                fullWidth
-                size="form"
-                mode="inline"
-                ariaLabel="Scene richness"
-              />
+              <div className="space-y-2 border-t border-white/10 pt-3">
+                <h5 className="text-xs font-sans uppercase tracking-[0.14em] text-neutral-400">
+                  Color &amp; light
+                </h5>
+                <FilterDropdown
+                  value={visualSettings.palette}
+                  options={paletteOptions}
+                  onChange={(value) => setVisualSetting('palette', value)}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Color and light"
+                />
+              </div>
+
+              <div className="space-y-2 border-t border-white/10 pt-3">
+                <h5 className="text-xs font-sans uppercase tracking-[0.14em] text-neutral-400">
+                  Scene richness
+                </h5>
+                <FilterDropdown
+                  value={visualSettings.detail}
+                  options={detailOptions}
+                  onChange={(value) => setVisualSetting('detail', value)}
+                  fullWidth
+                  size="form"
+                  mode="inline"
+                  ariaLabel="Scene richness"
+                />
+              </div>
+
+              {visualModifierDescriptions && (
+                <p className="border-t border-white/10 pt-3 text-xs leading-relaxed text-neutral-500">
+                  {visualModifierDescriptions}
+                </p>
+              )}
             </div>
-            {visualModifierDescriptions && (
-              <p className="text-xs leading-relaxed text-neutral-500">{visualModifierDescriptions}</p>
-            )}
 
             <FilterDropdown
               value={language}
