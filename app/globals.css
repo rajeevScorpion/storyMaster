@@ -45,6 +45,13 @@
   background: #059669;
 }
 
+/* Dropdown menus keep the scroll thumb but omit native end-cap arrows. */
+.dropdown-scrollbar::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* Smooth scroll behavior utility */
 .custom-scrollbar {
   scroll-behavior: smooth;

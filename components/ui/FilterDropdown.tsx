@@ -128,7 +128,7 @@ export default function FilterDropdown({
     mode === 'inline' || fullWidth ? 'w-full' : '',
   ].join(' ');
   const menuClassName = [
-    'max-h-72 overflow-y-auto bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
+    'dropdown-scrollbar max-h-72 overflow-y-auto bg-neutral-900/95 border border-emerald-500/40 backdrop-blur-xl shadow-2xl',
     isForm
       ? opensUp ? 'rounded-2xl rounded-b-none py-1.5' : 'rounded-2xl rounded-t-none py-1.5'
       : opensUp ? 'rounded-xl rounded-b-none py-1' : 'rounded-xl rounded-t-none py-1',
