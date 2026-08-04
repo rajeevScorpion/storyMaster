@@ -400,6 +400,7 @@ export default function AdvancedOptions({
               size="form"
               mode="inline"
               ariaLabel="Age group"
+              contextLabel="Audience"
             />
 
             <div className="space-y-2">
@@ -414,6 +415,7 @@ export default function AdvancedOptions({
                 size="form"
                 mode="inline"
                 ariaLabel="Setting or country"
+                contextLabel="Storyverse"
               />
               {settingCountry === 'custom' && (
                 <input
@@ -426,6 +428,17 @@ export default function AdvancedOptions({
                 />
               )}
             </div>
+
+            <FilterDropdown
+              value={language}
+              options={effectiveLanguageOptions}
+              onChange={(value) => onLanguageChange(value as StoryLanguage)}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Story language"
+              contextLabel="Language"
+            />
 
             <div className="rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
               <div className="flex items-center justify-between gap-3">
@@ -807,16 +820,6 @@ export default function AdvancedOptions({
                 </p>
               )}
             </div>
-
-            <FilterDropdown
-              value={language}
-              options={effectiveLanguageOptions}
-              onChange={(value) => onLanguageChange(value as StoryLanguage)}
-              fullWidth
-              size="form"
-              mode="inline"
-              ariaLabel="Story language"
-            />
 
             {narrationVoiceConfig?.enabled && (
               <div className="space-y-3 rounded-2xl border border-white/10 bg-neutral-950/50 p-4">
