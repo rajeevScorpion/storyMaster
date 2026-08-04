@@ -23,6 +23,15 @@ interface DropdownPosition {
   width?: number;
 }
 
+interface ScrollIndicator {
+  height: number;
+  top: number;
+  visible: boolean;
+}
+
+const SCROLL_TRACK_INSET = 4;
+const MIN_SCROLL_THUMB_HEIGHT = 24;
+
 export default function FilterDropdown({
   value,
   options,
@@ -46,8 +55,14 @@ export default function FilterDropdown({
   const [isOpen, setIsOpen] = useState(false);
   const [opensUp, setOpensUp] = useState(false);
   const [menuPosition, setMenuPosition] = useState<DropdownPosition | null>(null);
+  const [scrollIndicator, setScrollIndicator] = useState<ScrollIndicator>({
+    height: MIN_SCROLL_THUMB_HEIGHT,
+    top: 0,
+    visible: false,
+  });
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -109,6 +124,43 @@ export default function FilterDropdown({
     };
   }, [isOpen, updatePlacement]);
 
+  const updateScrollIndicator = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+
+    const overflow = element.scrollHeight - element.clientHeight;
+    const trackHeight = Math.max(0, element.clientHeight - SCROLL_TRACK_INSET * 2);
+    if (overflow <= 1 || trackHeight <= 0) {
+      setScrollIndicator((current) => (
+        current.visible ? { ...current, visible: false } : current
+      ));
+      return;
+    }
+
+    const height = Math.min(
+      trackHeight,
+      Math.max(MIN_SCROLL_THUMB_HEIGHT, (element.clientHeight / element.scrollHeight) * trackHeight)
+    );
+    const top = (element.scrollTop / overflow) * (trackHeight - height);
+    setScrollIndicator({ height, top, visible: true });
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen || !menuPosition) return;
+
+    const frame = window.requestAnimationFrame(updateScrollIndicator);
+    const element = scrollRef.current;
+    const resizeObserver = element && typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateScrollIndicator)
+      : null;
+    if (element && resizeObserver) resizeObserver.observe(element);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver?.disconnect();
+    };
+  }, [isOpen, menuPosition, options.length, updateScrollIndicator]);
+
   const containerClassName = [
     'relative',
     fullWidth ? 'w-full' : '',
@@ -156,7 +208,13 @@ export default function FilterDropdown({
             width: menuPosition.width,
           }}
         >
-          <div className={menuClassName} role="listbox" style={{ maxHeight: menuPosition.maxHeight }}>
+          <div
+            ref={scrollRef}
+            className={menuClassName}
+            role="listbox"
+            style={{ maxHeight: menuPosition.maxHeight }}
+            onScroll={updateScrollIndicator}
+          >
             {options.map((opt) => (
               <button
                 type="button"
@@ -182,6 +240,17 @@ export default function FilterDropdown({
               </button>
             ))}
           </div>
+          {scrollIndicator.visible && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute bottom-1 right-1 top-1 w-1 rounded-full bg-white/5"
+            >
+              <span
+                className="absolute left-0 w-1 rounded-full bg-emerald-600/90"
+                style={{ height: scrollIndicator.height, top: scrollIndicator.top }}
+              />
+            </span>
+          )}
         </motion.div>
       )}
     </AnimatePresence>,
