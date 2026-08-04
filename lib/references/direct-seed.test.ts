@@ -18,9 +18,11 @@ describe('buildDirectSeed', () => {
     expect(seedCharacters[0].id).toBe('ref_a');
     expect(seedCharacters[0].name).toBe('Leo');
     expect(seedCharacters[0].appearanceSummary).toBe('a curious boy');
+    expect(seedCharacters[0].nameSource).toBe('user_provided');
     // Unnamed -> placeholder name + flag so the LLM may rename on beat 1.
     expect(seedCharacters[1].name).toBe('Character 1');
     expect(seedCharacters[1].nameIsPlaceholder).toBe(true);
+    expect(seedCharacters[1].nameSource).toBe('ai_generated');
     expect(seedCharacters[0].nameIsPlaceholder).toBeUndefined();
   });
 

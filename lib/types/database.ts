@@ -108,6 +108,21 @@ export interface DbCharacterMaster {
   archived_at: string | null;
 }
 
+export interface DbCharacterNoveltyUsage {
+  id: string;
+  user_id: string;
+  story_id: string;
+  character_id: string;
+  display_name: string;
+  normalized_name: string;
+  appearance_signature: string | null;
+  name_source: 'ai_generated' | 'user_provided' | 'character_library' | 'episode_carry' | 'legacy';
+  language: string | null;
+  setting_country: string | null;
+  created_at: string;
+  last_used_at: string;
+}
+
 export interface DbEpisodeBranch {
   id: string;
   user_id: string;

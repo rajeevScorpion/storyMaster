@@ -42,6 +42,7 @@ import {
 import type { Character, PortraitReferenceConfig } from '@/lib/types/story';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import { splitStrictSeedSource } from '@/lib/ai/strict-seed-segmentation';
+import { applyCharacterNameProvenance } from '@/lib/ai/character-novelty.shared';
 import {
   SEED_GUIDANCE_WORD_CAP,
   SEED_SOURCE_WORD_CAP,
@@ -284,7 +285,11 @@ export async function materializeSeededBeat(
     }
   }
 
-  return normalizeStoryBeatTextParts(beat);
+  return normalizeStoryBeatTextParts(applyCharacterNameProvenance(
+    beat,
+    normalizedSessionState,
+    getSeedSourceText(storyConfig)
+  ));
 }
 
 export interface ReelDraftBeatOutput {

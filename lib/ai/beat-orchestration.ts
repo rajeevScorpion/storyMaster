@@ -10,6 +10,7 @@ import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectR
 import type { Character } from '@/lib/types/story';
 import type { CompilerEngine, PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { callGeminiText } from '@/app/actions/gemini-proxy';
+import { getCharacterNoveltyContextAction } from '@/app/actions/character-novelty';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
   buildPromptCharacterAnchors,
@@ -50,6 +51,12 @@ import {
 import { splitTextIntoCompleteCaptionPanels } from '@/lib/reel/captions';
 import type { ReelVisualStyleRuntime } from '@/lib/reel/styles';
 import type { StoryboardImageQualitySettings } from '@/lib/types/storyboard-settings';
+import {
+  applyCharacterNameProvenance,
+  buildCharacterNoveltyInstructions,
+  EMPTY_CHARACTER_NOVELTY_CONTEXT,
+  validateCharacterNovelty,
+} from '@/lib/ai/character-novelty.shared';
 
 const STORYBOARD_LAYOUT_HARD_REQUIREMENTS = [
   'Storyboard layout hard requirements:',
@@ -441,7 +448,22 @@ export async function generateStoryBeat(
   const storyTemplate = validatePromptTemplate('story_generation', storyTemplateCandidate).isValid
     ? storyTemplateCandidate
     : getDefaultPromptBody('story_generation');
-  const basePrompt = appendNarrativeVisualBoundaryContract(
+  const noveltyContext = await getCharacterNoveltyContextAction().catch((error) => {
+    console.warn(
+      'Character novelty history was unavailable; continuing with generic diversity guidance:',
+      error instanceof Error ? error.message : error
+    );
+    return EMPTY_CHARACTER_NOVELTY_CONTEXT;
+  });
+  const protectedCharacters = [
+    ...(normalizedSessionState?.characters || []),
+    ...(normalizedSessionState?.beats || []).flatMap((beat) => beat.characters || []),
+  ];
+  const characterNoveltyInstructions = buildCharacterNoveltyInstructions(
+    noveltyContext,
+    protectedCharacters
+  );
+  const basePrompt = `${appendNarrativeVisualBoundaryContract(
     appendStoryTextPartsOutputContract(resolvePromptTemplate(storyTemplate, {
       language: lang,
       userPrompt,
@@ -449,7 +471,7 @@ export async function generateStoryBeat(
       storyState: formatNarrativeStoryState(normalizedSessionState, selectedOptionLabel),
       selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
     }))
-  );
+  )}\n\n${characterNoveltyInstructions}`;
 
   try {
     const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => timeRuntimeStep(
@@ -475,8 +497,18 @@ export async function generateStoryBeat(
       }
     );
 
+    const validateAttempt = (candidate: StoryBeat): string[] => [
+      ...validateGeneratedBeat(candidate, normalizedSessionState),
+      ...validateCharacterNovelty(
+        candidate,
+        normalizedSessionState,
+        [userPrompt, selectedOptionLabel || ''].filter(Boolean).join('\n'),
+        noveltyContext
+      ),
+    ];
+
     let beat = await generateAttempt();
-    const issues = validateGeneratedBeat(beat, normalizedSessionState);
+    const issues = validateAttempt(beat);
 
     if (issues.length > 0) {
       console.info('[timing:story_runtime.generate_story_beat.validation_retry]', {
@@ -485,13 +517,17 @@ export async function generateStoryBeat(
         issues,
       });
       beat = await generateAttempt(buildValidationRepairNote(issues));
-      const retryIssues = validateGeneratedBeat(beat, normalizedSessionState);
+      const retryIssues = validateAttempt(beat);
       if (retryIssues.length > 0) {
         throw new Error(`Story beat validation failed after retry: ${retryIssues.join('; ')}`);
       }
     }
 
-    return normalizeStoryBeatTextParts(beat);
+    return normalizeStoryBeatTextParts(applyCharacterNameProvenance(
+      beat,
+      normalizedSessionState,
+      [userPrompt, selectedOptionLabel || ''].filter(Boolean).join('\n')
+    ));
   } catch (error) {
     console.error('Story beat generation failed:', error);
     throw error;

@@ -30,6 +30,7 @@ import {
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
 import { linkReferenceSetupToStory } from '@/app/actions/references';
+import { recordCharacterNoveltyUsageAction } from '@/app/actions/character-novelty';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
@@ -976,6 +977,12 @@ export async function saveStory(
     }
   }
 
+  await recordCharacterNoveltyUsageAction({
+    storyId,
+    characters: storyData.characters as unknown as Character[],
+    storyConfig: session.storyConfig,
+  });
+
   // Reference Personalization: backfill story_id onto the setup's reference rows
   // now that the story exists. Idempotent + owner-scoped; never blocks the save.
   const referenceSetupId = session.storyConfig?.references?.setupId;
@@ -1303,6 +1310,13 @@ export async function saveBeat(
         audioSyncedAt: existingBeat.audio_synced_at || undefined,
       }
     : undefined);
+
+  // Count the character as used once it has reached the user's generated beat,
+  // even if an older beats schema later requires the persistence fallback.
+  await recordCharacterNoveltyUsageAction({
+    storyId,
+    characters: node.data.characters || [],
+  });
 
   const { data, error } = await supabase
     .from('beats')

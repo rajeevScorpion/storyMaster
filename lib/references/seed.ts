@@ -68,6 +68,7 @@ export function buildSeedCharacters(inputs: SeedCharacterInput[]): Character[] {
       type: 'main',
       appearanceSummary: input.anchor,
       personalitySummary: '',
+      nameSource: userNamed ? 'user_provided' : 'ai_generated',
       referenceSheetUrl: input.canonicalSignedUrl,
       referenceSheetStorageKey: input.canonicalReference,
       ...(input.completedAt ? { referenceSheetUploadedAt: input.completedAt } : {}),

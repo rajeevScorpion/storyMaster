@@ -33,6 +33,7 @@ describe('masterToCharacter', () => {
     expect(character.masterId).toBe('master-1');
     expect(character.sourceStoryId).toBe('story-a');
     expect(character.importedAt).toBe(now.toISOString());
+    expect(character.nameSource).toBe('character_library');
     expect(character.name).toBe('Milo');
     expect(character.appearanceSummary).toContain('copper fox');
     expect(character.portraitUrl).toBe('https://assets/milo-portrait.webp');

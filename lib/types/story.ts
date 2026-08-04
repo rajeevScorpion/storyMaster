@@ -24,6 +24,13 @@ export interface CharacterSheetGalleryEntry {
   optimizationMetadata?: ImageCompressionMetadata;
 }
 
+export type CharacterNameSource =
+  | 'ai_generated'
+  | 'user_provided'
+  | 'character_library'
+  | 'episode_carry'
+  | 'legacy';
+
 export interface Character {
   id: string;
   name: string;
@@ -55,6 +62,9 @@ export interface Character {
   // setting/language-appropriate name on beat 1 (keeping the same id); the flag
   // is cleared once a real name lands so the name locks on later beats.
   nameIsPlaceholder?: boolean;
+  // Character Novelty Guard: provenance controls whether a name is an AI
+  // invention or protected user/canon input. Optional for legacy JSONB rows.
+  nameSource?: CharacterNameSource;
 }
 
 export interface Option {

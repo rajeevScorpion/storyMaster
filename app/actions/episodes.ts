@@ -309,6 +309,7 @@ export async function prepareEpisodeContinuation(input: {
       ...(roster?.masterId ? { masterId: roster.masterId } : {}),
       sourceStoryId: character.sourceStoryId ?? story.id,
       importedAt: nowIso,
+      nameSource: 'episode_carry',
     };
     delete merged.portraitBase64;
     delete merged.referenceSheetGallery;

@@ -72,6 +72,7 @@ export function buildDirectSeed(inputs: DirectSeedInput[]): DirectSeedResult {
         type: 'main',
         appearanceSummary: appearance,
         personalitySummary: '',
+        nameSource: userNamed ? 'user_provided' : 'ai_generated',
         // NO reference image fields — the raw key travels in the config below.
         ...(userNamed ? {} : { nameIsPlaceholder: true }),
       };

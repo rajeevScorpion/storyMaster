@@ -24,6 +24,7 @@ export function masterToCharacter(master: CharacterMaster, now: Date = new Date(
     personalitySummary: master.personalitySummary,
     masterId: master.id,
     importedAt: now.toISOString(),
+    nameSource: 'character_library',
   };
   if (master.originStoryId) character.sourceStoryId = master.originStoryId;
   if (master.portraitUrl) character.portraitUrl = master.portraitUrl;
