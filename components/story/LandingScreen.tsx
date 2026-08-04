@@ -1114,9 +1114,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                             {/* The pill is 72px tall, so its rounded left cap is a
                                 36px-radius semicircle. Pill p-2 (8) + pl-3 (12) +
                                 half the 32px trigger sits the + on that cap's
-                                centre; the extra 10px margin nudges it clear of
-                                the curve for better optical balance. */}
-                            <div ref={setAttachSlot} className="ml-[10px] flex shrink-0 items-center pl-3" />
+                                geometric centre. */}
+                            <div ref={setAttachSlot} className="flex shrink-0 items-center pl-3" />
                             <input
                               ref={promptInputRef}
                               type="text"
