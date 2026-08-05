@@ -20,6 +20,11 @@ import type {
   VisualSettings,
   VisualStylePreset,
 } from '@/lib/types/story';
+import {
+  DEFAULT_STORY_BEAT_LENGTH_LEVEL,
+  normalizeAgeGroup,
+  normalizeStoryBeatLengthLevel,
+} from '@/lib/ai/story-audience';
 import type {
   StoryConfigCharacterReference,
   StoryConfigReferences,
@@ -250,6 +255,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   storyKind: 'story',
   language: 'english',
   ageGroup: 'all_ages',
+  beatLength: { level: DEFAULT_STORY_BEAT_LENGTH_LEVEL },
   settingCountry: 'generic',
   maxBeats: 6,
   imageGenerationMode: 'prompt_only',
@@ -362,7 +368,14 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
   return {
     storyKind,
     language: normalizeStoryLanguage(input?.language),
-    ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
+    ageGroup: normalizeAgeGroup(input?.ageGroup),
+    ...(storyKind === 'story'
+      ? {
+          beatLength: {
+            level: normalizeStoryBeatLengthLevel(input?.beatLength?.level),
+          },
+        }
+      : {}),
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats,
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),

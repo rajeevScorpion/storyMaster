@@ -65,6 +65,7 @@ import {
   type NarrationVoiceSampleStatus,
   type NarrationVoiceSettings,
 } from '@/lib/ai/narration-voices';
+import { formatAudienceNarrationDirection } from '@/lib/ai/story-audience';
 
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
 const ELEVENLABS_TTS_TIMEOUT_MS = 45_000;
@@ -626,6 +627,8 @@ async function callGeminiTTS(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    /** Standard-story delivery guidance, independent of the selected voice. */
+    audience?: string;
     // Accent id (e.g. 'us', 'uk') locked on the story. Resolved to a natural-language
     // prompt instruction here — the only lever Gemini TTS exposes for accent.
     accent?: string | null;
@@ -669,6 +672,9 @@ async function callGeminiTTS(
       // model so a locked accent actually takes effect regardless of prompt version.
       if (accentInstruction && !ttsPrompt.includes(accentInstruction)) {
         ttsPrompt = `${accentInstruction}\n${ttsPrompt}`;
+      }
+      if (taskKey !== 'reel_tts') {
+        ttsPrompt = `${ttsPrompt}\n\n${formatAudienceNarrationDirection(options.audience)}`;
       }
       // TEMP DEBUG: prints the exact prompt sent to Gemini TTS so we can verify the
       // accent instruction actually reaches the model on the live path. Remove once
@@ -1209,6 +1215,7 @@ async function buildNarrationAudioPayload(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    audience?: string;
     accent?: string | null;
     reelCaptions?: ReelCaptionTiming;
     reelSettings?: ReelStorySettings;
@@ -1437,6 +1444,7 @@ async function buildNarrationAudioPayload(
         {
           taskKey: options.taskKey,
           narrationStyle: options.narrationStyle,
+          audience: options.audience,
           accent: options.accent,
         }
       )
@@ -1524,6 +1532,7 @@ export async function generateAndPersistNarration(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    audience?: string;
     accent?: string | null;
     reelCaptions?: ReelCaptionTiming;
     reelSettings?: ReelStorySettings;
@@ -1780,6 +1789,7 @@ export async function generateNarrationOnly(
   options: {
     taskKey?: Extract<TaskKey, 'tts' | 'reel_tts'>;
     narrationStyle?: string;
+    audience?: string;
     accent?: string | null;
     billingIdempotencyKey?: string;
   } = {}

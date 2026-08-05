@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Search, X } from 'lucide-react';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import type { GalleryFilters as Filters } from '@/lib/types/database';
+import { STORY_AUDIENCE_OPTIONS } from '@/lib/ai/story-audience';
 
 const LANGUAGE_OPTIONS = [
   { value: 'all', label: 'All Languages' },
@@ -31,12 +32,10 @@ const GENRE_OPTIONS = [
 
 const AGE_OPTIONS = [
   { value: 'all', label: 'All Ages' },
-  { value: 'all_ages', label: 'General' },
-  { value: 'kids_3_5', label: 'Kids 3-5' },
-  { value: 'kids_5_8', label: 'Kids 5-8' },
-  { value: 'kids_8_12', label: 'Kids 8-12' },
-  { value: 'teens', label: 'Teens' },
-  { value: 'adults', label: 'Adults' },
+  ...STORY_AUDIENCE_OPTIONS.map((option) => ({
+    ...option,
+    label: option.value === 'all_ages' ? 'All Ages stories' : option.label,
+  })),
 ];
 
 const COUNTRY_OPTIONS = [

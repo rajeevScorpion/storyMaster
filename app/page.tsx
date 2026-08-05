@@ -34,13 +34,14 @@ const getCachedLandingInitialData = unstable_cache(
           }
         : DEFAULT_LANDING_SETUP_SETTINGS,
       authoringWordCap: storyboardSettings?.authoringWordCap,
+      storyBeatLengthDefaultLevel: storyboardSettings?.storyBeatLengthDefaultLevel,
       reelSetup,
       narrationVoiceConfig,
       storyLanguageOptions,
       storyVisualCatalog,
     });
   },
-  ['kissago-landing-initial-data-v2'],
+  ['kissago-landing-initial-data-v3'],
   { revalidate: 60 }
 );
 

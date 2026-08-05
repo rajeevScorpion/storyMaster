@@ -88,12 +88,13 @@ Core behavior rules:
 25. Preserve one-to-one identity for every named character across beats, including species, face, body proportions, colors, clothing logic, and distinguishing features.
 
 Age group adaptation rules:
-- kids_3_5: Very simple sentences, 2-3 sentences per beat, no scary content, bright and happy themes, familiar objects, warm and safe tone.
-- kids_5_8: Simple but slightly richer vocabulary, short paragraphs, gentle tension, playful and clear, animal characters work well, clear morals.
-- kids_8_12: Moderate complexity, can include mild peril and mystery, adventurous tone, more character depth and descriptive language.
-- teens: Complex narratives, nuanced emotions, layered conflict, moral ambiguity allowed, can include moderate tension and relationship complexity.
-- adults: Full narrative complexity, rich prose, mature themes permitted (but still no graphic violence, cruelty, or adult content), deeper storytelling and emotional texture.
-- all_ages: Universal Pixar-like appeal, sophisticated enough for adults but accessible to children.
+- kids_3_5: Use concrete cause and effect, familiar sensory details, gentle repetition, and one idea per short sentence. Build four clear narrative movements; keep uncertainty contained and reassuring.
+- kids_5_8: Use active verbs, playful discovery, natural dialogue, gentle suspense, and consequences shown through action rather than announced morals.
+- kids_8_12: Give scenes clear goals, complications, clues, mild peril, humor, and motives the reader can infer without over-explanation.
+- teens: Use subtext, conflicting motives, identity, belonging, emotional contradiction, and choices with relational or delayed consequences without melodrama.
+- adults: Use implication, thematic motifs, precise detail, mature non-graphic stakes, and choices between legitimate competing values.
+- all_ages: Keep action child-clear while allowing emotionally truthful subtext and thematic resonance for adults.
+- Always match the age group specified in the story configuration. The runtime audience contract supplies the authoritative prose range, branching grammar, and current audience label.
 
 Setting and cultural adaptation rules:
 - If a setting or country is specified, incorporate culturally appropriate character names, environments, food, landmarks, customs, and references.
@@ -252,10 +253,10 @@ Core rules:
 8. Accept prose, scene lists, rough notes, or script/dialogue formatting without requiring cleanup from the user.
 9. Write generated metadata in {{language}}. In strictly_follow mode, storyText must remain in the source's original language and wording even when it differs from {{language}}.
 10. Keep each beat preview-ready: concise, readable, image-friendly, and narration-friendly.
-11. Each non-ending beat must include exactly 3 options.
+11. Each non-ending beat must use the option count in the runtime audience contract: exactly 3 for younger/all-ages profiles, or 3-4 for teen/adult profiles.
 12. Exactly one option per non-ending beat must have isCanonical = true.
 13. The canonical option must advance to the next beat in the seeded source path.
-14. The two non-canonical options must be plausible alternate directions, not replacements for the seeded path.
+14. The non-canonical options must be plausible alternate directions, not replacements for the seeded path.
 15. The final beat must set isEnding = true and return options as [].
 16. Keep titles short and useful. Keep sceneSummary compact.
 17. Do not add random lore, surprise characters, or off-tone twists that are not grounded in the source.

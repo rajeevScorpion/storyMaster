@@ -100,8 +100,13 @@ Prompt/seed authoring limits and seed preview pricing.
 | Setting | What it does | Affects | Safe default | Flag key |
 |---|---|---|---|---|
 | Word cap | Max words in a prompt/seed | Landing / authoring | 500 | `story_authoring_word_cap` |
+| Default Beat length | Baseline Brief-to-Immersive text amount for each new standard-story beat; audience profiles resolve it to a safe word range and users may override it | Landing / story generation / narration | Balanced (3) | `story_beat_length_default_level` |
 | Seed preview price | Coin price to preview a seed plan | Authoring paywall | — | (from pricing action costs) |
 | Vertical stories | Allow vertical (9:16) stories | Authoring | Off | `vertical_stories_setting_enabled` |
+
+Beat length does not change Reel text length. Strictly Follow seeded stories
+preserve canonical source wording even when it falls outside the selected Beat
+length range.
 
 The seed preview price is sourced from the pricing action-cost catalog, not a
 feature flag — change it under **Pricing → Action costs**.

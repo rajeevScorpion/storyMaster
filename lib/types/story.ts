@@ -234,6 +234,13 @@ export interface StoryBeat {
 
 export type AgeGroup = 'all_ages' | 'kids_3_5' | 'kids_5_8' | 'kids_8_12' | 'teens' | 'adults';
 
+export type StoryBeatLengthLevel = 1 | 2 | 3 | 4 | 5;
+
+export interface StoryBeatLengthConfig {
+  /** Semantic Brief-to-Immersive level, resolved against the selected audience. */
+  level: StoryBeatLengthLevel;
+}
+
 export type StoryLanguage = 'english' | 'hindi' | 'bangla' | 'urdu' | 'gujarati' | 'marathi';
 
 export type BuiltInVisualStylePreset =
@@ -319,6 +326,8 @@ export type StoryTextOverlaySettings = StoryTextOverlayConfig;
 export interface StoryConfig {
   storyKind: StoryKind;
   ageGroup: AgeGroup;
+  /** Standard branching stories only. Reels keep their existing textLength system. */
+  beatLength?: StoryBeatLengthConfig;
   settingCountry: string;
   maxBeats: number;
   language: StoryLanguage;

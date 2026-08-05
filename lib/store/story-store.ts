@@ -5279,6 +5279,7 @@ export const useStoryStore = create<StoryState>()(
               costPhase(baseCostTelemetry, 'tts'),
               {
                 accent: narrationAccent,
+                audience: session.storyConfig.ageGroup,
                 storyTextParts: node.data.storyTextParts,
                 overlayConfig: session.storyConfig.storyTextOverlay,
               }
@@ -5311,6 +5312,7 @@ export const useStoryStore = create<StoryState>()(
               costPhase(baseCostTelemetry, 'tts'),
               {
                 accent: narrationAccent,
+                audience: session.storyConfig.ageGroup,
                 storyTextParts: node.data.storyTextParts,
                 overlayConfig: session.storyConfig.storyTextOverlay,
               }

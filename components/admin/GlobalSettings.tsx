@@ -53,6 +53,7 @@ import {
   setStoryAssetUploadPauseDuringGeneration,
   setStoryAssetSyncWarningTimeout,
   setAuthoringWordCap,
+  setStoryBeatLengthDefaultLevel,
   setPreviewSeedPlanPriceCoins,
   setFreePlusCharacterSheets,
   setCreatorCharacterSheets,
@@ -69,7 +70,11 @@ import {
   saveAdminStoryLanguageSettings,
 } from '@/app/actions/admin';
 import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
-import type { StoryLanguage } from '@/lib/types/story';
+import type { StoryBeatLengthLevel, StoryLanguage } from '@/lib/types/story';
+import {
+  STORY_BEAT_LENGTH_LABELS,
+  resolveStoryBeatLength,
+} from '@/lib/ai/story-audience';
 import { generateNarrationVoiceSamples, getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
 import {
   normalizeNarrationVoiceList,
@@ -271,6 +276,8 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [authoringWordCap, setAuthoringWordCapState] = useState(500);
   const [authoringWordCapInput, setAuthoringWordCapInput] = useState('500');
   const [authoringWordCapSaving, setAuthoringWordCapSaving] = useState(false);
+  const [storyBeatLengthDefaultLevel, setStoryBeatLengthDefaultLevelState] = useState<StoryBeatLengthLevel>(3);
+  const [storyBeatLengthDefaultSaving, setStoryBeatLengthDefaultSaving] = useState(false);
   const [previewSeedPlanPriceCoins, setPreviewSeedPlanPriceCoinsState] = useState(0);
   const [previewSeedPlanPriceCoinsInput, setPreviewSeedPlanPriceCoinsInput] = useState('0');
   const [previewSeedPlanPriceCoinsSaving, setPreviewSeedPlanPriceCoinsSaving] = useState(false);
@@ -365,6 +372,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         storyAssetUploadPauseDuringGenerationEnabled: pauseUploadsDuringGenerationEnabled,
         storyAssetSyncWarningTimeoutMs: assetSyncWarningTimeoutMs,
         authoringWordCap: awc,
+        storyBeatLengthDefaultLevel: beatLengthDefault,
         previewSeedPlanPriceCoins: previewPriceCoins,
         imageUploadOptimizationSettings: nextImageUploadSettings,
         mediaStorage: nextMediaStorage,
@@ -428,6 +436,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setStoryAssetSyncWarningTimeoutInput(String(Math.round(assetSyncWarningTimeoutMs / 1000)));
         setAuthoringWordCapState(awc);
         setAuthoringWordCapInput(String(awc));
+        setStoryBeatLengthDefaultLevelState(beatLengthDefault);
         setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
         setPreviewSeedPlanPriceCoinsInput(String(previewPriceCoins));
         setImageUploadSettings(nextImageUploadSettings);
@@ -765,6 +774,20 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
+  async function handleStoryBeatLengthDefaultSave(level: StoryBeatLengthLevel) {
+    const previous = storyBeatLengthDefaultLevel;
+    setStoryBeatLengthDefaultLevelState(level);
+    setStoryBeatLengthDefaultSaving(true);
+    try {
+      await setStoryBeatLengthDefaultLevel(level);
+    } catch (error) {
+      setStoryBeatLengthDefaultLevelState(previous);
+      throw error;
+    } finally {
+      setStoryBeatLengthDefaultSaving(false);
+    }
+  }
+
   async function handlePreviewSeedPlanPriceSave() {
     const coins = previewSeedPlanPriceCoinsInput.trim() === '' ? NaN : Number(previewSeedPlanPriceCoinsInput);
     if (!Number.isFinite(coins) || coins < 0 || !Number.isInteger(coins)) return;
@@ -888,7 +911,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         narration: narrationVoiceSettings
           ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
           : 'Voice settings not loaded',
-        authoring: `${authoringWordCap} word cap, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
+        authoring: `${authoringWordCap} word cap, ${STORY_BEAT_LENGTH_LABELS[storyBeatLengthDefaultLevel]} beat default, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
         characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
         media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
         'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
@@ -1996,6 +2019,42 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
                   <span className="text-xs text-amber-400">Unsaved</span>
                 )}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-neutral-100 mb-1">Default Beat length</p>
+                  <p className="text-xs text-neutral-400">
+                    Baseline for new standard stories. Users can adjust it, and each audience maps
+                    the same level to an appropriate word range. Reel text length is unchanged.
+                  </p>
+                </div>
+                {storyBeatLengthDefaultSaving && <Loader2 size={14} className="shrink-0 animate-spin text-emerald-400" />}
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <span className="text-xs text-neutral-500">Brief</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={storyBeatLengthDefaultLevel}
+                  disabled={storyBeatLengthDefaultSaving}
+                  onChange={(event) => void handleStoryBeatLengthDefaultSave(
+                    Number(event.target.value) as StoryBeatLengthLevel
+                  )}
+                  aria-label="Default Beat length"
+                  aria-valuetext={STORY_BEAT_LENGTH_LABELS[storyBeatLengthDefaultLevel]}
+                  className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span className="text-xs text-neutral-500">Immersive</span>
+              </div>
+              <p className="mt-3 text-xs text-emerald-400">
+                {STORY_BEAT_LENGTH_LABELS[storyBeatLengthDefaultLevel]}
+                {' / '}
+                about {resolveStoryBeatLength('all_ages', storyBeatLengthDefaultLevel).targetWords} words per All Ages beat
+              </p>
             </div>
 
             <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
