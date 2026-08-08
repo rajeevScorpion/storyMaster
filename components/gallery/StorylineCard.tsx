@@ -71,6 +71,10 @@ export default function StorylineCard({
     <Link
       href={`/storyline/${item.id}`}
       onClick={handleClick}
+      // A rail-heavy gallery puts dozens of cards on screen; prefetching every
+      // storyline route on scroll costs far more than it saves, and the
+      // cover-aware open-flow loader already covers the perceived wait.
+      prefetch={false}
       className="group block h-full w-full rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
     >
       <motion.div
