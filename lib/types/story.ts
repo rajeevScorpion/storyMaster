@@ -326,6 +326,8 @@ export type StoryTextOverlaySettings = StoryTextOverlayConfig;
 export interface StoryConfig {
   storyKind: StoryKind;
   ageGroup: AgeGroup;
+  /** Discovery genre. Drives the gallery's genre filter and rails. */
+  genre?: string;
   /** Standard branching stories only. Reels keep their existing textLength system. */
   beatLength?: StoryBeatLengthConfig;
   settingCountry: string;

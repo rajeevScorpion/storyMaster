@@ -197,6 +197,15 @@ const DEFAULT_INPUTS: Record<PromptTaskKey, Record<string, string>> = {
     previousJournal: '',
     episodeNumber: '1',
   },
+  storyline_discovery_metadata: {
+    title: 'Lanterns in the Orchard',
+    genre: 'adventure',
+    targetAge: 'all_ages',
+    language: 'english',
+    setting: 'generic',
+    characters: 'Pip, Barnaby, the orchard keeper',
+    beatSummaries: '1. Pip finds a trail of floating lanterns beyond the village fence and follows them into the orchard.\n2. Pip and Barnaby discover a brass map case in an old apple tree and open it together.\n3. The map leads them to the orchard keeper, who reveals a forgotten friendship promise between their families.',
+  },
   visual_prompt: {
     storyText: 'Pip steps into Mr. Huckle\'s antique shop to escape the rain, discovers a strange indigo umbrella between a grandfather clock and dusty globe, turns the brass sun dial, and watches golden light flood the room.',
     storyTextParts: JSON.stringify([

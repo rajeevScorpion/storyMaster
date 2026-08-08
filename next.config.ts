@@ -29,6 +29,11 @@ const nextConfig: NextConfig = {
   },
   // Allow access to remote image placeholder.
   images: {
+    // Cover artwork is immutable once published and served from stable paths,
+    // so re-optimising it on the default short TTL is pure waste — and the
+    // optimiser shares the server's event loop, so that waste shows up as slow
+    // page responses and "upstream image response timed out" errors.
+    minimumCacheTTL: 60 * 60 * 24 * 30,
     remotePatterns: [
       {
         protocol: 'https',

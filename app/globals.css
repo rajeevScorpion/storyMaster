@@ -21,6 +21,68 @@
   }
 }
 
+/* Affordances that only make sense with a hover-capable, precise pointer
+   (e.g. rail paging arrows). Touch users swipe instead. */
+.pointer-fine-only {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pointer-fine-only {
+    display: flex;
+  }
+}
+
+/* Loading placeholders: a light sweep across the surface reads as "working"
+   where a flat pulse reads as "broken". Static under reduced motion. */
+.shimmer-surface {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  animation: shimmer-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes shimmer-sweep {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Slow push-in on the active hero billboard backdrop. */
+.hero-kenburns {
+  animation: hero-kenburns 14s ease-out forwards;
+  /* Centred origin so the push-in keeps the backdrop vertically centred; an
+     off-centre origin quietly drifts the framing toward one edge as it zooms. */
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+
+@keyframes hero-kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.07);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-surface::after {
+    animation: none;
+  }
+
+  .hero-kenburns {
+    animation: none;
+  }
+}
+
 /* Global dark thin scrollbar */
 * {
   scrollbar-width: thin;
@@ -65,12 +127,14 @@
 }
 
 /* Hidden scrollbar — still scrollable */
-.scrollbar-none {
+.scrollbar-none,
+.scrollbar-hide {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
-.scrollbar-none::-webkit-scrollbar {
+.scrollbar-none::-webkit-scrollbar,
+.scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
 

@@ -18,6 +18,8 @@ import {
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { normalizeStoredAgeGroup } from '@/lib/ai/story-audience';
+import { normalizeStoredGenre } from '@/lib/story/genres';
 import {
   extractImageContinuityState,
   summarizeImageContinuityState,
@@ -29,10 +31,12 @@ import {
 } from '@/lib/reel/settings';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { refreshStorylineDiscoveryMetadata } from '@/app/actions/storyline-discovery';
 import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { recordCharacterNoveltyUsageAction } from '@/app/actions/character-novelty';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import {
@@ -469,6 +473,9 @@ const ADDITIVE_STORYLINE_COLUMNS = [
   'unpublished_at',
   'moderation_status',
   'publish_quality',
+  // Migration 089 discovery classification columns.
+  'age_group',
+  'genre',
 ] as const;
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -626,7 +633,13 @@ function nodeToBeatRow(
     row.active_narration_preview_id = normalizedBeat.activeNarrationPreviewId;
   }
 
-  if (normalizedBeat.isStoryboard) {
+  // `isStoryboardBeat` rather than the raw field: every read path infers a
+  // storyboard from a plan or a full set of panel captions too, and writing
+  // only the raw flag left grids persisted as `is_storyboard = false`. Gallery
+  // surfaces then rendered the whole 2×2 grid instead of one panel. Never
+  // written false — a beat that has been a storyboard once stays one, and the
+  // column already defaults to false.
+  if (isStoryboardBeat(normalizedBeat)) {
     row.is_storyboard = true;
   }
 
@@ -1719,7 +1732,7 @@ export async function autoPublishStoryline(
 
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
-    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', storyId)
     .maybeSingle();
 
@@ -1835,6 +1848,8 @@ export async function autoPublishStoryline(
       node_path: nodePath,
       beats: refreshedLegacyBeats as unknown as Record<string, unknown>[],
       choices: refreshedChoices as unknown as Record<string, unknown>[],
+      age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+      genre: normalizeStoredGenre(sourceStory?.genre),
       is_public: true,
     };
 
@@ -1858,6 +1873,16 @@ export async function autoPublishStoryline(
         throw new Error(`Failed to refresh published storyline: ${refreshError.message}`);
       }
     }
+    // The refresh above rewrote title and beats without going through
+    // finalizeStorylineShareAssets, so the stored discovery intro would
+    // otherwise describe the previous version.
+    await refreshStorylineDiscoveryMetadata({
+      storylineId: existing.id,
+      storyId,
+      title: storyTitle,
+      beats: refreshedLegacyBeats,
+    });
+
     // Already published — just auto-save to user's profile
     await supabase
       .from('saved_storylines')
@@ -1956,6 +1981,8 @@ export async function autoPublishStoryline(
     node_path: nodePath,
     beats: legacyBeats as unknown as Record<string, unknown>[],
     choices: choices as unknown as Record<string, unknown>[],
+    age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+    genre: normalizeStoredGenre(sourceStory?.genre),
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
     path_hash: pathHash,
@@ -2648,7 +2675,7 @@ export async function publishStoryline(params: {
 
   const { data: sourceStory } = await supabase
     .from('stories')
-    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', params.storyId)
     .maybeSingle();
   const storyConfig = normalizeStoryConfig({
@@ -2698,6 +2725,10 @@ export async function publishStoryline(params: {
     node_path: params.nodePath,
     beats: publishedBeats as unknown as Record<string, unknown>[],
     choices: params.choices as unknown as Record<string, unknown>[],
+    // Denormalized for discovery filtering. Unrecognised values persist as
+    // NULL rather than a plausible-looking default.
+    age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+    genre: normalizeStoredGenre(sourceStory?.genre),
     author_name: profile?.display_name || 'Anonymous',
     is_public: requestedVisibility === 'public',
     visibility: requestedVisibility,

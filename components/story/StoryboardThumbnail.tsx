@@ -1,9 +1,11 @@
 'use client';
 
 import Image from 'next/image';
+import { useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import {
   getStoryboardPanelCropStyle,
+  getStoryboardPanelObjectPosition,
   STORYBOARD_PANEL_OVERSCAN_SCALE,
   STORYBOARD_PANEL_SEQUENCE,
 } from '@/lib/storyboard/layout';
@@ -17,13 +19,29 @@ const TOUCH_MOVE_CANCEL_PX = 10;
 // pick a source from srcset — passing the card-slot size leaves it half a
 // resolution short and the result pixelates. Double the length values so the
 // optimizer fetches a source sized for the actual 2× render box.
-const SIZE_LENGTH_REGEX = /(\d*\.?\d+)(vw|vh|px|rem|em)/g;
+//
+// Only the length at the end of each entry is scaled. Scaling every number in
+// the string also moved the media-condition breakpoints, so
+// `(max-width: 768px) 100vw, 1024px` became `(max-width: 1628px) 212vw,
+// 2170px`: the wrong branch matched on mid-size screens, and 2170px overshot
+// the 2048 source bucket into 3840. Oversized sources starve the image
+// optimizer, which is what surfaced as "upstream image response timed out".
+const SIZES_ENTRY_LENGTH_REGEX = /(\d*\.?\d+)(vw|vh|px|rem|em)\s*$/;
 
-function scaleSizesForCrop(sizes: string): string {
+export function scaleSizesForCrop(sizes: string): string {
   const cropFactor = 2 * STORYBOARD_PANEL_OVERSCAN_SCALE;
-  return sizes.replace(SIZE_LENGTH_REGEX, (_match, num: string, unit: string) => {
-    return `${parseFloat(num) * cropFactor}${unit}`;
-  });
+
+  // Commas only ever separate entries in a `sizes` attribute — a media
+  // condition cannot contain one — so splitting on them is safe.
+  return sizes
+    .split(',')
+    .map((entry) =>
+      entry.trim().replace(SIZES_ENTRY_LENGTH_REGEX, (_match, num: string, unit: string) => {
+        const scaled = parseFloat(num) * cropFactor;
+        return `${Number(scaled.toFixed(2))}${unit}`;
+      })
+    )
+    .join(', ');
 }
 
 interface StoryboardThumbnailProps {
@@ -33,9 +51,21 @@ interface StoryboardThumbnailProps {
   isPreviewing: boolean;
   previewSessionId: number;
   isStoryboard?: boolean;
-  allowAutoDetect?: boolean;
+  /**
+   * Beat artwork to cycle while previewing, for slots whose resting image is
+   * not a storyboard. A poster cover has nothing to cycle through, so the card
+   * holds the poster whole and borrows the opening beat's grid on hover. Always
+   * treated as a grid, and only fetched once a preview actually starts.
+   */
+  previewSrc?: string | null;
   className?: string;
   priority?: boolean;
+  /**
+   * Pin one panel instead of starting at panel 0 and cycling. The gallery hero
+   * uses it to lay a vertical storyline's four panels side by side; a pinned
+   * thumbnail never cycles, whatever `isPreviewing` says.
+   */
+  panel?: number;
 }
 
 interface StoryboardPreviewHandlers {
@@ -182,19 +212,29 @@ export default function StoryboardThumbnail({
   isPreviewing,
   previewSessionId,
   isStoryboard = true,
-  allowAutoDetect = false,
+  previewSrc,
   className = '',
   priority = false,
+  panel,
 }: StoryboardThumbnailProps) {
   const [panelState, setPanelState] = useState({ previewSessionId, panel: 0 });
-  const [detectedStoryboard, setDetectedStoryboard] = useState(false);
-  const shouldCrop = isStoryboard || detectedStoryboard;
-  const displayPanel = shouldCrop && isPreviewing && panelState.previewSessionId === previewSessionId
-    ? panelState.panel
-    : 0;
+  // Auto-cycling the quadrants is decorative motion; hold on the first panel
+  // when the viewer asked for reduced motion.
+  const prefersReducedMotion = useReducedMotion();
+  const isPinned = typeof panel === 'number';
+  // Mounted only while previewing, so a card that is never hovered never pays
+  // for the grid.
+  const showsPreviewSource = isPreviewing && !!previewSrc;
+  const activeSrc = showsPreviewSource ? previewSrc : src;
+  const shouldCrop = showsPreviewSource || isStoryboard;
+  const displayPanel = isPinned
+    ? panel
+    : shouldCrop && isPreviewing && panelState.previewSessionId === previewSessionId
+      ? panelState.panel
+      : 0;
 
   useEffect(() => {
-    if (!shouldCrop || !isPreviewing) return;
+    if (isPinned || !shouldCrop || !isPreviewing || prefersReducedMotion) return;
 
     const id = window.setInterval(() => {
       setPanelState((state) => ({
@@ -206,16 +246,7 @@ export default function StoryboardThumbnail({
     }, STORYBOARD_THUMBNAIL_CYCLE_MS);
 
     return () => window.clearInterval(id);
-  }, [isPreviewing, previewSessionId, shouldCrop]);
-
-  const handleLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    if (isStoryboard || !allowAutoDetect) return;
-
-    const { naturalWidth, naturalHeight } = event.currentTarget;
-    if (naturalWidth >= 1800 && naturalHeight >= 1000) {
-      setDetectedStoryboard(true);
-    }
-  };
+  }, [isPinned, isPreviewing, prefersReducedMotion, previewSessionId, shouldCrop]);
 
   if (!shouldCrop) {
     return (
@@ -227,7 +258,6 @@ export default function StoryboardThumbnail({
         referrerPolicy="no-referrer"
         sizes={sizes}
         priority={priority}
-        onLoad={handleLoad}
         draggable={false}
       />
     );
@@ -241,10 +271,14 @@ export default function StoryboardThumbnail({
           style={getStoryboardPanelCropStyle(displayPanel)}
         >
           <Image
-            src={src}
+            src={activeSrc}
             alt={alt}
             fill
-            className="object-cover"
+            className="object-cover transition-[object-position] duration-300 ease-in-out"
+            // Keeps the crop window centred on the panel when the slot's aspect
+            // ratio differs from the image's; matches the wrapper's transition
+            // so a panel cycle moves both together.
+            style={{ objectPosition: getStoryboardPanelObjectPosition(displayPanel) }}
             referrerPolicy="no-referrer"
             sizes={scaleSizesForCrop(sizes)}
             priority={priority}

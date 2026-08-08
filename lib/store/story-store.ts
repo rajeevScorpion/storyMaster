@@ -61,6 +61,7 @@ import {
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
 import { DEFAULT_STORY_CONFIG, deriveVisualStyleSummary, getSeedPlan, isReelStoryConfig, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_GENRE } from '@/lib/story/genres';
 import { DEFAULT_REEL_STORY_SETTINGS, findReelDefiner, normalizeReelStorySettings } from '@/lib/reel/settings';
 import { normalizeEditedReelPanelTexts } from '@/lib/reel/captions';
 import { DEFAULT_REEL_TEXT_OVERLAY_STYLE, normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
@@ -2539,7 +2540,7 @@ export const useStoryStore = create<StoryState>()(
               const initialSession: Partial<StorySession> = {
                 storySessionId: initialSessionId,
                 userPrompt: storyPrompt,
-                genre: 'adventure',
+                genre: storyConfig.genre || DEFAULT_STORY_GENRE,
                 tone: 'playful',
                 targetAge: storyConfig.ageGroup,
                 visualStyle,
@@ -2879,7 +2880,7 @@ export const useStoryStore = create<StoryState>()(
           const initialSession: Partial<StorySession> = {
             storySessionId: initialSessionId,
             userPrompt: storyPrompt,
-            genre: 'adventure',
+            genre: storyConfig.genre || DEFAULT_STORY_GENRE,
             tone: 'playful',
             targetAge: storyConfig.ageGroup,
             visualStyle,

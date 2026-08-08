@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "//header-size": "dev/preview raise Node's 16KB request-header cap. On localhost every project shares one cookie origin and Supabase stores auth tokens as several large chunked cookies, so that ceiling is reachable and Node answers HTTP 431 before Next sees the request. Left off `start`: standalone output prunes node_modules, so the explicit bin path is not safe for a hosted entrypoint.",
+    "dev": "node --max-http-header-size=32768 node_modules/next/dist/bin/next dev",
     "build": "next build",
-    "preview": "next start --hostname 127.0.0.1 --port 3000",
+    "preview": "node --max-http-header-size=32768 node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3000",
     "start": "next start",
     "test": "vitest run",
     "test:character-novelty-smoke": "vitest run --config vitest.smoke.config.ts",

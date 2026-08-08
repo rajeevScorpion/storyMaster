@@ -114,6 +114,27 @@ export function normalizeAgeGroup(value: unknown): AgeGroup {
     : 'all_ages';
 }
 
+/**
+ * Storage-side counterpart to `normalizeAgeGroup`, which coerces anything
+ * unrecognised to `all_ages`. That default is fine for prompting but wrong for
+ * persisted classification: it would make unclassified content indistinguishable
+ * from a deliberate all-ages choice, and downstream age filters would trust it.
+ * Returns null instead, so unknown stays unknown.
+ */
+export function normalizeStoredAgeGroup(value: unknown): AgeGroup | null {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(STORY_AUDIENCE_PROFILES, value)
+    ? value as AgeGroup
+    : null;
+}
+
+/**
+ * Bands the Kids surface may show (roughly ages 3–8). `all_ages` is excluded on
+ * purpose: it is the historical default for unclassified stories, so it cannot
+ * be treated as a verified child-safe signal. `kids_8_12` stays filterable in
+ * the main gallery instead.
+ */
+export const KIDS_AGE_GROUPS: AgeGroup[] = ['kids_3_5', 'kids_5_8'];
+
 export function normalizeStoryBeatLengthLevel(value: unknown): StoryBeatLengthLevel {
   const numeric = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(numeric)) return DEFAULT_STORY_BEAT_LENGTH_LEVEL;

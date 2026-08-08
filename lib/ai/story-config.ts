@@ -50,6 +50,7 @@ import {
   normalizeReelLength,
   normalizeReelTextLength,
 } from '@/lib/reel/settings';
+import { DEFAULT_STORY_GENRE, normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeReelNarrationSettings } from '@/lib/reel/narration';
 import { normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import { DEFAULT_REEL_TRANSITION_SETTINGS, normalizeReelTransitionSettings } from '@/lib/reel/transitions';
@@ -369,6 +370,7 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
     storyKind,
     language: normalizeStoryLanguage(input?.language),
     ageGroup: normalizeAgeGroup(input?.ageGroup),
+    genre: normalizeStoredGenre(input?.genre) ?? DEFAULT_STORY_GENRE,
     ...(storyKind === 'story'
       ? {
           beatLength: {
