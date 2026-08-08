@@ -35,7 +35,7 @@ export default function GalleryHero({
   };
 
   return (
-    <section className="relative h-[58vh] min-h-[340px] max-h-[620px] w-full overflow-hidden">
+    <section className="relative h-[58dvh] min-h-[340px] max-h-[620px] w-full overflow-hidden">
       {item.coverImageUrl && (
         <Image
           src={item.coverImageUrl}

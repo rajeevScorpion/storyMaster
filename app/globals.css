@@ -21,6 +21,18 @@
   }
 }
 
+/* Affordances that only make sense with a hover-capable, precise pointer
+   (e.g. rail paging arrows). Touch users swipe instead. */
+.pointer-fine-only {
+  display: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pointer-fine-only {
+    display: flex;
+  }
+}
+
 /* Global dark thin scrollbar */
 * {
   scrollbar-width: thin;

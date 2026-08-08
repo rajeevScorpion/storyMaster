@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
@@ -75,6 +75,7 @@ function isCacheFresh(entry?: GalleryCacheEntry): boolean {
 
 export default function GalleryPage() {
   const { user } = useAuth();
+  const prefersReducedMotion = useReducedMotion();
   const [showMyStories, setShowMyStories] = useState(false);
 
   // Hero + rails
@@ -337,6 +338,17 @@ export default function GalleryPage() {
   const loadingPlaceholderCount = gridLayout === 'portrait' ? 12 : PAGE_SIZE;
   const loadingMorePlaceholderCount = gridLayout === 'portrait' ? 6 : 4;
 
+  // Entrance motion is decorative: skip the travel and the stagger entirely
+  // when the viewer prefers reduced motion.
+  const enterProps = (delay: number) =>
+    prefersReducedMotion
+      ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.2 } }
+      : {
+          initial: { opacity: 0, y: 20 },
+          animate: { opacity: 1, y: 0 },
+          transition: { duration: 0.4, delay },
+        };
+
   const railSeeAll = (railKey: string) => {
     if (railKey === 'vertical') return handleVerticalSeeAll;
     if (railKey.startsWith('genre:')) {
@@ -347,16 +359,16 @@ export default function GalleryPage() {
   };
 
   return (
-    <main className="relative min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-emerald-500/30">
+    <main className="relative min-h-dvh bg-neutral-950 font-sans text-neutral-200 selection:bg-emerald-500/30">
       <div
         aria-hidden="true"
-        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-32 bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-40 md:h-48"
+        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-[calc(8rem+var(--safe-top))] bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-[calc(10rem+var(--safe-top))] md:h-[calc(12rem+var(--safe-top))]"
       />
       {/* Kissago logo — fixed top-left */}
       <KissagoLogo />
 
       {/* User menu — fixed top-right */}
-      <div className="fixed right-4 top-4 z-40">
+      <div className="fixed right-[max(1rem,var(--safe-right))] top-[max(1rem,var(--safe-top))] z-40">
         <UserMenu onMyStories={() => setShowMyStories(true)} />
       </div>
 
@@ -366,7 +378,7 @@ export default function GalleryPage() {
       />
 
       {/* Hero + rails run full-bleed; only the grid is width-constrained. */}
-      <div className="pb-16">
+      <div className="pb-[calc(4rem+var(--safe-bottom))]">
         {railsLoading ? (
           <HeroSkeleton />
         ) : railsData?.hero ? (
@@ -377,7 +389,7 @@ export default function GalleryPage() {
             onToggleSave={handleToggleSave}
           />
         ) : (
-          <header className="px-4 pb-8 pt-[clamp(5.125rem,17vh,8.125rem)] text-center lg:px-8">
+          <header className="px-4 pb-8 pt-[calc(clamp(5.125rem,17vh,8.125rem)+var(--safe-top))] text-center lg:px-8">
             <h1 className="mb-3 font-serif text-3xl text-neutral-100 md:text-4xl">
               Discover Stories
             </h1>
@@ -400,12 +412,7 @@ export default function GalleryPage() {
             </div>
           ) : (
             railsData?.rails.map((rail) => (
-              <motion.div
-                key={rail.key}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
-              >
+              <motion.div key={rail.key} {...enterProps(0)}>
                 <GalleryRail
                   rail={rail}
                   savedIds={savedIds}
@@ -448,12 +455,7 @@ export default function GalleryPage() {
             <>
               <div className={gridClass}>
                 {items.map((item, index) => (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.4, delay: (index % PAGE_SIZE) * 0.04 }}
-                  >
+                  <motion.div key={item.id} {...enterProps((index % PAGE_SIZE) * 0.04)}>
                     <StorylineCard
                       item={item}
                       layout={gridLayout}

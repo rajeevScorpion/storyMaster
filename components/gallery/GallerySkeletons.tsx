@@ -10,7 +10,7 @@ const SURFACE = 'rounded-2xl border border-white/5 bg-neutral-900/50 animate-pul
  */
 export function HeroSkeleton() {
   return (
-    <div className="relative h-[58vh] min-h-[340px] max-h-[620px] w-full overflow-hidden bg-neutral-900/50">
+    <div className="relative h-[58dvh] min-h-[340px] max-h-[620px] w-full overflow-hidden bg-neutral-900/50">
       <div className="absolute inset-0 animate-pulse bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent" />
       <div className="absolute inset-x-0 bottom-0 space-y-4 px-4 pb-10 lg:px-8 lg:pb-14">
         <div className="h-3 w-32 animate-pulse rounded bg-neutral-800" />

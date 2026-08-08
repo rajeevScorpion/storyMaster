@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { useReducedMotion } from 'motion/react';
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import {
   getStoryboardPanelCropStyle,
@@ -188,13 +189,16 @@ export default function StoryboardThumbnail({
 }: StoryboardThumbnailProps) {
   const [panelState, setPanelState] = useState({ previewSessionId, panel: 0 });
   const [detectedStoryboard, setDetectedStoryboard] = useState(false);
+  // Auto-cycling the quadrants is decorative motion; hold on the first panel
+  // when the viewer asked for reduced motion.
+  const prefersReducedMotion = useReducedMotion();
   const shouldCrop = isStoryboard || detectedStoryboard;
   const displayPanel = shouldCrop && isPreviewing && panelState.previewSessionId === previewSessionId
     ? panelState.panel
     : 0;
 
   useEffect(() => {
-    if (!shouldCrop || !isPreviewing) return;
+    if (!shouldCrop || !isPreviewing || prefersReducedMotion) return;
 
     const id = window.setInterval(() => {
       setPanelState((state) => ({
@@ -206,7 +210,7 @@ export default function StoryboardThumbnail({
     }, STORYBOARD_THUMBNAIL_CYCLE_MS);
 
     return () => window.clearInterval(id);
-  }, [isPreviewing, previewSessionId, shouldCrop]);
+  }, [isPreviewing, prefersReducedMotion, previewSessionId, shouldCrop]);
 
   const handleLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
     if (isStoryboard || !allowAutoDetect) return;

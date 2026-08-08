@@ -67,8 +67,10 @@ export default function GalleryRail({
   if (rail.items.length === 0) return null;
 
   const headingId = `rail-heading-${rail.key.replace(/[^a-z0-9]+/gi, '-')}`;
+  // Arrows are a pointer affordance only — touch users swipe the rail, and the
+  // edge fades below signal that there is more to scroll.
   const arrowClass =
-    'absolute top-1/2 z-10 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-neutral-900/90 text-neutral-300 opacity-0 transition-all hover:bg-neutral-800 hover:text-white focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 group-hover/rail:opacity-100 sm:flex';
+    'pointer-fine-only absolute top-1/2 z-10 h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-neutral-900/90 text-neutral-300 opacity-0 transition-all hover:bg-neutral-800 hover:text-white focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 group-hover/rail:opacity-100';
 
   return (
     <section className="group/rail relative" aria-labelledby={headingId}>
@@ -103,6 +105,20 @@ export default function GalleryRail({
       >
         <ChevronRight className="h-5 w-5" />
       </button>
+
+      {/* Edge fades double as the touch scroll affordance. */}
+      {canScrollLeft && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-0 z-[5] w-8 bg-gradient-to-r from-neutral-950 to-transparent"
+        />
+      )}
+      {canScrollRight && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-neutral-950 to-transparent"
+        />
+      )}
 
       <div
         ref={scrollRef}

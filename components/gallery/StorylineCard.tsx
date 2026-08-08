@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Share2 } from 'lucide-react';
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
@@ -39,6 +39,7 @@ export default function StorylineCard({
   onToggleSave,
 }: StorylineCardProps) {
   const storyboardPreview = useStoryboardThumbnailPreview(!!item.coverImageUrl);
+  const prefersReducedMotion = useReducedMotion();
 
   const handleClick = (event: React.MouseEvent<HTMLElement>) => {
     if (storyboardPreview.consumeSuppressedClick(event)) return;
@@ -71,7 +72,7 @@ export default function StorylineCard({
     >
       <motion.div
         {...storyboardPreview.previewHandlers}
-        whileHover={{ scale: 1.02 }}
+        whileHover={prefersReducedMotion ? undefined : { scale: 1.02 }}
         transition={{ duration: 0.2 }}
         className={`relative h-full w-full overflow-hidden rounded-2xl border border-white/5 bg-neutral-900 transition-colors duration-300 group-hover:border-emerald-500/30 ${
           layout === 'portrait' ? 'aspect-[9/16]' : 'aspect-video'
@@ -110,13 +111,15 @@ export default function StorylineCard({
             }}
             aria-label={isSaved ? `Remove ${item.title} from My List` : `Save ${item.title} to My List`}
             aria-pressed={isSaved}
-            className="absolute left-3 top-3 rounded-full border border-white/10 bg-black/40 p-1.5 text-neutral-300 backdrop-blur-sm transition-colors hover:text-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+            className="absolute left-1.5 top-1.5 flex h-11 w-11 items-center justify-center text-neutral-300 transition-colors hover:text-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
           >
-            {isSaved ? (
-              <BookmarkCheck className="h-4 w-4 text-emerald-400" />
-            ) : (
-              <Bookmark className="h-4 w-4" />
-            )}
+            <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-black/40 backdrop-blur-sm">
+              {isSaved ? (
+                <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+              ) : (
+                <Bookmark className="h-4 w-4" />
+              )}
+            </span>
           </button>
         )}
 
@@ -151,7 +154,7 @@ export default function StorylineCard({
                 type="button"
                 onClick={handleShare}
                 aria-label={`Share ${item.title}`}
-                className="flex items-center gap-1 transition-colors hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+                className="-my-3 flex min-h-11 min-w-11 items-center gap-1 transition-colors hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
               >
                 <Share2 className="h-3 w-3" />
               </button>
