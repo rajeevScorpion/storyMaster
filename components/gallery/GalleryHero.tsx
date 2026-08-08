@@ -4,6 +4,8 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Play } from 'lucide-react';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
+import { getStoryGenreLabel } from '@/lib/story/genres';
+import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
 import type { GalleryItem } from '@/lib/types/database';
 
 interface GalleryHeroProps {
@@ -24,6 +26,11 @@ export default function GalleryHero({
   isLoggedIn,
   onToggleSave,
 }: GalleryHeroProps) {
+  const genreLabel = getStoryGenreLabel(item.genre);
+  // Only label a band the storyline actually declares — an unclassified story
+  // must not read as "All Ages".
+  const audienceLabel = item.ageGroup ? getStoryAudienceProfile(item.ageGroup).label : null;
+
   const handleOpen = () => {
     writeOpenFlowNavMeta({
       kind: 'storyline',
@@ -66,6 +73,21 @@ export default function GalleryHero({
             <p className="line-clamp-2 max-w-xl text-sm text-neutral-300 md:text-base">
               {item.intro}
             </p>
+          )}
+
+          {(genreLabel || audienceLabel) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {genreLabel && (
+                <span className="rounded-full border border-indigo-500/30 bg-indigo-500/15 px-2.5 py-1 text-[11px] font-medium text-indigo-200">
+                  {genreLabel}
+                </span>
+              )}
+              {audienceLabel && (
+                <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-neutral-300">
+                  {audienceLabel}
+                </span>
+              )}
+            </div>
           )}
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-400">

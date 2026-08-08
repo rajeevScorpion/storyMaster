@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  KIDS_AGE_GROUPS,
   STORY_AUDIENCE_OPTIONS,
   countStoryWords,
   formatAudienceBranchingContract,
   formatAudienceNarrationDirection,
   formatAudienceVisualContract,
+  normalizeAgeGroup,
+  normalizeStoredAgeGroup,
   normalizeStoryBeatLengthLevel,
   resolveStoryBeatLength,
 } from './story-audience';
@@ -41,6 +44,25 @@ describe('story audience profiles', () => {
   it('counts both whitespace-delimited and unspaced scripts', () => {
     expect(countStoryWords('one two three')).toBe(3);
     expect(countStoryWords('物語が始まる')).toBeGreaterThan(1);
+  });
+
+  it('keeps unknown audiences unclassified on the storage path', () => {
+    // normalizeAgeGroup defaults to all_ages for prompting, which must never
+    // leak into persisted classification.
+    expect(normalizeAgeGroup(undefined)).toBe('all_ages');
+    expect(normalizeStoredAgeGroup(undefined)).toBeNull();
+    expect(normalizeStoredAgeGroup('')).toBeNull();
+    expect(normalizeStoredAgeGroup('toddlers')).toBeNull();
+    expect(normalizeStoredAgeGroup('toString')).toBeNull();
+    expect(normalizeStoredAgeGroup('kids_5_8')).toBe('kids_5_8');
+  });
+
+  it('limits the kids band to explicitly classified young audiences', () => {
+    expect(KIDS_AGE_GROUPS).toEqual(['kids_3_5', 'kids_5_8']);
+    // all_ages is the historical default for unclassified stories, so it is
+    // not a trustworthy child-safety signal.
+    expect(KIDS_AGE_GROUPS).not.toContain('all_ages');
+    expect(KIDS_AGE_GROUPS).not.toContain('kids_8_12');
   });
 
   it('keeps higher-age choices playable and visual direction open-ended', () => {

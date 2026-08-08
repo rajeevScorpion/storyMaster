@@ -27,6 +27,7 @@ import type {
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
 import { SEED_GUIDANCE_WORD_CAP, SEED_SOURCE_WORD_CAP } from '@/lib/story/authoring-limits';
+import { STORY_GENRES } from '@/lib/story/genres';
 import {
   STORY_AUDIENCE_OPTIONS,
   STORY_BEAT_LENGTH_LABELS,
@@ -39,6 +40,10 @@ const LANGUAGE_OPTIONS: FilterDropdownOption[] = STORY_LANGUAGE_OPTIONS.map((opt
 }));
 
 const AGE_GROUP_OPTIONS: FilterDropdownOption[] = STORY_AUDIENCE_OPTIONS;
+const GENRE_OPTIONS: FilterDropdownOption[] = STORY_GENRES.map((entry) => ({
+  value: entry.value,
+  label: entry.label,
+}));
 
 const SETTING_PRESETS = [
   'generic',
@@ -81,6 +86,8 @@ interface AdvancedOptionsProps {
   onLanguageChange: (v: StoryLanguage) => void;
   ageGroup: AgeGroup;
   onAgeGroupChange: (v: AgeGroup) => void;
+  genre: string;
+  onGenreChange: (v: string) => void;
   settingCountry: string;
   onSettingCountryChange: (v: string) => void;
   customSetting: string;
@@ -139,6 +146,8 @@ export default function AdvancedOptions({
   onLanguageChange,
   ageGroup,
   onAgeGroupChange,
+  genre,
+  onGenreChange,
   settingCountry,
   onSettingCountryChange,
   customSetting,
@@ -408,6 +417,17 @@ export default function AdvancedOptions({
               mode="inline"
               ariaLabel="Age group"
               contextLabel="Audience"
+            />
+
+            <FilterDropdown
+              value={genre}
+              options={GENRE_OPTIONS}
+              onChange={onGenreChange}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Genre"
+              contextLabel="Genre"
             />
 
             <div className="space-y-2">

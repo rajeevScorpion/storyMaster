@@ -46,6 +46,7 @@ import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import { buildDefaultVisualSettings, DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_GENRE } from '@/lib/story/genres';
 import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
 import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
 import { loadReadyReferenceSeed, loadDirectReferenceSeed } from '@/app/actions/references';
@@ -157,6 +158,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [language, setLanguage] = useState<StoryLanguage>('english');
   const [ageGroup, setAgeGroup] = useState<AgeGroup>('all_ages');
+  const [genre, setGenre] = useState<string>(DEFAULT_STORY_GENRE);
   const [settingCountry, setSettingCountry] = useState('generic');
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
@@ -528,7 +530,8 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setLanguage(config.language);
             setReelLanguage(config.language);
             setAgeGroup(config.ageGroup);
-            const isPresetSetting = ['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
+            setGenre(config.genre || DEFAULT_STORY_GENRE);
+            const isPresetSetting =['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
             setSettingCountry(isPresetSetting ? config.settingCountry : 'custom');
             setCustomSetting(isPresetSetting ? '' : config.settingCountry);
             setMaxBeats(config.maxBeats);
@@ -695,6 +698,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       storyKind: 'story',
       language,
       ageGroup,
+      genre,
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
       beatLength: { level: beatLengthLevel },
@@ -1697,6 +1701,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 ageGroup={ageGroup}
                 onAgeGroupChange={(value) => {
                   setAgeGroup(value);
+                  clearSeedPreview();
+                }}
+                genre={genre}
+                onGenreChange={(value) => {
+                  setGenre(value);
                   clearSeedPreview();
                 }}
                 settingCountry={settingCountry}

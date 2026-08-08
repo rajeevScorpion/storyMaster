@@ -7,6 +7,7 @@ import SegmentedControl from '@/components/ui/SegmentedControl';
 import Sheet from '@/components/ui/Sheet';
 import type { GalleryFilters as Filters, GalleryLane } from '@/lib/types/database';
 import { STORY_AUDIENCE_OPTIONS } from '@/lib/ai/story-audience';
+import { STORY_GENRES } from '@/lib/story/genres';
 
 const LANGUAGE_OPTIONS = [
   { value: 'all', label: 'All Languages' },
@@ -21,14 +22,7 @@ const TYPE_OPTIONS: { value: GalleryLane; label: string }[] = [
 
 const GENRE_OPTIONS = [
   { value: 'all', label: 'All Genres' },
-  { value: 'adventure', label: 'Adventure' },
-  { value: 'mystery', label: 'Mystery' },
-  { value: 'fantasy', label: 'Fantasy' },
-  { value: 'comedy', label: 'Comedy' },
-  { value: 'drama', label: 'Drama' },
-  { value: 'horror', label: 'Horror' },
-  { value: 'romance', label: 'Romance' },
-  { value: 'sci-fi', label: 'Sci-Fi' },
+  ...STORY_GENRES.map((genre) => ({ value: genre.value as string, label: genre.label })),
 ];
 
 const AGE_OPTIONS = [

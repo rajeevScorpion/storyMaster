@@ -17,6 +17,7 @@ import type {
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { deriveDiscoveryIntro } from '@/lib/story/discovery-intro';
+import { KIDS_AGE_GROUPS } from '@/lib/ai/story-audience';
 
 /**
  * Moderation gate for public listings: when the admin requires review before
@@ -60,6 +61,8 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
   share_cover_status?: string | null;
   discovery_intro?: string | null;
   discovery_intro_status?: string | null;
+  age_group?: string | null;
+  genre?: string | null;
   stories?: {
     genre?: string | null;
     story_config?: Record<string, unknown> | null;
@@ -73,14 +76,14 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
 const STORYLINE_BASE_COLUMNS =
   'id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, first_beat:beats->0, second_beat:beats->1';
 
-/** Added by migration 088; see `discoveryColumnsAvailable`. */
-const STORYLINE_DISCOVERY_COLUMNS = 'discovery_intro, discovery_intro_status';
+/** Added by migrations 088 and 089; see `discoveryColumnsAvailable`. */
+const STORYLINE_DISCOVERY_COLUMNS = 'discovery_intro, discovery_intro_status, age_group, genre';
 
 /**
  * Migrations are applied by hand, so this code can run against a database that
- * has not seen 088 yet. Selecting a column that does not exist fails the whole
- * listing, so the first such failure drops the discovery columns for the rest
- * of the process and the query is retried once.
+ * has not seen 088/089 yet. Selecting a column that does not exist fails the
+ * whole listing, so the first such failure drops the discovery columns for the
+ * rest of the process and the query is retried once.
  */
 let discoveryColumnsAvailable = true;
 
@@ -103,7 +106,7 @@ function isMissingDiscoveryColumnError(error: { code?: string; message?: string 
   // "column not found in schema cache" responses.
   return (
     (error.code === '42703' || error.code === 'PGRST200' || error.code === 'PGRST204')
-    && /discovery_intro/i.test(error.message ?? '')
+    && /discovery_intro|age_group|\bgenre\b/i.test(error.message ?? '')
   );
 }
 
@@ -118,12 +121,33 @@ async function selectStorylines<T>(
   const result = await build(storylineListColumns(options));
 
   if (discoveryColumnsAvailable && isMissingDiscoveryColumnError(result.error)) {
-    console.warn('Storyline discovery columns missing (migration 088 not applied); serving without intros.');
+    console.warn('Storyline discovery columns missing (migrations 088/089 not applied); serving without intros or stored classification.');
     discoveryColumnsAvailable = false;
     return build(storylineListColumns(options));
   }
 
   return result;
+}
+
+/**
+ * Audience scope for a discovery surface. `kids` is enforced here in the query
+ * layer rather than by RLS: cover hydration runs on the admin client, so the
+ * action layer is the trust boundary. The parameter can only ever narrow the
+ * result set, so a tampered client cannot widen a kids surface.
+ */
+export type GalleryAudienceMode = 'all' | 'kids';
+
+/**
+ * Kids eligibility depends on `storylines.age_group` (migration 089). If that
+ * column is unavailable the surface fails closed rather than falling back to an
+ * unfiltered listing.
+ */
+function kidsEligibilityUnavailable(mode: GalleryAudienceMode): boolean {
+  return mode === 'kids' && !discoveryColumnsAvailable;
+}
+
+function emptyGalleryPage(): GalleryPage {
+  return { items: [], total: 0, hasMore: false };
 }
 
 type StorylineCoverBeatRow = {
@@ -202,8 +226,10 @@ function mapStorylineRow(row: any): GalleryItem {
     storyId: row.story_id ?? row.id,
     beatCount: row.beat_count,
     intro: resolveDiscoveryIntro(row),
-    genre: row.stories?.genre || null,
-    ageGroup: readStoryConfigString(row.stories?.story_config, 'ageGroup'),
+    // Storyline columns win; the joined story is the fallback for rows
+    // published before migration 089 backfilled them.
+    genre: row.genre || row.stories?.genre || null,
+    ageGroup: row.age_group || readStoryConfigString(row.stories?.story_config, 'ageGroup'),
     settingCountry: readStoryConfigString(row.stories?.story_config, 'settingCountry'),
     likeCount: row.like_count ?? 0,
     viewCount: row.view_count ?? 0,
@@ -652,26 +678,43 @@ function titleCaseGenre(genre: string): string {
  * single cover-resolution pass over the deduped set, so a storyline appearing
  * in several rails is only signed once.
  */
-export async function getGalleryRails(): Promise<GalleryRailsResponse> {
+export async function getGalleryRails(
+  mode: GalleryAudienceMode = 'all'
+): Promise<GalleryRailsResponse> {
   const supabase = await createClient();
   const gateActive = await moderationGateActive();
   const moderationStatuses = ['none', 'approved'];
 
-  const withGate = <T>(query: T): T =>
-    gateActive
-      ? (query as { in: (column: string, values: string[]) => T }).in('moderation_status', moderationStatuses)
-      : query;
+  const withScope = <T>(query: T): T => {
+    let scoped = query as T & {
+      in: (column: string, values: string[]) => T & { in: (c: string, v: string[]) => T };
+    };
+    if (gateActive) {
+      scoped = scoped.in('moderation_status', moderationStatuses) as typeof scoped;
+    }
+    if (mode === 'kids') {
+      scoped = scoped.in('age_group', KIDS_AGE_GROUPS) as typeof scoped;
+    }
+    return scoped as T;
+  };
 
   const railQuery = (
     build: (query: ReturnType<ReturnType<typeof supabase.from>['select']>) => unknown
   ) =>
     selectStorylines<StorylineGalleryRow[]>(
       (columns) =>
-        build(withGate(supabase.from('storylines').select(columns))) as PromiseLike<
+        build(withScope(supabase.from('storylines').select(columns))) as PromiseLike<
           QueryResult<StorylineGalleryRow[]>
         >,
       { withStory: true }
     );
+
+  // Fail closed: without the age_group column there is no trustworthy way to
+  // restrict a kids surface, so show nothing rather than everything.
+  if (kidsEligibilityUnavailable(mode)) {
+    console.warn('Kids rails requested but age_group is unavailable (migration 089 not applied).');
+    return { hero: null, rails: [] };
+  }
 
   const [recentResult, mostLovedResult, verticalResult, savedRows] = await Promise.all([
     railQuery((query) =>
@@ -699,10 +742,17 @@ export async function getGalleryRails(): Promise<GalleryRailsResponse> {
         .order('created_at', { ascending: false })
         .limit(RAIL_ITEM_LIMIT)
     ),
-    fetchSavedStorylineRows(supabase),
+    // A viewer's saved list can contain anything they saved elsewhere, so it
+    // has no place on a kids surface.
+    mode === 'kids' ? Promise.resolve([]) : fetchSavedStorylineRows(supabase),
   ]);
 
   if (recentResult.error) {
+    // In kids mode a failed query must not degrade into an unfiltered surface.
+    if (mode === 'kids') {
+      console.error('Failed to fetch kids rails:', recentResult.error.message);
+      return { hero: null, rails: [] };
+    }
     throw new Error(`Failed to fetch gallery rails: ${recentResult.error.message}`);
   }
 
@@ -758,13 +808,15 @@ export async function getGalleryRails(): Promise<GalleryRailsResponse> {
   if (railItems.length > 0) {
     rails.push({
       key: 'new',
-      title: 'New on Kissago',
+      title: mode === 'kids' ? 'New for Kids' : 'New on Kissago',
       layout: 'wide',
       items: railItems.slice(0, RAIL_ITEM_LIMIT),
     });
   }
 
-  const mostLovedItems = toItems(mostLovedRows);
+  // Popularity counts are an engagement-pressure signal; the kids surface
+  // leaves them out entirely.
+  const mostLovedItems = mode === 'kids' ? [] : toItems(mostLovedRows);
   if (mostLovedItems.length >= GENRE_RAIL_MIN_ITEMS) {
     rails.push({ key: 'most_loved', title: 'Most Loved', layout: 'wide', items: mostLovedItems });
   }
@@ -880,11 +932,18 @@ export async function getSavedStorylineIds(): Promise<string[]> {
 export async function getGalleryItems(
   filters: GalleryFilters,
   limit: number = 12,
-  offset: number = 0
+  offset: number = 0,
+  mode: GalleryAudienceMode = 'all'
 ): Promise<GalleryPage> {
   const supabase = await createClient();
   const rangeEnd = offset + limit - 1;
   const lane: GalleryLane = filters.type === 'vertical' ? 'vertical' : 'storylines';
+
+  // Fail closed: no trustworthy age column means no kids listing.
+  if (kidsEligibilityUnavailable(mode)) {
+    console.warn('Kids listing requested but age_group is unavailable (migration 089 not applied).');
+    return emptyGalleryPage();
+  }
 
   const gateActive = await moderationGateActive();
 
@@ -903,15 +962,24 @@ export async function getGalleryItems(
       if (gateActive) {
         query = query.in('moderation_status', ['none', 'approved']);
       }
+      if (mode === 'kids') {
+        query = query.in('age_group', KIDS_AGE_GROUPS);
+      }
 
       if (filters.search) {
         query = query.ilike('title', `%${filters.search}%`);
       }
+      // Genre and audience read the indexed storyline columns (migration 089)
+      // instead of the unindexable jsonb path on the joined story.
       if (filters.genre && filters.genre !== 'all') {
-        query = query.ilike('stories.genre', filters.genre);
+        query = discoveryColumnsAvailable
+          ? query.eq('genre', filters.genre.toLowerCase())
+          : query.ilike('stories.genre', filters.genre);
       }
       if (filters.ageGroup && filters.ageGroup !== 'all') {
-        query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
+        query = discoveryColumnsAvailable
+          ? query.eq('age_group', filters.ageGroup)
+          : query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
       }
       if (filters.country && filters.country !== 'all') {
         query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);

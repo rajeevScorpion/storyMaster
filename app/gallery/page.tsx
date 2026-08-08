@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
 import { motion, useReducedMotion } from 'motion/react';
+import { Baby } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
@@ -17,8 +19,8 @@ import {
   GridSkeleton,
   HeroSkeleton,
 } from '@/components/gallery/GallerySkeletons';
-import { getGalleryRails, getGalleryItems, getSavedStorylineIds } from '@/app/actions/gallery';
-import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
+import { getGalleryRails, getGalleryItems } from '@/app/actions/gallery';
+import { useSavedStorylines } from '@/lib/hooks/useSavedStorylines';
 import type { GalleryItem, GalleryFilters, GalleryRailsResponse } from '@/lib/types/database';
 
 const DEFAULT_FILTERS: GalleryFilters = {
@@ -93,7 +95,7 @@ export default function GalleryPage() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [gridError, setGridError] = useState(false);
   const [supportsInfiniteScroll, setSupportsInfiniteScroll] = useState(false);
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const { savedIds, toggleSave } = useSavedStorylines(!!user);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -123,34 +125,6 @@ export default function GalleryPage() {
     if (typeof window === 'undefined') return;
     setSupportsInfiniteScroll('IntersectionObserver' in window);
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    if (!user) {
-      setSavedIds(new Set());
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    getSavedStorylineIds()
-      .then((ids) => {
-        if (!cancelled) {
-          setSavedIds(new Set(ids));
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to fetch saved storyline IDs:', error);
-        if (!cancelled) {
-          setSavedIds(new Set());
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user]);
 
   const applyCacheEntry = useCallback((entry: GalleryCacheEntry) => {
     setItems(entry.items);
@@ -287,38 +261,6 @@ export default function GalleryPage() {
     setFilters(normalizedFilters);
   }, [filters]);
 
-  const handleToggleSave = async (storylineId: string, currentlySaved: boolean) => {
-    // Optimistic update
-    setSavedIds((prev) => {
-      const next = new Set(prev);
-      if (currentlySaved) {
-        next.delete(storylineId);
-      } else {
-        next.add(storylineId);
-      }
-      return next;
-    });
-
-    try {
-      if (currentlySaved) {
-        await unsaveStoryline(storylineId);
-      } else {
-        await saveStorylineToProfile(storylineId);
-      }
-    } catch {
-      // Revert on error
-      setSavedIds((prev) => {
-        const next = new Set(prev);
-        if (currentlySaved) {
-          next.add(storylineId);
-        } else {
-          next.delete(storylineId);
-        }
-        return next;
-      });
-    }
-  };
-
   const scrollToGrid = useCallback(() => {
     gridRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
@@ -368,7 +310,14 @@ export default function GalleryPage() {
       <KissagoLogo />
 
       {/* User menu — fixed top-right */}
-      <div className="fixed right-[max(1rem,var(--safe-right))] top-[max(1rem,var(--safe-top))] z-40">
+      <div className="fixed right-[max(1rem,var(--safe-right))] top-[max(1rem,var(--safe-top))] z-40 flex items-center gap-2">
+        <Link
+          href="/gallery/kids"
+          className="flex min-h-11 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-neutral-200 backdrop-blur-md transition-colors hover:border-emerald-500/30 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+        >
+          <Baby className="h-4 w-4" aria-hidden="true" />
+          Kids
+        </Link>
         <UserMenu onMyStories={() => setShowMyStories(true)} />
       </div>
 
@@ -386,7 +335,7 @@ export default function GalleryPage() {
             item={railsData.hero}
             isSaved={savedIds.has(railsData.hero.id)}
             isLoggedIn={!!user}
-            onToggleSave={handleToggleSave}
+            onToggleSave={toggleSave}
           />
         ) : (
           <header className="px-4 pb-8 pt-[calc(clamp(5.125rem,17vh,8.125rem)+var(--safe-top))] text-center lg:px-8">
@@ -417,7 +366,7 @@ export default function GalleryPage() {
                   rail={rail}
                   savedIds={savedIds}
                   isLoggedIn={!!user}
-                  onToggleSave={handleToggleSave}
+                  onToggleSave={toggleSave}
                   onSeeAll={railSeeAll(rail.key)}
                 />
               </motion.div>
@@ -462,7 +411,7 @@ export default function GalleryPage() {
                       sizes={GRID_CARD_SIZES[gridLayout]}
                       isSaved={savedIds.has(item.id)}
                       isLoggedIn={!!user}
-                      onToggleSave={handleToggleSave}
+                      onToggleSave={toggleSave}
                     />
                   </motion.div>
                 ))}

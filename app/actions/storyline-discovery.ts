@@ -7,11 +7,11 @@ import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { LOCKED_PROMPT_GUARDRAILS, resolvePromptTemplate } from '@/lib/ai/prompt-config.shared';
 import { storylineDiscoveryMetadataSchema } from '@/lib/ai/generation-schemas';
 import { normalizeDiscoveryIntro } from '@/lib/story/discovery-intro';
+import { normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import type { AgeGroup } from '@/lib/types/story';
 
 const AGE_GROUPS: AgeGroup[] = ['all_ages', 'kids_3_5', 'kids_5_8', 'kids_8_12', 'teens', 'adults'];
-const GENRES = ['adventure', 'mystery', 'fantasy', 'comedy', 'drama', 'horror', 'romance', 'sci-fi'];
 
 const MAX_BEATS_IN_PROMPT = 8;
 const MAX_BEAT_CHARS = 160;
@@ -139,12 +139,11 @@ export async function generateStorylineDiscoveryMetadata(input: {
     const intro = normalizeDiscoveryIntro(parsed.intro);
     if (!intro) return null;
 
-    const genre = typeof parsed.genre === 'string' ? parsed.genre.trim().toLowerCase() : '';
     const ageFit = typeof parsed.ageFit === 'string' ? parsed.ageFit.trim() : '';
 
     return {
       intro,
-      genre: GENRES.includes(genre) ? genre : null,
+      genre: normalizeStoredGenre(parsed.genre),
       ageFit: AGE_GROUPS.includes(ageFit as AgeGroup) ? (ageFit as AgeGroup) : null,
     };
   } catch (error) {
@@ -163,13 +162,26 @@ export async function applyStorylineDiscoveryMetadata(
 ): Promise<void> {
   try {
     const admin = createAdminClient();
-    const { error } = await admin
-      .from('storylines')
-      .update({
-        discovery_intro: result?.intro ?? null,
-        discovery_intro_status: result ? 'ready' : 'failed',
-      })
-      .eq('id', storylineId);
+    const patch: Record<string, unknown> = {
+      discovery_intro: result?.intro ?? null,
+      discovery_intro_status: result ? 'ready' : 'failed',
+    };
+
+    if (result?.genre || result?.ageFit) {
+      // The model's suggestions only fill gaps. A classification the creator
+      // actually chose is never overwritten by an inferred one.
+      const { data: existing } = await admin
+        .from('storylines')
+        .select('age_group, genre')
+        .eq('id', storylineId)
+        .maybeSingle();
+
+      const row = existing as { age_group?: string | null; genre?: string | null } | null;
+      if (result.genre && !row?.genre) patch.genre = result.genre;
+      if (result.ageFit && !row?.age_group) patch.age_group = result.ageFit;
+    }
+
+    const { error } = await admin.from('storylines').update(patch).eq('id', storylineId);
 
     if (error) {
       console.warn('Skipped storyline discovery metadata update:', error.message);

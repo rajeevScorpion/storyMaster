@@ -18,6 +18,8 @@ import {
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { normalizeStoredAgeGroup } from '@/lib/ai/story-audience';
+import { normalizeStoredGenre } from '@/lib/story/genres';
 import {
   extractImageContinuityState,
   summarizeImageContinuityState,
@@ -470,6 +472,9 @@ const ADDITIVE_STORYLINE_COLUMNS = [
   'unpublished_at',
   'moderation_status',
   'publish_quality',
+  // Migration 089 discovery classification columns.
+  'age_group',
+  'genre',
 ] as const;
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
@@ -1720,7 +1725,7 @@ export async function autoPublishStoryline(
 
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
-    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', storyId)
     .maybeSingle();
 
@@ -1836,6 +1841,8 @@ export async function autoPublishStoryline(
       node_path: nodePath,
       beats: refreshedLegacyBeats as unknown as Record<string, unknown>[],
       choices: refreshedChoices as unknown as Record<string, unknown>[],
+      age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+      genre: normalizeStoredGenre(sourceStory?.genre),
       is_public: true,
     };
 
@@ -1967,6 +1974,8 @@ export async function autoPublishStoryline(
     node_path: nodePath,
     beats: legacyBeats as unknown as Record<string, unknown>[],
     choices: choices as unknown as Record<string, unknown>[],
+    age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+    genre: normalizeStoredGenre(sourceStory?.genre),
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
     path_hash: pathHash,
@@ -2659,7 +2668,7 @@ export async function publishStoryline(params: {
 
   const { data: sourceStory } = await supabase
     .from('stories')
-    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', params.storyId)
     .maybeSingle();
   const storyConfig = normalizeStoryConfig({
@@ -2709,6 +2718,10 @@ export async function publishStoryline(params: {
     node_path: params.nodePath,
     beats: publishedBeats as unknown as Record<string, unknown>[],
     choices: params.choices as unknown as Record<string, unknown>[],
+    // Denormalized for discovery filtering. Unrecognised values persist as
+    // NULL rather than a plausible-looking default.
+    age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+    genre: normalizeStoredGenre(sourceStory?.genre),
     author_name: profile?.display_name || 'Anonymous',
     is_public: requestedVisibility === 'public',
     visibility: requestedVisibility,

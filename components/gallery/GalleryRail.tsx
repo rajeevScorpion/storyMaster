@@ -20,6 +20,7 @@ interface GalleryRailProps {
   /** Optional "see all" affordance, e.g. jumping to the filtered grid. */
   onSeeAll?: () => void;
   seeAllLabel?: string;
+  hideEngagementCounts?: boolean;
 }
 
 /**
@@ -34,6 +35,7 @@ export default function GalleryRail({
   onToggleSave,
   onSeeAll,
   seeAllLabel = 'See all',
+  hideEngagementCounts = false,
 }: GalleryRailProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -138,6 +140,7 @@ export default function GalleryRail({
               sizes={CARD_SIZES[rail.layout]}
               isSaved={savedIds.has(item.id)}
               isLoggedIn={isLoggedIn}
+              hideEngagementCounts={hideEngagementCounts}
               onToggleSave={onToggleSave}
             />
           </div>

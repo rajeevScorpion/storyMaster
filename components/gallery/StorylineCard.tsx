@@ -20,6 +20,8 @@ interface StorylineCardProps {
   /** Slot-accurate `sizes`; the storyboard crop scales it up internally. */
   sizes?: string;
   priority?: boolean;
+  /** Kids surfaces omit view/like counts to avoid engagement pressure. */
+  hideEngagementCounts?: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
 }
 
@@ -36,6 +38,7 @@ export default function StorylineCard({
   isLoggedIn,
   sizes,
   priority = false,
+  hideEngagementCounts = false,
   onToggleSave,
 }: StorylineCardProps) {
   const storyboardPreview = useStoryboardThumbnailPreview(!!item.coverImageUrl);
@@ -144,13 +147,13 @@ export default function StorylineCard({
                   {item.beatCount}
                 </span>
               )}
-              {item.viewCount > 0 && (
+              {!hideEngagementCounts && item.viewCount > 0 && (
                 <span className="flex items-center gap-1">
                   <Eye className="h-3 w-3" />
                   {item.viewCount}
                 </span>
               )}
-              {item.likeCount > 0 && (
+              {!hideEngagementCounts && item.likeCount > 0 && (
                 <span className="flex items-center gap-1">
                   <Heart className="h-3 w-3" />
                   {item.likeCount}
