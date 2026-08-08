@@ -1,7 +1,6 @@
 'use client';
 
 import Link from 'next/link';
-import Image from 'next/image';
 import { motion } from 'motion/react';
 import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Share2 } from 'lucide-react';
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
@@ -14,7 +13,6 @@ interface GalleryItemCardProps {
   isLoggedIn: boolean;
   isWide?: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
-  onAuthRequired?: (returnTo: string) => void;
 }
 
 export default function GalleryItemCard({
@@ -23,35 +21,23 @@ export default function GalleryItemCard({
   isLoggedIn,
   isWide,
   onToggleSave,
-  onAuthRequired,
 }: GalleryItemCardProps) {
-  const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
+  const href = `/storyline/${item.id}`;
   const isVerticalCard = item.isVerticalStory || item.aspectRatio === '9:16';
-  const canPreviewStoryboard = item.type === 'storyline' && !!item.coverImageUrl;
-  const storyboardPreview = useStoryboardThumbnailPreview(canPreviewStoryboard);
-
-  // For tree items, unauthenticated users need to sign in first
-  const needsAuth = item.type === 'tree' && !isLoggedIn;
+  const storyboardPreview = useStoryboardThumbnailPreview(!!item.coverImageUrl);
 
   const handleClick = (e: React.MouseEvent<HTMLElement>) => {
     if (storyboardPreview.consumeSuppressedClick(e)) {
       return;
     }
 
-    if (needsAuth && onAuthRequired) {
-      e.preventDefault();
-      onAuthRequired(href);
-      return;
-    }
-    if (item.type === 'storyline') {
-      writeOpenFlowNavMeta({
-        kind: 'storyline',
-        title: item.title,
-        coverImageUrl: item.coverImageUrl,
-        coverIsStoryboard: item.coverIsStoryboard,
-        beatCount: item.beatCount,
-      });
-    }
+    writeOpenFlowNavMeta({
+      kind: 'storyline',
+      title: item.title,
+      coverImageUrl: item.coverImageUrl,
+      coverIsStoryboard: item.coverIsStoryboard,
+      beatCount: item.beatCount,
+    });
   };
 
   return (
@@ -73,7 +59,7 @@ export default function GalleryItemCard({
         )}
 
         {/* Cover Image */}
-        {item.coverImageUrl && item.type === 'storyline' ? (
+        {item.coverImageUrl && (
           <StoryboardThumbnail
             src={item.coverImageUrl}
             alt={item.title}
@@ -82,15 +68,6 @@ export default function GalleryItemCard({
             previewSessionId={storyboardPreview.previewSessionId}
             isStoryboard={item.coverIsStoryboard}
             allowAutoDetect
-          />
-        ) : item.coverImageUrl && (
-          <Image
-            src={item.coverImageUrl}
-            alt={item.title}
-            fill
-            className="object-cover transition-transform duration-500 group-hover:scale-105"
-            referrerPolicy="no-referrer"
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
           />
         )}
 
@@ -104,19 +81,17 @@ export default function GalleryItemCard({
         <div className="absolute top-3 right-3">
           <span
             className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
-              item.type === 'tree'
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                : isVerticalCard
+              isVerticalCard
                 ? 'bg-sky-500/20 text-sky-200 border border-sky-400/30'
                 : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
             }`}
           >
-            {item.type === 'tree' ? 'Explore' : isVerticalCard ? 'Vertical' : 'Experience'}
+            {isVerticalCard ? 'Vertical' : 'Experience'}
           </span>
         </div>
 
-        {/* Bookmark — top-left (storylines only, logged-in only) */}
-        {isLoggedIn && item.type === 'storyline' && (
+        {/* Bookmark — top-left (logged-in only) */}
+        {isLoggedIn && (
           <button
             onClick={(e) => {
               e.preventDefault();
@@ -140,45 +115,40 @@ export default function GalleryItemCard({
           </h3>
           <div className="flex items-center justify-between text-xs font-sans text-neutral-500">
             <span className="flex items-center gap-3">
-              {item.type === 'storyline' && item.beatCount && (
+              {item.beatCount && (
                 <span className="flex items-center gap-1">
                   <BookOpen className="w-3 h-3" />
                   {item.beatCount}
                 </span>
               )}
-              {item.type === 'storyline' && item.viewCount > 0 && (
+              {item.viewCount > 0 && (
                 <span className="flex items-center gap-1">
                   <Eye className="w-3 h-3" />
                   {item.viewCount}
                 </span>
               )}
-              {item.type === 'storyline' && item.likeCount > 0 && (
+              {item.likeCount > 0 && (
                 <span className="flex items-center gap-1">
                   <Heart className="w-3 h-3" />
                   {item.likeCount}
                 </span>
               )}
-              {item.type === 'storyline' && (
-                <button
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const url = `${window.location.origin}/storyline/${item.id}`;
-                    if (navigator.share) {
-                      navigator.share({ title: item.title, url }).catch(() => {});
-                    } else {
-                      navigator.clipboard.writeText(url).catch(() => {});
-                    }
-                  }}
-                  className="flex items-center gap-1 hover:text-neutral-200 transition-colors"
-                  title="Share storyline"
-                >
-                  <Share2 className="w-3 h-3" />
-                </button>
-              )}
-              {item.type === 'tree' && item.genre && (
-                <span className="capitalize">{item.genre}</span>
-              )}
+              <button
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const url = `${window.location.origin}/storyline/${item.id}`;
+                  if (navigator.share) {
+                    navigator.share({ title: item.title, url }).catch(() => {});
+                  } else {
+                    navigator.clipboard.writeText(url).catch(() => {});
+                  }
+                }}
+                className="flex items-center gap-1 hover:text-neutral-200 transition-colors"
+                title="Share storyline"
+              >
+                <Share2 className="w-3 h-3" />
+              </button>
             </span>
             {item.authorName && (
               <span className="truncate max-w-[120px]">by {item.authorName}</span>

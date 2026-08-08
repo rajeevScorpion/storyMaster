@@ -5,7 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
-import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryPage, GenreSection } from '@/lib/types/database';
+import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryLane, GalleryPage, GenreSection } from '@/lib/types/database';
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 
@@ -40,15 +40,29 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
   is_vertical_story?: boolean | null;
   aspect_ratio?: string | null;
   node_path?: string[] | null;
-  beats?: LegacyGalleryBeat[] | null;
+  /**
+   * Only the two candidate cover beats are selected (`beats->0` / `beats->1`)
+   * instead of the whole legacy snapshot — the feed never needs the rest.
+   * Typed loosely because PostgREST hands JSON paths back untyped.
+   */
+  first_beat?: unknown;
+  second_beat?: unknown;
   share_cover_url?: string | null;
   share_cover_status?: string | null;
   stories?: {
     genre?: string | null;
     story_config?: Record<string, unknown> | null;
-    story_map?: Record<string, unknown> | null;
   } | null;
 };
+
+/**
+ * Columns every storyline listing needs. `beats->0`/`beats->1` keep the legacy
+ * cover fallbacks working without transferring the full beat snapshot per row.
+ */
+const STORYLINE_LIST_COLUMNS =
+  'id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, first_beat:beats->0, second_beat:beats->1';
+
+const STORYLINE_LIST_COLUMNS_WITH_STORY = `${STORYLINE_LIST_COLUMNS}, stories!inner(genre, story_config)`;
 
 type StorylineCoverBeatRow = {
   storyline_id: string;
@@ -134,31 +148,32 @@ function mapStorylineRow(row: any): GalleryItem {
   };
 }
 
-function mapTreeRow(row: any): GalleryItem {
-  const aspectRatio = resolveStoryAspectRatio(row, row.story_config);
-  return {
-    id: row.story_id,
-    type: 'tree',
-    title: row.title,
-    coverImageUrl: row.cover_image_url,
-    coverIsStoryboard: false,
-    isVerticalStory: resolveIsVerticalStory(row, row.story_config),
-    aspectRatio,
-    authorName: row.author_name,
-    storyId: row.story_id,
-    beatCount: null,
-    genre: row.genre || null,
-    ageGroup: row.story_config?.ageGroup || null,
-    settingCountry: readStoryConfigString(row.story_config as Record<string, unknown> | null | undefined, 'settingCountry'),
-    likeCount: 0,
-    viewCount: 0,
-    createdAt: row.created_at,
-  };
+/**
+ * Coerce one selected `beats->N` value into a beat object. Tolerates the value
+ * arriving as a JSON string, and unwraps a one-element array in case the JSON
+ * path is ever served as a collection, so an unexpected shape degrades to the
+ * other cover fallbacks instead of throwing.
+ */
+function coerceLegacyBeat(value: unknown): LegacyGalleryBeat | null {
+  let candidate = value;
+
+  if (typeof candidate === 'string') {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch {
+      return null;
+    }
+  }
+
+  if (Array.isArray(candidate)) {
+    candidate = candidate[0];
+  }
+
+  return candidate && typeof candidate === 'object' ? (candidate as LegacyGalleryBeat) : null;
 }
 
 function getLegacyCoverBeat(row: StorylineGalleryRow): LegacyGalleryBeat | null {
-  const beats = Array.isArray(row.beats) ? row.beats : [];
-  return beats[1] ?? beats[0] ?? null;
+  return coerceLegacyBeat(row.second_beat) ?? coerceLegacyBeat(row.first_beat);
 }
 
 function getLegacyCoverUrl(row: StorylineGalleryRow): string | null {
@@ -362,16 +377,10 @@ async function resolveStoryMapCoverStoryboardFlags<T extends StorylineGalleryRow
   const rowsNeedingStoryMap = rows.filter((row) => !row.cover_is_storyboard);
   if (rowsNeedingStoryMap.length === 0) return rows;
 
-  const embeddedFlags = new Map<string, boolean>();
-  for (const row of rowsNeedingStoryMap) {
-    if (readStoryMapCoverIsStoryboard(row, row.stories?.story_map)) {
-      embeddedFlags.set(row.id, true);
-    }
-  }
-
+  // story_map is deliberately not selected with the listing (it carries the
+  // whole branching tree); only rows still unresolved pay for a targeted fetch.
   const storyIdsToFetch = Array.from(new Set(
     rowsNeedingStoryMap
-      .filter((row) => !embeddedFlags.has(row.id))
       .map((row) => row.story_id)
       .filter((storyId): storyId is string => typeof storyId === 'string' && storyId.length > 0)
   ));
@@ -400,7 +409,6 @@ async function resolveStoryMapCoverStoryboardFlags<T extends StorylineGalleryRow
 
   return rows.map((row) => {
     const isStoryboard = row.cover_is_storyboard
-      || embeddedFlags.get(row.id) === true
       || readStoryMapCoverIsStoryboard(row, row.story_id ? storyMapByStoryId.get(row.story_id) : null);
 
     return isStoryboard ? { ...row, cover_is_storyboard: true } : row;
@@ -498,7 +506,7 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
 
   let recentQuery = supabase
     .from('storylines')
-    .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats')
+    .select(STORYLINE_LIST_COLUMNS)
     .eq('is_public', true)
     .eq('is_vertical_story', false)
     .neq('aspect_ratio', '9:16');
@@ -515,7 +523,9 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
   }
 
   const rows = await resolveStorylineCovers((data || []) as StorylineGalleryRow[]);
-  return rows.map(({ beats, node_path, stories, share_cover_url, share_cover_status, ...storyline }) => {
+  return rows.map(({ first_beat, second_beat, node_path, stories, share_cover_url, share_cover_status, ...storyline }) => {
+    void first_beat;
+    void second_beat;
     void share_cover_url;
     void share_cover_status;
     const aspectRatio = resolveStoryAspectRatio(storyline, stories?.story_config);
@@ -536,7 +546,7 @@ export async function getTopByGenre(): Promise<GenreSection[]> {
   // Fetch public storylines joined with their parent story for genre
   let genreQuery = supabase
     .from('storylines')
-    .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)')
+    .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
     .eq('is_public', true)
     .eq('is_vertical_story', false)
     .neq('aspect_ratio', '9:16');
@@ -634,129 +644,46 @@ export async function getGalleryItems(
 ): Promise<GalleryPage> {
   const supabase = await createClient();
   const rangeEnd = offset + limit - 1;
+  const lane: GalleryLane = filters.type === 'vertical' ? 'vertical' : 'storylines';
 
-  // 1. Fetch storylines
-  if (filters.type === 'storylines') {
-    let query = supabase
-      .from('storylines')
-      .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
-      .eq('is_public', true)
-      .eq('is_vertical_story', false)
-      .neq('aspect_ratio', '9:16')
-      .order('created_at', { ascending: false });
-    if (await moderationGateActive()) {
-      query = query.in('moderation_status', ['none', 'approved']);
-    }
-
-    if (filters.search) {
-      query = query.ilike('title', `%${filters.search}%`);
-    }
-    if (filters.genre && filters.genre !== 'all') {
-      query = query.ilike('stories.genre', filters.genre);
-    }
-    if (filters.ageGroup && filters.ageGroup !== 'all') {
-      query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
-    }
-    if (filters.country && filters.country !== 'all') {
-      query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
-    }
-    if (filters.language && filters.language !== 'all') {
-      query = query.filter('stories.story_config->>language', 'eq', filters.language);
-    }
-
-    const { data: storylines, count, error } = await query.range(offset, rangeEnd);
-
-    if (error) {
-      throw new Error(`Failed to fetch storyline gallery items: ${error.message}`);
-    }
-
-    const resolvedRows = await resolveStorylineCovers((storylines || []) as StorylineGalleryRow[]);
-    const items = resolvedRows.map(mapStorylineRow);
-    const total = count ?? 0;
-
-    return {
-      items,
-      total,
-      hasMore: offset + items.length < total,
-    };
-  }
-
-  // 2. Fetch vertical/portrait storylines as their own gallery lane.
-  if (filters.type === 'vertical') {
-    let query = supabase
-      .from('storylines')
-      .select('id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, beats, stories!inner(genre, story_config, story_map)', { count: 'exact' })
-      .eq('is_public', true)
-      .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
-      .order('created_at', { ascending: false });
-    if (await moderationGateActive()) {
-      query = query.in('moderation_status', ['none', 'approved']);
-    }
-
-    if (filters.search) {
-      query = query.ilike('title', `%${filters.search}%`);
-    }
-    if (filters.genre && filters.genre !== 'all') {
-      query = query.ilike('stories.genre', filters.genre);
-    }
-    if (filters.ageGroup && filters.ageGroup !== 'all') {
-      query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
-    }
-    if (filters.country && filters.country !== 'all') {
-      query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
-    }
-    if (filters.language && filters.language !== 'all') {
-      query = query.filter('stories.story_config->>language', 'eq', filters.language);
-    }
-
-    const { data: storylines, count, error } = await query.range(offset, rangeEnd);
-
-    if (error) {
-      throw new Error(`Failed to fetch vertical story gallery items: ${error.message}`);
-    }
-
-    const resolvedRows = await resolveStorylineCovers((storylines || []) as StorylineGalleryRow[]);
-    const items = resolvedRows.map(mapStorylineRow);
-    const total = count ?? 0;
-
-    return {
-      items,
-      total,
-      hasMore: offset + items.length < total,
-    };
-  }
-
-  // 3. Fetch story trees from a DB-backed gallery source
   let query = supabase
-    .from('gallery_story_trees')
-    .select('story_id, title, user_prompt, genre, story_config, cover_image_url, author_name, created_at, is_vertical_story, aspect_ratio', { count: 'exact' })
-    .eq('is_vertical_story', false)
-    .neq('aspect_ratio', '9:16')
+    .from('storylines')
+    .select(STORYLINE_LIST_COLUMNS_WITH_STORY, { count: 'exact' })
+    .eq('is_public', true)
     .order('created_at', { ascending: false });
 
+  query = lane === 'vertical'
+    ? query.or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
+    : query.eq('is_vertical_story', false).neq('aspect_ratio', '9:16');
+
+  if (await moderationGateActive()) {
+    query = query.in('moderation_status', ['none', 'approved']);
+  }
+
   if (filters.search) {
-    query = query.or(`title.ilike.%${filters.search}%,user_prompt.ilike.%${filters.search}%`);
+    query = query.ilike('title', `%${filters.search}%`);
   }
   if (filters.genre && filters.genre !== 'all') {
-    query = query.ilike('genre', filters.genre);
+    query = query.ilike('stories.genre', filters.genre);
   }
   if (filters.ageGroup && filters.ageGroup !== 'all') {
-    query = query.filter('story_config->>ageGroup', 'eq', filters.ageGroup);
+    query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
   }
   if (filters.country && filters.country !== 'all') {
-    query = query.filter('story_config->>settingCountry', 'eq', filters.country);
+    query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
   }
   if (filters.language && filters.language !== 'all') {
-    query = query.filter('story_config->>language', 'eq', filters.language);
+    query = query.filter('stories.story_config->>language', 'eq', filters.language);
   }
 
-  const { data: storyTrees, count, error } = await query.range(offset, rangeEnd);
+  const { data: storylines, count, error } = await query.range(offset, rangeEnd);
 
   if (error) {
-    throw new Error(`Failed to fetch story tree gallery items: ${error.message}`);
+    throw new Error(`Failed to fetch ${lane} gallery items: ${error.message}`);
   }
 
-  const items = (storyTrees || []).map(mapTreeRow);
+  const resolvedRows = await resolveStorylineCovers((storylines || []) as StorylineGalleryRow[]);
+  const items = resolvedRows.map(mapStorylineRow);
   const total = count ?? 0;
 
   return {

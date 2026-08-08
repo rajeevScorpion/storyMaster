@@ -42,7 +42,6 @@ import type { PricingRuntimeContext } from '@/lib/types/pricing';
 import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
-import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
@@ -1933,10 +1932,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         </section>
       )}
 
-      {/* Public Storylines Gallery — hidden for now */}
-      <div id="gallery-section" className="hidden">
-        <Gallery />
-      </div>
     </div>
   );
 }

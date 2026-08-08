@@ -84,7 +84,7 @@ function isCacheFresh(entry?: GalleryCacheEntry): boolean {
 }
 
 export default function GalleryPage() {
-  const { user, openAuthDialog } = useAuth();
+  const { user } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
 
   // Genre showcase state
@@ -363,7 +363,7 @@ export default function GalleryPage() {
             Discover Stories
           </h1>
           <p className="text-sm text-neutral-500 max-w-lg mx-auto">
-            Explore branching story trees or experience published storylines created by people like us.
+            Experience published storylines created by people like us.
           </p>
         </motion.div>
 
@@ -378,7 +378,6 @@ export default function GalleryPage() {
               isLoggedIn={!!user}
               onToggleSave={handleToggleSave}
               onGenreClick={handleGenreClick}
-              onAuthRequired={(returnTo) => openAuthDialog('sign_in', returnTo)}
             />
           )}
         </section>
@@ -439,7 +438,6 @@ export default function GalleryPage() {
                         isLoggedIn={!!user}
                         isWide={isBig}
                         onToggleSave={handleToggleSave}
-                        onAuthRequired={(returnTo) => openAuthDialog('sign_in', returnTo)}
                       />
                     </motion.div>
                   );

@@ -450,7 +450,11 @@ export interface DbManagedPage {
 
 export interface GalleryItem {
   id: string;
-  type: 'tree' | 'storyline';
+  /**
+   * Retained as a discriminator so cards/keys stay stable, but discovery is
+   * storyline-only — raw story trees are no longer surfaced in the feed.
+   */
+  type: 'storyline';
   title: string;
   coverImageUrl: string | null;
   coverIsStoryboard: boolean;
@@ -481,9 +485,11 @@ export interface DbStorylineView {
   viewed_at: string;
 }
 
+export type GalleryLane = 'storylines' | 'vertical';
+
 export interface GalleryFilters {
   search: string;
-  type: 'storylines' | 'trees' | 'vertical';
+  type: GalleryLane;
   genre: string;
   ageGroup: string;
   country: string;

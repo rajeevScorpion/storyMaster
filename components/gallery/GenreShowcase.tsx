@@ -2,7 +2,6 @@
 
 import { useRef, useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import { motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Bookmark, BookmarkCheck, BookOpen } from 'lucide-react';
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
@@ -14,7 +13,6 @@ interface GenreShowcaseProps {
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
-  onAuthRequired?: (returnTo: string) => void;
 }
 
 function GenreItemCard({
@@ -22,29 +20,18 @@ function GenreItemCard({
   savedIds,
   isLoggedIn,
   onToggleSave,
-  onAuthRequired,
 }: {
   item: GalleryItem;
   savedIds: Set<string>;
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
-  onAuthRequired?: (returnTo: string) => void;
 }) {
-  const href = item.type === 'tree' ? `/explore/${item.storyId}` : `/storyline/${item.id}`;
+  const href = `/storyline/${item.id}`;
   const isSaved = savedIds.has(item.id);
-  const needsAuth = item.type === 'tree' && !isLoggedIn;
-  const canPreviewStoryboard = item.type === 'storyline' && !!item.coverImageUrl;
-  const storyboardPreview = useStoryboardThumbnailPreview(canPreviewStoryboard);
+  const storyboardPreview = useStoryboardThumbnailPreview(!!item.coverImageUrl);
 
   const handleClick = (e: React.MouseEvent<HTMLElement>) => {
-    if (storyboardPreview.consumeSuppressedClick(e)) {
-      return;
-    }
-
-    if (needsAuth && onAuthRequired) {
-      e.preventDefault();
-      onAuthRequired(href);
-    }
+    storyboardPreview.consumeSuppressedClick(e);
   };
 
   return (
@@ -67,7 +54,7 @@ function GenreItemCard({
           </div>
         )}
 
-        {item.coverImageUrl && item.type === 'storyline' ? (
+        {item.coverImageUrl && (
           <StoryboardThumbnail
             src={item.coverImageUrl}
             alt={item.title}
@@ -77,34 +64,19 @@ function GenreItemCard({
             isStoryboard={item.coverIsStoryboard}
             allowAutoDetect
           />
-        ) : item.coverImageUrl && (
-          <Image
-            src={item.coverImageUrl}
-            alt={item.title}
-            fill
-            className="object-cover transition-transform duration-500 group-hover:scale-105"
-            referrerPolicy="no-referrer"
-            sizes="320px"
-          />
         )}
 
         <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/50 to-transparent" />
 
         {/* Type pill */}
         <div className="absolute top-3 right-3">
-          <span
-            className={`px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
-              item.type === 'tree'
-                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-            }`}
-          >
-            {item.type === 'tree' ? 'Explore' : 'Experience'}
+          <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+            Experience
           </span>
         </div>
 
         {/* Bookmark */}
-        {isLoggedIn && item.type === 'storyline' && (
+        {isLoggedIn && (
           <button
             onClick={(e) => {
               e.preventDefault();
@@ -143,14 +115,12 @@ function GenreRow({
   isLoggedIn,
   onToggleSave,
   onGenreClick,
-  onAuthRequired,
 }: {
   section: GenreSection;
   savedIds: Set<string>;
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
   onGenreClick: (genre: string) => void;
-  onAuthRequired?: (returnTo: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -209,7 +179,6 @@ function GenreRow({
             savedIds={savedIds}
             isLoggedIn={isLoggedIn}
             onToggleSave={onToggleSave}
-            onAuthRequired={onAuthRequired}
           />
         ))}
       </div>
@@ -223,7 +192,6 @@ export default function GenreShowcase({
   isLoggedIn,
   onToggleSave,
   onGenreClick,
-  onAuthRequired,
 }: GenreShowcaseProps) {
   if (sections.length === 0) return null;
 
@@ -242,7 +210,6 @@ export default function GenreShowcase({
             isLoggedIn={isLoggedIn}
             onToggleSave={onToggleSave}
             onGenreClick={onGenreClick}
-            onAuthRequired={onAuthRequired}
           />
         </motion.div>
       ))}
