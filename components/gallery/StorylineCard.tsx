@@ -43,7 +43,12 @@ export default function StorylineCard({
   hideEngagementCounts = false,
   onToggleSave,
 }: StorylineCardProps) {
-  const storyboardPreview = useStoryboardThumbnailPreview(!!item.coverImageUrl);
+  // Nothing to preview on a poster cover with no opening beat behind it, so the
+  // hover/long-press handlers stay off rather than suppressing clicks for a
+  // cycle that never plays.
+  const storyboardPreview = useStoryboardThumbnailPreview(
+    !!item.coverImageUrl && (item.coverIsStoryboard || !!item.openingImageUrl)
+  );
   const prefersReducedMotion = useReducedMotion();
 
   // Reading position. The bar needs a length to divide by, so a progress row
@@ -103,7 +108,9 @@ export default function StorylineCard({
             isPreviewing={storyboardPreview.isPreviewing}
             previewSessionId={storyboardPreview.previewSessionId}
             isStoryboard={item.coverIsStoryboard}
-            allowAutoDetect
+            // A poster cover shows whole and never crops; hover borrows the
+            // opening beat's grid so the card still previews the story.
+            previewSrc={item.coverIsStoryboard ? null : item.openingImageUrl}
             priority={priority}
           />
         ) : (

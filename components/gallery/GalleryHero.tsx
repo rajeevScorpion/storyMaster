@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { BookOpen, Bookmark, BookmarkCheck, Play } from 'lucide-react';
 import StoryboardThumbnail from '@/components/story/StoryboardThumbnail';
+import { STORYBOARD_PANEL_SEQUENCE } from '@/lib/storyboard/layout';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import { getStoryGenreLabel } from '@/lib/story/genres';
 import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
@@ -23,6 +24,86 @@ const PRELOAD_NEXT_SLIDE_MS = 2500;
  * lands in the 2048 bucket — ample for a backdrop under two gradient scrims.
  */
 const HERO_SIZES = '(max-width: 768px) 100vw, 960px';
+
+/**
+ * One slot per panel in the vertical strip below, so all four panels resolve to
+ * the same source and the browser fetches the grid once. StoryboardThumbnail
+ * scales this by ~2.12× for the crop box, and a panel occupying a quarter of
+ * the hero needs a grid two panels wide — which is exactly what 25vw × 2.12
+ * asks for. The mobile branch matches Tailwind's `md`, where the strip
+ * collapses to panel 1 alone at full width.
+ */
+const HERO_VERTICAL_PANEL_SIZES = '(max-width: 767px) 100vw, 25vw';
+
+/**
+ * The billboard shows its artwork full-bleed, so it prefers the storyline's
+ * opening beat over its cover: a cover can be poster art with the title burned
+ * in, and a wide crop slices the lettering. Beat artwork is always a 2×2
+ * storyboard grid — hence `isStoryboard` unconditionally, rather than a flag
+ * that is only ever written when true. The cover is the fallback for
+ * storylines whose opening beat has no image, and keeps its own flag because a
+ * poster must not be cropped to a quadrant.
+ */
+function getBackdrop(item: GalleryItem): { url: string | null; isStoryboard: boolean } {
+  return item.openingImageUrl
+    ? { url: item.openingImageUrl, isStoryboard: true }
+    : { url: item.coverImageUrl, isStoryboard: item.coverIsStoryboard };
+}
+
+/**
+ * The backdrop for one slide. Never cycles panels — `isPreviewing` is pinned
+ * false and the vertical strip pins a panel outright — so the billboard holds
+ * still whatever the pointer does.
+ *
+ * A 9:16 panel stretched across a 16:9-and-wider billboard magnifies the art
+ * past legibility, so vertical storylines lay all four panels side by side
+ * instead: 4 × 9:16 is about 2.25:1, which suits the slot. Below `md` there is
+ * no room for four, and it falls back to panel 1 alone.
+ */
+function HeroBackdrop({ item, priority }: { item: GalleryItem; priority: boolean }) {
+  const { url, isStoryboard } = getBackdrop(item);
+  if (!url) return null;
+
+  if (isStoryboard && item.isVerticalStory) {
+    return (
+      <div className="absolute inset-0 flex">
+        {STORYBOARD_PANEL_SEQUENCE.map((panel) => (
+          <div
+            key={panel}
+            // Panels 2–4 are hidden rather than unmounted below `md`: they
+            // share panel 1's resolved source, so hiding them costs no extra
+            // fetch and avoids a layout swap on resize.
+            className={`relative h-full ${panel === 0 ? 'flex-1' : 'hidden md:block md:flex-1'}`}
+          >
+            <StoryboardThumbnail
+              src={url}
+              alt=""
+              sizes={HERO_VERTICAL_PANEL_SIZES}
+              isPreviewing={false}
+              previewSessionId={0}
+              isStoryboard
+              panel={panel}
+              priority={priority && panel === 0}
+            />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <StoryboardThumbnail
+      src={url}
+      alt=""
+      sizes={HERO_SIZES}
+      isPreviewing={false}
+      previewSessionId={0}
+      isStoryboard={isStoryboard}
+      panel={0}
+      priority={priority}
+    />
+  );
+}
 
 interface GalleryHeroProps {
   items: GalleryItem[];
@@ -128,20 +209,9 @@ export default function GalleryHero({
               isActive ? 'opacity-100' : 'opacity-0'
             }`}
           >
-            {item.coverImageUrl && (
-              <div className={`absolute inset-0 ${isActive && !prefersReducedMotion ? 'hero-kenburns' : ''}`}>
-                <StoryboardThumbnail
-                  src={item.coverImageUrl}
-                  alt=""
-                  sizes={HERO_SIZES}
-                  isPreviewing={false}
-                  previewSessionId={0}
-                  isStoryboard={item.coverIsStoryboard}
-                  allowAutoDetect
-                  priority={index === 0}
-                />
-              </div>
-            )}
+            <div className={`absolute inset-0 ${isActive && !prefersReducedMotion ? 'hero-kenburns' : ''}`}>
+              <HeroBackdrop item={item} priority={index === 0} />
+            </div>
           </div>
         );
       })}

@@ -458,6 +458,19 @@ export interface GalleryItem {
   title: string;
   coverImageUrl: string | null;
   coverIsStoryboard: boolean;
+  /**
+   * The storyline's opening beat image, for surfaces that show artwork
+   * full-bleed rather than in a card. Cover art can be poster-like — the title
+   * burned into the image — so cropping it to a wide billboard slices the
+   * lettering; beat artwork is clean.
+   *
+   * Always a 2×2 storyboard grid, so consumers must render a single panel from
+   * it and never the grid itself. The billboard uses it as its backdrop, and
+   * cards whose cover is a poster cycle its panels on hover. Null for
+   * storylines whose opening beat has no image, where consumers fall back to
+   * the cover.
+   */
+  openingImageUrl: string | null;
   isVerticalStory: boolean;
   aspectRatio: StoryAspectRatio;
   authorName: string | null;

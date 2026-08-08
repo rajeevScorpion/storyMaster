@@ -190,25 +190,14 @@ function emptyGalleryPage(): GalleryPage {
   return { items: [], total: 0, hasMore: false };
 }
 
-type StorylineCoverBeatRow = {
-  storyline_id: string;
-  beat_id: string;
-  position: number;
-};
-
-type StoryboardFlagBeatRow = {
-  id: string;
-  is_storyboard: boolean | null;
-};
-
-type StoryMapFlagStoryRow = {
-  id: string;
-  story_map: Record<string, unknown> | null;
-};
-
 type BeatCoverImageRow = {
   story_id: string;
   node_id: string;
+  image_url: string | null;
+};
+
+type OpeningBeatRow = {
+  id: string;
   image_url: string | null;
 };
 
@@ -260,6 +249,8 @@ function mapStorylineRow(row: any): GalleryItem {
     title: row.title,
     coverImageUrl: row.cover_image_url,
     coverIsStoryboard: row.cover_is_storyboard === true,
+    // Attached by `withOpeningPanels` for featured items only.
+    openingImageUrl: null,
     isVerticalStory: resolveIsVerticalStory(row, row.stories?.story_config),
     aspectRatio,
     authorName: row.author_name,
@@ -401,19 +392,6 @@ function getReadyShareCoverUrl(row: StorylineGalleryRow): string | null {
   return row.share_cover_status === 'ready' && shareCoverUrl ? shareCoverUrl : null;
 }
 
-function getLegacyCoverIsStoryboard(row: StorylineGalleryRow): boolean {
-  const coverBeat = getLegacyCoverBeat(row);
-  const imagePrompt = coverBeat?.imagePrompt ?? coverBeat?.image_prompt;
-  const promptLooksStoryboard = typeof imagePrompt === 'string'
-    && /\b(storyboard|2x2|2×2|four-panel|panel grid)\b/i.test(imagePrompt);
-
-  return coverBeat?.isStoryboard === true
-    || coverBeat?.is_storyboard === true
-    || !!coverBeat?.storyboardPlan
-    || !!coverBeat?.storyboard_plan
-    || promptLooksStoryboard;
-}
-
 function getPreferredStorylineCoverUrl(row: StorylineGalleryRow): string | null {
   const coverImageUrl = row.cover_image_url?.trim();
   if (coverImageUrl && !parseR2UrlLikeReference(coverImageUrl)) {
@@ -491,184 +469,6 @@ async function resolveCurrentBeatCoverUrls<T extends StorylineGalleryRow>(
 }
 
 /**
- * Look up the storyboard flag for cover beats via the normalized tables
- * (`storyline_beats` → `beats`). Returns only the storylines it could resolve.
- */
-async function fetchNormalizedCoverStoryboardFlags(
-  storylineIds: string[]
-): Promise<Map<string, boolean>> {
-  const flags = new Map<string, boolean>();
-  if (storylineIds.length === 0) return flags;
-
-  try {
-    const admin = createAdminClient();
-
-    const { data: coverBeatRows, error: coverBeatError } = await admin
-      .from('storyline_beats')
-      .select('storyline_id, beat_id, position')
-      .in('storyline_id', storylineIds)
-      .in('position', [0, 1]);
-
-    if (coverBeatError || !coverBeatRows) {
-      console.error('Failed to fetch gallery cover storyboard flags:', coverBeatError?.message);
-      return flags;
-    }
-
-    const beatIds = Array.from(new Set(
-      (coverBeatRows as StorylineCoverBeatRow[])
-        .map((row) => row.beat_id)
-        .filter(Boolean)
-    ));
-    if (beatIds.length === 0) return flags;
-
-    const { data: beatRows, error: beatError } = await admin
-      .from('beats')
-      .select('id, is_storyboard')
-      .in('id', beatIds);
-
-    if (beatError || !beatRows) {
-      console.error('Failed to fetch gallery beat storyboard flags:', beatError?.message);
-      return flags;
-    }
-
-    const storyboardByBeatId = new Map(
-      (beatRows as StoryboardFlagBeatRow[]).map((beat) => [beat.id, beat.is_storyboard === true])
-    );
-    const bestByStorylineId = new Map<string, { position: number; isStoryboard: boolean }>();
-
-    for (const row of coverBeatRows as StorylineCoverBeatRow[]) {
-      if (row.position !== 0 && row.position !== 1) continue;
-
-      const isStoryboard = storyboardByBeatId.get(row.beat_id);
-      if (typeof isStoryboard !== 'boolean') continue;
-
-      const current = bestByStorylineId.get(row.storyline_id);
-      if (!current || row.position > current.position) {
-        bestByStorylineId.set(row.storyline_id, { position: row.position, isStoryboard });
-      }
-    }
-
-    for (const [storylineId, best] of bestByStorylineId) {
-      flags.set(storylineId, best.isStoryboard);
-    }
-  } catch (error) {
-    console.error('Failed to resolve gallery cover storyboard flags:', error);
-  }
-
-  return flags;
-}
-
-function readStoryMapCoverIsStoryboard(row: StorylineGalleryRow, storyMap: Record<string, unknown> | null | undefined): boolean {
-  if (!storyMap || typeof storyMap !== 'object') return false;
-
-  const nodes = (storyMap as { nodes?: Record<string, { data?: Record<string, unknown> }> }).nodes;
-  if (!nodes) return false;
-
-  const nodePath = Array.isArray(row.node_path) ? row.node_path : [];
-  const coverNodeId = nodePath[1] ?? nodePath[0];
-  const coverNodeData = coverNodeId ? nodes[coverNodeId]?.data : undefined;
-  if (!coverNodeData) return false;
-
-  return coverNodeData.isStoryboard === true
-    || coverNodeData.is_storyboard === true
-    || !!coverNodeData.storyboardPlan
-    || !!coverNodeData.storyboard_plan;
-}
-
-/**
- * Fallback storyboard lookup for storylines the normalized tables could not
- * answer: read the cover node straight out of the story's branching map.
- * `story_map` is never selected with the listing (it carries the whole tree),
- * so only unresolved rows pay for this.
- */
-async function fetchStoryMapCoverStoryboardFlags(
-  rows: StorylineGalleryRow[]
-): Promise<Map<string, boolean>> {
-  const flags = new Map<string, boolean>();
-  if (rows.length === 0) return flags;
-
-  const storyIds = Array.from(new Set(
-    rows
-      .map((row) => row.story_id)
-      .filter((storyId): storyId is string => typeof storyId === 'string' && storyId.length > 0)
-  ));
-  if (storyIds.length === 0) return flags;
-
-  try {
-    const admin = createAdminClient();
-    const { data, error } = await admin
-      .from('stories')
-      .select('id, story_map')
-      .in('id', storyIds);
-
-    if (error || !data) {
-      console.error('Failed to fetch gallery story-map storyboard flags:', error?.message);
-      return flags;
-    }
-
-    const storyMapByStoryId = new Map(
-      (data as StoryMapFlagStoryRow[]).map((story) => [story.id, story.story_map])
-    );
-
-    for (const row of rows) {
-      const storyMap = row.story_id ? storyMapByStoryId.get(row.story_id) : null;
-      flags.set(row.id, readStoryMapCoverIsStoryboard(row, storyMap));
-    }
-  } catch (error) {
-    console.error('Failed to resolve gallery story-map storyboard flags:', error);
-  }
-
-  return flags;
-}
-
-/**
- * Whether each storyline's cover beat is a 2×2 storyboard, as recorded outside
- * the listing row itself.
- *
- * This used to cost three admin round-trips on every gallery request. The
- * answer is derived from published beats, which never change, so it is cached
- * per storyline and a warm feed makes no queries at all.
- */
-async function resolveRemoteCoverStoryboardFlags(
-  rows: StorylineGalleryRow[]
-): Promise<Map<string, boolean>> {
-  const rowsById = new Map(rows.map((row) => [row.id, row]));
-  const ids = Array.from(rowsById.keys()).filter(Boolean);
-  if (ids.length === 0) return new Map();
-
-  const byCacheKey = await cachedMany<boolean>(
-    ids.map((id) => `storyline-cover-storyboard:${id}`),
-    COVER_FLAG_TTL_MS,
-    async (missingKeys) => {
-      const missingIds = missingKeys.map((key) => key.split(':').slice(1).join(':'));
-      const normalized = await fetchNormalizedCoverStoryboardFlags(missingIds);
-
-      // Only rows the normalized tables did not answer fall through to the
-      // story map.
-      const unresolved = missingIds
-        .filter((id) => !normalized.has(id))
-        .map((id) => rowsById.get(id))
-        .filter((row): row is StorylineGalleryRow => !!row);
-      const fromStoryMap = await fetchStoryMapCoverStoryboardFlags(unresolved);
-
-      const filled = new Map<string, boolean>();
-      for (const id of missingIds) {
-        const flag = normalized.get(id) ?? fromStoryMap.get(id);
-        if (typeof flag === 'boolean') filled.set(`storyline-cover-storyboard:${id}`, flag);
-      }
-      return filled;
-    }
-  );
-
-  const flags = new Map<string, boolean>();
-  for (const id of ids) {
-    const flag = byCacheKey.get(`storyline-cover-storyboard:${id}`);
-    if (typeof flag === 'boolean') flags.set(id, flag);
-  }
-  return flags;
-}
-
-/**
  * Mint (or reuse) read URLs for private cover objects. Signatures are valid for
  * 24h and cached for 12, so repeat visitors and overlapping rails reuse one
  * signature instead of re-signing every object on every request.
@@ -743,37 +543,151 @@ async function resolveStorylineCovers<T extends StorylineGalleryRow>(
   if (rows.length === 0) return [];
 
   const rowsWithCurrentBeatCovers = await resolveCurrentBeatCoverUrls(rows);
-  const resolved = rowsWithCurrentBeatCovers.map((row) => ({
-    ...row,
-    cover_image_url: getPreferredStorylineCoverUrl(row),
-    cover_is_storyboard: getPreferredStorylineCoverUrl(row) === getReadyShareCoverUrl(row)
-      ? false
-      : getLegacyCoverIsStoryboard(row),
-  }));
 
-  // Flags and signatures are independent lookups over the same rows.
-  const [remoteFlags, signedUrls] = await Promise.all([
-    resolveRemoteCoverStoryboardFlags(
-      resolved.filter((row) => !row.cover_is_storyboard)
-    ),
-    signCoverUrls(
-      resolved
-        .map((row) => row.cover_image_url)
-        .filter((url): url is string => !!url)
-    ),
-  ]);
+  // Structural rather than inferred. A share cover is a rendered poster with
+  // the title composited in; every other cover source is beat artwork, because
+  // publishing copies the cover node's own image into `cover_image_url`. So the
+  // answer is "which source won", not "what does some flag say" — the flag was
+  // read off the cover *beat* and then applied to the *poster*, which is how a
+  // title card ended up cropped to one quadrant and blown up 2.12× on the rails.
+  const resolved = rowsWithCurrentBeatCovers.map((row) => {
+    const coverImageUrl = getPreferredStorylineCoverUrl(row);
+    return {
+      ...row,
+      cover_image_url: coverImageUrl,
+      cover_is_storyboard: Boolean(coverImageUrl) && coverImageUrl !== getReadyShareCoverUrl(row),
+    };
+  });
+
+  const signedUrls = await signCoverUrls(
+    resolved
+      .map((row) => row.cover_image_url)
+      .filter((url): url is string => !!url)
+  );
 
   return resolved.map((row) => {
     const signedUrl = row.cover_image_url ? signedUrls.get(row.cover_image_url) : undefined;
-    const isStoryboard = row.cover_is_storyboard || remoteFlags.get(row.id) === true;
+    return signedUrl ? { ...row, cover_image_url: signedUrl } : row;
+  });
+}
 
-    if (!signedUrl && isStoryboard === row.cover_is_storyboard) return row;
+/**
+ * Opening beat image taken from the legacy snapshot already on the row
+ * (`beats->0`), so storylines carrying one cost no extra query.
+ *
+ * No storyboard flag comes back with it: beat artwork is always a 2×2 grid, and
+ * consumers crop to a single panel unconditionally rather than trusting a flag
+ * that is only ever written when true (see `is_storyboard` in persistence).
+ */
+function getSnapshotOpeningImageUrl(row: StorylineGalleryRow): string | null {
+  const beat = coerceLegacyBeat(row.first_beat);
+  return (beat?.imageUrl ?? beat?.image_url)?.trim() || null;
+}
 
-    return {
-      ...row,
-      cover_image_url: signedUrl ?? row.cover_image_url,
-      cover_is_storyboard: isStoryboard,
-    };
+/**
+ * Opening beat images from the normalized tables (`storyline_beats` position 0
+ * → `beats`), for storylines whose snapshot has none. Returns only the
+ * storylines it could resolve.
+ */
+async function fetchNormalizedOpeningImageUrls(
+  storylineIds: string[]
+): Promise<Map<string, string>> {
+  const panels = new Map<string, string>();
+  if (storylineIds.length === 0) return panels;
+
+  try {
+    const admin = createAdminClient();
+
+    const { data: openingRows, error: openingError } = await admin
+      .from('storyline_beats')
+      .select('storyline_id, beat_id')
+      .in('storyline_id', storylineIds)
+      .eq('position', 0);
+
+    if (openingError || !openingRows) {
+      console.error('Failed to fetch storyline opening beats:', openingError?.message);
+      return panels;
+    }
+
+    const beatIdByStorylineId = new Map<string, string>();
+    for (const row of openingRows as Array<{ storyline_id: string; beat_id: string }>) {
+      if (row.beat_id) beatIdByStorylineId.set(row.storyline_id, row.beat_id);
+    }
+    if (beatIdByStorylineId.size === 0) return panels;
+
+    const { data: beatRows, error: beatError } = await admin
+      .from('beats')
+      .select('id, image_url')
+      .in('id', Array.from(new Set(beatIdByStorylineId.values())));
+
+    if (beatError || !beatRows) {
+      console.error('Failed to fetch storyline opening beat images:', beatError?.message);
+      return panels;
+    }
+
+    const beatById = new Map((beatRows as OpeningBeatRow[]).map((beat) => [beat.id, beat]));
+
+    for (const [storylineId, beatId] of beatIdByStorylineId) {
+      const imageUrl = beatById.get(beatId)?.image_url?.trim();
+      if (imageUrl) panels.set(storylineId, imageUrl);
+    }
+  } catch (error) {
+    console.error('Failed to resolve storyline opening images:', error);
+  }
+
+  return panels;
+}
+
+/**
+ * Attach each item's opening beat image, signing its URL the same way covers
+ * are. Two surfaces need it: the billboard, which shows it as the backdrop, and
+ * cards whose cover is a poster, which hold the poster at rest and cycle this
+ * grid's panels on hover.
+ *
+ * Most rows carry the image in the snapshot already selected with the listing,
+ * so they cost nothing; the rest fall through to one batched beat lookup. A
+ * published beat's image never changes, so both that lookup and the signature
+ * are cached per storyline and a warm feed makes no queries at all.
+ */
+async function withOpeningPanels(
+  items: GalleryItem[],
+  rowsById: Map<string, StorylineGalleryRow>
+): Promise<GalleryItem[]> {
+  if (items.length === 0) return items;
+
+  const byCacheKey = await cachedMany<string>(
+    items.map((item) => `storyline-opening-panel:${item.id}`),
+    COVER_FLAG_TTL_MS,
+    async (missingKeys) => {
+      const missingIds = missingKeys.map((key) => key.split(':').slice(1).join(':'));
+      const filled = new Map<string, string>();
+      const unresolved: string[] = [];
+
+      for (const id of missingIds) {
+        const row = rowsById.get(id);
+        const snapshotUrl = row ? getSnapshotOpeningImageUrl(row) : null;
+        if (snapshotUrl) {
+          filled.set(`storyline-opening-panel:${id}`, snapshotUrl);
+        } else {
+          unresolved.push(id);
+        }
+      }
+
+      for (const [id, imageUrl] of await fetchNormalizedOpeningImageUrls(unresolved)) {
+        filled.set(`storyline-opening-panel:${id}`, imageUrl);
+      }
+
+      return filled;
+    }
+  );
+
+  const signedUrls = await signCoverUrls(Array.from(byCacheKey.values()));
+
+  return items.map((item) => {
+    const imageUrl = byCacheKey.get(`storyline-opening-panel:${item.id}`);
+    if (!imageUrl) return item;
+
+    return { ...item, openingImageUrl: signedUrls.get(imageUrl) ?? imageUrl };
   });
 }
 
@@ -1024,12 +938,19 @@ export async function getGalleryRails(
     fetchStorylineProgress(supabase, dedupedRows.map((row) => row.id)),
   ]);
 
-  const itemsById = new Map<string, GalleryItem>(
+  const rowsById = new Map<string, StorylineGalleryRow>(
+    resolvedRows.map((row) => [row.id, row])
+  );
+  const itemsWithPanels = await withOpeningPanels(
     resolvedRows.map((row) => {
       const item = mapStorylineRow(row);
       const progress = progressById.get(row.id);
-      return [row.id, progress ? { ...item, progress } : item];
-    })
+      return progress ? { ...item, progress } : item;
+    }),
+    rowsById
+  );
+  const itemsById = new Map<string, GalleryItem>(
+    itemsWithPanels.map((item) => [item.id, item])
   );
 
   const toItems = (rows: StorylineGalleryRow[]): GalleryItem[] =>
@@ -1043,7 +964,9 @@ export async function getGalleryRails(
   // covers are eligible too — the hero crops them to a single panel — so the
   // billboard never falls back to a bare heading just because a batch of
   // stories was generated in storyboard mode. The lead slot still rotates
-  // daily so the page is stable across reloads and cacheable.
+  // daily so the page is stable across reloads and cacheable. A cover is still
+  // what makes a storyline eligible, since it is the backdrop fallback for
+  // storylines whose opening beat has no image of its own.
   const coverItems = recentItems.filter((item) => !!item.coverImageUrl);
   const cleanCoverItems = coverItems.filter((item) => !item.coverIsStoryboard);
   const featuredPool = cleanCoverItems.length >= 2 ? cleanCoverItems : coverItems;

@@ -58,7 +58,9 @@
 /* Slow push-in on the active hero billboard backdrop. */
 .hero-kenburns {
   animation: hero-kenburns 14s ease-out forwards;
-  transform-origin: 50% 30%;
+  /* Centred origin so the push-in keeps the backdrop vertically centred; an
+     off-centre origin quietly drifts the framing toward one edge as it zooms. */
+  transform-origin: 50% 50%;
   will-change: transform;
 }
 
