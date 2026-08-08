@@ -5,7 +5,15 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
-import type { GalleryStoryline, GalleryItem, GalleryFilters, GalleryLane, GalleryPage, GenreSection } from '@/lib/types/database';
+import type {
+  GalleryStoryline,
+  GalleryItem,
+  GalleryFilters,
+  GalleryLane,
+  GalleryPage,
+  GalleryRail,
+  GalleryRailsResponse,
+} from '@/lib/types/database';
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 
@@ -537,78 +545,225 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
   });
 }
 
+const RAIL_RECENT_POOL = 48;
+const RAIL_ITEM_LIMIT = 12;
+const GENRE_RAIL_ITEM_LIMIT = 10;
+const GENRE_RAIL_MIN_ITEMS = 3;
+
 /**
- * Fetch top storylines grouped by genre for the genre showcase section.
+ * Rotate the hero once a day rather than per request, so the billboard is
+ * stable across reloads and safe to cache later.
  */
-export async function getTopByGenre(): Promise<GenreSection[]> {
+function dayOfYearUtc(now: Date): number {
+  const startOfYear = Date.UTC(now.getUTCFullYear(), 0, 1);
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.floor((today - startOfYear) / 86_400_000);
+}
+
+function titleCaseGenre(genre: string): string {
+  return genre.charAt(0).toUpperCase() + genre.slice(1);
+}
+
+/**
+ * Build the cinematic discovery surface: a hero billboard plus the rails above
+ * the "Browse All" grid. Rows are fetched in parallel and then run through a
+ * single cover-resolution pass over the deduped set, so a storyline appearing
+ * in several rails is only signed once.
+ */
+export async function getGalleryRails(): Promise<GalleryRailsResponse> {
   const supabase = await createClient();
+  const gateActive = await moderationGateActive();
+  const moderationStatuses = ['none', 'approved'];
 
-  // Fetch public storylines joined with their parent story for genre
-  let genreQuery = supabase
-    .from('storylines')
-    .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
-    .eq('is_public', true)
-    .eq('is_vertical_story', false)
-    .neq('aspect_ratio', '9:16');
-  if (await moderationGateActive()) {
-    genreQuery = genreQuery.in('moderation_status', ['none', 'approved']);
+  const recentQuery = (() => {
+    const query = supabase
+      .from('storylines')
+      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
+      .eq('is_public', true)
+      .eq('is_vertical_story', false)
+      .neq('aspect_ratio', '9:16')
+      .order('created_at', { ascending: false })
+      .limit(RAIL_RECENT_POOL);
+    return gateActive ? query.in('moderation_status', moderationStatuses) : query;
+  })();
+
+  const mostLovedQuery = (() => {
+    const query = supabase
+      .from('storylines')
+      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
+      .eq('is_public', true)
+      .eq('is_vertical_story', false)
+      .neq('aspect_ratio', '9:16')
+      .gt('like_count', 0)
+      .order('like_count', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(RAIL_ITEM_LIMIT);
+    return gateActive ? query.in('moderation_status', moderationStatuses) : query;
+  })();
+
+  const verticalQuery = (() => {
+    const query = supabase
+      .from('storylines')
+      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
+      .eq('is_public', true)
+      .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
+      .order('created_at', { ascending: false })
+      .limit(RAIL_ITEM_LIMIT);
+    return gateActive ? query.in('moderation_status', moderationStatuses) : query;
+  })();
+
+  const [recentResult, mostLovedResult, verticalResult, savedRows] = await Promise.all([
+    recentQuery,
+    mostLovedQuery,
+    verticalQuery,
+    fetchSavedStorylineRows(supabase),
+  ]);
+
+  if (recentResult.error) {
+    throw new Error(`Failed to fetch gallery rails: ${recentResult.error.message}`);
   }
-  const { data: rows, error } = await genreQuery
-    .order('created_at', { ascending: false })
-    .limit(100);
 
-  if (error || !rows) {
-    console.error('Failed to fetch top by genre:', error?.message);
-    return [];
+  const recentRows = (recentResult.data || []) as StorylineGalleryRow[];
+  const mostLovedRows = (mostLovedResult.error ? [] : mostLovedResult.data || []) as StorylineGalleryRow[];
+  const verticalRows = (verticalResult.error ? [] : verticalResult.data || []) as StorylineGalleryRow[];
+
+  if (mostLovedResult.error) {
+    console.error('Failed to fetch most-loved rail:', mostLovedResult.error.message);
+  }
+  if (verticalResult.error) {
+    console.error('Failed to fetch vertical rail:', verticalResult.error.message);
   }
 
-  const resolvedRows = await resolveStorylineCovers((rows || []) as StorylineGalleryRow[]);
+  // One cover-resolution pass across every rail's rows.
+  const dedupedRows: StorylineGalleryRow[] = [];
+  const seenIds = new Set<string>();
+  for (const row of [...recentRows, ...mostLovedRows, ...verticalRows, ...savedRows]) {
+    if (!row?.id || seenIds.has(row.id)) continue;
+    seenIds.add(row.id);
+    dedupedRows.push(row);
+  }
 
-  // Group by genre, pick top 4 per genre
-  const genreMap = new Map<string, GalleryItem[]>();
+  const resolvedRows = await resolveStorylineCovers(dedupedRows);
+  const itemsById = new Map<string, GalleryItem>(
+    resolvedRows.map((row) => [row.id, mapStorylineRow(row)])
+  );
 
-  for (const row of resolvedRows) {
-    const genre = row.stories?.genre || 'adventure';
-    const genreKey = genre.toLowerCase();
+  const toItems = (rows: StorylineGalleryRow[]): GalleryItem[] =>
+    rows
+      .map((row) => itemsById.get(row.id))
+      .filter((item): item is GalleryItem => !!item);
 
-    if (!genreMap.has(genreKey)) {
-      genreMap.set(genreKey, []);
-    }
+  const recentItems = toItems(recentRows);
 
-    const items = genreMap.get(genreKey)!;
-    if (items.length >= 4) continue;
+  // A storyboard grid makes a poor billboard, and a hero without artwork is
+  // worse than no hero at all — so only clean covers are eligible.
+  const heroCandidates = recentItems.filter(
+    (item) => !!item.coverImageUrl && !item.coverIsStoryboard
+  );
+  const hero = heroCandidates.length > 0
+    ? heroCandidates[dayOfYearUtc(new Date()) % heroCandidates.length]
+    : null;
 
-    const aspectRatio = resolveStoryAspectRatio(row, row.stories?.story_config);
-    items.push({
-      id: row.id,
-      type: 'storyline',
-      title: row.title,
-      coverImageUrl: row.cover_image_url,
-      coverIsStoryboard: row.cover_is_storyboard,
-      isVerticalStory: resolveIsVerticalStory(row, row.stories?.story_config),
-      aspectRatio,
-      authorName: row.author_name,
-      storyId: row.story_id ?? row.id,
-      beatCount: row.beat_count,
-      genre: genreKey,
-      ageGroup: readStoryConfigString(row.stories?.story_config, 'ageGroup'),
-      settingCountry: readStoryConfigString(row.stories?.story_config, 'settingCountry'),
-      likeCount: row.like_count ?? 0,
-      viewCount: row.view_count ?? 0,
-      createdAt: row.created_at,
+  const railItems = hero ? recentItems.filter((item) => item.id !== hero.id) : recentItems;
+  const rails: GalleryRail[] = [];
+
+  const savedItems = toItems(savedRows);
+  if (savedItems.length > 0) {
+    rails.push({ key: 'my_list', title: 'My List', layout: 'wide', items: savedItems });
+  }
+
+  if (railItems.length > 0) {
+    rails.push({
+      key: 'new',
+      title: 'New on Kissago',
+      layout: 'wide',
+      items: railItems.slice(0, RAIL_ITEM_LIMIT),
     });
   }
 
-  // Sort genres by item count desc, then alphabetically
-  const sections: GenreSection[] = Array.from(genreMap.entries())
-    .filter(([, items]) => items.length > 0)
-    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-    .map(([genre, items]) => ({
-      genre: genre.charAt(0).toUpperCase() + genre.slice(1),
-      items,
-    }));
+  const mostLovedItems = toItems(mostLovedRows);
+  if (mostLovedItems.length >= GENRE_RAIL_MIN_ITEMS) {
+    rails.push({ key: 'most_loved', title: 'Most Loved', layout: 'wide', items: mostLovedItems });
+  }
 
-  return sections;
+  // Genre rails are only meaningful once the catalogue actually spans more than
+  // one genre; with a single genre they would just restate "New on Kissago".
+  const genreGroups = new Map<string, GalleryItem[]>();
+  for (const item of railItems) {
+    const genreKey = (item.genre || '').toLowerCase();
+    if (!genreKey) continue;
+    const group = genreGroups.get(genreKey) ?? [];
+    if (group.length >= GENRE_RAIL_ITEM_LIMIT) continue;
+    group.push(item);
+    genreGroups.set(genreKey, group);
+  }
+
+  const qualifyingGenres = Array.from(genreGroups.entries())
+    .filter(([, items]) => items.length >= GENRE_RAIL_MIN_ITEMS)
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+
+  if (qualifyingGenres.length >= 2) {
+    for (const [genre, items] of qualifyingGenres) {
+      rails.push({
+        key: `genre:${genre}`,
+        title: titleCaseGenre(genre),
+        layout: 'wide',
+        items,
+      });
+    }
+  }
+
+  const verticalItems = toItems(verticalRows);
+  if (verticalItems.length > 0) {
+    rails.push({
+      key: 'vertical',
+      title: 'Vertical Stories',
+      layout: 'portrait',
+      items: verticalItems,
+    });
+  }
+
+  return { hero, rails };
+}
+
+/**
+ * Storylines the signed-in viewer saved, newest save first. Returns an empty
+ * list (never throws) for signed-out visitors so the rails still render.
+ */
+async function fetchSavedStorylineRows(
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<StorylineGalleryRow[]> {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+
+    const { data: savedRows, error: savedError } = await supabase
+      .from('saved_storylines')
+      .select('storyline_id, saved_at')
+      .eq('user_id', user.id)
+      .order('saved_at', { ascending: false })
+      .limit(RAIL_ITEM_LIMIT);
+
+    if (savedError || !savedRows?.length) return [];
+
+    const orderedIds = (savedRows as { storyline_id: string }[]).map((row) => row.storyline_id);
+    const { data, error } = await supabase
+      .from('storylines')
+      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
+      .in('id', orderedIds);
+
+    if (error || !data) return [];
+
+    const rowsById = new Map(
+      (data as unknown as StorylineGalleryRow[]).map((row) => [row.id, row])
+    );
+    return orderedIds
+      .map((id) => rowsById.get(id))
+      .filter((row): row is StorylineGalleryRow => !!row);
+  } catch (error) {
+    console.error('Failed to fetch saved storyline rail:', error);
+    return [];
+  }
 }
 
 export async function getSavedStorylineIds(): Promise<string[]> {

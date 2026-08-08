@@ -7,39 +7,19 @@ import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import ManagedFooter from '@/components/layout/ManagedFooter';
-import GenreShowcase, { GenreShowcaseSkeleton } from '@/components/gallery/GenreShowcase';
 import GalleryFiltersBar from '@/components/gallery/GalleryFilters';
-import GalleryItemCard from '@/components/gallery/GalleryItemCard';
-import { getTopByGenre, getGalleryItems, getSavedStorylineIds } from '@/app/actions/gallery';
+import GalleryHero from '@/components/gallery/GalleryHero';
+import GalleryRail from '@/components/gallery/GalleryRail';
+import StorylineCard from '@/components/gallery/StorylineCard';
+import { GalleryEmptyState, GalleryErrorState } from '@/components/gallery/GalleryStates';
+import {
+  GalleryRailsSkeleton,
+  GridSkeleton,
+  HeroSkeleton,
+} from '@/components/gallery/GallerySkeletons';
+import { getGalleryRails, getGalleryItems, getSavedStorylineIds } from '@/app/actions/gallery';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
-import type { GalleryItem, GalleryFilters, GenreSection } from '@/lib/types/database';
-
-/** Fisher-Yates shuffle (returns a new array). */
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-/**
- * Build a Set of indices that should be "big" (2×2) in a bento grid.
- * Each group of 5 items fills 2 rows of 4 cols: 1 big (2×2) + 4 small (1×1).
- * The big item is randomly placed on the left (index 0) or right (index 2)
- * within each group, so the layout changes on every mount.
- */
-function generateBentoPattern(count: number): Set<number> {
-  const bigIndices = new Set<number>();
-  for (let g = 0; g * 5 < count; g++) {
-    const base = g * 5;
-    // Randomly pick left-aligned (offset 0) or right-aligned (offset 2)
-    const offset = Math.random() < 0.5 ? 0 : 2;
-    bigIndices.add(base + offset);
-  }
-  return bigIndices;
-}
+import type { GalleryItem, GalleryFilters, GalleryRailsResponse } from '@/lib/types/database';
 
 const DEFAULT_FILTERS: GalleryFilters = {
   search: '',
@@ -52,6 +32,16 @@ const DEFAULT_FILTERS: GalleryFilters = {
 
 const PAGE_SIZE = 12;
 const CACHE_TTL_MS = 5 * 60 * 1000;
+
+const GRID_CLASS = {
+  wide: 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
+  portrait: 'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6',
+} as const;
+
+const GRID_CARD_SIZES = {
+  wide: '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, 23vw',
+  portrait: '(max-width: 640px) 46vw, (max-width: 768px) 31vw, (max-width: 1280px) 23vw, 16vw',
+} as const;
 
 interface GalleryCacheEntry {
   items: GalleryItem[];
@@ -87,11 +77,12 @@ export default function GalleryPage() {
   const { user } = useAuth();
   const [showMyStories, setShowMyStories] = useState(false);
 
-  // Genre showcase state
-  const [genreSections, setGenreSections] = useState<GenreSection[]>([]);
-  const [genreLoading, setGenreLoading] = useState(true);
+  // Hero + rails
+  const [railsData, setRailsData] = useState<GalleryRailsResponse | null>(null);
+  const [railsLoading, setRailsLoading] = useState(true);
+  const [railsError, setRailsError] = useState(false);
 
-  // Grid state
+  // Browse All grid
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [filters, setFilters] = useState<GalleryFilters>(DEFAULT_FILTERS);
   const [hasMore, setHasMore] = useState(false);
@@ -99,6 +90,7 @@ export default function GalleryPage() {
   const [initialGridLoading, setInitialGridLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [gridError, setGridError] = useState(false);
   const [supportsInfiniteScroll, setSupportsInfiniteScroll] = useState(false);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
 
@@ -109,20 +101,22 @@ export default function GalleryPage() {
   const activeFilterKeyRef = useRef(getFilterKey(DEFAULT_FILTERS));
   const activeRequestTokenRef = useRef(0);
   const hasHydratedOnceRef = useRef(false);
-  const [bentoPattern, setBentoPattern] = useState<Set<number>>(new Set());
 
-  // Generate bento pattern client-side only to avoid hydration mismatch
-  useEffect(() => {
-    setBentoPattern(generateBentoPattern(50));
+  const loadRails = useCallback(() => {
+    setRailsLoading(true);
+    setRailsError(false);
+    getGalleryRails()
+      .then(setRailsData)
+      .catch((error) => {
+        console.error('Failed to fetch gallery rails:', error);
+        setRailsError(true);
+      })
+      .finally(() => setRailsLoading(false));
   }, []);
 
-  // Fetch genre showcase on mount
   useEffect(() => {
-    getTopByGenre()
-      .then(setGenreSections)
-      .catch(console.error)
-      .finally(() => setGenreLoading(false));
-  }, []);
+    loadRails();
+  }, [loadRails]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -179,9 +173,11 @@ export default function GalleryPage() {
     try {
       const result = await getGalleryItems(normalizedFilters, PAGE_SIZE, offset);
       const cachedEntry = cacheRef.current.get(filterKey);
+      // Server order (created_at desc) is preserved so appended pages line up
+      // with what is already on screen.
       const nextItems = append && cachedEntry
         ? [...cachedEntry.items, ...result.items]
-        : shuffle(result.items);
+        : result.items;
 
       const nextEntry: GalleryCacheEntry = {
         items: nextItems,
@@ -195,10 +191,14 @@ export default function GalleryPage() {
 
       if (activeFilterKeyRef.current === filterKey && activeRequestTokenRef.current === token) {
         applyCacheEntry(nextEntry);
+        setGridError(false);
         hasHydratedOnceRef.current = true;
       }
     } catch (err) {
       console.error('Failed to fetch gallery:', err);
+      if (activeFilterKeyRef.current === filterKey && activeRequestTokenRef.current === token) {
+        setGridError(true);
+      }
     } finally {
       inFlightRequestsRef.current.delete(requestKey);
 
@@ -213,7 +213,7 @@ export default function GalleryPage() {
     }
   }, [applyCacheEntry]);
 
-  const loadFilterResults = useCallback((nextFilters: GalleryFilters) => {
+  const loadFilterResults = useCallback((nextFilters: GalleryFilters, force = false) => {
     const normalizedFilters = normalizeFilters(nextFilters);
     const filterKey = getFilterKey(normalizedFilters);
     const cachedEntry = cacheRef.current.get(filterKey);
@@ -222,8 +222,9 @@ export default function GalleryPage() {
     activeFilterKeyRef.current = filterKey;
     activeRequestTokenRef.current = token;
     setIsLoadingMore(false);
+    setGridError(false);
 
-    if (cachedEntry && isCacheFresh(cachedEntry)) {
+    if (!force && cachedEntry && isCacheFresh(cachedEntry)) {
       applyCacheEntry(cachedEntry);
       setInitialGridLoading(false);
       setIsRefreshing(false);
@@ -261,7 +262,7 @@ export default function GalleryPage() {
 
   useEffect(() => {
     if (!supportsInfiniteScroll) return;
-    if (!hasMore || isRefreshing) return;
+    if (!hasMore || isRefreshing || gridError) return;
 
     const sentinel = sentinelRef.current;
     if (!sentinel) return;
@@ -277,12 +278,11 @@ export default function GalleryPage() {
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [handleLoadMore, hasMore, isRefreshing, supportsInfiniteScroll]);
+  }, [gridError, handleLoadMore, hasMore, isRefreshing, supportsInfiniteScroll]);
 
   const handleFiltersChange = useCallback((nextFilters: GalleryFilters) => {
     const normalizedFilters = normalizeFilters(nextFilters);
     if (getFilterKey(normalizedFilters) === getFilterKey(filters)) return;
-    setBentoPattern(generateBentoPattern(50));
     setFilters(normalizedFilters);
   }, [filters]);
 
@@ -318,20 +318,36 @@ export default function GalleryPage() {
     }
   };
 
-  const handleGenreClick = (genre: string) => {
-    handleFiltersChange({ ...filters, genre });
+  const scrollToGrid = useCallback(() => {
     gridRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  const handleGenreSeeAll = useCallback((genre: string) => {
+    handleFiltersChange({ ...filters, genre });
+    scrollToGrid();
+  }, [filters, handleFiltersChange, scrollToGrid]);
+
+  const handleVerticalSeeAll = useCallback(() => {
+    handleFiltersChange({ ...filters, type: 'vertical' });
+    scrollToGrid();
+  }, [filters, handleFiltersChange, scrollToGrid]);
+
+  const gridLayout = filters.type === 'vertical' ? 'portrait' : 'wide';
+  const gridClass = GRID_CLASS[gridLayout];
+  const loadingPlaceholderCount = gridLayout === 'portrait' ? 12 : PAGE_SIZE;
+  const loadingMorePlaceholderCount = gridLayout === 'portrait' ? 6 : 4;
+
+  const railSeeAll = (railKey: string) => {
+    if (railKey === 'vertical') return handleVerticalSeeAll;
+    if (railKey.startsWith('genre:')) {
+      const genre = railKey.slice('genre:'.length);
+      return () => handleGenreSeeAll(genre);
+    }
+    return undefined;
   };
 
-  const isVerticalStoriesView = filters.type === 'vertical';
-  const galleryGridClass = isVerticalStoriesView
-    ? 'grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6'
-    : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[200px]';
-  const loadingPlaceholderCount = isVerticalStoriesView ? 12 : PAGE_SIZE;
-  const loadingMorePlaceholderCount = isVerticalStoriesView ? 6 : 4;
-
   return (
-    <main className="relative min-h-screen bg-neutral-950 text-neutral-200 font-sans selection:bg-emerald-500/30">
+    <main className="relative min-h-screen bg-neutral-950 font-sans text-neutral-200 selection:bg-emerald-500/30">
       <div
         aria-hidden="true"
         className="pointer-events-none fixed inset-x-0 top-0 z-30 h-32 bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-40 md:h-48"
@@ -339,9 +355,8 @@ export default function GalleryPage() {
       {/* Kissago logo — fixed top-left */}
       <KissagoLogo />
 
-
       {/* User menu — fixed top-right */}
-      <div className="fixed top-4 right-4 z-40">
+      <div className="fixed right-4 top-4 z-40">
         <UserMenu onMyStories={() => setShowMyStories(true)} />
       </div>
 
@@ -350,45 +365,65 @@ export default function GalleryPage() {
         onClose={() => setShowMyStories(false)}
       />
 
-      {/* Page content */}
-      <div className="pt-[clamp(5.125rem,17vh,8.125rem)] pb-16 px-4 max-w-7xl mx-auto">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-          className="text-center mb-12"
-        >
-          <h1 className="text-3xl md:text-4xl font-serif text-neutral-100 mb-3">
-            Discover Stories
-          </h1>
-          <p className="text-sm text-neutral-500 max-w-lg mx-auto">
-            Experience published storylines created by people like us.
-          </p>
-        </motion.div>
+      {/* Hero + rails run full-bleed; only the grid is width-constrained. */}
+      <div className="pb-16">
+        {railsLoading ? (
+          <HeroSkeleton />
+        ) : railsData?.hero ? (
+          <GalleryHero
+            item={railsData.hero}
+            isSaved={savedIds.has(railsData.hero.id)}
+            isLoggedIn={!!user}
+            onToggleSave={handleToggleSave}
+          />
+        ) : (
+          <header className="px-4 pb-8 pt-[clamp(5.125rem,17vh,8.125rem)] text-center lg:px-8">
+            <h1 className="mb-3 font-serif text-3xl text-neutral-100 md:text-4xl">
+              Discover Stories
+            </h1>
+            <p className="mx-auto max-w-lg text-sm text-neutral-500">
+              Experience published storylines created by people like us.
+            </p>
+          </header>
+        )}
 
-        {/* Genre Showcase */}
-        <section className="mb-16">
-          {genreLoading ? (
-            <GenreShowcaseSkeleton />
+        <section className="mt-10 space-y-10">
+          {railsLoading ? (
+            <GalleryRailsSkeleton />
+          ) : railsError ? (
+            <div className="px-4 lg:px-8">
+              <GalleryErrorState
+                title="Couldn't load the highlights"
+                message="The featured rows are unavailable right now. Browse All below still works."
+                onRetry={loadRails}
+              />
+            </div>
           ) : (
-            <GenreShowcase
-              sections={genreSections}
-              savedIds={savedIds}
-              isLoggedIn={!!user}
-              onToggleSave={handleToggleSave}
-              onGenreClick={handleGenreClick}
-            />
+            railsData?.rails.map((rail) => (
+              <motion.div
+                key={rail.key}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+              >
+                <GalleryRail
+                  rail={rail}
+                  savedIds={savedIds}
+                  isLoggedIn={!!user}
+                  onToggleSave={handleToggleSave}
+                  onSeeAll={railSeeAll(rail.key)}
+                />
+              </motion.div>
+            ))
           )}
         </section>
 
-        {/* Browse All section */}
-        <div ref={gridRef} className="scroll-mt-20">
-          <h2 className="text-xl md:text-2xl font-serif text-neutral-200 mb-6">
+        {/* Browse All */}
+        <div ref={gridRef} className="mx-auto mt-16 max-w-7xl scroll-mt-20 px-4 lg:px-8">
+          <h2 className="mb-6 font-serif text-xl text-neutral-200 md:text-2xl">
             Browse All
           </h2>
 
-          {/* Filters */}
           <div className="mb-8">
             <GalleryFiltersBar
               filters={filters}
@@ -397,64 +432,52 @@ export default function GalleryPage() {
           </div>
 
           <div className="mb-4 flex items-center justify-between gap-3 text-xs text-neutral-500">
-            <span>{total > 0 ? `${total} stories` : 'No stories found'}</span>
+            <span>{total > 0 ? `${total} stories` : ''}</span>
             {isRefreshing && (
               <span className="text-emerald-400/80">Updating results...</span>
             )}
           </div>
 
-          {/* Grid */}
           {initialGridLoading && items.length === 0 ? (
-            <div className={galleryGridClass}>
-              {[...Array(loadingPlaceholderCount)].map((_, i) => (
-                <div
-                  key={i}
-                  className={`rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse ${
-                    isVerticalStoriesView ? 'aspect-[9/16]' : bentoPattern.has(i) ? 'sm:col-span-2 sm:row-span-2' : ''
-                  }`}
-                />
-              ))}
-            </div>
+            <GridSkeleton count={loadingPlaceholderCount} layout={gridLayout} className={gridClass} />
+          ) : gridError && items.length === 0 ? (
+            <GalleryErrorState onRetry={() => loadFilterResults(filters, true)} />
           ) : items.length === 0 ? (
-            <div className="text-center py-20">
-              <p className="text-neutral-500 text-sm">No stories found matching your filters.</p>
-            </div>
+            <GalleryEmptyState onClearFilters={() => setFilters(DEFAULT_FILTERS)} />
           ) : (
             <>
-              <div className={galleryGridClass}>
-                {items.map((item, index) => {
-                  const isBig = !isVerticalStoriesView && bentoPattern.has(index);
-                  return (
-                    <motion.div
-                      key={`${item.type}-${item.id}`}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.4, delay: (index % PAGE_SIZE) * 0.05 }}
-                      className={isVerticalStoriesView ? 'aspect-[9/16]' : isBig ? 'sm:col-span-2 sm:row-span-2' : ''}
-                    >
-                      <GalleryItemCard
-                        item={item}
-                        isSaved={savedIds.has(item.id)}
-                        isLoggedIn={!!user}
-                        isWide={isBig}
-                        onToggleSave={handleToggleSave}
-                      />
-                    </motion.div>
-                  );
-                })}
+              <div className={gridClass}>
+                {items.map((item, index) => (
+                  <motion.div
+                    key={item.id}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.4, delay: (index % PAGE_SIZE) * 0.04 }}
+                  >
+                    <StorylineCard
+                      item={item}
+                      layout={gridLayout}
+                      sizes={GRID_CARD_SIZES[gridLayout]}
+                      isSaved={savedIds.has(item.id)}
+                      isLoggedIn={!!user}
+                      onToggleSave={handleToggleSave}
+                    />
+                  </motion.div>
+                ))}
               </div>
 
               {isLoadingMore && (
-                <div className={`${galleryGridClass} mt-4`}>
-                  {[...Array(loadingMorePlaceholderCount)].map((_, index) => (
-                    <div
-                      key={`loading-more-${index}`}
-                      className={`rounded-2xl bg-neutral-900/50 border border-white/5 animate-pulse ${
-                        isVerticalStoriesView ? 'aspect-[9/16]' : ''
-                      }`}
-                    />
-                  ))}
-                </div>
+                <GridSkeleton
+                  count={loadingMorePlaceholderCount}
+                  layout={gridLayout}
+                  className={`${gridClass} mt-4`}
+                />
+              )}
+
+              {gridError && (
+                <p className="mt-6 text-center text-xs text-amber-400/80">
+                  Couldn&apos;t load more stories. Try again in a moment.
+                </p>
               )}
 
               {hasMore && !isRefreshing && (
@@ -463,7 +486,7 @@ export default function GalleryPage() {
                   <button
                     onClick={handleLoadMore}
                     disabled={isLoadingMore}
-                    className="mt-10 mx-auto block px-8 py-3 rounded-2xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all duration-200 text-sm font-medium disabled:opacity-50"
+                    className="mx-auto mt-10 block rounded-2xl border border-white/10 bg-white/5 px-8 py-3 text-sm font-medium text-neutral-300 transition-all duration-200 hover:border-white/20 hover:bg-white/10 disabled:opacity-50"
                   >
                     {isLoadingMore ? 'Loading...' : `Load More (${items.length} of ${total})`}
                   </button>

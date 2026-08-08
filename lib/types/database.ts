@@ -502,9 +502,19 @@ export interface GalleryPage {
   hasMore: boolean;
 }
 
-export interface GenreSection {
-  genre: string;
+/** Card shape a rail renders: 16:9 landscape or 9:16 portrait. */
+export type GalleryRailLayout = 'wide' | 'portrait';
+
+export interface GalleryRail {
+  key: string;
+  title: string;
+  layout: GalleryRailLayout;
   items: GalleryItem[];
+}
+
+export interface GalleryRailsResponse {
+  hero: GalleryItem | null;
+  rails: GalleryRail[];
 }
 
 export interface DbPricingPlan {
