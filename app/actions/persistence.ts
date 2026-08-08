@@ -36,6 +36,7 @@ import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { recordCharacterNoveltyUsageAction } from '@/app/actions/character-novelty';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import {
@@ -632,7 +633,13 @@ function nodeToBeatRow(
     row.active_narration_preview_id = normalizedBeat.activeNarrationPreviewId;
   }
 
-  if (normalizedBeat.isStoryboard) {
+  // `isStoryboardBeat` rather than the raw field: every read path infers a
+  // storyboard from a plan or a full set of panel captions too, and writing
+  // only the raw flag left grids persisted as `is_storyboard = false`. Gallery
+  // surfaces then rendered the whole 2×2 grid instead of one panel. Never
+  // written false — a beat that has been a storyboard once stays one, and the
+  // column already defaults to false.
+  if (isStoryboardBeat(normalizedBeat)) {
     row.is_storyboard = true;
   }
 
