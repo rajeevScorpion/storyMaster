@@ -38,6 +38,8 @@ const CARD_SIZES = '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, 31vw';
 interface KidsGalleryBrowserProps {
   initialRails: GalleryRailsResponse | null;
   initialGrid: GalleryPage | null;
+  /** Undefined only if the server could not resolve them; see useSavedStorylines. */
+  initialSavedIds?: string[];
 }
 
 /**
@@ -52,6 +54,7 @@ interface KidsGalleryBrowserProps {
 export default function KidsGalleryBrowser({
   initialRails,
   initialGrid,
+  initialSavedIds,
 }: KidsGalleryBrowserProps) {
   const { user } = useAuth();
   const prefersReducedMotion = useReducedMotion();
@@ -67,7 +70,7 @@ export default function KidsGalleryBrowser({
   const [gridLoading, setGridLoading] = useState(!initialGrid);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [gridError, setGridError] = useState(false);
-  const { savedIds, toggleSave } = useSavedStorylines(!!user);
+  const { savedIds, toggleSave } = useSavedStorylines(!!user, initialSavedIds);
 
   // Bumping a token re-runs the fetch effect; every state change then happens
   // in an async callback rather than synchronously during the effect. Starting
@@ -205,7 +208,7 @@ export default function KidsGalleryBrowser({
               />
             </div>
           ) : (
-            railsData?.rails.map((rail, railIndex) => (
+            railsData?.rails.map((rail) => (
               <motion.div key={rail.key} {...enterProps}>
                 <GalleryRail
                   rail={rail}
@@ -213,7 +216,6 @@ export default function KidsGalleryBrowser({
                   isLoggedIn={!!user}
                   hideEngagementCounts
                   onToggleSave={toggleSave}
-                  priority={railIndex === 0}
                 />
               </motion.div>
             ))

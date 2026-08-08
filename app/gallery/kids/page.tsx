@@ -1,5 +1,5 @@
 import KidsGalleryBrowser, { KIDS_FILTERS, PAGE_SIZE } from '@/components/gallery/KidsGalleryBrowser';
-import { getGalleryItems, getGalleryRails } from '@/app/actions/gallery';
+import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
 import type { GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
 export const dynamic = 'force-dynamic';
@@ -9,9 +9,10 @@ export const dynamic = 'force-dynamic';
  * enforced in the query layer — the audience scope is never a client decision.
  */
 export default async function KidsGalleryRoute() {
-  const [railsResult, gridResult] = await Promise.allSettled([
+  const [railsResult, gridResult, savedResult] = await Promise.allSettled([
     getGalleryRails('kids'),
     getGalleryItems(KIDS_FILTERS, PAGE_SIZE, 0, 'kids'),
+    getSavedStorylineIds(),
   ]);
 
   let initialRails: GalleryRailsResponse | null = null;
@@ -28,5 +29,11 @@ export default async function KidsGalleryRoute() {
     console.error('Failed to prerender kids grid:', gridResult.reason);
   }
 
-  return <KidsGalleryBrowser initialRails={initialRails} initialGrid={initialGrid} />;
+  return (
+    <KidsGalleryBrowser
+      initialRails={initialRails}
+      initialGrid={initialGrid}
+      initialSavedIds={savedResult.status === 'fulfilled' ? savedResult.value : undefined}
+    />
+  );
 }

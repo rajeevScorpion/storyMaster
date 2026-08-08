@@ -18,13 +18,29 @@ const TOUCH_MOVE_CANCEL_PX = 10;
 // pick a source from srcset — passing the card-slot size leaves it half a
 // resolution short and the result pixelates. Double the length values so the
 // optimizer fetches a source sized for the actual 2× render box.
-const SIZE_LENGTH_REGEX = /(\d*\.?\d+)(vw|vh|px|rem|em)/g;
+//
+// Only the length at the end of each entry is scaled. Scaling every number in
+// the string also moved the media-condition breakpoints, so
+// `(max-width: 768px) 100vw, 1024px` became `(max-width: 1628px) 212vw,
+// 2170px`: the wrong branch matched on mid-size screens, and 2170px overshot
+// the 2048 source bucket into 3840. Oversized sources starve the image
+// optimizer, which is what surfaced as "upstream image response timed out".
+const SIZES_ENTRY_LENGTH_REGEX = /(\d*\.?\d+)(vw|vh|px|rem|em)\s*$/;
 
-function scaleSizesForCrop(sizes: string): string {
+export function scaleSizesForCrop(sizes: string): string {
   const cropFactor = 2 * STORYBOARD_PANEL_OVERSCAN_SCALE;
-  return sizes.replace(SIZE_LENGTH_REGEX, (_match, num: string, unit: string) => {
-    return `${parseFloat(num) * cropFactor}${unit}`;
-  });
+
+  // Commas only ever separate entries in a `sizes` attribute — a media
+  // condition cannot contain one — so splitting on them is safe.
+  return sizes
+    .split(',')
+    .map((entry) =>
+      entry.trim().replace(SIZES_ENTRY_LENGTH_REGEX, (_match, num: string, unit: string) => {
+        const scaled = parseFloat(num) * cropFactor;
+        return `${Number(scaled.toFixed(2))}${unit}`;
+      })
+    )
+    .join(', ');
 }
 
 interface StoryboardThumbnailProps {

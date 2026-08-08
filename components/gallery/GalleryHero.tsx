@@ -11,6 +11,18 @@ import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
 import type { GalleryItem } from '@/lib/types/database';
 
 const ROTATE_INTERVAL_MS = 8000;
+/** Delay before the second slide is mounted; see `renderCount`. */
+const PRELOAD_NEXT_SLIDE_MS = 2500;
+
+/**
+ * Capped deliberately rather than a plain `100vw`.
+ *
+ * A storyboard cover is cropped to one quadrant, and StoryboardThumbnail scales
+ * `sizes` by ~2.12× to compensate, so `100vw` would ask the optimiser for a
+ * 3840px-wide source per slide and saturate it. 960px scales to ~2035px, which
+ * lands in the 2048 bucket — ample for a backdrop under two gradient scrims.
+ */
+const HERO_SIZES = '(max-width: 768px) 100vw, 960px';
 
 interface GalleryHeroProps {
   items: GalleryItem[];
@@ -35,11 +47,13 @@ export default function GalleryHero({
   const prefersReducedMotion = useReducedMotion();
   const [activeIndex, setActiveIndex] = useState(0);
   const [isPointerOver, setIsPointerOver] = useState(false);
-  // Backdrops are full-bleed, so mounting all five would put five 100vw images
-  // on the critical path. Only the current slide and the one after it are
-  // rendered until the rotation actually reaches them; slides already shown
-  // stay mounted so the crossfade has something to fade out.
-  const [renderCount, setRenderCount] = useState(() => Math.min(items.length, 2));
+  // Backdrops are full-bleed, so mounting every slide would put five large
+  // images on the critical path and starve the image optimiser. Only the first
+  // is mounted for the initial paint; the second follows shortly after so the
+  // first crossfade still has a decoded image, and the rest arrive as the
+  // rotation reaches them. Slides already shown stay mounted so a crossfade
+  // always has something to fade out of.
+  const [renderCount, setRenderCount] = useState(1);
 
   // A refreshed featured list may be shorter than the previous one.
   const safeIndex = items.length > 0 ? activeIndex % items.length : 0;
@@ -54,6 +68,17 @@ export default function GalleryHero({
     if (items.length === 0) return;
     showSlide((safeIndex + 1) % items.length);
   }, [items.length, safeIndex, showSlide]);
+
+  useEffect(() => {
+    if (items.length < 2) return;
+
+    // Off the critical path: the first slide has had time to load by now.
+    const id = window.setTimeout(
+      () => setRenderCount((count) => Math.max(count, 2)),
+      PRELOAD_NEXT_SLIDE_MS
+    );
+    return () => window.clearTimeout(id);
+  }, [items.length]);
 
   useEffect(() => {
     if (items.length < 2 || prefersReducedMotion || isPointerOver) return;
@@ -108,7 +133,7 @@ export default function GalleryHero({
                 <StoryboardThumbnail
                   src={item.coverImageUrl}
                   alt=""
-                  sizes="100vw"
+                  sizes={HERO_SIZES}
                   isPreviewing={false}
                   previewSessionId={0}
                   isStoryboard={item.coverIsStoryboard}

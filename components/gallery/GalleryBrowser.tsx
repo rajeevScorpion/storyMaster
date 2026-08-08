@@ -84,9 +84,15 @@ interface GalleryBrowserProps {
   /** Rendered on the server so the first paint carries real content. */
   initialRails: GalleryRailsResponse | null;
   initialGrid: GalleryPage | null;
+  /** Undefined only if the server could not resolve them; see useSavedStorylines. */
+  initialSavedIds?: string[];
 }
 
-export default function GalleryBrowser({ initialRails, initialGrid }: GalleryBrowserProps) {
+export default function GalleryBrowser({
+  initialRails,
+  initialGrid,
+  initialSavedIds,
+}: GalleryBrowserProps) {
   const { user } = useAuth();
   const prefersReducedMotion = useReducedMotion();
   const [showMyStories, setShowMyStories] = useState(false);
@@ -106,7 +112,7 @@ export default function GalleryBrowser({ initialRails, initialGrid }: GalleryBro
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [gridError, setGridError] = useState(false);
   const [supportsInfiniteScroll, setSupportsInfiniteScroll] = useState(false);
-  const { savedIds, toggleSave } = useSavedStorylines(!!user);
+  const { savedIds, toggleSave } = useSavedStorylines(!!user, initialSavedIds);
 
   const gridRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -394,7 +400,7 @@ export default function GalleryBrowser({ initialRails, initialGrid }: GalleryBro
               />
             </div>
           ) : (
-            railsData?.rails.map((rail, railIndex) => (
+            railsData?.rails.map((rail) => (
               <motion.div key={rail.key} {...enterProps(0)}>
                 <GalleryRail
                   rail={rail}
@@ -402,7 +408,6 @@ export default function GalleryBrowser({ initialRails, initialGrid }: GalleryBro
                   isLoggedIn={!!user}
                   onToggleSave={toggleSave}
                   onSeeAll={railSeeAll(rail.key)}
-                  priority={railIndex === 0}
                 />
               </motion.div>
             ))

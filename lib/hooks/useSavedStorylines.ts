@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getSavedStorylineIds } from '@/app/actions/gallery';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 
@@ -13,11 +13,15 @@ const EMPTY_IDS: ReadonlySet<string> = new Set<string>();
  * A signed-out viewer's list is derived as empty rather than cleared in an
  * effect, so signing out cannot leave a stale set on screen for a render.
  */
-export function useSavedStorylines(isSignedIn: boolean) {
-  const [fetchedIds, setFetchedIds] = useState<Set<string>>(new Set());
+export function useSavedStorylines(isSignedIn: boolean, initialIds?: string[]) {
+  const [fetchedIds, setFetchedIds] = useState<Set<string>>(() => new Set(initialIds ?? []));
+  // A server action re-renders the whole route's server components, so on a
+  // server-rendered page this one mount-time call would re-run the entire feed.
+  // When the server already supplied the list, never fetch it again.
+  const hasServerIds = useRef(initialIds !== undefined);
 
   useEffect(() => {
-    if (!isSignedIn) return;
+    if (!isSignedIn || hasServerIds.current) return;
 
     let cancelled = false;
     getSavedStorylineIds()

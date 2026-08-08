@@ -21,8 +21,6 @@ interface GalleryRailProps {
   onSeeAll?: () => void;
   seeAllLabel?: string;
   hideEngagementCounts?: boolean;
-  /** First rail on the page loads its leading artwork eagerly. */
-  priority?: boolean;
 }
 
 /**
@@ -38,7 +36,6 @@ export default function GalleryRail({
   onSeeAll,
   seeAllLabel = 'See all',
   hideEngagementCounts = false,
-  priority = false,
 }: GalleryRailProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -139,7 +136,7 @@ export default function GalleryRail({
           onScroll={updateScrollState}
           className="scrollbar-hide flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain] sm:gap-4 lg:scroll-px-8 lg:px-8"
         >
-          {rail.items.map((item, index) => (
+          {rail.items.map((item) => (
             <div
               key={item.id}
               className={`shrink-0 snap-start ${
@@ -155,7 +152,6 @@ export default function GalleryRail({
                 isSaved={savedIds.has(item.id)}
                 isLoggedIn={isLoggedIn}
                 hideEngagementCounts={hideEngagementCounts}
-                priority={priority && index < 3}
                 onToggleSave={onToggleSave}
               />
             </div>

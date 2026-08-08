@@ -1,5 +1,5 @@
 import GalleryBrowser, { DEFAULT_FILTERS, PAGE_SIZE } from '@/components/gallery/GalleryBrowser';
-import { getGalleryItems, getGalleryRails } from '@/app/actions/gallery';
+import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
 import type { GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
 // The feed depends on the viewer's session (My List) and on freshly published
@@ -15,11 +15,16 @@ export const dynamic = 'force-dynamic';
  * above-the-fold payload here collapses that into the initial HTML; the client
  * component still owns filters, paging, and saves, and refetches on its own
  * when either half fails.
+ *
+ * Saved ids are resolved here too. They are cheap, but fetching them from the
+ * client costs a server action, and a server action re-renders this whole route
+ * — so that one mount-time call would re-run the entire feed.
  */
 export default async function GalleryRoute() {
-  const [railsResult, gridResult] = await Promise.allSettled([
+  const [railsResult, gridResult, savedResult] = await Promise.allSettled([
     getGalleryRails(),
     getGalleryItems(DEFAULT_FILTERS, PAGE_SIZE, 0),
+    getSavedStorylineIds(),
   ]);
 
   let initialRails: GalleryRailsResponse | null = null;
@@ -36,5 +41,15 @@ export default async function GalleryRoute() {
     console.error('Failed to prerender gallery grid:', gridResult.reason);
   }
 
-  return <GalleryBrowser initialRails={initialRails} initialGrid={initialGrid} />;
+  // Undefined (not []) on failure, so the client falls back to fetching them
+  // rather than rendering an empty My List as though nothing were saved.
+  const initialSavedIds = savedResult.status === 'fulfilled' ? savedResult.value : undefined;
+
+  return (
+    <GalleryBrowser
+      initialRails={initialRails}
+      initialGrid={initialGrid}
+      initialSavedIds={initialSavedIds}
+    />
+  );
 }
