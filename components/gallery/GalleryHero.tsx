@@ -1,149 +1,231 @@
 'use client';
 
-import Image from 'next/image';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { BookOpen, Bookmark, BookmarkCheck, Eye, Heart, Play } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
+import { BookOpen, Bookmark, BookmarkCheck, Play } from 'lucide-react';
+import StoryboardThumbnail from '@/components/story/StoryboardThumbnail';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import { getStoryGenreLabel } from '@/lib/story/genres';
 import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
 import type { GalleryItem } from '@/lib/types/database';
 
+const ROTATE_INTERVAL_MS = 8000;
+
 interface GalleryHeroProps {
-  item: GalleryItem;
-  isSaved: boolean;
+  items: GalleryItem[];
+  savedIds: Set<string>;
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
 }
 
 /**
- * Cinematic billboard for one featured storyline. Only rendered when the feed
- * finds a storyline with clean (non-storyboard) artwork — a hero built on
- * missing or gridded imagery looks worse than no hero at all.
+ * Rotating billboard over the day's spotlight storylines. Backdrops crossfade
+ * on a timer (paused for reduced motion, hidden tabs, and while the pointer
+ * rests on the hero so the copy stays readable), and storyboard covers are
+ * cropped to a single panel by StoryboardThumbnail rather than showing the raw
+ * 2×2 grid.
  */
 export default function GalleryHero({
-  item,
-  isSaved,
+  items,
+  savedIds,
   isLoggedIn,
   onToggleSave,
 }: GalleryHeroProps) {
-  const genreLabel = getStoryGenreLabel(item.genre);
+  const prefersReducedMotion = useReducedMotion();
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [isPointerOver, setIsPointerOver] = useState(false);
+  // Backdrops are full-bleed, so mounting all five would put five 100vw images
+  // on the critical path. Only the current slide and the one after it are
+  // rendered until the rotation actually reaches them; slides already shown
+  // stay mounted so the crossfade has something to fade out.
+  const [renderCount, setRenderCount] = useState(() => Math.min(items.length, 2));
+
+  // A refreshed featured list may be shorter than the previous one.
+  const safeIndex = items.length > 0 ? activeIndex % items.length : 0;
+  const active = items[safeIndex];
+
+  const showSlide = useCallback((index: number) => {
+    setActiveIndex(index);
+    setRenderCount((count) => Math.max(count, Math.min(items.length, index + 2)));
+  }, [items.length]);
+
+  const advance = useCallback(() => {
+    if (items.length === 0) return;
+    showSlide((safeIndex + 1) % items.length);
+  }, [items.length, safeIndex, showSlide]);
+
+  useEffect(() => {
+    if (items.length < 2 || prefersReducedMotion || isPointerOver) return;
+
+    const id = window.setInterval(() => {
+      if (!document.hidden) advance();
+    }, ROTATE_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [advance, isPointerOver, items.length, prefersReducedMotion]);
+
+  if (!active) return null;
+
+  const genreLabel = getStoryGenreLabel(active.genre);
   // Only label a band the storyline actually declares — an unclassified story
   // must not read as "All Ages".
-  const audienceLabel = item.ageGroup ? getStoryAudienceProfile(item.ageGroup).label : null;
+  const audienceLabel = active.ageGroup ? getStoryAudienceProfile(active.ageGroup).label : null;
+  const isSaved = savedIds.has(active.id);
 
   const handleOpen = () => {
     writeOpenFlowNavMeta({
       kind: 'storyline',
-      title: item.title,
-      coverImageUrl: item.coverImageUrl,
-      coverIsStoryboard: item.coverIsStoryboard,
-      beatCount: item.beatCount,
+      title: active.title,
+      coverImageUrl: active.coverImageUrl,
+      coverIsStoryboard: active.coverIsStoryboard,
+      beatCount: active.beatCount,
     });
   };
 
   return (
-    <section className="relative h-[58dvh] min-h-[340px] max-h-[620px] w-full overflow-hidden">
-      {item.coverImageUrl && (
-        <Image
-          src={item.coverImageUrl}
-          alt=""
-          fill
-          priority
-          sizes="100vw"
-          referrerPolicy="no-referrer"
-          className="object-cover"
-        />
-      )}
+    <section
+      aria-label="Featured storylines"
+      onPointerEnter={(event) => {
+        if (event.pointerType === 'mouse') setIsPointerOver(true);
+      }}
+      onPointerLeave={() => setIsPointerOver(false)}
+      className="relative h-[62dvh] min-h-[420px] w-full max-h-[560px] overflow-hidden md:h-[72dvh] md:max-h-[720px]"
+    >
+      {/* Stacked backdrops crossfade via opacity; every slide stays mounted so
+          the next image is already decoded when its turn comes. */}
+      {items.slice(0, Math.max(renderCount, safeIndex + 1)).map((item, index) => {
+        const isActive = index === safeIndex;
+        return (
+          <div
+            key={item.id}
+            aria-hidden={!isActive}
+            className={`absolute inset-0 transition-opacity duration-1000 ease-out ${
+              isActive ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {item.coverImageUrl && (
+              <div className={`absolute inset-0 ${isActive && !prefersReducedMotion ? 'hero-kenburns' : ''}`}>
+                <StoryboardThumbnail
+                  src={item.coverImageUrl}
+                  alt=""
+                  sizes="100vw"
+                  isPreviewing={false}
+                  previewSessionId={0}
+                  isStoryboard={item.coverIsStoryboard}
+                  allowAutoDetect
+                  priority={index === 0}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Scrims: bottom fade into the page, left fade behind the copy. */}
-      <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/55 to-neutral-950/20" />
-      <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/85 via-neutral-950/35 to-transparent" />
+      <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/45 to-neutral-950/15" />
+      <div className="absolute inset-0 bg-gradient-to-r from-neutral-950/90 via-neutral-950/40 to-transparent" />
 
-      <div className="absolute inset-x-0 bottom-0 px-4 pb-10 lg:px-8 lg:pb-14">
-        <div className="max-w-2xl space-y-4">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
-            Featured storyline
-          </p>
-
-          <h1 className="font-serif text-3xl leading-tight text-neutral-50 md:text-5xl">
-            {item.title}
-          </h1>
-
-          {item.intro && (
-            <p className="line-clamp-2 max-w-xl text-sm text-neutral-300 md:text-base">
-              {item.intro}
+      <div className="absolute inset-x-0 bottom-0 px-4 pb-14 lg:px-8 lg:pb-20">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={active.id}
+            initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, transition: { duration: 0.2 } }}
+            transition={{ duration: 0.45, ease: 'easeOut' }}
+            className="max-w-2xl space-y-4"
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
+              Featured storyline
             </p>
-          )}
 
-          {(genreLabel || audienceLabel) && (
-            <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-serif text-3xl leading-tight text-neutral-50 drop-shadow-sm md:text-5xl">
+              {active.title}
+            </h1>
+
+            {active.intro && (
+              <p className="line-clamp-2 max-w-xl text-sm text-neutral-200 md:line-clamp-3 md:text-base">
+                {active.intro}
+              </p>
+            )}
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-neutral-300">
               {genreLabel && (
-                <span className="rounded-full border border-indigo-500/30 bg-indigo-500/15 px-2.5 py-1 text-[11px] font-medium text-indigo-200">
+                <span className="rounded-full border border-indigo-400/30 bg-indigo-500/15 px-2.5 py-1 text-[11px] font-medium text-indigo-200">
                   {genreLabel}
                 </span>
               )}
               {audienceLabel && (
-                <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-neutral-300">
+                <span className="rounded-full border border-white/10 bg-white/10 px-2.5 py-1 text-[11px] font-medium text-neutral-200 backdrop-blur-sm">
                   {audienceLabel}
                 </span>
               )}
+              {!!active.beatCount && (
+                <span className="flex items-center gap-1 text-neutral-300">
+                  <BookOpen className="h-3.5 w-3.5" />
+                  {active.beatCount} beats
+                </span>
+              )}
+              {active.authorName && <span className="text-neutral-400">by {active.authorName}</span>}
             </div>
-          )}
 
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-400">
-            {item.authorName && <span>by {item.authorName}</span>}
-            {!!item.beatCount && (
-              <span className="flex items-center gap-1">
-                <BookOpen className="h-3.5 w-3.5" />
-                {item.beatCount} beats
-              </span>
-            )}
-            {item.viewCount > 0 && (
-              <span className="flex items-center gap-1">
-                <Eye className="h-3.5 w-3.5" />
-                {item.viewCount}
-              </span>
-            )}
-            {item.likeCount > 0 && (
-              <span className="flex items-center gap-1">
-                <Heart className="h-3.5 w-3.5" />
-                {item.likeCount}
-              </span>
-            )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <Link
-              href={`/storyline/${item.id}`}
-              onClick={handleOpen}
-              className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-6 py-3 text-sm font-medium text-neutral-950 transition-colors hover:bg-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
-            >
-              <Play className="h-4 w-4 fill-current" />
-              Start reading
-            </Link>
-
-            {isLoggedIn && (
-              <button
-                type="button"
-                onClick={() => onToggleSave(item.id, isSaved)}
-                aria-pressed={isSaved}
-                className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm text-neutral-200 backdrop-blur-sm transition-colors hover:border-white/25 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+            <div className="flex flex-wrap items-center gap-3 pt-1.5">
+              <Link
+                href={`/storyline/${active.id}`}
+                onClick={handleOpen}
+                className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-6 py-3 text-sm font-semibold text-neutral-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 hover:shadow-emerald-400/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
               >
-                {isSaved ? (
-                  <>
-                    <BookmarkCheck className="h-4 w-4 text-emerald-400" />
-                    Saved
-                  </>
-                ) : (
-                  <>
-                    <Bookmark className="h-4 w-4" />
-                    My List
-                  </>
-                )}
+                <Play className="h-4 w-4 fill-current" />
+                Start reading
+              </Link>
+
+              {isLoggedIn && (
+                <button
+                  type="button"
+                  onClick={() => onToggleSave(active.id, isSaved)}
+                  aria-pressed={isSaved}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm text-neutral-200 backdrop-blur-sm transition-colors hover:border-white/25 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+                >
+                  {isSaved ? (
+                    <>
+                      <BookmarkCheck className="h-4 w-4 text-emerald-400" />
+                      Saved
+                    </>
+                  ) : (
+                    <>
+                      <Bookmark className="h-4 w-4" />
+                      My List
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </motion.div>
+        </AnimatePresence>
+
+        {items.length > 1 && (
+          <div className="mt-5 flex items-center gap-1" role="tablist" aria-label="Featured storylines">
+            {items.map((item, index) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={index === safeIndex}
+                aria-label={`Show featured storyline ${index + 1} of ${items.length}: ${item.title}`}
+                onClick={() => showSlide(index)}
+                className="group/dot flex h-8 items-center px-1 focus-visible:outline-none"
+              >
+                <span
+                  className={`h-1 rounded-full transition-all duration-300 group-focus-visible/dot:ring-2 group-focus-visible/dot:ring-emerald-400/70 ${
+                    index === safeIndex
+                      ? 'w-7 bg-emerald-400'
+                      : 'w-3 bg-white/25 group-hover/dot:bg-white/50'
+                  }`}
+                />
               </button>
-            )}
+            ))}
           </div>
-        </div>
+        )}
       </div>
     </section>
   );

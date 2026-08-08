@@ -8,8 +8,8 @@ import type { GalleryRail as GalleryRailData } from '@/lib/types/database';
 const SCROLL_EPSILON_PX = 4;
 
 const CARD_SIZES = {
-  wide: '(max-width: 640px) 280px, 320px',
-  portrait: '(max-width: 640px) 150px, 170px',
+  wide: '(max-width: 640px) 260px, (max-width: 1280px) 300px, 340px',
+  portrait: '(max-width: 640px) 150px, 180px',
 } as const;
 
 interface GalleryRailProps {
@@ -21,6 +21,8 @@ interface GalleryRailProps {
   onSeeAll?: () => void;
   seeAllLabel?: string;
   hideEngagementCounts?: boolean;
+  /** First rail on the page loads its leading artwork eagerly. */
+  priority?: boolean;
 }
 
 /**
@@ -36,6 +38,7 @@ export default function GalleryRail({
   onSeeAll,
   seeAllLabel = 'See all',
   hideEngagementCounts = false,
+  priority = false,
 }: GalleryRailProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -62,89 +65,102 @@ export default function GalleryRail({
   const scrollByPage = (direction: 'left' | 'right') => {
     const el = scrollRef.current;
     if (!el) return;
-    const amount = Math.max(el.clientWidth * 0.9, 240);
+    const amount = Math.max(el.clientWidth * 0.85, 240);
     el.scrollBy({ left: direction === 'left' ? -amount : amount, behavior: 'smooth' });
   };
 
   if (rail.items.length === 0) return null;
 
   const headingId = `rail-heading-${rail.key.replace(/[^a-z0-9]+/gi, '-')}`;
-  // Arrows are a pointer affordance only — touch users swipe the rail, and the
-  // edge fades below signal that there is more to scroll.
-  const arrowClass =
-    'pointer-fine-only absolute top-1/2 z-10 h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-neutral-900/90 text-neutral-300 opacity-0 transition-all hover:bg-neutral-800 hover:text-white focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 group-hover/rail:opacity-100';
+  // Tall edge paddles rather than small floating circles: they cover the card
+  // strip, so the click target matches where the eye already is. Pointer-only —
+  // touch users swipe, and the edge fades signal there is more to scroll.
+  const paddleClass =
+    'pointer-fine-only absolute bottom-2 top-0 z-20 w-12 items-center justify-center text-neutral-200 opacity-0 transition-opacity duration-200 hover:text-white focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400/70 group-hover/rail:opacity-100';
 
   return (
     <section className="group/rail relative" aria-labelledby={headingId}>
       <div className="mb-3 flex items-baseline justify-between gap-4 px-4 lg:px-8">
-        <h2 id={headingId} className="font-serif text-lg text-neutral-200 md:text-xl">
+        <h2
+          id={headingId}
+          className="font-serif text-xl text-neutral-100 md:text-[1.375rem]"
+        >
           {rail.title}
         </h2>
         {onSeeAll && (
           <button
             type="button"
             onClick={onSeeAll}
-            className="shrink-0 rounded-lg text-xs text-neutral-500 transition-colors hover:text-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+            className="shrink-0 rounded-lg text-xs font-medium text-neutral-500 transition-colors hover:text-emerald-400 focus-visible:text-emerald-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 md:opacity-0 md:group-hover/rail:opacity-100 md:group-focus-within/rail:opacity-100"
           >
-            {seeAllLabel}
+            {seeAllLabel} <span aria-hidden="true">→</span>
           </button>
         )}
       </div>
 
-      <button
-        type="button"
-        onClick={() => scrollByPage('left')}
-        aria-label={`Scroll ${rail.title} left`}
-        className={`${arrowClass} left-2 ${canScrollLeft ? '' : 'pointer-events-none invisible'}`}
-      >
-        <ChevronLeft className="h-5 w-5" />
-      </button>
-      <button
-        type="button"
-        onClick={() => scrollByPage('right')}
-        aria-label={`Scroll ${rail.title} right`}
-        className={`${arrowClass} right-2 ${canScrollRight ? '' : 'pointer-events-none invisible'}`}
-      >
-        <ChevronRight className="h-5 w-5" />
-      </button>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => scrollByPage('left')}
+          aria-label={`Scroll ${rail.title} left`}
+          className={`${paddleClass} left-0 bg-gradient-to-r from-neutral-950 via-neutral-950/80 to-transparent ${
+            canScrollLeft ? '' : 'pointer-events-none !opacity-0'
+          }`}
+        >
+          <ChevronLeft className="h-7 w-7" />
+        </button>
+        <button
+          type="button"
+          onClick={() => scrollByPage('right')}
+          aria-label={`Scroll ${rail.title} right`}
+          className={`${paddleClass} right-0 bg-gradient-to-l from-neutral-950 via-neutral-950/80 to-transparent ${
+            canScrollRight ? '' : 'pointer-events-none !opacity-0'
+          }`}
+        >
+          <ChevronRight className="h-7 w-7" />
+        </button>
 
-      {/* Edge fades double as the touch scroll affordance. */}
-      {canScrollLeft && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-0 z-[5] w-8 bg-gradient-to-r from-neutral-950 to-transparent"
-        />
-      )}
-      {canScrollRight && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-neutral-950 to-transparent"
-        />
-      )}
-
-      <div
-        ref={scrollRef}
-        onScroll={updateScrollState}
-        className="scrollbar-hide flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain] lg:scroll-px-8 lg:px-8"
-      >
-        {rail.items.map((item) => (
+        {/* Edge fades double as the touch scroll affordance. */}
+        {canScrollLeft && (
           <div
-            key={item.id}
-            className={`shrink-0 snap-start ${
-              rail.layout === 'portrait' ? 'w-[150px] sm:w-[170px]' : 'w-[280px] md:w-[320px]'
-            }`}
-          >
-            <StorylineCard
-              item={item}
-              layout={rail.layout}
-              sizes={CARD_SIZES[rail.layout]}
-              isSaved={savedIds.has(item.id)}
-              isLoggedIn={isLoggedIn}
-              hideEngagementCounts={hideEngagementCounts}
-              onToggleSave={onToggleSave}
-            />
-          </div>
-        ))}
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-0 z-10 w-10 bg-gradient-to-r from-neutral-950 to-transparent"
+          />
+        )}
+        {canScrollRight && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 right-0 z-10 w-10 bg-gradient-to-l from-neutral-950 to-transparent"
+          />
+        )}
+
+        <div
+          ref={scrollRef}
+          onScroll={updateScrollState}
+          className="scrollbar-hide flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain] sm:gap-4 lg:scroll-px-8 lg:px-8"
+        >
+          {rail.items.map((item, index) => (
+            <div
+              key={item.id}
+              className={`shrink-0 snap-start ${
+                rail.layout === 'portrait'
+                  ? 'w-[150px] sm:w-[180px]'
+                  : 'w-[260px] md:w-[300px] xl:w-[340px]'
+              }`}
+            >
+              <StorylineCard
+                item={item}
+                layout={rail.layout}
+                sizes={CARD_SIZES[rail.layout]}
+                isSaved={savedIds.has(item.id)}
+                isLoggedIn={isLoggedIn}
+                hideEngagementCounts={hideEngagementCounts}
+                priority={priority && index < 3}
+                onToggleSave={onToggleSave}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </section>
   );

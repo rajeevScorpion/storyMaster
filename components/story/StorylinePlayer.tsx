@@ -48,7 +48,7 @@ import { getStoryboardSettings } from '@/app/actions/admin';
 import { STORYBOARD_ADVANCE_MS } from '@/lib/constants/media';
 import { saveStorylineToProfile, unsaveStoryline } from '@/app/actions/persistence';
 import { refreshStorylineSignedUrls } from '@/app/actions/exploration';
-import { toggleLike, recordView } from '@/app/actions/engagement';
+import { toggleLike, recordView, recordStorylineProgress } from '@/app/actions/engagement';
 import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from './MyStoriesDrawer';
 import ChoiceTransition from './ChoiceTransition';
@@ -551,14 +551,28 @@ export default function StorylinePlayer({
   const persistPage = useCallback((pageIndex: number) => {
     if (!persistenceUserId) return;
     const beat = currentBeats[pageIndex];
+    const completed = pageIndex === currentBeats.length - 1 && Boolean(beat?.isEnding);
+
     void saveStorylineProgress({
       storylineId,
       storyId,
       userId: persistenceUserId,
       currentPageIndex: pageIndex,
-      completed: pageIndex === currentBeats.length - 1 && Boolean(beat?.isEnding),
+      completed,
     });
-  }, [currentBeats, persistenceUserId, storyId, storylineId]);
+
+    // Server copy for the gallery's Continue Reading rail and finished badge.
+    // Written on page turns only — the local save above also runs on every
+    // audio tick, which is far too often for a network round-trip.
+    if (isLoggedIn) {
+      void recordStorylineProgress({
+        storylineId,
+        beatIndex: pageIndex,
+        beatCount: currentBeats.length,
+        completed,
+      });
+    }
+  }, [currentBeats, isLoggedIn, persistenceUserId, storyId, storylineId]);
 
   const clearChoiceTransitionTimers = useCallback(() => {
     if (choiceHoldTimerRef.current) {

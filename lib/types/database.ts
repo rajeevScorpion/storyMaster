@@ -471,6 +471,19 @@ export interface GalleryItem {
   likeCount: number;
   viewCount: number;
   createdAt: string;
+  /**
+   * This viewer's reading position (migration 090). Null for signed-out
+   * visitors and for storylines they have not started.
+   */
+  progress: GalleryProgress | null;
+}
+
+/** Per-viewer reading state for one storyline. */
+export interface GalleryProgress {
+  /** Zero-based index of the beat the reader stopped on. */
+  beatIndex: number;
+  beatCount: number | null;
+  completed: boolean;
 }
 
 export interface DbStorylineLike {
@@ -515,7 +528,12 @@ export interface GalleryRail {
 }
 
 export interface GalleryRailsResponse {
-  hero: GalleryItem | null;
+  /**
+   * Billboard rotation: up to five spotlight storylines with artwork. The
+   * client crossfades through them; an empty list means no storyline has a
+   * usable cover yet and the page falls back to a plain heading.
+   */
+  featured: GalleryItem[];
   rails: GalleryRail[];
 }
 

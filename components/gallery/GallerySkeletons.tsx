@@ -2,7 +2,7 @@
 
 import type { GalleryRailLayout } from '@/lib/types/database';
 
-const SURFACE = 'rounded-2xl border border-white/5 bg-neutral-900/50 animate-pulse';
+const SURFACE = 'shimmer-surface rounded-2xl border border-white/5 bg-neutral-900/60';
 
 /**
  * Placeholders are sized from the same aspect ratios as the real cards so the
@@ -10,13 +10,13 @@ const SURFACE = 'rounded-2xl border border-white/5 bg-neutral-900/50 animate-pul
  */
 export function HeroSkeleton() {
   return (
-    <div className="relative h-[58dvh] min-h-[340px] max-h-[620px] w-full overflow-hidden bg-neutral-900/50">
-      <div className="absolute inset-0 animate-pulse bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent" />
-      <div className="absolute inset-x-0 bottom-0 space-y-4 px-4 pb-10 lg:px-8 lg:pb-14">
-        <div className="h-3 w-32 animate-pulse rounded bg-neutral-800" />
-        <div className="h-10 w-3/4 max-w-xl animate-pulse rounded bg-neutral-800" />
-        <div className="h-3 w-48 animate-pulse rounded bg-neutral-800" />
-        <div className="h-12 w-40 animate-pulse rounded-2xl bg-neutral-800" />
+    <div className="shimmer-surface relative h-[62dvh] min-h-[420px] max-h-[560px] w-full overflow-hidden bg-neutral-900/60 md:h-[72dvh] md:max-h-[720px]">
+      <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 space-y-4 px-4 pb-14 lg:px-8 lg:pb-20">
+        <div className="h-3 w-32 rounded bg-neutral-800" />
+        <div className="h-10 w-3/4 max-w-xl rounded bg-neutral-800" />
+        <div className="h-3 w-48 rounded bg-neutral-800" />
+        <div className="h-12 w-40 rounded-2xl bg-neutral-800" />
       </div>
     </div>
   );
@@ -31,7 +31,7 @@ export function RailSkeleton({ layout = 'wide' }: { layout?: GalleryRailLayout }
   return (
     <div>
       <div className="mb-3 px-4 lg:px-8">
-        <div className="h-6 w-40 animate-pulse rounded bg-neutral-800" />
+        <div className="shimmer-surface h-6 w-40 rounded bg-neutral-800" />
       </div>
       <div className="flex gap-4 overflow-hidden px-4 lg:px-8">
         {[0, 1, 2, 3, 4].map((index) => (

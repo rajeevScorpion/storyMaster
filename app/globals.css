@@ -33,6 +33,54 @@
   }
 }
 
+/* Loading placeholders: a light sweep across the surface reads as "working"
+   where a flat pulse reads as "broken". Static under reduced motion. */
+.shimmer-surface {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.05), transparent);
+  animation: shimmer-sweep 1.8s ease-in-out infinite;
+}
+
+@keyframes shimmer-sweep {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Slow push-in on the active hero billboard backdrop. */
+.hero-kenburns {
+  animation: hero-kenburns 14s ease-out forwards;
+  transform-origin: 50% 30%;
+  will-change: transform;
+}
+
+@keyframes hero-kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.07);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-surface::after {
+    animation: none;
+  }
+
+  .hero-kenburns {
+    animation: none;
+  }
+}
+
 /* Global dark thin scrollbar */
 * {
   scrollbar-width: thin;
