@@ -463,6 +463,8 @@ export interface GalleryItem {
   authorName: string | null;
   storyId: string;
   beatCount: number | null;
+  /** Stored catalogue intro, or a deterministic beat-1 fallback. */
+  intro: string | null;
   genre: string | null;
   ageGroup: string | null;
   settingCountry: string | null;

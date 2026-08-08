@@ -7,6 +7,8 @@ export default function BackfillPage() {
   const [coverResult, setCoverResult] = useState<string>('');
   const [beatStatus, setBeatStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
   const [beatResult, setBeatResult] = useState<string>('');
+  const [introStatus, setIntroStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [introResult, setIntroResult] = useState<string>('');
 
   const runCoverBackfill = async () => {
     setCoverStatus('running');
@@ -33,6 +35,20 @@ export default function BackfillPage() {
     } catch (err: any) {
       setBeatResult(err.message);
       setBeatStatus('error');
+    }
+  };
+
+  const runDiscoveryIntroBackfill = async () => {
+    setIntroStatus('running');
+    try {
+      const res = await fetch('/api/admin/backfill-discovery', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      setIntroResult(JSON.stringify(data, null, 2));
+      setIntroStatus('done');
+    } catch (err: any) {
+      setIntroResult(err.message);
+      setIntroStatus('error');
     }
   };
 
@@ -84,6 +100,29 @@ export default function BackfillPage() {
           {coverResult && (
             <pre className={`rounded-xl p-4 text-sm whitespace-pre-wrap ${coverStatus === 'error' ? 'bg-red-500/10 text-red-300' : 'bg-black/30 text-neutral-300'}`}>
               {coverResult}
+            </pre>
+          )}
+        </div>
+
+        <div className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-5">
+          <div>
+            <h2 className="text-lg font-medium text-neutral-100">Generate Gallery Introductions</h2>
+            <p className="mt-1 text-sm text-neutral-400">
+              Writes the short catalogue intro for up to 25 published storylines that have never been
+              processed. Each row costs one model call; run it repeatedly to work through the backlog.
+              Storylines without an intro still show a derived excerpt, so this is optional polish.
+            </p>
+          </div>
+          <button
+            onClick={runDiscoveryIntroBackfill}
+            disabled={introStatus === 'running'}
+            className="w-full rounded-xl border border-emerald-500/30 bg-emerald-500/20 px-4 py-3 text-emerald-300 transition-colors hover:bg-emerald-500/30 disabled:opacity-50"
+          >
+            {introStatus === 'running' ? 'Generating...' : 'Generate Introductions (25)'}
+          </button>
+          {introResult && (
+            <pre className={`rounded-xl p-4 text-sm whitespace-pre-wrap ${introStatus === 'error' ? 'bg-red-500/10 text-red-300' : 'bg-black/30 text-neutral-300'}`}>
+              {introResult}
             </pre>
           )}
         </div>

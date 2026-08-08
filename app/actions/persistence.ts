@@ -29,6 +29,7 @@ import {
 } from '@/lib/reel/settings';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { refreshStorylineDiscoveryMetadata } from '@/app/actions/storyline-discovery';
 import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { recordCharacterNoveltyUsageAction } from '@/app/actions/character-novelty';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
@@ -1858,6 +1859,16 @@ export async function autoPublishStoryline(
         throw new Error(`Failed to refresh published storyline: ${refreshError.message}`);
       }
     }
+    // The refresh above rewrote title and beats without going through
+    // finalizeStorylineShareAssets, so the stored discovery intro would
+    // otherwise describe the previous version.
+    await refreshStorylineDiscoveryMetadata({
+      storylineId: existing.id,
+      storyId,
+      title: storyTitle,
+      beats: refreshedLegacyBeats,
+    });
+
     // Already published — just auto-save to user's profile
     await supabase
       .from('saved_storylines')

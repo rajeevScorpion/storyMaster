@@ -62,6 +62,12 @@ export default function GalleryHero({
             {item.title}
           </h1>
 
+          {item.intro && (
+            <p className="line-clamp-2 max-w-xl text-sm text-neutral-300 md:text-base">
+              {item.intro}
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-neutral-400">
             {item.authorName && <span>by {item.authorName}</span>}
             {!!item.beatCount && (

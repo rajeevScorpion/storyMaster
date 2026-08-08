@@ -6,6 +6,7 @@ export type TaskKey =
   | 'seed_plan_generation'
   | 'seeded_beat_materialization'
   | 'story_bible_generation'
+  | 'storyline_discovery_metadata'
   | 'visual_prompt'
   | 'reel_visual_prompt'
   | 'image_generation'
@@ -40,6 +41,7 @@ export const TASK_DEFINITIONS: {
   { key: 'seed_plan_generation', label: 'Seed Plan Generation', description: 'Turns user-authored source material into a structured canonical beat plan preview' },
   { key: 'seeded_beat_materialization', label: 'Seeded Beat Materialization', description: 'Turns one confirmed seed-plan beat into a full runtime story beat while preserving the authored path' },
   { key: 'story_bible_generation', label: 'Story Bible Writer', description: 'Condenses a finished episode into an updated series bible plus a journal summary for episodic continuity' },
+  { key: 'storyline_discovery_metadata', label: 'Discovery Metadata', description: 'Writes the 1-2 sentence gallery introduction for a published storyline, plus suggested genre and audience fit' },
   { key: 'visual_prompt', label: 'Visual Prompt Composer', description: 'Builds structured 4-frame storyboard plans and portrait tasks from each story beat' },
   { key: 'reel_visual_prompt', label: 'Reel Visual Composer', description: 'Builds 4-frame storyboard plans optimized for vertical reel pacing' },
   { key: 'image_generation', label: 'Image Generation', description: 'Generates scene illustrations from refined prompts' },
@@ -60,6 +62,7 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   seed_plan_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.3 },
   seeded_beat_materialization: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.4 },
   story_bible_generation: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.35 },
+  storyline_discovery_metadata: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.4 },
   visual_prompt: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.7 },
   reel_visual_prompt: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.5 },
   image_generation: { modelId: DEFAULT_IMAGE_MODEL_ID, temperature: null },

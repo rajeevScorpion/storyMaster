@@ -718,12 +718,30 @@ Requirements:
 - Expressive pose or poses that reflect personality without changing outfit or silhouette
 - No text, labels, or watermarks`;
 
+export const STORYLINE_DISCOVERY_METADATA_PROMPT_DEFAULT = `Write the catalogue entry for a published interactive story so a reader browsing the gallery can decide whether to open it.
+
+Title: {{title}}
+Stated genre: {{genre}}
+Intended audience: {{targetAge}}
+Language: {{language}}
+Setting: {{setting}}
+Characters: {{characters}}
+
+Story beats, in order:
+{{beatSummaries}}
+
+Return JSON with:
+- "intro": one or two short sentences (about 30 words, never more than 220 characters) introducing the premise. Write it in {{language}}. Set up the situation and the hook; never reveal the middle, the twist, or how it ends. Do not restate the title, do not address the reader as "you", and do not use marketing phrases like "a thrilling journey".
+- "genre": the single genre slug that best fits the story.
+- "ageFit": the audience band the content actually suits, which may differ from the stated audience. Use "unknown" if the beats do not make it clear.`;
+
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
   reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the reel draft schema { beatCount, beats: [...] } exactly: produce all beats in one response. Each beat carries only beatIndex, title, storyText, sceneSummary, imagePrompt. Do not return options, characters, continuityNotes, clues, or any branching fields. Reels are linear inspirational quote sequences, not stories.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it. When Source Fidelity is strictly_follow, copy each authoritative Strict Follow Source Segment into its matching storyText field exactly.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. Extra Guidance is visual-only and must never alter the seeded story.',
   story_bible_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve established canon from the previous bible; never invent characters, places, or rules absent from the inputs. Keep every field compact enough to reuse as prompt context.',
+  storyline_discovery_metadata: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. The intro must be at most 220 characters, contain no markdown, emoji, quotation marks, or line breaks, and must never spoil the ending or any mid-story twist. Keep the language appropriate for the intended audience. "genre" must be one of: adventure, mystery, fantasy, comedy, drama, horror, romance, sci-fi. "ageFit" must be one of: all_ages, kids_3_5, kids_5_8, kids_8_12, teens, adults, unknown.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only. Align topLeft, topRight, bottomLeft, and bottomRight to storyTextParts 1, 2, 3, and 4 when provided. When Seed Authoring Context says strictly_follow, visualize the authored beat literally; use Extra Guidance only for visual details.',
   reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly. Optimize the four frames for vertical reel pacing as abstract/symbolic visuals that complement an inspirational quote. portraitTasks MUST be an empty array — reels have no recurring characters.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
@@ -940,6 +958,21 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'episodeNumber', label: 'Episode Number', description: 'The completed episode number in the series.', required: true },
     ],
     defaultPrompt: STORY_BIBLE_GENERATION_PROMPT_DEFAULT,
+  },
+  storyline_discovery_metadata: {
+    key: 'storyline_discovery_metadata',
+    label: 'Discovery Metadata',
+    description: 'Writes the short gallery introduction stored with a published storyline, plus a suggested genre and audience fit.',
+    placeholders: [
+      { key: 'title', label: 'Title', description: 'Published storyline title.', required: true },
+      { key: 'genre', label: 'Genre', description: 'Genre recorded on the parent story.', required: true },
+      { key: 'targetAge', label: 'Target Age', description: 'Audience band recorded on the parent story.', required: true },
+      { key: 'language', label: 'Language', description: 'Language the intro must be written in.', required: true },
+      { key: 'setting', label: 'Setting', description: 'Setting or country context for the story.', required: false },
+      { key: 'characters', label: 'Characters', description: 'Named characters appearing in the published path.', required: false },
+      { key: 'beatSummaries', label: 'Beat Summaries', description: 'Condensed beats of the published path, in order.', required: true },
+    ],
+    defaultPrompt: STORYLINE_DISCOVERY_METADATA_PROMPT_DEFAULT,
   },
 };
 

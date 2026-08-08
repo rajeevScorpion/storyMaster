@@ -16,6 +16,7 @@ import type {
 } from '@/lib/types/database';
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
+import { deriveDiscoveryIntro } from '@/lib/story/discovery-intro';
 
 /**
  * Moderation gate for public listings: when the admin requires review before
@@ -57,6 +58,8 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
   second_beat?: unknown;
   share_cover_url?: string | null;
   share_cover_status?: string | null;
+  discovery_intro?: string | null;
+  discovery_intro_status?: string | null;
   stories?: {
     genre?: string | null;
     story_config?: Record<string, unknown> | null;
@@ -67,10 +70,61 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
  * Columns every storyline listing needs. `beats->0`/`beats->1` keep the legacy
  * cover fallbacks working without transferring the full beat snapshot per row.
  */
-const STORYLINE_LIST_COLUMNS =
+const STORYLINE_BASE_COLUMNS =
   'id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, first_beat:beats->0, second_beat:beats->1';
 
-const STORYLINE_LIST_COLUMNS_WITH_STORY = `${STORYLINE_LIST_COLUMNS}, stories!inner(genre, story_config)`;
+/** Added by migration 088; see `discoveryColumnsAvailable`. */
+const STORYLINE_DISCOVERY_COLUMNS = 'discovery_intro, discovery_intro_status';
+
+/**
+ * Migrations are applied by hand, so this code can run against a database that
+ * has not seen 088 yet. Selecting a column that does not exist fails the whole
+ * listing, so the first such failure drops the discovery columns for the rest
+ * of the process and the query is retried once.
+ */
+let discoveryColumnsAvailable = true;
+
+function storylineListColumns(options: { withStory?: boolean } = {}): string {
+  const columns = discoveryColumnsAvailable
+    ? `${STORYLINE_BASE_COLUMNS}, ${STORYLINE_DISCOVERY_COLUMNS}`
+    : STORYLINE_BASE_COLUMNS;
+  return options.withStory ? `${columns}, stories!inner(genre, story_config)` : columns;
+}
+
+type QueryResult<T> = {
+  data: T | null;
+  error: { code?: string; message?: string } | null;
+  count?: number | null;
+};
+
+function isMissingDiscoveryColumnError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  // 42703 = undefined_column; PGRST200/PGRST204 cover PostgREST's own
+  // "column not found in schema cache" responses.
+  return (
+    (error.code === '42703' || error.code === 'PGRST200' || error.code === 'PGRST204')
+    && /discovery_intro/i.test(error.message ?? '')
+  );
+}
+
+/**
+ * Run a storyline listing query, retrying without the discovery columns if the
+ * database has not had migration 088 applied yet.
+ */
+async function selectStorylines<T>(
+  build: (columns: string) => PromiseLike<QueryResult<T>>,
+  options: { withStory?: boolean } = {}
+): Promise<QueryResult<T>> {
+  const result = await build(storylineListColumns(options));
+
+  if (discoveryColumnsAvailable && isMissingDiscoveryColumnError(result.error)) {
+    console.warn('Storyline discovery columns missing (migration 088 not applied); serving without intros.');
+    discoveryColumnsAvailable = false;
+    return build(storylineListColumns(options));
+  }
+
+  return result;
+}
 
 type StorylineCoverBeatRow = {
   storyline_id: string;
@@ -147,6 +201,7 @@ function mapStorylineRow(row: any): GalleryItem {
     authorName: row.author_name,
     storyId: row.story_id ?? row.id,
     beatCount: row.beat_count,
+    intro: resolveDiscoveryIntro(row),
     genre: row.stories?.genre || null,
     ageGroup: readStoryConfigString(row.stories?.story_config, 'ageGroup'),
     settingCountry: readStoryConfigString(row.stories?.story_config, 'settingCountry'),
@@ -182,6 +237,19 @@ function coerceLegacyBeat(value: unknown): LegacyGalleryBeat | null {
 
 function getLegacyCoverBeat(row: StorylineGalleryRow): LegacyGalleryBeat | null {
   return coerceLegacyBeat(row.second_beat) ?? coerceLegacyBeat(row.first_beat);
+}
+
+/**
+ * Prefer the intro written at publish time; otherwise derive one from the
+ * opening beat. Never calls an LLM — legacy rows resolve deterministically.
+ */
+function resolveDiscoveryIntro(row: StorylineGalleryRow): string | null {
+  if (row.discovery_intro_status === 'ready') {
+    const stored = row.discovery_intro?.trim();
+    if (stored) return stored;
+  }
+
+  return deriveDiscoveryIntro(coerceLegacyBeat(row.first_beat));
 }
 
 function getLegacyCoverUrl(row: StorylineGalleryRow): string | null {
@@ -511,19 +579,21 @@ async function resolveStorylineCovers<T extends StorylineGalleryRow>(
  */
 export async function getPublicStorylines(limit: number = 6): Promise<GalleryStoryline[]> {
   const supabase = await createClient();
+  const gateActive = await moderationGateActive();
 
-  let recentQuery = supabase
-    .from('storylines')
-    .select(STORYLINE_LIST_COLUMNS)
-    .eq('is_public', true)
-    .eq('is_vertical_story', false)
-    .neq('aspect_ratio', '9:16');
-  if (await moderationGateActive()) {
-    recentQuery = recentQuery.in('moderation_status', ['none', 'approved']);
-  }
-  const { data, error } = await recentQuery
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const { data, error } = await selectStorylines<StorylineGalleryRow[]>((columns) => {
+    const query = supabase
+      .from('storylines')
+      .select(columns)
+      .eq('is_public', true)
+      .eq('is_vertical_story', false)
+      .neq('aspect_ratio', '9:16')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    return (gateActive
+      ? query.in('moderation_status', ['none', 'approved'])
+      : query) as unknown as PromiseLike<QueryResult<StorylineGalleryRow[]>>;
+  });
 
   if (error) {
     console.error('Failed to fetch public storylines:', error.message);
@@ -531,11 +601,23 @@ export async function getPublicStorylines(limit: number = 6): Promise<GallerySto
   }
 
   const rows = await resolveStorylineCovers((data || []) as StorylineGalleryRow[]);
-  return rows.map(({ first_beat, second_beat, node_path, stories, share_cover_url, share_cover_status, ...storyline }) => {
+  return rows.map(({
+    first_beat,
+    second_beat,
+    node_path,
+    stories,
+    share_cover_url,
+    share_cover_status,
+    discovery_intro,
+    discovery_intro_status,
+    ...storyline
+  }) => {
     void first_beat;
     void second_beat;
     void share_cover_url;
     void share_cover_status;
+    void discovery_intro;
+    void discovery_intro_status;
     const aspectRatio = resolveStoryAspectRatio(storyline, stories?.story_config);
     return {
       ...storyline,
@@ -575,47 +657,48 @@ export async function getGalleryRails(): Promise<GalleryRailsResponse> {
   const gateActive = await moderationGateActive();
   const moderationStatuses = ['none', 'approved'];
 
-  const recentQuery = (() => {
-    const query = supabase
-      .from('storylines')
-      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
-      .eq('is_public', true)
-      .eq('is_vertical_story', false)
-      .neq('aspect_ratio', '9:16')
-      .order('created_at', { ascending: false })
-      .limit(RAIL_RECENT_POOL);
-    return gateActive ? query.in('moderation_status', moderationStatuses) : query;
-  })();
+  const withGate = <T>(query: T): T =>
+    gateActive
+      ? (query as { in: (column: string, values: string[]) => T }).in('moderation_status', moderationStatuses)
+      : query;
 
-  const mostLovedQuery = (() => {
-    const query = supabase
-      .from('storylines')
-      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
-      .eq('is_public', true)
-      .eq('is_vertical_story', false)
-      .neq('aspect_ratio', '9:16')
-      .gt('like_count', 0)
-      .order('like_count', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(RAIL_ITEM_LIMIT);
-    return gateActive ? query.in('moderation_status', moderationStatuses) : query;
-  })();
-
-  const verticalQuery = (() => {
-    const query = supabase
-      .from('storylines')
-      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
-      .eq('is_public', true)
-      .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
-      .order('created_at', { ascending: false })
-      .limit(RAIL_ITEM_LIMIT);
-    return gateActive ? query.in('moderation_status', moderationStatuses) : query;
-  })();
+  const railQuery = (
+    build: (query: ReturnType<ReturnType<typeof supabase.from>['select']>) => unknown
+  ) =>
+    selectStorylines<StorylineGalleryRow[]>(
+      (columns) =>
+        build(withGate(supabase.from('storylines').select(columns))) as PromiseLike<
+          QueryResult<StorylineGalleryRow[]>
+        >,
+      { withStory: true }
+    );
 
   const [recentResult, mostLovedResult, verticalResult, savedRows] = await Promise.all([
-    recentQuery,
-    mostLovedQuery,
-    verticalQuery,
+    railQuery((query) =>
+      query
+        .eq('is_public', true)
+        .eq('is_vertical_story', false)
+        .neq('aspect_ratio', '9:16')
+        .order('created_at', { ascending: false })
+        .limit(RAIL_RECENT_POOL)
+    ),
+    railQuery((query) =>
+      query
+        .eq('is_public', true)
+        .eq('is_vertical_story', false)
+        .neq('aspect_ratio', '9:16')
+        .gt('like_count', 0)
+        .order('like_count', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(RAIL_ITEM_LIMIT)
+    ),
+    railQuery((query) =>
+      query
+        .eq('is_public', true)
+        .or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
+        .order('created_at', { ascending: false })
+        .limit(RAIL_ITEM_LIMIT)
+    ),
     fetchSavedStorylineRows(supabase),
   ]);
 
@@ -747,16 +830,18 @@ async function fetchSavedStorylineRows(
     if (savedError || !savedRows?.length) return [];
 
     const orderedIds = (savedRows as { storyline_id: string }[]).map((row) => row.storyline_id);
-    const { data, error } = await supabase
-      .from('storylines')
-      .select(STORYLINE_LIST_COLUMNS_WITH_STORY)
-      .in('id', orderedIds);
+    const { data, error } = await selectStorylines<StorylineGalleryRow[]>(
+      (columns) =>
+        supabase
+          .from('storylines')
+          .select(columns)
+          .in('id', orderedIds) as unknown as PromiseLike<QueryResult<StorylineGalleryRow[]>>,
+      { withStory: true }
+    );
 
     if (error || !data) return [];
 
-    const rowsById = new Map(
-      (data as unknown as StorylineGalleryRow[]).map((row) => [row.id, row])
-    );
+    const rowsById = new Map(data.map((row) => [row.id, row]));
     return orderedIds
       .map((id) => rowsById.get(id))
       .filter((row): row is StorylineGalleryRow => !!row);
@@ -801,37 +886,46 @@ export async function getGalleryItems(
   const rangeEnd = offset + limit - 1;
   const lane: GalleryLane = filters.type === 'vertical' ? 'vertical' : 'storylines';
 
-  let query = supabase
-    .from('storylines')
-    .select(STORYLINE_LIST_COLUMNS_WITH_STORY, { count: 'exact' })
-    .eq('is_public', true)
-    .order('created_at', { ascending: false });
+  const gateActive = await moderationGateActive();
 
-  query = lane === 'vertical'
-    ? query.or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
-    : query.eq('is_vertical_story', false).neq('aspect_ratio', '9:16');
+  const { data: storylines, count, error } = await selectStorylines<StorylineGalleryRow[]>(
+    (columns) => {
+      let query = supabase
+        .from('storylines')
+        .select(columns, { count: 'exact' })
+        .eq('is_public', true)
+        .order('created_at', { ascending: false });
 
-  if (await moderationGateActive()) {
-    query = query.in('moderation_status', ['none', 'approved']);
-  }
+      query = lane === 'vertical'
+        ? query.or('is_vertical_story.eq.true,aspect_ratio.eq.9:16')
+        : query.eq('is_vertical_story', false).neq('aspect_ratio', '9:16');
 
-  if (filters.search) {
-    query = query.ilike('title', `%${filters.search}%`);
-  }
-  if (filters.genre && filters.genre !== 'all') {
-    query = query.ilike('stories.genre', filters.genre);
-  }
-  if (filters.ageGroup && filters.ageGroup !== 'all') {
-    query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
-  }
-  if (filters.country && filters.country !== 'all') {
-    query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
-  }
-  if (filters.language && filters.language !== 'all') {
-    query = query.filter('stories.story_config->>language', 'eq', filters.language);
-  }
+      if (gateActive) {
+        query = query.in('moderation_status', ['none', 'approved']);
+      }
 
-  const { data: storylines, count, error } = await query.range(offset, rangeEnd);
+      if (filters.search) {
+        query = query.ilike('title', `%${filters.search}%`);
+      }
+      if (filters.genre && filters.genre !== 'all') {
+        query = query.ilike('stories.genre', filters.genre);
+      }
+      if (filters.ageGroup && filters.ageGroup !== 'all') {
+        query = query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
+      }
+      if (filters.country && filters.country !== 'all') {
+        query = query.filter('stories.story_config->>settingCountry', 'eq', filters.country);
+      }
+      if (filters.language && filters.language !== 'all') {
+        query = query.filter('stories.story_config->>language', 'eq', filters.language);
+      }
+
+      return query.range(offset, rangeEnd) as unknown as PromiseLike<
+        QueryResult<StorylineGalleryRow[]>
+      >;
+    },
+    { withStory: true }
+  );
 
   if (error) {
     throw new Error(`Failed to fetch ${lane} gallery items: ${error.message}`);

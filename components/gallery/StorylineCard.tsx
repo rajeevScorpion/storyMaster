@@ -130,6 +130,12 @@ export default function StorylineCard({
 
           {/* Progressive disclosure: revealed on hover/keyboard focus, and
               always on touch, where `.touch-visible` forces it open. */}
+          {item.intro && layout === 'wide' && (
+            <p className="touch-visible line-clamp-2 text-xs leading-snug text-neutral-300 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+              {item.intro}
+            </p>
+          )}
+
           <div className="touch-visible flex items-center justify-between gap-2 text-xs font-sans text-neutral-400 opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
             <span className="flex items-center gap-3">
               {!!item.beatCount && (
