@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { loadStorylineWithBeats } from '@/app/actions/exploration';
 import { loadCachedStoryline, saveStorylineAndPrefetch } from '@/lib/persistence/runtime';
 import type { StorylineManifestPayload } from '@/lib/persistence';
+import type { StorylineSeriesContext } from '@/lib/types/series';
 import { preloadStorylineMedia } from '@/lib/media/storyline-preload';
 import OpenFlowLoader from './OpenFlowLoader';
 import StorylinePlayer from './StorylinePlayer';
@@ -24,6 +25,12 @@ interface StorylinePersistenceLoaderProps {
   aspectRatio: '16:9' | '9:16';
   /** Validated unlisted share token (server-checked) for RLS-hidden storylines. */
   shareToken?: string | null;
+  /**
+   * Resolved server-side and threaded straight through as a prop, never into
+   * the cached manifest: a device holding a manifest saved before this existed
+   * would otherwise serve a storyline that forgets it is part of a series.
+   */
+  series?: StorylineSeriesContext | null;
 }
 
 export default function StorylinePersistenceLoader(props: StorylinePersistenceLoaderProps) {
@@ -160,6 +167,7 @@ export default function StorylinePersistenceLoader(props: StorylinePersistenceLo
       isLoggedIn={payload.isLoggedIn}
       persistenceUserId={props.userId}
       sourceUpdatedAt={sourceUpdatedAt}
+      series={props.series ?? null}
     />
   );
 }
