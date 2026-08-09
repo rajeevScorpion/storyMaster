@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef, type CSSProperties } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -32,7 +32,11 @@ import {
   Check,
   AlertTriangle,
   X,
+  SkipForward,
+  ListVideo,
 } from 'lucide-react';
+import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
+import type { StorylineSeriesContext } from '@/lib/types/series';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useStoryTransitionPlayback } from '@/lib/hooks/useStoryTransitionPlayback';
 import { useStoryAutoScroll } from '@/lib/hooks/useStoryAutoScroll';
@@ -78,6 +82,12 @@ import { requestHomeStoryReset } from '@/lib/story/home-navigation';
 const SIGNED_URL_REFRESH_INTERVAL = 50 * 60 * 1000; // 50 minutes
 const CHOICE_TRANSITION_FADE_MS = 600;
 
+/**
+ * Long enough to read "The End" and decide to stop, short enough that letting
+ * a series run does not feel like waiting.
+ */
+const NEXT_EPISODE_COUNTDOWN_SECONDS = 10;
+
 const MOBILE_CONTROL_BUTTON_CLASS = 'p-2.5 rounded-full border transition-all cursor-pointer motion-safe:hover:scale-110 motion-safe:active:scale-95';
 const MOBILE_CONTROL_ICON_CLASS = 'w-[1.125rem] h-[1.125rem]';
 const DESKTOP_CONTROL_BUTTON_CLASS = 'p-3 rounded-full border transition-all cursor-pointer motion-safe:hover:scale-110 motion-safe:active:scale-95';
@@ -109,6 +119,8 @@ interface StorylinePlayerProps {
   isLoggedIn?: boolean;
   persistenceUserId?: string;
   sourceUpdatedAt?: string;
+  /** Null for a standalone storyline, which is most of them. */
+  series?: StorylineSeriesContext | null;
 }
 
 export default function StorylinePlayer({
@@ -128,12 +140,14 @@ export default function StorylinePlayer({
   isLoggedIn = false,
   persistenceUserId,
   sourceUpdatedAt = 'legacy',
+  series = null,
 }: StorylinePlayerProps) {
   const normalizedStoryTransition = useMemo(
     () => normalizeStoryTransitionSettings(storyTransition),
     [storyTransition]
   );
   const isVerticalStoryline = isVerticalStory || aspectRatio === '9:16';
+  const nextEpisode = series?.nextEpisode ?? null;
   const [currentBeats, setCurrentBeats] = useState(beats);
   const [currentIndex, setCurrentIndex] = useState(() => {
     if (typeof window === 'undefined') return 0;
@@ -158,6 +172,9 @@ export default function StorylinePlayer({
   const [showMyStories, setShowMyStories] = useState(false);
   const [shareToastVisible, setShareToastVisible] = useState(false);
   const [showEndModal, setShowEndModal] = useState(false);
+  /** Seconds left before the next episode takes over; null when not counting. */
+  const [nextEpisodeCountdown, setNextEpisodeCountdown] = useState<number | null>(null);
+  const [showEpisodePicker, setShowEpisodePicker] = useState(false);
   const [restoredAudioTimeMs, setRestoredAudioTimeMs] = useState(0);
   const [audioEndedCount, setAudioEndedCount] = useState(0);
   const [cycleSettings, setCycleSettings] = useState<{
@@ -189,9 +206,14 @@ export default function StorylinePlayer({
   });
   const [isAdminUser, setIsAdminUser] = useState(false);
   const router = useRouter();
+  const prefersReducedMotion = useReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
   const choiceHoldTimerRef = useRef<number | null>(null);
   const choiceAdvanceTimerRef = useRef<number | null>(null);
+  // Tracked so it can be cancelled: once the modal can navigate away, an
+  // orphaned timer fires against an unmounted tree.
+  const endModalTimerRef = useRef<number | null>(null);
+  const countdownTimerRef = useRef<number | null>(null);
   const signedUrlRefreshInFlightRef = useRef(false);
   const lastSignedUrlRefreshAtRef = useRef(Date.now());
   const progressRestoredRef = useRef(false);
@@ -561,7 +583,7 @@ export default function StorylinePlayer({
       completed,
     });
 
-    // Server copy for the gallery's Continue Reading rail and finished badge.
+    // Server copy for the gallery's Continue Watching rail and finished badge.
     // Written on page turns only — the local save above also runs on every
     // audio tick, which is far too often for a network round-trip.
     if (isLoggedIn) {
@@ -584,6 +606,62 @@ export default function StorylinePlayer({
       choiceAdvanceTimerRef.current = null;
     }
   }, []);
+
+  const clearEndModalTimer = useCallback(() => {
+    if (endModalTimerRef.current !== null) {
+      window.clearTimeout(endModalTimerRef.current);
+      endModalTimerRef.current = null;
+    }
+  }, []);
+
+  const cancelNextEpisodeCountdown = useCallback(() => {
+    if (countdownTimerRef.current !== null) {
+      window.clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setNextEpisodeCountdown(null);
+  }, []);
+
+  /**
+   * Hand off to the next episode.
+   *
+   * A full route push and remount is the right shape, not a compromise: the
+   * loader has to re-run its cache-versus-network race and preload a different
+   * set of media, and the player holds an audio element, a signed-URL refresh
+   * interval and a few dozen state atoms all keyed to this storyline.
+   *
+   * `?beat=0` is load-bearing. The player treats an explicit beat param as a
+   * signal to ignore saved progress, so without it, auto-advancing into an
+   * episode the viewer already finished would restore them to its last beat and
+   * reopen this very modal. Opening an episode from the gallery passes no beat
+   * param and still resumes, which is the behaviour we want in that direction.
+   */
+  const goToNextEpisode = useCallback(() => {
+    const next = series?.nextEpisode;
+    if (!next) return;
+
+    cancelNextEpisodeCountdown();
+    clearEndModalTimer();
+    stopAudio();
+    setShowEndModal(false);
+
+    writeOpenFlowNavMeta({
+      kind: 'storyline',
+      title: next.title,
+      coverImageUrl: null,
+      coverIsStoryboard: false,
+      beatCount: next.beatCount,
+    });
+
+    router.push(`/storyline/${next.storylineId}?beat=0`);
+  }, [cancelNextEpisodeCountdown, clearEndModalTimer, router, series, stopAudio]);
+
+  // Read by the countdown so the interval never has to be torn down and rebuilt
+  // just because a dependency of the navigation changed.
+  const goToNextEpisodeRef = useRef(goToNextEpisode);
+  useEffect(() => {
+    goToNextEpisodeRef.current = goToNextEpisode;
+  }, [goToNextEpisode]);
 
   const clearChoiceTransition = useCallback(() => {
     clearChoiceTransitionTimers();
@@ -714,14 +792,30 @@ export default function StorylinePlayer({
     if (handledAudioEndedCountRef.current === audioEndedCount) return;
     handledAudioEndedCountRef.current = audioEndedCount;
     if (!autoPlay) return;
+
     if (isLast && currentBeat.isEnding) {
-      setTimeout(() => setShowEndModal(true), 1500);
-    } else if (isLast && autoReplay) {
+      // Loop is an explicit request and outranks anything the ending would
+      // otherwise offer. Checked inside this branch rather than after it: the
+      // ending case used to match first and swallow it, so turning loop on and
+      // reaching a proper ending silently did nothing.
+      if (autoReplay) {
+        queueMicrotask(() => replay());
+        return;
+      }
+      clearEndModalTimer();
+      endModalTimerRef.current = window.setTimeout(() => {
+        endModalTimerRef.current = null;
+        setShowEndModal(true);
+      }, 1500);
+      return;
+    }
+
+    if (isLast && autoReplay) {
       queueMicrotask(() => replay());
     } else if (!isLast) {
       queueMicrotask(() => goNext());
     }
-  }, [audioEndedCount, autoPlay, autoReplay, isLast, currentBeat.isEnding, goNext, replay]);
+  }, [audioEndedCount, autoPlay, autoReplay, isLast, currentBeat.isEnding, goNext, replay, clearEndModalTimer]);
 
   // Show end modal after delay when manually navigating to ending beat without audio
   useEffect(() => {
@@ -740,8 +834,55 @@ export default function StorylinePlayer({
   useEffect(() => {
     return () => {
       clearChoiceTransitionTimers();
+      clearEndModalTimer();
+      if (countdownTimerRef.current !== null) {
+        window.clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
     };
-  }, [clearChoiceTransitionTimers]);
+  }, [clearChoiceTransitionTimers, clearEndModalTimer]);
+
+  /**
+   * Auto-advance into the next episode once the ending has landed.
+   *
+   * Only when the reader had autoplay on — they were already letting it run —
+   * and never when loop is on, which is an explicit request to stay put.
+   * Reduced motion opts out too: an unrequested navigation is motion.
+   */
+  useEffect(() => {
+    if (!showEndModal || !series?.nextEpisode) return;
+    if (!autoPlay || autoReplay || prefersReducedMotion) return;
+
+    setNextEpisodeCountdown(NEXT_EPISODE_COUNTDOWN_SECONDS);
+    countdownTimerRef.current = window.setInterval(() => {
+      setNextEpisodeCountdown((remaining) => {
+        if (remaining === null) return null;
+        if (remaining > 1) return remaining - 1;
+        if (countdownTimerRef.current !== null) {
+          window.clearInterval(countdownTimerRef.current);
+          countdownTimerRef.current = null;
+        }
+        // Deferred: navigating from inside a state updater would run a router
+        // push during render.
+        queueMicrotask(() => goToNextEpisodeRef.current());
+        return null;
+      });
+    }, 1000);
+
+    return () => {
+      if (countdownTimerRef.current !== null) {
+        window.clearInterval(countdownTimerRef.current);
+        countdownTimerRef.current = null;
+      }
+    };
+  }, [showEndModal, series, autoPlay, autoReplay, prefersReducedMotion]);
+
+  // Warm the next episode's route only once the reader is actually at the end,
+  // rather than for every storyline anyone opens.
+  useEffect(() => {
+    if (!isLast || !series?.nextEpisode) return;
+    router.prefetch(`/storyline/${series.nextEpisode.storylineId}`);
+  }, [isLast, router, series]);
 
   // Keyboard navigation
   const volumeRef = useRef(volume);
@@ -940,6 +1081,12 @@ export default function StorylinePlayer({
             {/* Kissago branding — matches main page style */}
             <KissagoLogo fixed={false} onClick={handleLogoClick} />
             <div className="hidden md:block">
+              {series && (
+                <p className="max-w-[22rem] truncate text-[10px] font-sans font-semibold uppercase tracking-[0.14em] text-emerald-400/90">
+                  Ep {series.episodeNumber}
+                  {series.seriesTitle ? ` · ${series.seriesTitle}` : ''}
+                </p>
+              )}
               <h1 className="text-lg font-serif tracking-wide text-neutral-200">{title}</h1>
               {authorName && (
                 <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
@@ -949,6 +1096,82 @@ export default function StorylinePlayer({
           <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
             <div className="flex min-w-0 items-center gap-2 overflow-x-auto pl-1 text-sm font-sans uppercase tracking-widest text-neutral-400 scrollbar-none [&>*]:shrink-0 md:gap-3 md:overflow-visible md:pl-0">
               <span className="shrink-0 text-xs">Beat {currentIndex + 1} / {currentBeats.length}</span>
+
+          {/* Episode picker. Sits inside the scrolling action row rather than
+              beside the title so it survives the mobile overflow. */}
+          {series && series.episodes.length > 1 && (
+            <div className="relative shrink-0">
+              <button
+                onClick={() => setShowEpisodePicker((open) => !open)}
+                aria-expanded={showEpisodePicker}
+                aria-haspopup="true"
+                title={`Episode ${series.episodeNumber}${series.seriesTitle ? ` of ${series.seriesTitle}` : ''}`}
+                className={`flex items-center gap-1 rounded-full px-2 py-2 text-xs transition-all ${
+                  showEpisodePicker
+                    ? 'bg-emerald-500/20 text-emerald-300'
+                    : 'text-neutral-500 hover:bg-white/10 hover:text-neutral-200'
+                }`}
+              >
+                <ListVideo className="w-4 h-4" />
+                Ep {series.episodeNumber}
+              </button>
+
+              <AnimatePresence>
+                {showEpisodePicker && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -6 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-full z-30 mt-2 max-h-72 w-64 overflow-y-auto rounded-2xl border border-white/10 bg-neutral-900/95 p-1.5 shadow-2xl backdrop-blur-xl"
+                  >
+                    {series.seriesTitle && (
+                      <p className="truncate px-2 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-neutral-500">
+                        {series.seriesTitle}
+                      </p>
+                    )}
+                    {series.episodes.map((episode) => {
+                      const isCurrent = episode.storylineId === storylineId;
+                      return (
+                        <button
+                          key={episode.storylineId}
+                          onClick={() => {
+                            setShowEpisodePicker(false);
+                            if (isCurrent) return;
+                            stopAudio();
+                            writeOpenFlowNavMeta({
+                              kind: 'storyline',
+                              title: episode.title,
+                              coverImageUrl: null,
+                              coverIsStoryboard: false,
+                              beatCount: episode.beatCount,
+                            });
+                            router.push(`/storyline/${episode.storylineId}`);
+                          }}
+                          aria-current={isCurrent ? 'true' : undefined}
+                          className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-xs normal-case tracking-normal transition-colors ${
+                            isCurrent
+                              ? 'bg-emerald-500/15 text-emerald-200'
+                              : 'text-neutral-300 hover:bg-white/5 hover:text-neutral-100'
+                          }`}
+                        >
+                          <span
+                            className={`w-8 shrink-0 tabular-nums ${
+                              isCurrent ? 'text-emerald-300' : 'text-neutral-500'
+                            }`}
+                          >
+                            Ep {episode.episodeNumber}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{episode.title}</span>
+                          {isCurrent && <Play className="h-3 w-3 shrink-0 fill-current" />}
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
 
           {/* Save to profile button — logged-in only */}
           {isLoggedIn && (
@@ -1123,6 +1346,12 @@ export default function StorylinePlayer({
         </div>
 
         <div className="mt-3 md:hidden">
+          {series && (
+            <p className="truncate text-[10px] font-sans font-semibold uppercase tracking-[0.14em] text-emerald-400/90">
+              Ep {series.episodeNumber}
+              {series.seriesTitle ? ` · ${series.seriesTitle}` : ''}
+            </p>
+          )}
           <h1 className="text-lg font-serif leading-snug tracking-wide text-neutral-200">{title}</h1>
           {authorName && (
             <p className="text-xs text-neutral-500 font-sans">by {authorName}</p>
@@ -1632,7 +1861,11 @@ export default function StorylinePlayer({
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               transition={{ duration: 0.6, delay: 0.15, ease: [0.16, 1, 0.3, 1] }}
               className="relative z-10 max-w-sm w-full p-8 rounded-3xl bg-neutral-900/30 backdrop-blur-xl border border-white/10 shadow-2xl text-center"
-              onClick={(e) => e.stopPropagation()}
+              // Any deliberate touch inside the modal means the reader is
+              // making the decision themselves; stop counting at them.
+              onClick={(e) => { e.stopPropagation(); cancelNextEpisodeCountdown(); }}
+              onPointerDown={cancelNextEpisodeCountdown}
+              onKeyDown={cancelNextEpisodeCountdown}
             >
               <h3 className="text-xs font-sans uppercase tracking-widest text-emerald-400 mb-3">
                 The End
@@ -1642,28 +1875,75 @@ export default function StorylinePlayer({
               </p>
 
               <div className="space-y-3">
-                <button
-                  onClick={() => { setShowEndModal(false); router.push('/gallery'); }}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-500/40 transition-all cursor-pointer font-sans text-sm"
-                >
-                  <Compass className="w-4 h-4" />
-                  Find More Stories
-                </button>
+                {nextEpisode ? (
+                  <button
+                    onClick={goToNextEpisode}
+                    className="relative w-full overflow-hidden flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-emerald-500 border border-emerald-400 text-neutral-950 font-semibold hover:bg-emerald-400 transition-all cursor-pointer font-sans text-sm"
+                  >
+                    {/* The countdown reads as the button filling up, so the
+                        thing about to happen is the thing being measured. */}
+                    {nextEpisodeCountdown !== null && (
+                      <motion.span
+                        aria-hidden="true"
+                        initial={{ width: '0%' }}
+                        animate={{ width: '100%' }}
+                        transition={{ duration: NEXT_EPISODE_COUNTDOWN_SECONDS, ease: 'linear' }}
+                        className="absolute inset-y-0 left-0 bg-emerald-300/50"
+                      />
+                    )}
+                    <span className="relative flex items-center gap-2">
+                      <SkipForward className="w-4 h-4 fill-current" />
+                      <span className="flex flex-col items-start leading-tight">
+                        <span>
+                          Next Episode
+                          {nextEpisodeCountdown !== null ? ` · ${nextEpisodeCountdown}s` : ''}
+                        </span>
+                        <span className="text-[11px] font-normal text-neutral-900/80">
+                          Ep {nextEpisode.episodeNumber} · {nextEpisode.title}
+                        </span>
+                      </span>
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { setShowEndModal(false); router.push('/gallery'); }}
+                    className="w-full flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-500/40 transition-all cursor-pointer font-sans text-sm"
+                  >
+                    <Compass className="w-4 h-4" />
+                    Find More Stories
+                  </button>
+                )}
 
-                <div className="flex gap-3">
+                <div className="flex gap-2">
+                  {/* Browsing on demotes to a peer of Replay and Share once
+                      there is a next episode to offer. */}
+                  {nextEpisode && (
+                    <button
+                      onClick={() => { setShowEndModal(false); router.push('/gallery'); }}
+                      className="flex-1 flex items-center justify-center gap-1.5 px-2 py-3.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans text-xs"
+                    >
+                      <Compass className="w-4 h-4 shrink-0" />
+                      Browse
+                    </button>
+                  )}
+
                   <button
                     onClick={replay}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans text-sm"
+                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans ${
+                      nextEpisode ? 'px-2 py-3.5 text-xs' : 'px-4 py-3.5 text-sm gap-2'
+                    }`}
                   >
-                    <RotateCcw className="w-4 h-4" />
+                    <RotateCcw className="w-4 h-4 shrink-0" />
                     Replay
                   </button>
 
                   <button
                     onClick={() => { setShowEndModal(false); handleShare(); }}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans text-sm"
+                    className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans ${
+                      nextEpisode ? 'px-2 py-3.5 text-xs' : 'px-4 py-3.5 text-sm gap-2'
+                    }`}
                   >
-                    <Share2 className="w-4 h-4" />
+                    <Share2 className="w-4 h-4 shrink-0" />
                     Share
                   </button>
                 </div>
