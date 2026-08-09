@@ -561,7 +561,7 @@ export default function StorylinePlayer({
       completed,
     });
 
-    // Server copy for the gallery's Continue Reading rail and finished badge.
+    // Server copy for the gallery's Continue Watching rail and finished badge.
     // Written on page turns only — the local save above also runs on every
     // audio tick, which is far too often for a network round-trip.
     if (isLoggedIn) {

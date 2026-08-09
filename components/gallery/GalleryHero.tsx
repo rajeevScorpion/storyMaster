@@ -271,7 +271,7 @@ export default function GalleryHero({
                 className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500 px-6 py-3 text-sm font-semibold text-neutral-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 hover:shadow-emerald-400/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
               >
                 <Play className="h-4 w-4 fill-current" />
-                Start reading
+                Start watching
               </Link>
 
               {isLoggedIn && (

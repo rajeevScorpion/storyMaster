@@ -982,13 +982,13 @@ export async function getGalleryRails(
   const railItems = recentItems;
   const rails: GalleryRail[] = [];
 
-  // Unfinished reading outranks everything: it is the one row where the viewer
+  // Unfinished stories outrank everything: it is the one row where the viewer
   // already told us what they want next.
   const continueItems = dedupeByStory(toItems(continueRows));
   if (continueItems.length > 0) {
     rails.push({
       key: 'continue',
-      title: 'Continue Reading',
+      title: 'Continue Watching',
       layout: 'wide',
       items: continueItems,
     });
@@ -1056,7 +1056,7 @@ export async function getGalleryRails(
 }
 
 /**
- * Storylines the viewer started but has not finished, most recently read first.
+ * Storylines the viewer started but has not finished, most recently watched first.
  *
  * "Started" means they advanced past the opening beat — see migration 090 — so
  * a storyline that was opened and immediately abandoned never appears here.
