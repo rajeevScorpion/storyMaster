@@ -489,6 +489,25 @@ export interface GalleryItem {
    * visitors and for storylines they have not started.
    */
   progress: GalleryProgress | null;
+  /**
+   * Series membership (migration 093). Null on standalone storylines, which is
+   * the overwhelming majority — episodes are opt-in.
+   */
+  seriesId: string | null;
+  seriesTitle: string | null;
+  episodeNumber: number | null;
+  /**
+   * Published, publicly-visible episodes in this series. Set only on a
+   * collapsed series card; null everywhere else, including on the individual
+   * episode cards the browse grid still lists.
+   */
+  episodeCount: number | null;
+  /**
+   * Jump list for a collapsed series card. Carries no artwork on purpose —
+   * signing a cover per episode is the expensive part of a rail payload, and a
+   * jump list needs a label, not a thumbnail.
+   */
+  episodes: GalleryEpisodeSummary[] | null;
 }
 
 /** Per-viewer reading state for one storyline. */
@@ -497,6 +516,17 @@ export interface GalleryProgress {
   beatIndex: number;
   beatCount: number | null;
   completed: boolean;
+}
+
+/** One episode inside a collapsed series card's jump list. */
+export interface GalleryEpisodeSummary {
+  storylineId: string;
+  storyId: string;
+  title: string;
+  episodeNumber: number;
+  beatCount: number | null;
+  createdAt: string;
+  progress: GalleryProgress | null;
 }
 
 export interface DbStorylineLike {

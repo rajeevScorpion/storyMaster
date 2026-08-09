@@ -476,7 +476,90 @@ const ADDITIVE_STORYLINE_COLUMNS = [
   // Migration 089 discovery classification columns.
   'age_group',
   'genre',
+  // Migration 093 series columns — stripped when the migration hasn't been
+  // applied yet so publishing keeps working during rollout.
+  'series_id',
+  'episode_number',
+  'series_title',
 ] as const;
+
+type StorylineSeriesFields = {
+  series_id: string | null;
+  episode_number: number | null;
+  series_title: string | null;
+};
+
+const NO_SERIES: StorylineSeriesFields = {
+  series_id: null,
+  episode_number: null,
+  series_title: null,
+};
+
+/**
+ * Series membership to stamp onto a storyline at publish time (migration 093).
+ *
+ * The gallery reads storylines anonymously and cannot see `episode_branches` —
+ * that table is owner-only and points at unpublished work. Publishing, though,
+ * runs on the author's own client, which can read their own branch, so the
+ * display name is resolved here and copied down. Mirrors the COALESCE chain in
+ * the migration's backfill, so a row published now and a row backfilled then
+ * carry the same title.
+ *
+ * Both the branch id and the episode number are required: a branch with no
+ * episode number cannot be ordered, so such a story publishes as standalone
+ * rather than joining a series at an unknown position.
+ *
+ * Queried on its own rather than folded into the caller's `stories` select so
+ * that a database without migration 075 loses the series stamp instead of
+ * failing the publish — a missing column fails the whole row, not one field.
+ */
+async function resolveStorylineSeriesFields(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  storyId: string
+): Promise<StorylineSeriesFields> {
+  try {
+    const { data: story, error } = await supabase
+      .from('stories')
+      .select('title, episode_branch_id, episode_number')
+      .eq('id', storyId)
+      .maybeSingle();
+
+    if (error || !story) return NO_SERIES;
+
+    const branchId = (story.episode_branch_id as string | null) ?? null;
+    const episodeNumber = story.episode_number as number | null;
+    if (!branchId || typeof episodeNumber !== 'number') return NO_SERIES;
+
+    const storyTitle = (story.title as string | null)?.trim() || null;
+
+    const { data: branch } = await supabase
+      .from('episode_branches')
+      .select('branch_name, root_story_id')
+      .eq('id', branchId)
+      .maybeSingle();
+
+    const branchName = (branch?.branch_name as string | null)?.trim() || null;
+    let rootTitle: string | null = null;
+
+    if (!branchName && branch?.root_story_id) {
+      const { data: root } = await supabase
+        .from('stories')
+        .select('title')
+        .eq('id', branch.root_story_id as string)
+        .maybeSingle();
+      rootTitle = (root?.title as string | null)?.trim() || null;
+    }
+
+    return {
+      series_id: branchId,
+      episode_number: episodeNumber,
+      series_title: branchName ?? rootTitle ?? storyTitle,
+    };
+  } catch (error) {
+    console.warn('Failed to resolve storyline series fields:', error);
+    return NO_SERIES;
+  }
+}
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error?.message) return false;
@@ -1740,6 +1823,8 @@ export async function autoPublishStoryline(
     throw new Error(`Failed to fetch story orientation: ${sourceStoryError.message}`);
   }
 
+  const seriesFields = await resolveStorylineSeriesFields(supabase, storyId);
+
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
     story_kind: sourceStory?.story_kind,
@@ -1850,6 +1935,7 @@ export async function autoPublishStoryline(
       choices: refreshedChoices as unknown as Record<string, unknown>[],
       age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
       genre: normalizeStoredGenre(sourceStory?.genre),
+      ...seriesFields,
       is_public: true,
     };
 
@@ -1983,6 +2069,7 @@ export async function autoPublishStoryline(
     choices: choices as unknown as Record<string, unknown>[],
     age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
     genre: normalizeStoredGenre(sourceStory?.genre),
+    ...seriesFields,
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
     path_hash: pathHash,
@@ -2678,6 +2765,7 @@ export async function publishStoryline(params: {
     .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', params.storyId)
     .maybeSingle();
+  const seriesFields = await resolveStorylineSeriesFields(supabase, params.storyId);
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
     story_kind: sourceStory?.story_kind,
@@ -2729,6 +2817,7 @@ export async function publishStoryline(params: {
     // NULL rather than a plausible-looking default.
     age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
     genre: normalizeStoredGenre(sourceStory?.genre),
+    ...seriesFields,
     author_name: profile?.display_name || 'Anonymous',
     is_public: requestedVisibility === 'public',
     visibility: requestedVisibility,

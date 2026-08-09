@@ -7,6 +7,7 @@ import { parseR2UrlLikeReference } from '@/lib/media/r2-reference';
 import { extractStoragePath } from '@/lib/supabase/storage';
 import type {
   GalleryStoryline,
+  GalleryEpisodeSummary,
   GalleryItem,
   GalleryFilters,
   GalleryLane,
@@ -15,6 +16,11 @@ import type {
   GalleryRail,
   GalleryRailsResponse,
 } from '@/lib/types/database';
+import {
+  collapseSeries,
+  SERIES_EPISODE_LIST_LIMIT,
+  SERIES_MIN_EPISODES,
+} from '@/lib/gallery/series';
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { deriveDiscoveryIntro } from '@/lib/story/discovery-intro';
@@ -87,6 +93,10 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
   discovery_intro_status?: string | null;
   age_group?: string | null;
   genre?: string | null;
+  /** Migration 093; absent until it is applied. */
+  series_id?: string | null;
+  episode_number?: number | null;
+  series_title?: string | null;
   stories?: {
     genre?: string | null;
     story_config?: Record<string, unknown> | null;
@@ -100,21 +110,76 @@ type StorylineGalleryRow = Omit<GalleryStoryline, 'cover_is_storyboard' | 'is_ve
 const STORYLINE_BASE_COLUMNS =
   'id, title, cover_image_url, share_cover_url, share_cover_status, beat_count, author_name, story_id, is_vertical_story, aspect_ratio, node_path, like_count, view_count, created_at, first_beat:beats->0, second_beat:beats->1';
 
-/** Added by migrations 088 and 089; see `discoveryColumnsAvailable`. */
-const STORYLINE_DISCOVERY_COLUMNS = 'discovery_intro, discovery_intro_status, age_group, genre';
-
 /**
  * Migrations are applied by hand, so this code can run against a database that
- * has not seen 088/089 yet. Selecting a column that does not exist fails the
- * whole listing, so the first such failure drops the discovery columns for the
- * rest of the process and the query is retried once.
+ * has not seen the newer ones. Selecting a column that does not exist fails the
+ * whole listing, so each additive migration's columns form a group that can be
+ * dropped independently for the rest of the process and the query retried.
+ *
+ * Groups are tracked separately on purpose. Folding 093 into the 088/089 latch
+ * would make a missing series column disable the stored age band too, and
+ * `kidsEligibilityUnavailable` fails the kids surface closed when that happens
+ * — a blank kids gallery for an entirely unrelated reason.
  */
-let discoveryColumnsAvailable = true;
+type StorylineColumnGroup = 'discovery' | 'series';
+
+const STORYLINE_COLUMN_GROUPS: Array<{
+  key: StorylineColumnGroup;
+  columns: string;
+  /** Column names this group owns, for matching an undefined-column error. */
+  pattern: RegExp;
+  warning: string;
+}> = [
+  {
+    key: 'discovery',
+    columns: 'discovery_intro, discovery_intro_status, age_group, genre',
+    pattern: /discovery_intro|age_group|\bgenre\b/i,
+    warning:
+      'Storyline discovery columns missing (migrations 088/089 not applied); serving without intros or stored classification.',
+  },
+  {
+    key: 'series',
+    columns: 'series_id, episode_number, series_title',
+    pattern: /series_id|series_title|episode_number/i,
+    warning:
+      'Storyline series columns missing (migration 093 not applied); grouping episodes from the joined story instead.',
+  },
+];
+
+const unavailableColumnGroups = new Set<StorylineColumnGroup>();
+
+function isColumnGroupAvailable(key: StorylineColumnGroup): boolean {
+  return !unavailableColumnGroups.has(key);
+}
+
+/**
+ * Kept as a derived read so the kids-eligibility gate and the stored-genre
+ * filters keep asking the one question they actually care about.
+ */
+function discoveryColumnsAvailable(): boolean {
+  return isColumnGroupAvailable('discovery');
+}
+
+/**
+ * Series grouping needs migration 093. Without it the rails simply list each
+ * episode as its own storyline, which is what they did before.
+ *
+ * The episode columns on `stories` are anon-readable and could in principle
+ * back a join-based fallback, but widening the `stories!inner` select would
+ * make a database without migration 075 fail the entire gallery rather than
+ * lose one feature — a worse failure than the one it avoids, for a window that
+ * closes as soon as 093 is applied.
+ */
+function seriesColumnsAvailable(): boolean {
+  return isColumnGroupAvailable('series');
+}
 
 function storylineListColumns(options: { withStory?: boolean } = {}): string {
-  const columns = discoveryColumnsAvailable
-    ? `${STORYLINE_BASE_COLUMNS}, ${STORYLINE_DISCOVERY_COLUMNS}`
-    : STORYLINE_BASE_COLUMNS;
+  const groups = STORYLINE_COLUMN_GROUPS
+    .filter((group) => isColumnGroupAvailable(group.key))
+    .map((group) => group.columns);
+  const columns = [STORYLINE_BASE_COLUMNS, ...groups].join(', ');
+
   return options.withStory ? `${columns}, stories!inner(genre, story_config)` : columns;
 }
 
@@ -124,30 +189,46 @@ type QueryResult<T> = {
   count?: number | null;
 };
 
-function isMissingDiscoveryColumnError(error: { code?: string; message?: string } | null): boolean {
+function isUndefinedColumnError(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
   // 42703 = undefined_column; PGRST200/PGRST204 cover PostgREST's own
   // "column not found in schema cache" responses.
-  return (
-    (error.code === '42703' || error.code === 'PGRST200' || error.code === 'PGRST204')
-    && /discovery_intro|age_group|\bgenre\b/i.test(error.message ?? '')
+  return error.code === '42703' || error.code === 'PGRST200' || error.code === 'PGRST204';
+}
+
+function missingColumnGroup(
+  error: { code?: string; message?: string } | null
+): StorylineColumnGroup | null {
+  if (!isUndefinedColumnError(error)) return null;
+  const message = error?.message ?? '';
+  const group = STORYLINE_COLUMN_GROUPS.find(
+    (candidate) => isColumnGroupAvailable(candidate.key) && candidate.pattern.test(message)
   );
+  return group?.key ?? null;
 }
 
 /**
- * Run a storyline listing query, retrying without the discovery columns if the
- * database has not had migration 088 applied yet.
+ * Run a storyline listing query, dropping whichever additive column group the
+ * database has not seen yet and retrying.
+ *
+ * Retries in a loop rather than once: Postgres reports only the first undefined
+ * column per attempt, so a database missing both 088/089 and 093 needs one
+ * attempt per group before it succeeds.
  */
 async function selectStorylines<T>(
   build: (columns: string) => PromiseLike<QueryResult<T>>,
   options: { withStory?: boolean } = {}
 ): Promise<QueryResult<T>> {
-  const result = await build(storylineListColumns(options));
+  let result = await build(storylineListColumns(options));
 
-  if (discoveryColumnsAvailable && isMissingDiscoveryColumnError(result.error)) {
-    console.warn('Storyline discovery columns missing (migrations 088/089 not applied); serving without intros or stored classification.');
-    discoveryColumnsAvailable = false;
-    return build(storylineListColumns(options));
+  for (let attempt = 0; attempt < STORYLINE_COLUMN_GROUPS.length; attempt += 1) {
+    const missing = missingColumnGroup(result.error);
+    if (!missing) break;
+
+    const group = STORYLINE_COLUMN_GROUPS.find((candidate) => candidate.key === missing)!;
+    console.warn(group.warning);
+    unavailableColumnGroups.add(missing);
+    result = await build(storylineListColumns(options));
   }
 
   return result;
@@ -183,7 +264,7 @@ async function resolveEffectiveAudienceMode(
  * unfiltered listing.
  */
 function kidsEligibilityUnavailable(mode: GalleryAudienceMode): boolean {
-  return mode === 'kids' && !discoveryColumnsAvailable;
+  return mode === 'kids' && !discoveryColumnsAvailable();
 }
 
 function emptyGalleryPage(): GalleryPage {
@@ -267,6 +348,13 @@ function mapStorylineRow(row: any): GalleryItem {
     createdAt: row.created_at,
     // Attached per request by `withProgress`; never part of the cached rows.
     progress: null,
+    // Membership is per row; the count and the jump list are filled in by the
+    // collapse pass, which is the only thing that has seen the whole series.
+    seriesId: row.series_id ?? null,
+    seriesTitle: row.series_title ?? null,
+    episodeNumber: typeof row.episode_number === 'number' ? row.episode_number : null,
+    episodeCount: null,
+    episodes: null,
   };
 }
 
@@ -752,6 +840,13 @@ const GENRE_RAIL_ITEM_LIMIT = 10;
 const GENRE_RAIL_MIN_ITEMS = 3;
 const FEATURED_LIMIT = 5;
 
+// Series. The pool is bounded by the rail pool's distinct series — a handful in
+// practice — so the ceiling only guards against a catalogue that is one giant
+// serial. A jump list longer than the list limit renders as "N+".
+const SERIES_RAIL_ITEM_LIMIT = 12;
+const SERIES_RAIL_MIN_ITEMS = 2;
+const SERIES_EPISODE_POOL_LIMIT = 300;
+
 /**
  * Republishing creates a fresh storyline row for the same story, so rails can
  * show near-identical duplicates back to back. Keep only the first (rows
@@ -784,10 +879,67 @@ function titleCaseGenre(genre: string): string {
   return genre.charAt(0).toUpperCase() + genre.slice(1);
 }
 
+/** One published episode, as the jump list and the count need it. */
+type SeriesEpisodeRow = {
+  id: string;
+  story_id: string;
+  series_id: string;
+  episode_number: number;
+  title: string;
+  beat_count: number | null;
+  created_at: string;
+};
+
 interface PublicRailRows {
   recentRows: StorylineGalleryRow[];
   mostLovedRows: StorylineGalleryRow[];
   verticalRows: StorylineGalleryRow[];
+  episodeRows: SeriesEpisodeRow[];
+}
+
+/**
+ * Every published episode of every series present in the rail pool.
+ *
+ * Carries no cover URL on purpose. Signing cover art is the expensive part of
+ * building a feed, and a jump list needs a label and a length, not a
+ * thumbnail — which is what makes fetching the whole set eagerly cheaper than
+ * lazy-loading it per card.
+ *
+ * The audience and moderation scope must be applied here too. A kids viewer
+ * being offered a non-kids episode from a jump list is the one failure in this
+ * file that is a safety bug rather than a cosmetic one.
+ */
+async function fetchSeriesEpisodeRows(
+  supabase: ReturnType<typeof createAnonClient>,
+  seriesIds: string[],
+  mode: GalleryAudienceMode,
+  gateActive: boolean
+): Promise<SeriesEpisodeRow[]> {
+  const ids = Array.from(new Set(seriesIds.filter(Boolean)));
+  if (ids.length === 0 || !seriesColumnsAvailable()) return [];
+
+  let query = supabase
+    .from('storylines')
+    .select('id, story_id, series_id, episode_number, title, beat_count, created_at')
+    .eq('is_public', true)
+    .in('series_id', ids)
+    .not('episode_number', 'is', null);
+
+  if (gateActive) query = query.in('moderation_status', ['none', 'approved']);
+  if (mode === 'kids') query = query.in('age_group', KIDS_AGE_GROUPS);
+
+  const { data, error } = await query
+    .order('series_id', { ascending: true })
+    .order('episode_number', { ascending: true })
+    .order('created_at', { ascending: false })
+    .limit(SERIES_EPISODE_POOL_LIMIT);
+
+  if (error) {
+    console.warn('Failed to fetch series episodes:', error.message);
+    return [];
+  }
+
+  return (data ?? []) as SeriesEpisodeRow[];
 }
 
 /**
@@ -873,11 +1025,20 @@ async function fetchPublicRailRows(
         console.error('Failed to fetch vertical rail:', verticalResult.error.message);
       }
 
-      return {
-        recentRows: (recentResult.data || []) as StorylineGalleryRow[],
-        mostLovedRows: (mostLovedResult.error ? [] : mostLovedResult.data || []) as StorylineGalleryRow[],
-        verticalRows: (verticalResult.error ? [] : verticalResult.data || []) as StorylineGalleryRow[],
-      };
+      const recentRows = (recentResult.data || []) as StorylineGalleryRow[];
+      const mostLovedRows = (mostLovedResult.error ? [] : mostLovedResult.data || []) as StorylineGalleryRow[];
+      const verticalRows = (verticalResult.error ? [] : verticalResult.data || []) as StorylineGalleryRow[];
+
+      // One extra query for every series in the pool, inside the same 60s
+      // cache — so this costs one query a minute for the whole site, not one
+      // per card or per visitor.
+      const seriesIds = [...recentRows, ...mostLovedRows, ...verticalRows]
+        .map((row) => row.series_id)
+        .filter((id): id is string => !!id);
+
+      const episodeRows = await fetchSeriesEpisodeRows(supabase, seriesIds, mode, gateActive);
+
+      return { recentRows, mostLovedRows, verticalRows, episodeRows };
     }
   );
 }
@@ -921,7 +1082,7 @@ export async function getGalleryRails(
     throw new Error(`Failed to fetch gallery rails: ${publicRowsResult.message}`);
   }
 
-  const { recentRows, mostLovedRows, verticalRows } = publicRowsResult;
+  const { recentRows, mostLovedRows, verticalRows, episodeRows } = publicRowsResult;
 
   // One cover-resolution pass across every rail's rows.
   const dedupedRows: StorylineGalleryRow[] = [];
@@ -933,10 +1094,40 @@ export async function getGalleryRails(
   }
 
   // Covers come from the shared cache; progress is per viewer and read fresh.
+  // The progress lookup is widened to cover every episode of every series in
+  // the pool, so a collapsed card can open where the viewer actually stopped
+  // rather than always at episode one — one `.in()` wider, no extra query.
   const [resolvedRows, progressById] = await Promise.all([
     resolveStorylineCovers(dedupedRows),
-    fetchStorylineProgress(supabase, dedupedRows.map((row) => row.id)),
+    fetchStorylineProgress(supabase, [
+      ...dedupedRows.map((row) => row.id),
+      ...episodeRows.map((row) => row.id),
+    ]),
   ]);
+
+  // Rows arrive grouped by series, ascending by episode, newest republish
+  // first within an episode — so keeping the first row per story keeps the
+  // freshest storyline for each episode and stops a republished episode from
+  // being counted twice.
+  const episodesBySeriesId = new Map<string, GalleryEpisodeSummary[]>();
+  const seenEpisodeStoryIds = new Set<string>();
+  for (const row of episodeRows) {
+    if (seenEpisodeStoryIds.has(row.story_id)) continue;
+    seenEpisodeStoryIds.add(row.story_id);
+
+    const group = episodesBySeriesId.get(row.series_id) ?? [];
+    if (group.length >= SERIES_EPISODE_LIST_LIMIT) continue;
+    group.push({
+      storylineId: row.id,
+      storyId: row.story_id,
+      title: row.title,
+      episodeNumber: row.episode_number,
+      beatCount: row.beat_count,
+      createdAt: row.created_at,
+      progress: progressById.get(row.id) ?? null,
+    });
+    episodesBySeriesId.set(row.series_id, group);
+  }
 
   const rowsById = new Map<string, StorylineGalleryRow>(
     resolvedRows.map((row) => [row.id, row])
@@ -958,7 +1149,14 @@ export async function getGalleryRails(
       .map((row) => itemsById.get(row.id))
       .filter((item): item is GalleryItem => !!item);
 
-  const recentItems = dedupeByStory(toItems(recentRows));
+  // Collapse after deduping republishes: `dedupeByStory` keys on the story, so
+  // it never touches sibling episodes — each is a separate story — which is
+  // exactly why a second pass is needed. Running it first lets the collapse
+  // assume one item per story.
+  const collapse = (items: GalleryItem[]): GalleryItem[] =>
+    collapseSeries(dedupeByStory(items), episodesBySeriesId);
+
+  const recentItems = collapse(toItems(recentRows));
 
   // Billboard rotation: prefer clean single-image covers, but storyboard
   // covers are eligible too — the hero crops them to a single panel — so the
@@ -983,7 +1181,9 @@ export async function getGalleryRails(
   const rails: GalleryRail[] = [];
 
   // Unfinished stories outrank everything: it is the one row where the viewer
-  // already told us what they want next.
+  // already told us what they want next. Deliberately not collapsed — the
+  // viewer stopped inside one specific episode, and a series card would send
+  // them somewhere else. Same for My List, which holds what they chose to save.
   const continueItems = dedupeByStory(toItems(continueRows));
   if (continueItems.length > 0) {
     rails.push({
@@ -1008,9 +1208,24 @@ export async function getGalleryRails(
     });
   }
 
+  // Series get their own row, above the genre rails but below the catalogue's
+  // heartbeat: `new` is what most of the catalogue lives in, and demoting it
+  // to promote the episodic minority costs more discovery than it buys.
+  const seriesItems = recentItems
+    .filter((item) => (item.episodeCount ?? 0) >= SERIES_MIN_EPISODES)
+    .slice(0, SERIES_RAIL_ITEM_LIMIT);
+  if (seriesItems.length >= SERIES_RAIL_MIN_ITEMS) {
+    rails.push({
+      key: 'series',
+      title: 'Series & Episodes',
+      layout: 'wide',
+      items: seriesItems,
+    });
+  }
+
   // Popularity counts are an engagement-pressure signal; the kids surface
   // leaves them out entirely.
-  const mostLovedItems = mode === 'kids' ? [] : dedupeByStory(toItems(mostLovedRows));
+  const mostLovedItems = mode === 'kids' ? [] : collapse(toItems(mostLovedRows));
   if (mostLovedItems.length >= GENRE_RAIL_MIN_ITEMS) {
     rails.push({ key: 'most_loved', title: 'Most Loved', layout: 'wide', items: mostLovedItems });
   }
@@ -1042,7 +1257,7 @@ export async function getGalleryRails(
     }
   }
 
-  const verticalItems = dedupeByStory(toItems(verticalRows));
+  const verticalItems = collapse(toItems(verticalRows));
   if (verticalItems.length > 0) {
     rails.push({
       key: 'vertical',
@@ -1225,12 +1440,12 @@ export async function getGalleryItems(
       // Genre and audience read the indexed storyline columns (migration 089)
       // instead of the unindexable jsonb path on the joined story.
       if (filters.genre && filters.genre !== 'all') {
-        query = discoveryColumnsAvailable
+        query = discoveryColumnsAvailable()
           ? query.eq('genre', filters.genre.toLowerCase())
           : query.ilike('stories.genre', filters.genre);
       }
       if (filters.ageGroup && filters.ageGroup !== 'all') {
-        query = discoveryColumnsAvailable
+        query = discoveryColumnsAvailable()
           ? query.eq('age_group', filters.ageGroup)
           : query.filter('stories.story_config->>ageGroup', 'eq', filters.ageGroup);
       }

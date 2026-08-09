@@ -2,9 +2,11 @@
 
 import Link from 'next/link';
 import { motion, useReducedMotion } from 'motion/react';
-import { BookOpen, Bookmark, BookmarkCheck, Play, Share2 } from 'lucide-react';
+import { BookOpen, Bookmark, BookmarkCheck, Layers, Play, Share2 } from 'lucide-react';
+import SeriesEpisodeList from '@/components/gallery/SeriesEpisodeList';
 import { getStoryGenreLabel } from '@/lib/story/genres';
 import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
+import { SERIES_EPISODE_LIST_LIMIT } from '@/lib/gallery/series';
 import type { ExpandedPanelPlacement } from '@/lib/gallery/card-expansion';
 import type { GalleryItem } from '@/lib/types/database';
 
@@ -16,7 +18,8 @@ interface StorylineCardPanelProps {
   isSaved: boolean;
   isLoggedIn: boolean;
   onToggleSave: (storylineId: string, saved: boolean) => void;
-  onOpen: () => void;
+  /** Records what the open-flow loader should show; an episode overrides it. */
+  onOpen: (override?: { title?: string; beatCount?: number | null }) => void;
   onShare: () => void;
 }
 
@@ -56,6 +59,15 @@ export default function StorylineCardPanel({
       : 'Start watching';
 
   const isSide = placement === 'side';
+  const episodes = item.episodes ?? [];
+  const episodeCount = item.episodeCount ?? 0;
+  const isSeries = episodeCount >= 2;
+  // A list that hit its ceiling reports "20+" rather than a count it stopped
+  // taking.
+  const episodeCountLabel =
+    episodes.length >= SERIES_EPISODE_LIST_LIMIT
+      ? `${SERIES_EPISODE_LIST_LIMIT}+ episodes`
+      : `${episodeCount} episodes`;
 
   return (
     <motion.div
@@ -82,11 +94,18 @@ export default function StorylineCardPanel({
             {audienceLabel}
           </span>
         )}
-        {!!item.beatCount && (
-          <span className="flex items-center gap-1">
-            <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-            {item.beatCount} beats
+        {isSeries ? (
+          <span className="flex items-center gap-1 text-emerald-300">
+            <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+            {episodeCountLabel}
           </span>
+        ) : (
+          !!item.beatCount && (
+            <span className="flex items-center gap-1">
+              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+              {item.beatCount} beats
+            </span>
+          )
         )}
         {item.authorName && (
           <span className="max-w-[140px] truncate text-neutral-400">by {item.authorName}</span>
@@ -96,7 +115,7 @@ export default function StorylineCardPanel({
       <div className="flex flex-wrap items-center gap-2 pt-0.5">
         <Link
           href={`/storyline/${item.id}`}
-          onClick={onOpen}
+          onClick={() => onOpen()}
           prefetch={false}
           className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 px-3.5 py-2 text-xs font-semibold text-neutral-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 hover:shadow-emerald-400/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
         >
@@ -134,6 +153,14 @@ export default function StorylineCardPanel({
           <Share2 className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
       </div>
+
+      {isSeries && (
+        <SeriesEpisodeList
+          episodes={episodes}
+          activeStorylineId={item.id}
+          onOpen={(episode) => onOpen({ title: episode.title, beatCount: episode.beatCount })}
+        />
+      )}
     </motion.div>
   );
 }

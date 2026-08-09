@@ -3,7 +3,7 @@
 import { useId, useRef } from 'react';
 import Link from 'next/link';
 import { motion, useReducedMotion } from 'motion/react';
-import { BookOpen, Bookmark, BookmarkCheck, Check, Eye, Heart, Share2 } from 'lucide-react';
+import { BookOpen, Bookmark, BookmarkCheck, Check, Eye, Heart, Layers, Share2 } from 'lucide-react';
 import StoryboardThumbnail, { useStoryboardThumbnailPreview } from '@/components/story/StoryboardThumbnail';
 import StorylineCardPanel from '@/components/gallery/StorylineCardPanel';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
@@ -81,6 +81,7 @@ export default function StorylineCard({
 
   const isExpandable = !!onRequestExpand;
   const isSideExpanded = isExpanded && panelPlacement === 'side';
+  const isSeries = (item.episodeCount ?? 0) >= 2;
 
   // Reading position. The bar needs a length to divide by, so a progress row
   // written before the storyline length was known shows no bar.
@@ -90,13 +91,15 @@ export default function StorylineCard({
     ? Math.min(100, Math.round((progress.beatIndex / (progressTotal - 1)) * 100))
     : 0;
 
-  const rememberNavMeta = () => {
+  const rememberNavMeta = (override?: { title?: string; beatCount?: number | null }) => {
     writeOpenFlowNavMeta({
       kind: 'storyline',
-      title: item.title,
+      // Jumping straight to an episode should load under that episode's name,
+      // not the series card's.
+      title: override?.title ?? item.title,
       coverImageUrl: item.coverImageUrl,
       coverIsStoryboard: item.coverIsStoryboard,
-      beatCount: item.beatCount,
+      beatCount: override?.beatCount ?? item.beatCount,
     });
   };
 
@@ -230,15 +233,26 @@ export default function StorylineCard({
           className="absolute inset-0 z-0 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-400/70"
         />
 
-        {progress?.completed && (
-          <span
-            className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-full border border-emerald-400/30 bg-neutral-950/70 px-2 py-1 text-[10px] font-medium text-emerald-300 backdrop-blur-sm"
-            title="You finished watching this story"
-          >
-            <Check className="h-3 w-3" aria-hidden="true" />
-            Watched
+        {/* A series card says so up front — it is the difference between one
+            story and a run of them, and the reason its count is episodes
+            rather than beats. */}
+        {isSeries ? (
+          <span className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-full border border-emerald-400/30 bg-neutral-950/75 px-2 py-1 text-[10px] font-medium text-emerald-300 backdrop-blur-sm">
+            <Layers className="h-3 w-3" aria-hidden="true" />
+            {item.episodeCount} Episodes
           </span>
+        ) : (
+          progress?.completed && (
+            <span
+              className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-full border border-emerald-400/30 bg-neutral-950/70 px-2 py-1 text-[10px] font-medium text-emerald-300 backdrop-blur-sm"
+              title="You finished watching this story"
+            >
+              <Check className="h-3 w-3" aria-hidden="true" />
+              Watched
+            </span>
+          )
         )}
+
 
         {isLoggedIn && (
           <button
@@ -279,6 +293,15 @@ export default function StorylineCard({
             layout === 'portrait' ? 'p-3' : 'p-3.5 sm:p-4'
           } ${progressPercent > 0 ? 'pb-4 sm:pb-5' : ''}`}
         >
+          {/* Rails collapse a series to one card; the grid keeps the episodes
+              apart, so there they carry their own position instead. Sits above
+              the title rather than in a corner, where the save button lives. */}
+          {!isSeries && item.episodeNumber !== null && item.seriesTitle && (
+            <p className="mb-0.5 truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-indigo-300/90 drop-shadow-sm">
+              Ep {item.episodeNumber} · {item.seriesTitle}
+            </p>
+          )}
+
           <h3
             id={titleId}
             className={`line-clamp-2 font-serif leading-snug text-neutral-50 drop-shadow-sm transition-colors group-hover:text-white ${
