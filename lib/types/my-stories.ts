@@ -1,5 +1,31 @@
 export type TabId = 'explored' | 'my-stories' | 'storylines' | 'reels' | 'characters';
 
+/**
+ * Rows fetched per drawer tab page. The lists used to be unbounded — every
+ * story a user had ever made, plus a thumbnail lookup over all of them, on
+ * every load — which got slower for good with each story written. A page plus
+ * "Load more" keeps the first paint flat no matter how large the library gets.
+ */
+export const MY_STORIES_PAGE_SIZE = 30;
+
+/** A page of list rows plus whether another page exists behind it. */
+export interface PagedList<T> {
+  items: T[];
+  hasMore: boolean;
+}
+
+/** Tabs that page; the Characters tab loads as one snapshot. */
+export type PagedTabId = 'my-stories' | 'storylines' | 'reels';
+
+/**
+ * Paging window for a list query. Lives here rather than beside the loaders
+ * because a `'use server'` module may only export async functions.
+ */
+export interface ListPageInput {
+  limit?: number;
+  offset?: number;
+}
+
 export interface SavedStory {
   id: string;
   title: string;

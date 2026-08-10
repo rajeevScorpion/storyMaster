@@ -17,6 +17,7 @@ import {
   getBeatPersistedImageUrl,
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+import { MY_STORIES_PAGE_SIZE, type ListPageInput, type PagedList } from '@/lib/types/my-stories';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
 import { normalizeStoredAgeGroup } from '@/lib/ai/story-audience';
 import { normalizeStoredGenre } from '@/lib/story/genres';
@@ -2382,14 +2383,30 @@ async function resolveStorylineListThumbnails(
  * List the current user's created stories.
  */
 /**
+ * Resolves a paging window. One extra row past the page is requested so "is
+ * there more?" is answered by the same round trip, with no count query; the
+ * probe row is sliced off by `takePage` before it reaches the client.
+ */
+function listRange(input?: ListPageInput): { limit: number; offset: number; last: number } {
+  const limit = Math.max(1, input?.limit ?? MY_STORIES_PAGE_SIZE);
+  const offset = Math.max(0, input?.offset ?? 0);
+  return { limit, offset, last: offset + limit };
+}
+
+function takePage<T>(rows: T[], limit: number): PagedList<T> {
+  return { items: rows.slice(0, limit), hasMore: rows.length > limit };
+}
+
+/**
  * Story-list loader threaded with an already-resolved auth context, so a
  * bundled bootstrap can authenticate once and fan out. `listUserStories` below
  * is the thin per-request wrapper.
  */
 export async function loadUserStoriesData(
   supabase: SupabaseClient,
-  userId: string
-): Promise<Array<{
+  userId: string,
+  page?: ListPageInput
+): Promise<PagedList<{
   id: string;
   title: string;
   status: string;
@@ -2403,12 +2420,14 @@ export async function loadUserStoriesData(
   thumbnail_url: string | null;
   thumbnail_is_storyboard: boolean;
 }>> {
+  const { limit, offset, last } = listRange(page);
   const { data, error } = await supabase
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number, is_vertical_story, aspect_ratio')
     .eq('user_id', userId)
     .neq('story_kind', 'reel')
-    .order('updated_at', { ascending: false });
+    .order('updated_at', { ascending: false })
+    .range(offset, last);
 
   let rows: Array<{
     id: string;
@@ -2429,27 +2448,33 @@ export async function loadUserStoriesData(
       .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
       .eq('user_id', userId)
       .neq('story_kind', 'reel')
-      .order('updated_at', { ascending: false });
+      .order('updated_at', { ascending: false })
+      .range(offset, last);
 
     if (fallbackError) throw new Error(`Failed to list stories: ${fallbackError.message}`);
     rows = fallbackData || [];
   }
 
-  const stories = rows;
+  // Thumbnails resolve for the page only — the probe row is dropped first so it
+  // never costs a beats lookup or a signature.
+  const { items: stories, hasMore } = takePage(rows, limit);
   const thumbnails = await resolveStoryListThumbnails(supabase, stories);
 
-  return stories.map((story) => ({
-    ...story,
-    thumbnail_url: thumbnails.get(story.id)?.url ?? null,
-    thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
-  }));
+  return {
+    items: stories.map((story) => ({
+      ...story,
+      thumbnail_url: thumbnails.get(story.id)?.url ?? null,
+      thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
+    })),
+    hasMore,
+  };
 }
 
-export async function listUserStories() {
+export async function listUserStories(page?: ListPageInput) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
-  return loadUserStoriesData(supabase, user.id);
+  return loadUserStoriesData(supabase, user.id, page);
 }
 
 /**
@@ -2458,8 +2483,9 @@ export async function listUserStories() {
  */
 export async function loadUserReelsData(
   supabase: SupabaseClient,
-  userId: string
-): Promise<Array<{
+  userId: string,
+  page?: ListPageInput
+): Promise<PagedList<{
   id: string;
   title: string;
   status: string;
@@ -2474,19 +2500,21 @@ export async function loadUserReelsData(
   thumbnail_url: string | null;
   thumbnail_is_storyboard: boolean;
 }>> {
+  const { limit, offset, last } = listRange(page);
   const { data, error } = await supabase
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url, is_vertical_story, aspect_ratio')
     .eq('user_id', userId)
     .eq('story_kind', 'reel')
-    .order('updated_at', { ascending: false });
+    .order('updated_at', { ascending: false })
+    .range(offset, last);
 
   if (error) throw new Error(`Failed to list reels: ${error.message}`);
 
-  const reels = data || [];
+  const { items: reels, hasMore } = takePage(data || [], limit);
   const thumbnails = await resolveStoryListThumbnails(supabase, reels);
 
-  return reels.map((story: any) => {
+  const items = reels.map((story: any) => {
     const storyMap = story.story_map && typeof story.story_map === 'object' ? story.story_map : null;
     const nodeCount = storyMap?.nodes && typeof storyMap.nodes === 'object'
       ? Object.keys(storyMap.nodes).length
@@ -2500,7 +2528,7 @@ export async function loadUserReelsData(
       is_archived: Boolean(story.is_archived),
       updated_at: story.updated_at,
       user_prompt: story.user_prompt,
-      story_kind: 'reel',
+      story_kind: 'reel' as const,
       beat_count: nodeCount || (Number.isFinite(configBeatCount) ? configBeatCount : 0),
       cover_image_url: story.cover_image_url,
       is_vertical_story: story.is_vertical_story,
@@ -2509,16 +2537,18 @@ export async function loadUserReelsData(
       thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
     };
   });
+
+  return { items, hasMore };
 }
 
 /**
  * List the current user's generated reels.
  */
-export async function listUserReels() {
+export async function listUserReels(page?: ListPageInput) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
-  return loadUserReelsData(supabase, user.id);
+  return loadUserReelsData(supabase, user.id, page);
 }
 
 /**
@@ -2617,8 +2647,9 @@ export async function unsaveStoryline(storylineId: string): Promise<void> {
  */
 export async function loadSavedStorylinesData(
   supabase: SupabaseClient,
-  userId: string
-): Promise<Array<{
+  userId: string,
+  page?: ListPageInput
+): Promise<PagedList<{
   id: string;
   storyline_id: string;
   saved_at: string;
@@ -2636,6 +2667,7 @@ export async function loadSavedStorylinesData(
     thumbnail_is_storyboard?: boolean;
   };
 }>> {
+  const { limit, offset, last } = listRange(page);
   const { data, error } = await supabase
     .from('saved_storylines')
     .select(`
@@ -2656,11 +2688,12 @@ export async function loadSavedStorylinesData(
       )
     `)
     .eq('user_id', userId)
-    .order('saved_at', { ascending: false });
+    .order('saved_at', { ascending: false })
+    .range(offset, last);
 
   if (error) throw new Error(`Failed to list saved storylines: ${error.message}`);
 
-  const rows = data || [];
+  const { items: rows, hasMore } = takePage(data || [], limit);
   const thumbnails = await resolveStorylineListThumbnails(
     supabase,
     rows
@@ -2675,7 +2708,7 @@ export async function loadSavedStorylinesData(
       }))
   );
 
-  return rows.map((row: any) => {
+  const items = rows.map((row: any) => {
     if (!row.storylines) {
       return {
         id: row.id,
@@ -2700,16 +2733,18 @@ export async function loadSavedStorylinesData(
       },
     };
   });
+
+  return { items, hasMore };
 }
 
 /**
  * List storylines saved to the user's profile.
  */
-export async function listSavedStorylines() {
+export async function listSavedStorylines(page?: ListPageInput) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
-  return loadSavedStorylinesData(supabase, user.id);
+  return loadSavedStorylinesData(supabase, user.id, page);
 }
 
 // ============================================================

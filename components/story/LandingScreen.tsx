@@ -352,7 +352,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     );
     useMyStoriesStore
       .getState()
-      .bootstrapSession({ force: true, imageTaskKey, imageModelSelection: imageModelSelection ?? null })
+      .bootstrapSession({
+        // The landing payload is never cached client-side, so it must come
+        // back on every mount; the drawer lists keep their 5-minute cache
+        // instead of being re-queried and re-signed on every visit here.
+        requireLandingPayload: true,
+        imageTaskKey,
+        imageModelSelection: imageModelSelection ?? null,
+      })
       .then((bootstrap) => {
         if (cancelled) return;
         if (!bootstrap) {
