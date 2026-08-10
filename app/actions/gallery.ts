@@ -21,6 +21,7 @@ import {
   SERIES_EPISODE_LIST_LIMIT,
   SERIES_MIN_EPISODES,
 } from '@/lib/gallery/series';
+import { buildSearchOrFilter } from '@/lib/gallery/search-query';
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { deriveDiscoveryIntro } from '@/lib/story/discovery-intro';
@@ -46,6 +47,9 @@ const COVER_FLAG_TTL_MS = 30 * 60 * 1000;
 const SIGNED_URL_TTL_MS = 12 * 60 * 60 * 1000;
 const SIGNED_URL_LIFETIME_SECONDS = 60 * 60 * 24;
 const PUBLIC_RAILS_TTL_MS = 60 * 1000;
+
+/** Mirrors GALLERY_PAGE_SIZE; the action must stand on its own if called bare. */
+const DEFAULT_GALLERY_LIMIT = 12;
 
 /**
  * Moderation gate for public listings: when the admin requires review before
@@ -1394,13 +1398,26 @@ export async function getSavedStorylineIds(): Promise<string[]> {
  */
 export async function getGalleryItems(
   filters: GalleryFilters,
-  limit: number = 12,
+  limit: number = DEFAULT_GALLERY_LIMIT,
   offset: number = 0,
   requestedMode: GalleryAudienceMode = 'all'
 ): Promise<GalleryPage> {
   const supabase = await createClient();
   const mode = await resolveEffectiveAudienceMode(requestedMode);
-  const rangeEnd = offset + limit - 1;
+
+  // A non-finite bound makes `.range()` return zero rows while still reporting
+  // the true count, which reads as "the catalogue is empty" rather than as a
+  // fault. Serve a valid page instead and say so, loudly.
+  const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : DEFAULT_GALLERY_LIMIT;
+  const safeOffset = Number.isInteger(offset) && offset >= 0 ? offset : 0;
+  if (safeLimit !== limit || safeOffset !== offset) {
+    console.error(
+      `getGalleryItems called with an invalid range (limit=${String(limit)}, offset=${String(offset)}); ` +
+        `falling back to ${safeOffset}..${safeOffset + safeLimit - 1}.`
+    );
+  }
+
+  const rangeEnd = safeOffset + safeLimit - 1;
   const lane: GalleryLane = filters.type === 'vertical' ? 'vertical' : 'storylines';
 
   // Fail closed: no trustworthy age column means no kids listing.
@@ -1413,7 +1430,7 @@ export async function getGalleryItems(
 
   // `count: 'exact'` is a second scan of the filtered set. The client only
   // needs the total once per filter combination, so later pages skip it.
-  const wantsCount = offset === 0;
+  const wantsCount = safeOffset === 0;
 
   const { data: storylines, count, error } = await selectStorylines<StorylineGalleryRow[]>(
     (columns) => {
@@ -1435,7 +1452,16 @@ export async function getGalleryItems(
       }
 
       if (filters.search) {
-        query = query.ilike('title', `%${filters.search}%`);
+        // Rebuilt per attempt so a retry that drops a column group also stops
+        // searching in it.
+        const searchColumns = ['title', 'author_name'];
+        if (discoveryColumnsAvailable()) searchColumns.push('discovery_intro', 'genre');
+        if (seriesColumnsAvailable()) searchColumns.push('series_title');
+
+        const searchFilter = buildSearchOrFilter(filters.search, searchColumns);
+        // Null means the term was only wildcards or punctuation. That is "no
+        // search", not "matches nothing".
+        if (searchFilter) query = query.or(searchFilter);
       }
       // Genre and audience read the indexed storyline columns (migration 089)
       // instead of the unindexable jsonb path on the joined story.
@@ -1456,7 +1482,7 @@ export async function getGalleryItems(
         query = query.filter('stories.story_config->>language', 'eq', filters.language);
       }
 
-      return query.range(offset, rangeEnd) as unknown as PromiseLike<
+      return query.range(safeOffset, rangeEnd) as unknown as PromiseLike<
         QueryResult<StorylineGalleryRow[]>
       >;
     },
@@ -1476,7 +1502,7 @@ export async function getGalleryItems(
     // Pages past the first report 0; the client keeps the total it already has.
     total: count ?? 0,
     hasMore: typeof count === 'number'
-      ? offset + items.length < count
-      : items.length === limit,
+      ? safeOffset + items.length < count
+      : items.length === safeLimit,
   };
 }
