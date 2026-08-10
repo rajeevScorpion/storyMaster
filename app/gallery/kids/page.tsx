@@ -1,5 +1,6 @@
-import KidsGalleryBrowser, { PAGE_SIZE } from '@/components/gallery/KidsGalleryBrowser';
+import KidsGalleryBrowser from '@/components/gallery/KidsGalleryBrowser';
 import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
+import { GALLERY_PAGE_SIZE } from '@/lib/gallery/paging';
 import {
   DEFAULT_GALLERY_FILTERS,
   filtersFromParams,
@@ -42,7 +43,7 @@ export default async function KidsGalleryRoute({
 
   const [railsResult, searchResult, savedResult] = await Promise.allSettled([
     getGalleryRails('kids'),
-    getGalleryItems(searchFilters, PAGE_SIZE, 0, 'kids'),
+    getGalleryItems(searchFilters, GALLERY_PAGE_SIZE, 0, 'kids'),
     getSavedStorylineIds(),
   ]);
 

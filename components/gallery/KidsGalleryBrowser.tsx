@@ -15,9 +15,10 @@ import { getGalleryRails } from '@/app/actions/gallery';
 import { useSavedStorylines } from '@/lib/hooks/useSavedStorylines';
 import { useGallerySearchMode } from '@/lib/hooks/useGallerySearchMode';
 import { useGalleryResults } from '@/lib/hooks/useGalleryResults';
+import { GALLERY_PAGE_SIZE } from '@/lib/gallery/paging';
 import type { GalleryFilters, GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
-export const PAGE_SIZE = 12;
+
 const GRID_CLASS = 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
 const CARD_SIZES = '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, (max-width: 1536px) 24vw, 19vw';
 
@@ -73,7 +74,7 @@ export default function KidsGalleryBrowser({
 
   const results = useGalleryResults({
     filters,
-    pageSize: PAGE_SIZE,
+    pageSize: GALLERY_PAGE_SIZE,
     enabled: search.isOpen,
     mode: 'kids',
     initialPage: initialSearchPage,
@@ -191,7 +192,7 @@ export default function KidsGalleryBrowser({
           savedIds={savedIds}
           isLoggedIn={!!user}
           onToggleSave={toggleSave}
-          pageSize={PAGE_SIZE}
+          pageSize={GALLERY_PAGE_SIZE}
           variant="kids"
           infiniteScroll={false}
           hideEngagementCounts

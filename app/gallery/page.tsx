@@ -1,5 +1,6 @@
-import GalleryBrowser, { PAGE_SIZE } from '@/components/gallery/GalleryBrowser';
+import GalleryBrowser from '@/components/gallery/GalleryBrowser';
 import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
+import { GALLERY_PAGE_SIZE } from '@/lib/gallery/paging';
 import {
   DEFAULT_GALLERY_FILTERS,
   filtersFromParams,
@@ -54,7 +55,7 @@ export default async function GalleryRoute({
 
   const [railsResult, searchResult, savedResult] = await Promise.allSettled([
     getGalleryRails(),
-    getGalleryItems(searchFilters, PAGE_SIZE, 0),
+    getGalleryItems(searchFilters, GALLERY_PAGE_SIZE, 0),
     getSavedStorylineIds(),
   ]);
 

@@ -16,13 +16,14 @@ import { getGalleryRails } from '@/app/actions/gallery';
 import { useSavedStorylines } from '@/lib/hooks/useSavedStorylines';
 import { useGallerySearchMode } from '@/lib/hooks/useGallerySearchMode';
 import { useGalleryResults } from '@/lib/hooks/useGalleryResults';
+import { GALLERY_PAGE_SIZE } from '@/lib/gallery/paging';
 import type {
   GalleryFilters,
   GalleryPage,
   GalleryRailsResponse,
 } from '@/lib/types/database';
 
-export const PAGE_SIZE = 12;
+
 
 interface GalleryBrowserProps {
   /** Rendered on the server so the first paint carries real content. */
@@ -58,7 +59,7 @@ export default function GalleryBrowser({
   });
   const results = useGalleryResults({
     filters: search.filters,
-    pageSize: PAGE_SIZE,
+    pageSize: GALLERY_PAGE_SIZE,
     enabled: search.isOpen,
     initialPage: initialSearchPage,
     initialFilters: initialSearchFilters,
@@ -193,7 +194,7 @@ export default function GalleryBrowser({
           savedIds={savedIds}
           isLoggedIn={!!user}
           onToggleSave={toggleSave}
-          pageSize={PAGE_SIZE}
+          pageSize={GALLERY_PAGE_SIZE}
         />
       )}
 
