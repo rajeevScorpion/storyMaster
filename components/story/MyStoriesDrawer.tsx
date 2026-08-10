@@ -8,7 +8,7 @@ import { deleteStory, archiveStory, unarchiveStory, unsaveStoryline } from '@/ap
 import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import { writeOpenFlowNavMeta } from '@/lib/story/open-flow-nav';
 import Link from 'next/link';
-import type { SavedStory, SavedStorylineItem, TabId, UserReel } from '@/lib/types/my-stories';
+import type { PagedTabId, SavedStory, SavedStorylineItem, TabId, UserReel } from '@/lib/types/my-stories';
 import type { CharacterMaster } from '@/lib/types/character-library';
 
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
@@ -16,6 +16,7 @@ import CharacterMasterCard from './CharacterMasterCard';
 import CharacterMasterDialog from './CharacterMasterDialog';
 import StoryboardThumbnail from './StoryboardThumbnail';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
 
 interface MyStoriesDrawerProps {
   isOpen: boolean;
@@ -48,7 +49,10 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   const characters = useMyStoriesStore((s) => s.characters);
   const characterSettings = useMyStoriesStore((s) => s.characterSettings);
   const loading = useMyStoriesStore((s) => s.loading);
+  const hasMore = useMyStoriesStore((s) => s.hasMore);
+  const loadingMore = useMyStoriesStore((s) => s.loadingMore);
   const fetchTab = useMyStoriesStore((s) => s.fetchTab);
+  const loadMore = useMyStoriesStore((s) => s.loadMore);
   const ensureCharacterUniverse = useMyStoriesStore((s) => s.ensureCharacterUniverse);
 
   // Flag-gated: fail closed until the snapshot loads. Prefetched on login, so
@@ -77,6 +81,19 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   }, [isOpen]);
 
   const isLoading = loading[effectiveTab];
+
+  // Cached rows from the last visit are painted immediately and revalidated in
+  // the background, so skeletons are only right when there is genuinely
+  // nothing to show — otherwise a refresh would blank content already on screen.
+  const rowsOnScreen =
+    effectiveTab === 'my-stories'
+      ? stories.length
+      : effectiveTab === 'reels'
+        ? reels.length
+        : effectiveTab === 'characters'
+          ? characters.length
+          : savedStorylines.length;
+  const showSkeletons = isLoading && rowsOnScreen === 0;
 
   const handleLoadStory = (story: SavedStory) => {
     writeOpenFlowNavMeta({
@@ -151,6 +168,15 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     }
   };
 
+  const handleShareStoryline = (item: SavedStorylineItem) => {
+    const url = `${window.location.origin}/storyline/${item.storyline_id}`;
+    if (navigator.share) {
+      navigator.share({ title: item.storyline?.title || 'Storyline', url }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(url).catch(() => {});
+    }
+  };
+
   const handleUnsaveStoryline = async (storylineId: string) => {
     setActionId(storylineId);
     try {
@@ -193,7 +219,9 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
   // List thumbnail: server resolves cover → first-beat fallback plus the
   // storyboard flag; storyboard grids render only their first panel via
   // StoryboardThumbnail's static crop. The box follows the story orientation
-  // (16:9 landscape / 9:16 portrait).
+  // (16:9 landscape / 9:16 portrait), and is sized to fill the card's height
+  // rather than float in the middle of it — artwork is what makes a row
+  // recognizable, so it gets the space the padding used to take.
   const renderThumbnail = (
     url: string | null | undefined,
     isStoryboard: boolean | null | undefined,
@@ -202,22 +230,24 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     isPortrait: boolean
   ) => (
     <div
-      className={`relative flex-shrink-0 rounded-lg overflow-hidden bg-neutral-800/60 border border-white/5 ${
-        isPortrait ? 'h-16 aspect-[9/16]' : 'h-14 aspect-video'
+      className={`relative flex-shrink-0 rounded-xl overflow-hidden bg-neutral-800/60 border border-white/5 ${
+        isPortrait ? 'h-24 aspect-[9/16]' : 'h-20 aspect-video'
       }`}
     >
       {url ? (
         <StoryboardThumbnail
           src={url}
           alt={alt}
-          sizes={isPortrait ? '36px' : '100px'}
+          // Matches the rendered box so the optimizer picks a source that fits
+          // instead of upscaling a thumbnail cut for the old smaller slot.
+          sizes={isPortrait ? '56px' : '144px'}
           isPreviewing={false}
           previewSessionId={0}
           isStoryboard={isStoryboard === true}
         />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center">
-          <FallbackIcon className="w-5 h-5 text-neutral-700" />
+          <FallbackIcon className="w-6 h-6 text-neutral-700" />
         </div>
       )}
     </div>
@@ -231,6 +261,31 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     </div>
   );
 
+  /**
+   * Paged tabs load 30 rows at a time; the rest arrive on request rather than
+   * making every drawer open pay for a library that only grows.
+   */
+  const renderLoadMore = (tab: PagedTabId) => {
+    if (!hasMore[tab]) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => loadMore(tab)}
+        disabled={loadingMore[tab]}
+        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/5 bg-neutral-900/40 py-3 text-xs font-medium uppercase tracking-widest text-neutral-400 transition-colors hover:border-white/15 hover:text-neutral-200 disabled:opacity-60"
+      >
+        {loadingMore[tab] ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Loading
+          </>
+        ) : (
+          'Load more'
+        )}
+      </button>
+    );
+  };
+
   const renderEmptyState = (icon: typeof BookOpen, title: string, description: string) => (
     <div className="flex flex-col items-center justify-center h-64 text-center px-8">
       {(() => { const Icon = icon; return <Icon className="w-12 h-12 text-neutral-700 mb-4" />; })()}
@@ -238,6 +293,42 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       <p className="text-neutral-600 text-sm">{description}</p>
     </div>
   );
+
+  /**
+   * Archive/restore + delete, shared by the story and reel rows — the same two
+   * actions, differing only in what the labels call the row.
+   */
+  const buildStoryActions = (
+    row: SavedStory | UserReel,
+    noun: 'story' | 'reel'
+  ): RowAction[] => {
+    const busy = actionId === row.id;
+    return [
+      row.is_archived
+        ? {
+            key: 'restore',
+            label: `Restore ${noun}`,
+            icon: ArchiveRestore,
+            onSelect: () => handleUnarchiveStory(row.id),
+            disabled: busy,
+          }
+        : {
+            key: 'archive',
+            label: `Archive ${noun}`,
+            icon: Archive,
+            onSelect: () => handleArchiveStory(row.id),
+            disabled: busy,
+          },
+      {
+        key: 'delete',
+        label: `Delete ${noun} permanently`,
+        icon: Trash2,
+        tone: 'danger',
+        onSelect: () => handleDeleteStory(row.id),
+        disabled: busy,
+      },
+    ];
+  };
 
   const renderMyStories = () => {
     if (stories.length === 0) {
@@ -250,7 +341,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className={`group relative rounded-2xl border transition-all overflow-hidden ${
+        className={`group relative flex items-center gap-2 rounded-2xl border p-2 transition-all overflow-hidden ${
           story.is_archived
             ? 'bg-neutral-900/30 border-white/5 opacity-60'
             : 'bg-neutral-900/60 border-white/5 hover:border-white/15'
@@ -258,78 +349,43 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadStory(story)}
-          className="w-full text-left p-4 pr-20"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
         >
-          <div className="flex items-center gap-3">
-            {renderThumbnail(story.thumbnail_url, story.thumbnail_is_storyboard, story.title, BookOpen, isPortraitRow(story))}
-            <div className="min-w-0 flex-1">
-              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-                {story.title}
-              </h3>
-              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-                  story.is_archived
-                    ? 'bg-neutral-500/10 text-neutral-500'
-                    : story.status === 'completed'
-                      ? 'bg-emerald-500/10 text-emerald-400'
-                      : 'bg-amber-500/10 text-amber-400'
-                }`}>
-                  {story.is_archived ? 'archived' : story.status}
+          {renderThumbnail(story.thumbnail_url, story.thumbnail_is_storyboard, story.title, BookOpen, isPortraitRow(story))}
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+              {story.title}
+            </h3>
+            <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{story.user_prompt}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+              <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+                story.is_archived
+                  ? 'bg-neutral-500/10 text-neutral-500'
+                  : story.status === 'completed'
+                    ? 'bg-emerald-500/10 text-emerald-400'
+                    : 'bg-amber-500/10 text-amber-400'
+              }`}>
+                {story.is_archived ? 'archived' : story.status}
+              </span>
+              {typeof story.episode_number === 'number' && story.episode_number > 0 && (
+                <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
+                  Ep {story.episode_number}
                 </span>
-                {typeof story.episode_number === 'number' && story.episode_number > 0 && (
-                  <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-300">
-                    Ep {story.episode_number}
-                  </span>
-                )}
-                {renderOrientationBadge(story)}
-                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
-                  <Clock className="w-3 h-3" />
-                  {formatDate(story.updated_at)}
-                </span>
-              </div>
+              )}
+              {renderOrientationBadge(story)}
+              <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                <Clock className="w-3 h-3" />
+                {formatDate(story.updated_at)}
+              </span>
             </div>
           </div>
         </button>
 
-        {/* Action buttons */}
-        <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-          {story.is_archived ? (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleUnarchiveStory(story.id); }}
-              disabled={actionId === story.id}
-              className="p-2 hover:bg-emerald-500/10 rounded-full transition-all"
-              title="Restore story"
-            >
-              {actionId === story.id ? (
-                <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
-              ) : (
-                <ArchiveRestore className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
-              )}
-            </button>
-          ) : (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleArchiveStory(story.id); }}
-              disabled={actionId === story.id}
-              className="p-2 hover:bg-amber-500/10 rounded-full transition-all"
-              title="Archive story"
-            >
-              {actionId === story.id ? (
-                <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-              ) : (
-                <Archive className="w-4 h-4 text-neutral-600 hover:text-amber-400 transition-colors" />
-              )}
-            </button>
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); handleDeleteStory(story.id); }}
-            disabled={actionId === story.id}
-            className="p-2 hover:bg-red-500/10 rounded-full transition-all"
-            title="Delete story permanently"
-          >
-            <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
-          </button>
-        </div>
+        <RowActionsMenu
+          ariaLabel={`Actions for ${story.title}`}
+          busy={actionId === story.id}
+          actions={buildStoryActions(story, 'story')}
+        />
       </motion.div>
     ));
   };
@@ -345,7 +401,7 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
         initial={{ opacity: 0, y: 10 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className={`group relative rounded-2xl border transition-all overflow-hidden ${
+        className={`group relative flex items-center gap-2 rounded-2xl border p-2 transition-all overflow-hidden ${
           reel.is_archived
             ? 'bg-neutral-900/30 border-white/5 opacity-60'
             : 'bg-neutral-900/60 border-white/5 hover:border-white/15'
@@ -353,74 +409,40 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
       >
         <button
           onClick={() => handleLoadReel(reel)}
-          className="w-full text-left p-4 pr-20"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
         >
-          <div className="flex items-center gap-3">
-            {renderThumbnail(reel.thumbnail_url, reel.thumbnail_is_storyboard, reel.title, Clapperboard, isPortraitRow(reel))}
-            <div className="min-w-0 flex-1">
-              <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-                {reel.title}
-              </h3>
-              <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
-                <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
-                  reel.is_archived
-                    ? 'bg-neutral-500/10 text-neutral-500'
-                    : reel.status === 'completed'
-                      ? 'bg-emerald-500/10 text-emerald-400'
-                      : 'bg-cyan-500/10 text-cyan-300'
-                }`}>
-                  {reel.is_archived ? 'archived' : reel.status}
-                </span>
-                <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
-                  {reel.beat_count} beats
-                </span>
-                <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
-                  <Clock className="w-3 h-3" />
-                  {formatDate(reel.updated_at)}
-                </span>
-              </div>
+          {renderThumbnail(reel.thumbnail_url, reel.thumbnail_is_storyboard, reel.title, Clapperboard, isPortraitRow(reel))}
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
+              {reel.title}
+            </h3>
+            <p className="text-xs text-neutral-500 mt-1 line-clamp-1">{reel.user_prompt}</p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+              <span className={`whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full ${
+                reel.is_archived
+                  ? 'bg-neutral-500/10 text-neutral-500'
+                  : reel.status === 'completed'
+                    ? 'bg-emerald-500/10 text-emerald-400'
+                    : 'bg-cyan-500/10 text-cyan-300'
+              }`}>
+                {reel.is_archived ? 'archived' : reel.status}
+              </span>
+              <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300">
+                {reel.beat_count} beats
+              </span>
+              <span className="flex items-center gap-1 whitespace-nowrap text-[10px] text-neutral-600">
+                <Clock className="w-3 h-3" />
+                {formatDate(reel.updated_at)}
+              </span>
             </div>
           </div>
         </button>
 
-        <div className="absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-          {reel.is_archived ? (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleUnarchiveStory(reel.id); }}
-              disabled={actionId === reel.id}
-              className="p-2 hover:bg-emerald-500/10 rounded-full transition-all"
-              title="Restore reel"
-            >
-              {actionId === reel.id ? (
-                <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
-              ) : (
-                <ArchiveRestore className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
-              )}
-            </button>
-          ) : (
-            <button
-              onClick={(e) => { e.stopPropagation(); handleArchiveStory(reel.id); }}
-              disabled={actionId === reel.id}
-              className="p-2 hover:bg-amber-500/10 rounded-full transition-all"
-              title="Archive reel"
-            >
-              {actionId === reel.id ? (
-                <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />
-              ) : (
-                <Archive className="w-4 h-4 text-neutral-600 hover:text-amber-400 transition-colors" />
-              )}
-            </button>
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); handleDeleteStory(reel.id); }}
-            disabled={actionId === reel.id}
-            className="p-2 hover:bg-red-500/10 rounded-full transition-all"
-            title="Delete reel permanently"
-          >
-            <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
-          </button>
-        </div>
+        <RowActionsMenu
+          ariaLabel={`Actions for ${reel.title}`}
+          busy={actionId === reel.id}
+          actions={buildStoryActions(reel, 'reel')}
+        />
       </motion.div>
     ));
   };
@@ -429,30 +451,63 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
     if (savedStorylines.length === 0) {
       return renderEmptyState(Library, 'No saved storylines', 'Completed storylines will appear here automatically.');
     }
-    return savedStorylines.map((item) => (
-      <motion.div
-        key={item.id}
-        layout
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="group relative rounded-2xl bg-neutral-900/60 border border-white/5 hover:border-white/15 transition-all overflow-hidden"
-      >
-        <div className="p-4 pr-32">
+    return savedStorylines.map((item) => {
+      const title = item.storyline?.title || 'Untitled Storyline';
+      const actions: RowAction[] = [
+        {
+          key: 'play',
+          label: 'Play storyline',
+          icon: Play,
+          href: `/storyline/${item.storyline_id}`,
+          onSelect: () => handleOpenStoryline(item),
+        },
+        {
+          key: 'share',
+          label: 'Share storyline',
+          icon: Share2,
+          onSelect: () => handleShareStoryline(item),
+        },
+        ...(item.is_owner
+          ? [{
+              key: 'cover',
+              label: 'Manage cover',
+              icon: ImageIcon,
+              onSelect: () => setManagedStorylineId(item.storyline_id),
+            } satisfies RowAction]
+          : []),
+        {
+          key: 'remove',
+          label: 'Remove from saved',
+          icon: Trash2,
+          tone: 'danger',
+          onSelect: () => handleUnsaveStoryline(item.storyline_id),
+          disabled: actionId === item.storyline_id,
+        },
+      ];
+
+      return (
+        <motion.div
+          key={item.id}
+          layout
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="group relative flex items-center gap-2 rounded-2xl bg-neutral-900/60 border border-white/5 p-2 hover:border-white/15 transition-all overflow-hidden"
+        >
           <Link
             href={`/storyline/${item.storyline_id}`}
             onClick={() => handleOpenStoryline(item)}
-            className="flex items-center gap-3"
+            className="flex min-w-0 flex-1 items-center gap-3"
           >
             {renderThumbnail(
               item.storyline?.thumbnail_url,
               item.storyline?.thumbnail_is_storyboard,
-              item.storyline?.title || 'Untitled Storyline',
+              title,
               Library,
               isPortraitRow(item.storyline)
             )}
             <div className="min-w-0 flex-1">
               <h3 className="text-base font-serif text-neutral-200 group-hover:text-white transition-colors truncate">
-                {item.storyline?.title || 'Untitled Storyline'}
+                {title}
               </h3>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
                 <span className="whitespace-nowrap text-[10px] uppercase tracking-widest font-medium px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400">
@@ -466,60 +521,15 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
               </div>
             </div>
           </Link>
-        </div>
 
-        {/* Action buttons */}
-        <div className="touch-visible absolute top-3 right-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-          <Link
-            href={`/storyline/${item.storyline_id}`}
-            onClick={() => handleOpenStoryline(item)}
-            className="p-2 hover:bg-purple-500/10 rounded-full transition-all"
-            title="Play storyline"
-          >
-            <Play className="w-4 h-4 text-neutral-600 hover:text-purple-400 transition-colors" />
-          </Link>
-          <button
-            onClick={async (e) => {
-              e.stopPropagation();
-              const url = `${window.location.origin}/storyline/${item.storyline_id}`;
-              if (navigator.share) {
-                navigator.share({ title: item.storyline?.title || 'Storyline', url }).catch(() => {});
-              } else {
-                navigator.clipboard.writeText(url).catch(() => {});
-              }
-            }}
-            className="p-2 hover:bg-emerald-500/10 rounded-full transition-all"
-            title="Share storyline"
-          >
-            <Share2 className="w-4 h-4 text-neutral-600 hover:text-emerald-400 transition-colors" />
-          </button>
-          {item.is_owner && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setManagedStorylineId(item.storyline_id);
-              }}
-              className="p-2 hover:bg-sky-500/10 rounded-full transition-all"
-              title="Manage cover"
-            >
-              <ImageIcon className="w-4 h-4 text-neutral-600 hover:text-sky-300 transition-colors" />
-            </button>
-          )}
-          <button
-            onClick={(e) => { e.stopPropagation(); handleUnsaveStoryline(item.storyline_id); }}
-            disabled={actionId === item.storyline_id}
-            className="p-2 hover:bg-red-500/10 rounded-full transition-all"
-            title="Remove from saved"
-          >
-            {actionId === item.storyline_id ? (
-              <Loader2 className="w-4 h-4 text-red-400 animate-spin" />
-            ) : (
-              <Trash2 className="w-4 h-4 text-neutral-600 hover:text-red-400 transition-colors" />
-            )}
-          </button>
-        </div>
-      </motion.div>
-    ));
+          <RowActionsMenu
+            ariaLabel={`Actions for ${title}`}
+            busy={actionId === item.storyline_id}
+            actions={actions}
+          />
+        </motion.div>
+      );
+    });
   };
 
   const renderCharacters = () => {
@@ -621,17 +631,26 @@ export default function MyStoriesDrawer({ isOpen, onClose }: MyStoriesDrawerProp
             </div>
 
             {/* Content */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {isLoading ? (
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {showSkeletons ? (
                 renderLoadingSkeletons()
               ) : effectiveTab === 'my-stories' ? (
-                renderMyStories()
+                <>
+                  {renderMyStories()}
+                  {renderLoadMore('my-stories')}
+                </>
               ) : effectiveTab === 'reels' ? (
-                renderReels()
+                <>
+                  {renderReels()}
+                  {renderLoadMore('reels')}
+                </>
               ) : effectiveTab === 'characters' ? (
                 renderCharacters()
               ) : (
-                renderStorylines()
+                <>
+                  {renderStorylines()}
+                  {renderLoadMore('storylines')}
+                </>
               )}
             </div>
           </motion.div>
