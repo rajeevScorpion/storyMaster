@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { callGeminiImage } from '@/app/actions/gemini-proxy';
 import { generateSelectedImage } from '@/app/actions/image-generation';
+import { refreshStorylineDiscoveryMetadata } from '@/app/actions/storyline-discovery';
 import type { CostActivityKey, CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import {
   extractImageContinuityState,
@@ -658,6 +659,15 @@ export async function finalizeStorylineShareAssets(
       });
     }
   }
+
+  // Runs for every publish path that finalizes assets, and independently of
+  // whether the cover work above succeeded. Never throws.
+  await refreshStorylineDiscoveryMetadata({
+    storylineId: input.storylineId,
+    storyId: input.storyId,
+    title: input.title,
+    beats: input.beats,
+  });
 }
 
 export async function getPublishedStorylineCoverEditorState(

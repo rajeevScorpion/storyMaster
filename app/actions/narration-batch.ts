@@ -322,6 +322,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
         costTelemetry,
         {
           accent: job.accent,
+          audience: config.ageGroup,
           storyTextParts: node.data.storyTextParts as StoryTextParts | undefined,
           overlayConfig: config.storyTextOverlay,
           serverAuth: { userId: job.user_id },

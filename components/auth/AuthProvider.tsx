@@ -51,8 +51,25 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       activeUserIdRef.current = nextUser?.id ?? null;
       setUser(nextUser);
       setIsLoading(false);
-      if (nextUser) useMyStoriesStore.getState().prefetchAll();
+      if (nextUser) {
+        useMyStoriesStore.getState().hydrateFromCache(nextUser.id);
+        useMyStoriesStore.getState().prefetchAll();
+      } else {
+        // No validated user: drop anything the local session let us paint,
+        // including the on-disk copy.
+        useMyStoriesStore.getState().clear();
+      }
     };
+
+    // Paint the drawer from the last session's cache off the *local* session,
+    // which reads from storage — waiting for the validated `getUser()` round
+    // trip would put the cached rows on screen after the network answered,
+    // which is the delay this cache exists to remove. The validated user
+    // arriving below re-keys the cache (and drops it) if it disagrees.
+    void supabase.auth.getSession().then(({ data }) => {
+      const cachedUserId = data.session?.user?.id;
+      if (cachedUserId) useMyStoriesStore.getState().hydrateFromCache(cachedUserId);
+    });
 
     void Promise.all([supabase.auth.getUser(), supabase.auth.getSession()])
       .then(([validated, local]) => {

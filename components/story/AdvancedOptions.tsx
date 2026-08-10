@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryLanguage, VisualSettings } from '@/lib/types/story';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AgeGroup, PortraitReferenceQuality, SourceFidelity, StoryBeatLengthLevel, StoryLanguage, VisualSettings } from '@/lib/types/story';
 import type { ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import type { ImageModelPickerState, ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
@@ -27,20 +27,23 @@ import type {
   NarrationVoiceClientConfig,
 } from '@/lib/ai/narration-voices';
 import { SEED_GUIDANCE_WORD_CAP, SEED_SOURCE_WORD_CAP } from '@/lib/story/authoring-limits';
+import { STORY_GENRES } from '@/lib/story/genres';
+import {
+  STORY_AUDIENCE_OPTIONS,
+  STORY_BEAT_LENGTH_LABELS,
+  resolveStoryBeatLength,
+} from '@/lib/ai/story-audience';
 
 const LANGUAGE_OPTIONS: FilterDropdownOption[] = STORY_LANGUAGE_OPTIONS.map((option) => ({
   value: option.value,
   label: option.label,
 }));
 
-const AGE_GROUP_OPTIONS: FilterDropdownOption[] = [
-  { value: 'all_ages', label: 'All Ages' },
-  { value: 'kids_3_5', label: 'Kids 3-5' },
-  { value: 'kids_5_8', label: 'Kids 5-8' },
-  { value: 'kids_8_12', label: 'Kids 8-12' },
-  { value: 'teens', label: 'Teens' },
-  { value: 'adults', label: 'Adults' },
-];
+const AGE_GROUP_OPTIONS: FilterDropdownOption[] = STORY_AUDIENCE_OPTIONS;
+const GENRE_OPTIONS: FilterDropdownOption[] = STORY_GENRES.map((entry) => ({
+  value: entry.value,
+  label: entry.label,
+}));
 
 const SETTING_PRESETS = [
   'generic',
@@ -83,12 +86,16 @@ interface AdvancedOptionsProps {
   onLanguageChange: (v: StoryLanguage) => void;
   ageGroup: AgeGroup;
   onAgeGroupChange: (v: AgeGroup) => void;
+  genre: string;
+  onGenreChange: (v: string) => void;
   settingCountry: string;
   onSettingCountryChange: (v: string) => void;
   customSetting: string;
   onCustomSettingChange: (v: string) => void;
   maxBeats: number;
   onMaxBeatsChange: (v: number) => void;
+  beatLengthLevel: StoryBeatLengthLevel;
+  onBeatLengthLevelChange: (v: StoryBeatLengthLevel) => void;
   visualSettings: VisualSettings;
   visualCatalog?: StoryVisualCatalog;
   onVisualSettingsChange: (v: VisualSettings) => void;
@@ -139,12 +146,16 @@ export default function AdvancedOptions({
   onLanguageChange,
   ageGroup,
   onAgeGroupChange,
+  genre,
+  onGenreChange,
   settingCountry,
   onSettingCountryChange,
   customSetting,
   onCustomSettingChange,
   maxBeats,
   onMaxBeatsChange,
+  beatLengthLevel,
+  onBeatLengthLevelChange,
   visualSettings,
   visualCatalog = BUILT_IN_STORY_VISUAL_CATALOG,
   onVisualSettingsChange,
@@ -193,11 +204,16 @@ export default function AdvancedOptions({
   const sampleAudioCacheRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const playingAudioRef = useRef<HTMLAudioElement | null>(null);
   const sliderMax = pricingStoryLengthUiLimitsEnabled ? Math.max(3, pricingStoryLengthCap) : 8;
+  const resolvedBeatLength = resolveStoryBeatLength(ageGroup, beatLengthLevel);
+  const beatLengthLocked = isSeedMode && sourceFidelity === 'strictly_follow';
   const planLabel = `${currentPlanLabel.charAt(0).toUpperCase()}${currentPlanLabel.slice(1)} plan limit`;
   const voiceGender = narrationVoiceSelection?.genderBucket || 'female';
-  const voiceList = voiceGender === 'male'
-    ? narrationVoiceConfig?.maleVoiceList || []
-    : narrationVoiceConfig?.femaleVoiceList || [];
+  const voiceList = useMemo(
+    () => voiceGender === 'male'
+      ? narrationVoiceConfig?.maleVoiceList || []
+      : narrationVoiceConfig?.femaleVoiceList || [],
+    [narrationVoiceConfig?.femaleVoiceList, narrationVoiceConfig?.maleVoiceList, voiceGender]
+  );
   const selectedVoice = narrationVoiceSelection?.voiceId || (
     voiceGender === 'male'
       ? narrationVoiceConfig?.defaultMaleVoice
@@ -403,6 +419,17 @@ export default function AdvancedOptions({
               contextLabel="Audience"
             />
 
+            <FilterDropdown
+              value={genre}
+              options={GENRE_OPTIONS}
+              onChange={onGenreChange}
+              fullWidth
+              size="form"
+              mode="inline"
+              ariaLabel="Genre"
+              contextLabel="Genre"
+            />
+
             <div className="space-y-2">
               <FilterDropdown
                 value={SETTING_PRESETS.includes(settingCountry) ? settingCountry : 'custom'}
@@ -496,6 +523,51 @@ export default function AdvancedOptions({
                 />
                 <span className="text-xs text-neutral-500">{sliderMax}</span>
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-neutral-950/40 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-2">
+                  <h4 className="text-sm font-sans text-neutral-200">Beat length</h4>
+                  <InfoPopover title="Beat length" ariaLabel="Show beat length details">
+                    <p>Controls how much story text and narration each beat contains.</p>
+                    <p>
+                      The word range adapts to the selected audience. Each beat still forms one
+                      scene with four storyboard panels and one narration track.
+                    </p>
+                    {beatLengthLocked && (
+                      <p>Strict source mode keeps canonical source wording unchanged.</p>
+                    )}
+                  </InfoPopover>
+                </div>
+                <div className="text-right font-sans">
+                  <p className="text-sm text-emerald-400">{resolvedBeatLength.label}</p>
+                  <p className="text-xs text-neutral-500">
+                    about {resolvedBeatLength.targetWords} words
+                  </p>
+                </div>
+              </div>
+              <div className="mt-4 flex items-center gap-3">
+                <span className="text-xs text-neutral-500">Brief</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={5}
+                  step={1}
+                  value={beatLengthLevel}
+                  disabled={beatLengthLocked}
+                  onChange={(event) => onBeatLengthLevelChange(Number(event.target.value) as StoryBeatLengthLevel)}
+                  aria-label="Beat length"
+                  aria-valuetext={`${STORY_BEAT_LENGTH_LABELS[beatLengthLevel]}, about ${resolvedBeatLength.targetWords} words per beat`}
+                  className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-white/10 accent-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span className="text-xs text-neutral-500">Immersive</span>
+              </div>
+              <p className="mt-3 text-xs text-neutral-500">
+                {beatLengthLocked
+                  ? 'Canonical source text takes priority over this setting.'
+                  : `${resolvedBeatLength.targetMinWords}-${resolvedBeatLength.targetMaxWords} words per beat for this audience.`}
+              </p>
             </div>
 
             {storyPromptOnlyModeEnabled && (

@@ -6,6 +6,7 @@ import { notFound } from 'next/navigation';
 import { headers } from 'next/headers';
 import StorylinePersistenceLoader from '@/components/story/StorylinePersistenceLoader';
 import StorylinePreview from '@/components/story/StorylinePreview';
+import { getStorylineSeriesContext } from '@/app/actions/series';
 import type { Metadata } from 'next';
 import {
   resolveStorylineShareCover,
@@ -215,6 +216,11 @@ export default async function StorylinePage({ params, searchParams }: PageProps)
   isLiked = (likeCheck ?? 0) > 0;
   const likeCount = storyline.like_count ?? 0;
 
+  // Resolved here rather than in the player: it is one indexed query alongside
+  // the two counts above, and it means the end-of-story modal can offer the
+  // next episode instantly instead of spinning at the story's closing moment.
+  const series = await getStorylineSeriesContext(storyline.id);
+
   return (
     <Suspense>
       <StorylinePersistenceLoader
@@ -232,6 +238,7 @@ export default async function StorylinePage({ params, searchParams }: PageProps)
         isLiked={isLiked}
         likeCount={likeCount}
         shareToken={validatedShareToken}
+        series={series}
       />
     </Suspense>
   );

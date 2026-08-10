@@ -44,10 +44,15 @@ import type {
   Option,
   StoryMap,
 } from '@/lib/types/story';
+import { normalizeStoryConfig } from '@/lib/ai/story-config';
+import {
+  formatAudienceBranchingContract,
+  getStoryAudienceProfile,
+} from '@/lib/ai/story-audience';
 
 const MAX_BEAT_TEXT_CHARS = 4000;
 const MAX_CUSTOM_OPTION_CHARS = 200;
-const REGENERATED_OPTION_COUNT = 3;
+const DEFAULT_REGENERATED_OPTION_COUNT = 3;
 
 // ── Runtime snapshot ───────────────────────────────────────────────
 
@@ -491,22 +496,31 @@ export async function regenerateBeatOptions(input: {
 
     const { data: storyRow } = await supabase
       .from('stories')
-      .select('tone, genre, target_age')
+      .select('tone, genre, target_age, story_config')
       .eq('id', input.storyId)
       .single();
-    const audience = [storyRow?.genre, storyRow?.tone, storyRow?.target_age && `age ${storyRow.target_age}`]
+    const storyConfig = normalizeStoryConfig(
+      (storyRow?.story_config as Record<string, unknown> | null) ?? {
+        ageGroup: storyRow?.target_age,
+      }
+    );
+    const audienceProfile = getStoryAudienceProfile(storyConfig.ageGroup);
+    const regeneratedOptionCount = audienceProfile.optionCount === '3_or_4'
+      ? 4
+      : DEFAULT_REGENERATED_OPTION_COUNT;
+    const audience = [storyRow?.genre, storyRow?.tone, audienceProfile.label]
       .filter(Boolean)
       .join(', ') || 'general audience';
 
-    const prompt = fillPrompt(OPTIONS_REGENERATION_PROMPT, {
-      numberOfOptions: String(REGENERATED_OPTION_COUNT),
+    const prompt = `${fillPrompt(OPTIONS_REGENERATION_PROMPT, {
+      numberOfOptions: String(regeneratedOptionCount),
       storyContext,
       choiceHistory: choices.length > 0 ? choices.map((label) => `- ${label}`).join('\n') : '(none yet)',
       beatText: node.data.storyText,
       namedCharacters:
         characters.map((c) => `- ${c.name} (${c.type}): ${c.personalitySummary}`).join('\n') || '(none named yet)',
       audience,
-    });
+    })}\n\n${formatAudienceBranchingContract(storyConfig.ageGroup)}`;
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return { status: 'failed', error: 'Story generation is not configured.' };
@@ -531,15 +545,16 @@ export async function regenerateBeatOptions(input: {
     }
     const generated = (parsed.options ?? [])
       .filter((option) => option.label?.trim())
-      .slice(0, REGENERATED_OPTION_COUNT)
+      .slice(0, regeneratedOptionCount)
       .map<Option>((option) => ({
         id: `opt_${uuidv4()}`,
         label: option.label!.trim(),
         intent: option.intent?.trim() ?? '',
         source: 'ai',
       }));
-    if (generated.length === 0) {
-      return { status: 'failed', error: 'No usable options were generated. Please try again.' };
+    const uniqueGeneratedLabels = new Set(generated.map((option) => option.label.toLocaleLowerCase()));
+    if (generated.length !== regeneratedOptionCount || uniqueGeneratedLabels.size !== generated.length) {
+      return { status: 'failed', error: 'A complete set of distinct options could not be generated. Please try again.' };
     }
 
     // Replace AI options, preserve user-authored custom options.

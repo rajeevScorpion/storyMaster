@@ -26,20 +26,22 @@ export default function CharacterMasterCard({ master, onOpen }: CharacterMasterC
       exit={{ opacity: 0, scale: 0.95 }}
       type="button"
       onClick={() => onOpen(master)}
-      className={`group flex w-full items-center gap-4 rounded-2xl border p-4 text-left transition-all ${
+      className={`group flex w-full items-center gap-3 rounded-2xl border p-2 text-left transition-all ${
         isArchived
           ? 'bg-neutral-900/30 border-white/5 opacity-60'
           : 'bg-neutral-900/60 border-white/5 hover:border-white/15'
       }`}
     >
-      <span className="h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-neutral-800">
+      {/* Minimal padding, maximal portrait — matches the story rows in the
+          same drawer, where the artwork is what identifies the row. */}
+      <span className="h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-neutral-800">
         <CharacterAvatar
           src={thumbnail}
           alt={master.name}
           imgClassName="h-full w-full object-cover"
           fallback={
             <span className="flex h-full w-full items-center justify-center">
-              <UserRound className="h-6 w-6 text-neutral-600" />
+              <UserRound className="h-7 w-7 text-neutral-600" />
             </span>
           }
         />

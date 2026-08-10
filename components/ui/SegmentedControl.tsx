@@ -14,6 +14,12 @@ interface SegmentedControlProps<T extends string> {
   onChange: (value: T) => void;
   ariaLabel: string;
   className?: string;
+  /**
+   * Fills its container from `lg` up. On by default because the form layouts
+   * that came first rely on it; the gallery filter row wants it content-sized,
+   * sitting left with the dropdowns rather than stretching across the page.
+   */
+  stretch?: boolean;
 }
 
 /**
@@ -28,12 +34,13 @@ export default function SegmentedControl<T extends string>({
   onChange,
   ariaLabel,
   className,
+  stretch = true,
 }: SegmentedControlProps<T>) {
   return (
     <div
       role="group"
       aria-label={ariaLabel}
-      className={`flex w-fit rounded-full bg-black/30 p-1 lg:w-full ${className ?? ''}`}
+      className={`flex w-fit rounded-full bg-black/30 p-1 ${stretch ? 'lg:w-full' : ''} ${className ?? ''}`}
     >
       {options.map((option) => {
         const Icon = option.icon;
@@ -46,7 +53,9 @@ export default function SegmentedControl<T extends string>({
             aria-pressed={active}
             aria-label={option.label}
             title={option.label}
-            className={`flex flex-none items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition lg:flex-1 lg:py-2 ${
+            className={`flex flex-none items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition lg:py-2 ${
+              stretch ? 'lg:flex-1' : ''
+            } ${
               active ? 'bg-emerald-400 text-neutral-950' : 'text-neutral-300 hover:bg-white/10'
             }`}
           >

@@ -88,12 +88,13 @@ Core behavior rules:
 25. Preserve one-to-one identity for every named character across beats, including species, face, body proportions, colors, clothing logic, and distinguishing features.
 
 Age group adaptation rules:
-- kids_3_5: Very simple sentences, 2-3 sentences per beat, no scary content, bright and happy themes, familiar objects, warm and safe tone.
-- kids_5_8: Simple but slightly richer vocabulary, short paragraphs, gentle tension, playful and clear, animal characters work well, clear morals.
-- kids_8_12: Moderate complexity, can include mild peril and mystery, adventurous tone, more character depth and descriptive language.
-- teens: Complex narratives, nuanced emotions, layered conflict, moral ambiguity allowed, can include moderate tension and relationship complexity.
-- adults: Full narrative complexity, rich prose, mature themes permitted (but still no graphic violence, cruelty, or adult content), deeper storytelling and emotional texture.
-- all_ages: Universal Pixar-like appeal, sophisticated enough for adults but accessible to children.
+- kids_3_5: Use concrete cause and effect, familiar sensory details, gentle repetition, and one idea per short sentence. Build four clear narrative movements; keep uncertainty contained and reassuring.
+- kids_5_8: Use active verbs, playful discovery, natural dialogue, gentle suspense, and consequences shown through action rather than announced morals.
+- kids_8_12: Give scenes clear goals, complications, clues, mild peril, humor, and motives the reader can infer without over-explanation.
+- teens: Use subtext, conflicting motives, identity, belonging, emotional contradiction, and choices with relational or delayed consequences without melodrama.
+- adults: Use implication, thematic motifs, precise detail, mature non-graphic stakes, and choices between legitimate competing values.
+- all_ages: Keep action child-clear while allowing emotionally truthful subtext and thematic resonance for adults.
+- Always match the age group specified in the story configuration. The runtime audience contract supplies the authoritative prose range, branching grammar, and current audience label.
 
 Setting and cultural adaptation rules:
 - If a setting or country is specified, incorporate culturally appropriate character names, environments, food, landmarks, customs, and references.
@@ -252,10 +253,10 @@ Core rules:
 8. Accept prose, scene lists, rough notes, or script/dialogue formatting without requiring cleanup from the user.
 9. Write generated metadata in {{language}}. In strictly_follow mode, storyText must remain in the source's original language and wording even when it differs from {{language}}.
 10. Keep each beat preview-ready: concise, readable, image-friendly, and narration-friendly.
-11. Each non-ending beat must include exactly 3 options.
+11. Each non-ending beat must use the option count in the runtime audience contract: exactly 3 for younger/all-ages profiles, or 3-4 for teen/adult profiles.
 12. Exactly one option per non-ending beat must have isCanonical = true.
 13. The canonical option must advance to the next beat in the seeded source path.
-14. The two non-canonical options must be plausible alternate directions, not replacements for the seeded path.
+14. The non-canonical options must be plausible alternate directions, not replacements for the seeded path.
 15. The final beat must set isEnding = true and return options as [].
 16. Keep titles short and useful. Keep sceneSummary compact.
 17. Do not add random lore, surprise characters, or off-tone twists that are not grounded in the source.
@@ -717,12 +718,30 @@ Requirements:
 - Expressive pose or poses that reflect personality without changing outfit or silhouette
 - No text, labels, or watermarks`;
 
+export const STORYLINE_DISCOVERY_METADATA_PROMPT_DEFAULT = `Write the catalogue entry for a published interactive story so a reader browsing the gallery can decide whether to open it.
+
+Title: {{title}}
+Stated genre: {{genre}}
+Intended audience: {{targetAge}}
+Language: {{language}}
+Setting: {{setting}}
+Characters: {{characters}}
+
+Story beats, in order:
+{{beatSummaries}}
+
+Return JSON with:
+- "intro": one or two short sentences (about 30 words, never more than 220 characters) introducing the premise. Write it in {{language}}. Set up the situation and the hook; never reveal the middle, the twist, or how it ends. Do not restate the title, do not address the reader as "you", and do not use marketing phrases like "a thrilling journey".
+- "genre": the single genre slug that best fits the story.
+- "ageFit": the audience band the content actually suits, which may differ from the stated audience. Use "unknown" if the beats do not make it clear.`;
+
 export const LOCKED_PROMPT_GUARDRAILS: Record<PromptTaskKey, string> = {
   story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and keep the content safe for the requested audience. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. For continuation beats, the storyText must visibly enact, restate, or naturally continue the selected option before showing its consequence; if the selected option is a question or dialogue choice, include the question or a natural paraphrase before any answer.',
   reel_story_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the reel draft schema { beatCount, beats: [...] } exactly: produce all beats in one response. Each beat carries only beatIndex, title, storyText, sceneSummary, imagePrompt. Do not return options, characters, continuityNotes, clues, or any branching fields. Reels are linear inspirational quote sequences, not stories.',
   seed_plan_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the source story instead of creatively replacing it. When Source Fidelity is strictly_follow, copy each authoritative Strict Follow Source Segment into its matching storyText field exactly.',
   seeded_beat_materialization: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve the seeded beat content and option structure. Include storyTextParts as exactly four non-empty hidden narration chunks that preserve storyText in order and are balanced for spoken duration. Extra Guidance is visual-only and must never alter the seeded story.',
   story_bible_generation: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly. Preserve established canon from the previous bible; never invent characters, places, or rules absent from the inputs. Keep every field compact enough to reuse as prompt context.',
+  storyline_discovery_metadata: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. The intro must be at most 220 characters, contain no markdown, emoji, quotation marks, or line breaks, and must never spoil the ending or any mid-story twist. Keep the language appropriate for the intended audience. "genre" must be one of: adventure, mystery, fantasy, comedy, drama, horror, romance, sci-fi. "ageFit" must be one of: all_ages, kids_3_5, kids_5_8, kids_8_12, teens, adults, unknown.',
   visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the provided schema exactly and use the requested keys only. Align topLeft, topRight, bottomLeft, and bottomRight to storyTextParts 1, 2, 3, and 4 when provided. When Seed Authoring Context says strictly_follow, visualize the authored beat literally; use Extra Guidance only for visual details.',
   reel_visual_prompt: 'Return strict valid JSON only. Never include markdown, commentary, or text outside the JSON object. Follow the storyboard schema exactly. Optimize the four frames for vertical reel pacing as abstract/symbolic visuals that complement an inspirational quote. portraitTasks MUST be an empty array — reels have no recurring characters.',
   image_generation: 'Return only the final image prompt as plain text. Do not add explanations, numbering, or markdown. Never request duplicate copies of a named character unless the brief explicitly requires them.',
@@ -939,6 +958,21 @@ export const PROMPT_TASK_DEFINITIONS: Record<PromptTaskKey, PromptTaskDefinition
       { key: 'episodeNumber', label: 'Episode Number', description: 'The completed episode number in the series.', required: true },
     ],
     defaultPrompt: STORY_BIBLE_GENERATION_PROMPT_DEFAULT,
+  },
+  storyline_discovery_metadata: {
+    key: 'storyline_discovery_metadata',
+    label: 'Discovery Metadata',
+    description: 'Writes the short gallery introduction stored with a published storyline, plus a suggested genre and audience fit.',
+    placeholders: [
+      { key: 'title', label: 'Title', description: 'Published storyline title.', required: true },
+      { key: 'genre', label: 'Genre', description: 'Genre recorded on the parent story.', required: true },
+      { key: 'targetAge', label: 'Target Age', description: 'Audience band recorded on the parent story.', required: true },
+      { key: 'language', label: 'Language', description: 'Language the intro must be written in.', required: true },
+      { key: 'setting', label: 'Setting', description: 'Setting or country context for the story.', required: false },
+      { key: 'characters', label: 'Characters', description: 'Named characters appearing in the published path.', required: false },
+      { key: 'beatSummaries', label: 'Beat Summaries', description: 'Condensed beats of the published path, in order.', required: true },
+    ],
+    defaultPrompt: STORYLINE_DISCOVERY_METADATA_PROMPT_DEFAULT,
   },
 };
 

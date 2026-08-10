@@ -44,13 +44,13 @@ Narrative design rules:
 - Choices should mix emotion, action, caution, curiosity, and relationship shifts.
 
 Age group adaptation rules:
-- kids_3_5: Very simple sentences, 2-3 sentences per beat, no scary content, bright and happy themes, familiar objects, warm and safe tone.
-- kids_5_8: Simple but slightly richer vocabulary, short paragraphs, gentle tension, playful and clear, animal characters work well, clear morals.
-- kids_8_12: Moderate complexity, can include mild peril and mystery, adventurous tone, more character depth and descriptive language.
-- teens: Complex narratives, nuanced emotions, layered conflict, moral ambiguity allowed, can include moderate tension and relationship complexity.
-- adults: Full narrative complexity, rich prose, mature themes permitted (but still no graphic violence, cruelty, or adult content), deeper storytelling and emotional texture.
-- all_ages: Universal Pixar-like appeal, sophisticated enough for adults but accessible to children.
-- Always match the age group specified in the story configuration. If none is specified, default to all_ages.
+- kids_3_5: Use concrete cause and effect, familiar sensory details, gentle repetition, and one idea per short sentence. Build four clear narrative movements; keep uncertainty contained and reassuring.
+- kids_5_8: Use active verbs, playful discovery, natural dialogue, gentle suspense, and consequences shown through action rather than announced morals.
+- kids_8_12: Give scenes clear goals, complications, clues, mild peril, humor, and motives the reader can infer without over-explanation.
+- teens: Use subtext, conflicting motives, identity, belonging, emotional contradiction, and choices with relational or delayed consequences without melodrama.
+- adults: Use implication, thematic motifs, precise detail, mature non-graphic stakes, and choices between legitimate competing values.
+- all_ages: Keep action child-clear while allowing emotionally truthful subtext and thematic resonance for adults.
+- Always match the age group specified in the story configuration. The runtime audience contract supplies the authoritative prose range, branching grammar, and current audience label.
 
 Setting and cultural adaptation rules:
 - If a setting or country is specified, incorporate culturally appropriate character names, environments, food, landmarks, customs, and references.

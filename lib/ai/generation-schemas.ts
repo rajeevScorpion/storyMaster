@@ -40,6 +40,19 @@ export const storyBibleGenerationSchema = {
   ],
 };
 
+// Discovery metadata for a published storyline: the catalogue intro shown in
+// the gallery, plus a suggested genre and audience fit. Both suggestions are
+// validated against the app's enums before anything is stored.
+export const storylineDiscoveryMetadataSchema = {
+  type: Type.OBJECT,
+  properties: {
+    intro: { type: Type.STRING },
+    genre: { type: Type.STRING },
+    ageFit: { type: Type.STRING },
+  },
+  required: ['intro'],
+};
+
 // Pack 1: options-only regeneration returns just fresh choices for the
 // current beat (no story text, characters, or continuity fields).
 export const optionsRegenerationSchema = {

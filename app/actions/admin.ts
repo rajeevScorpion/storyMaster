@@ -3,6 +3,11 @@
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getAllModelConfigs, getFeatureFlag, setFeatureFlag, getFeatureFlagValue, setFeatureFlagValue, warmFeatureFlagCaches, type ModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
+import {
+  DEFAULT_STORY_BEAT_LENGTH_LEVEL,
+  STORY_BEAT_LENGTH_DEFAULT_LEVEL_FLAG_KEY,
+  normalizeStoryBeatLengthLevel,
+} from '@/lib/ai/story-audience';
 import type { StoryModelOverrides } from '@/app/actions/story-runtime';
 import {
   parseReelStorySettingsValue,
@@ -520,6 +525,7 @@ const GLOBAL_SETTINGS_WARM_KEYS: readonly string[] = [
   'cloud_save_timeout_ms',
   'story_asset_sync_warning_timeout_ms',
   'story_authoring_word_cap',
+  STORY_BEAT_LENGTH_DEFAULT_LEVEL_FLAG_KEY,
   // Prompt-only image gallery
   'prompt_only_max_images_per_beat',
   'prompt_only_image_gallery_cleanup_enabled',
@@ -576,6 +582,7 @@ export async function getGlobalSettings(section: string = 'overview'): Promise<{
   cloudSaveTimeoutMs: number;
   storyAssetSyncWarningTimeoutMs: number;
   authoringWordCap: number;
+  storyBeatLengthDefaultLevel: import('@/lib/types/story').StoryBeatLengthLevel;
   previewSeedPlanPriceCoins: number;
   promptOnlyMaxImagesPerBeat: number;
   promptOnlyImageGalleryCleanupEnabled: boolean;
@@ -596,7 +603,7 @@ export async function getGlobalSettings(section: string = 'overview'): Promise<{
   // component holds by default and never displays off-section.
   const needsNarrationSamples = section === 'overview' || section === 'narration';
   const needsPreviewPrice = section === 'overview' || section === 'authoring';
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationBundle, enabledStoryLanguageIds] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, clientStoryPersistenceEnabled, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, textMs, imageMs, ttsMs, saveMs, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, storyBeatLengthDefaultLevelValue, previewSeedPlanPriceCoins, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabledFlag, promptOnlyImageGalleryCleanupDaysStr, imageUploadOptimizationSettings, mediaStorage, narrationBundle, enabledStoryLanguageIds] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -630,6 +637,7 @@ export async function getGlobalSettings(section: string = 'overview'): Promise<{
     getFeatureFlagValue('cloud_save_timeout_ms'),
     getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
+    getFeatureFlagValue(STORY_BEAT_LENGTH_DEFAULT_LEVEL_FLAG_KEY),
     needsPreviewPrice ? getPreviewSeedPlanPriceCoins() : Promise.resolve(0),
     getFeatureFlagValue('prompt_only_max_images_per_beat'),
     getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
@@ -697,6 +705,9 @@ export async function getGlobalSettings(section: string = 'overview'): Promise<{
     cloudSaveTimeoutMs: parseInt(saveMs ?? '20000', 10) || 20000,
     storyAssetSyncWarningTimeoutMs: parseInt(storyAssetSyncWarningTimeoutMs ?? '15000', 10) || 15000,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
+    storyBeatLengthDefaultLevel: normalizeStoryBeatLengthLevel(
+      storyBeatLengthDefaultLevelValue ?? DEFAULT_STORY_BEAT_LENGTH_LEVEL
+    ),
     previewSeedPlanPriceCoins,
     promptOnlyMaxImagesPerBeat: Math.max(1, Math.min(10, parseInt(promptOnlyMaxImagesPerBeatStr ?? '3', 10) || 3)),
     promptOnlyImageGalleryCleanupEnabled: promptOnlyImageGalleryCleanupEnabledFlag,
@@ -975,6 +986,17 @@ export async function setAuthoringWordCap(words: number): Promise<void> {
   await setFeatureFlagValue('story_authoring_word_cap', String(Math.round(words)));
 }
 
+export async function setStoryBeatLengthDefaultLevel(level: number): Promise<void> {
+  await verifyAdmin();
+  if (!Number.isInteger(level) || level < 1 || level > 5) {
+    throw new Error('Default Beat length must be a whole-number level from 1 to 5.');
+  }
+  await setFeatureFlagValue(
+    STORY_BEAT_LENGTH_DEFAULT_LEVEL_FLAG_KEY,
+    String(normalizeStoryBeatLengthLevel(level))
+  );
+}
+
 export interface BeatControlAdminSettings {
   flags: Record<BeatControlFlagKey, boolean>;
   maxImageVersionsPerBeat: number;
@@ -1101,6 +1123,7 @@ export async function getStoryboardSettings(): Promise<{
   storyIncrementalAssetSyncEnabled: boolean;
   storyAssetUploadPauseDuringGenerationEnabled: boolean;
   authoringWordCap: number;
+  storyBeatLengthDefaultLevel: import('@/lib/types/story').StoryBeatLengthLevel;
   storyAssetSyncWarningTimeoutMs: number;
   promptOnlyMaxImagesPerBeat: number;
   promptOnlyImageGalleryCleanupEnabled: boolean;
@@ -1112,7 +1135,7 @@ export async function getStoryboardSettings(): Promise<{
   characterSheetCleanupDays: number;
   imageUploadOptimizationSettings: ImageUploadOptimizationSettings;
 }> {
-  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, reelStoryPublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr, imageUploadOptimizationSettings] = await Promise.all([
+  const [cycleOverride, cycleMsStr, vignetteEnabled, vignetteAmountValue, storyboardImageSettings, loadingNodeLabelsEnabled, loadingHintTypewriterEnabled, loadingReaderAnticipationMsStr, loadingReaderStoryTextEnabled, loadingReaderOptionsEnabled, loadingReaderScrollSpeedStr, storyUiTextLineCountValue, storyUiAutoScrollEnabled, storyTextOverlayWordsPerLineValue, storylineChoiceFlashEnabled, storylineChoiceFlashMsStr, saveMs, freePlusCharacterSheetsEnabled, creatorCharacterSheetsEnabled, storyPromptOnlyModeEnabled, verticalStoriesSettingEnabled, audioStorylinePublishEnabled, reelStoryPublishEnabled, videoDownloadEnabled, videoDownloadAdminBypass, storyAssetSignedUrlSwapEnabled, storyIncrementalAssetSyncEnabled, storyAssetUploadPauseDuringGenerationEnabled, storyAssetSyncWarningTimeoutMs, authoringWordCapStr, storyBeatLengthDefaultLevelValue, promptOnlyMaxImagesPerBeatStr, promptOnlyImageGalleryCleanupEnabled, promptOnlyImageGalleryCleanupDaysStr, characterSheetUploadEnabled, characterSheetUploadMaxBytesStr, characterSheetMaxPerCharacterStr, characterSheetCleanupEnabled, characterSheetCleanupDaysStr, imageUploadOptimizationSettings] = await Promise.all([
     getFeatureFlag('storyboard_cycle_override'),
     getFeatureFlagValue('storyboard_cycle_ms'),
     getFeatureFlag('storyboard_vignette_enabled', true),
@@ -1143,6 +1166,7 @@ export async function getStoryboardSettings(): Promise<{
     getFeatureFlag('story_asset_upload_pause_during_generation_enabled', false),
     getFeatureFlagValue('story_asset_sync_warning_timeout_ms'),
     getFeatureFlagValue('story_authoring_word_cap'),
+    getFeatureFlagValue(STORY_BEAT_LENGTH_DEFAULT_LEVEL_FLAG_KEY),
     getFeatureFlagValue('prompt_only_max_images_per_beat'),
     getFeatureFlag('prompt_only_image_gallery_cleanup_enabled', true),
     getFeatureFlagValue('prompt_only_image_gallery_cleanup_days'),
@@ -1200,6 +1224,9 @@ export async function getStoryboardSettings(): Promise<{
     storyIncrementalAssetSyncEnabled,
     storyAssetUploadPauseDuringGenerationEnabled,
     authoringWordCap: parseInt(authoringWordCapStr ?? '500', 10) || 500,
+    storyBeatLengthDefaultLevel: normalizeStoryBeatLengthLevel(
+      storyBeatLengthDefaultLevelValue ?? DEFAULT_STORY_BEAT_LENGTH_LEVEL
+    ),
     storyAssetSyncWarningTimeoutMs: parseInt(storyAssetSyncWarningTimeoutMs ?? '15000', 10) || 15000,
     promptOnlyMaxImagesPerBeat: Math.max(1, Math.min(10, parseInt(promptOnlyMaxImagesPerBeatStr ?? '3', 10) || 3)),
     promptOnlyImageGalleryCleanupEnabled,

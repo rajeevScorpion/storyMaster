@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatNarrativeStoryBible, formatStoryBible, validateGeneratedBeat } from './story-bible';
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
+import { normalizeStoryConfig } from './story-config';
 
 function makeCharacter(name: string, overrides: Partial<Character> = {}): Character {
   return {
@@ -14,12 +15,19 @@ function makeCharacter(name: string, overrides: Partial<Character> = {}): Charac
 }
 
 function makeValidBeat(overrides: Partial<StoryBeat> = {}): StoryBeat {
+  const words = ['A', 'story', 'begins', ...Array.from({ length: 81 }, (_, index) => `moment${index + 1}`)];
+  const storyText = words.join(' ');
   return {
     title: 'Beat 1',
     beatNumber: 1,
     isEnding: false,
-    storyText: 'A story begins.',
-    storyTextParts: ['A story', 'begins', 'to', 'unfold.'],
+    storyText,
+    storyTextParts: [
+      words.slice(0, 21).join(' '),
+      words.slice(21, 42).join(' '),
+      words.slice(42, 63).join(' '),
+      words.slice(63).join(' '),
+    ],
     sceneSummary: 'The opening scene.',
     options: [
       { id: 'opt-1', label: 'Go left', intent: 'explore' },
@@ -85,6 +93,27 @@ describe('formatNarrativeStoryBible', () => {
     expect(narrative.visualDirection).toBeUndefined();
     expect(narrative.recentBeats[0].imagePromptExcerpt).toBeUndefined();
     expect(narrative.recentBeats[0].storyTextExcerpt).toContain('A story begins');
+  });
+
+  it('keeps the latest consequence and compact head-tail context from earlier beats', () => {
+    const earlier = makeValidBeat({
+      storyText: `EARLIER OPEN ${'middle '.repeat(120)} EARLIER CONSEQUENCE`,
+    });
+    const latest = makeValidBeat({
+      beatNumber: 2,
+      storyText: `LATEST OPEN ${'detail '.repeat(100)} LATEST CONSEQUENCE`,
+      newCharacterIds: [],
+    });
+    const narrative = JSON.parse(formatNarrativeStoryBible({
+      currentBeat: 2,
+      beats: [earlier, latest],
+      characters: latest.characters,
+    }));
+
+    expect(narrative.recentBeats[0].storyTextExcerpt).toContain('EARLIER OPEN');
+    expect(narrative.recentBeats[0].storyTextExcerpt).toContain('EARLIER CONSEQUENCE');
+    expect(narrative.recentBeats[0].storyTextExcerpt.length).toBeLessThanOrEqual(360);
+    expect(narrative.recentBeats[1].storyTextExcerpt).toContain('LATEST CONSEQUENCE');
   });
 });
 
@@ -192,5 +221,59 @@ describe('formatStoryBible — series context injection (Pack 2)', () => {
       })
     );
     expect(bible.seriesBible.length).toBeLessThanOrEqual(2000);
+  });
+});
+
+describe('validateGeneratedBeat - audience contracts', () => {
+  it('requires exactly three choices for Preschool stories', () => {
+    const words = Array.from({ length: 44 }, (_, index) => `word${index}`);
+    const beat = makeValidBeat({
+      storyText: words.join(' '),
+      storyTextParts: [
+        words.slice(0, 11).join(' '),
+        words.slice(11, 22).join(' '),
+        words.slice(22, 33).join(' '),
+        words.slice(33).join(' '),
+      ],
+      options: [
+        { id: '1', label: 'One', intent: 'one' },
+        { id: '2', label: 'Two', intent: 'two' },
+        { id: '3', label: 'Three', intent: 'three' },
+        { id: '4', label: 'Four', intent: 'four' },
+      ],
+    });
+    const issues = validateGeneratedBeat(beat, {
+      currentBeat: 0,
+      storyConfig: normalizeStoryConfig({ ageGroup: 'kids_3_5', beatLength: { level: 3 } }),
+    });
+    expect(issues.some((issue) => issue.includes('exactly 3 options'))).toBe(true);
+  });
+
+  it('allows a strict canonical seeded beat to preserve source length', () => {
+    const source = 'These exact source words must stay unchanged.';
+    const beat = makeValidBeat({
+      storyText: source,
+      storyTextParts: ['These exact', 'source words', 'must stay', 'unchanged.'],
+      originKind: 'seeded_canonical',
+    });
+    const issues = validateGeneratedBeat(beat, {
+      currentBeat: 0,
+      storyConfig: normalizeStoryConfig({
+        authoring: {
+          mode: 'seeded',
+          sourceText: source,
+          sourceFidelity: 'strictly_follow',
+        },
+      }),
+    });
+    expect(issues.some((issue) => issue.includes('storyText has'))).toBe(false);
+  });
+
+  it('rejects panel chunks that alter the narration text', () => {
+    const beat = makeValidBeat({
+      storyTextParts: ['A different', 'story was', 'placed in', 'these chunks'],
+    });
+    const issues = validateGeneratedBeat(beat, { currentBeat: 0 });
+    expect(issues.some((issue) => issue.includes('preserve all storyText content'))).toBe(true);
   });
 });

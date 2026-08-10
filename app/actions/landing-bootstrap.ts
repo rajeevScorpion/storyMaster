@@ -15,7 +15,7 @@ import type { ImageModelPickerState, ImageModelSelection, ImageTaskKey } from '@
 import type { ReelMoodRecord } from '@/lib/reel/moods';
 import type { ReelVisualStyleCard } from '@/lib/reel/styles';
 import type { PricingMarketKey, PricingRuntimeContext } from '@/lib/types/pricing';
-import type { SavedStory, SavedStorylineItem, UserReel } from '@/lib/types/my-stories';
+import type { PagedList, SavedStory, SavedStorylineItem, UserReel } from '@/lib/types/my-stories';
 import type { CharacterMaster } from '@/lib/types/character-library';
 import type { CharacterUniverseRuntimeSettings } from '@/lib/character-universe/settings';
 
@@ -27,17 +27,27 @@ export interface LandingBootstrapData {
 }
 
 export interface SessionBootstrapData extends LandingBootstrapData {
-  /** null = anonymous session (or the section failed); client keeps its cache. */
+  /**
+   * null = anonymous session (or the section failed); client keeps its cache.
+   * Each list is the first page only (`MY_STORIES_PAGE_SIZE`); `hasMore` tells
+   * the drawer whether to offer "Load more".
+   */
   myStories: {
     stories: SavedStory[];
     storylines: SavedStorylineItem[];
     reels: UserReel[];
+    hasMore: { stories: boolean; storylines: boolean; reels: boolean };
   } | null;
   /** null = anonymous session; `masters` is [] when the library flag is off. */
   characterUniverse: {
     settings: CharacterUniverseRuntimeSettings;
     masters: CharacterMaster[];
   } | null;
+}
+
+/** A list section that failed degrades to an empty page, never a failed boot. */
+function emptyPage<T>(): PagedList<T> {
+  return { items: [], hasMore: false };
 }
 
 /**
@@ -82,6 +92,13 @@ export async function getSessionBootstrap(input: {
   imageTaskKey: ImageTaskKey;
   imageModelSelection?: ImageModelSelection | null;
   pricingMarketKey?: PricingMarketKey | null;
+  /**
+   * False when the caller only needs the landing payload because its cached
+   * lists are still fresh — the user sections then cost nothing at all: no
+   * list queries, no thumbnail resolution, no signing. Returned as null, which
+   * the client already reads as "keep your cache".
+   */
+  includeUserSections?: boolean;
 }): Promise<SessionBootstrapData> {
   const supabase = await createClient();
   let user: { id: string } | null = null;
@@ -92,16 +109,27 @@ export async function getSessionBootstrap(input: {
     // Treat auth failures as anonymous — the public payload still loads.
   }
 
+  const wantsUserSections = input.includeUserSections !== false && Boolean(user);
+
   const [landing, myStories, characterUniverse] = await Promise.all([
     getLandingBootstrap(input),
-    user
+    wantsUserSections && user
       ? Promise.all([
-          loadUserStoriesData(supabase, user.id).catch(() => [] as SavedStory[]),
-          loadSavedStorylinesData(supabase, user.id).catch(() => [] as SavedStorylineItem[]),
-          loadUserReelsData(supabase, user.id).catch(() => [] as UserReel[]),
-        ]).then(([stories, storylines, reels]) => ({ stories, storylines, reels }))
+          loadUserStoriesData(supabase, user.id).catch(() => emptyPage<SavedStory>()),
+          loadSavedStorylinesData(supabase, user.id).catch(() => emptyPage<SavedStorylineItem>()),
+          loadUserReelsData(supabase, user.id).catch(() => emptyPage<UserReel>()),
+        ]).then(([stories, storylines, reels]) => ({
+          stories: stories.items,
+          storylines: storylines.items,
+          reels: reels.items,
+          hasMore: {
+            stories: stories.hasMore,
+            storylines: storylines.hasMore,
+            reels: reels.hasMore,
+          },
+        }))
       : Promise.resolve(null),
-    user
+    wantsUserSections && user
       ? loadCharacterUniversePayloadData(supabase, user.id).catch(() => null)
       : Promise.resolve(null),
   ]);

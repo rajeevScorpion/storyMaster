@@ -678,6 +678,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
   costTelemetry?: CostTelemetryContext,
   options: {
     narrationStyle?: string;
+    audience?: string;
     accent?: string | null;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
@@ -700,6 +701,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      audience: options.audience,
       accent: options.accent,
       billingIdempotencyKey: options.billingIdempotencyKey,
       ...(options.serverAuth ? { serverAuth: options.serverAuth } : {}),
@@ -760,6 +762,7 @@ export async function generateStoryNarrationOnlyWithOverlay(
   costTelemetry?: CostTelemetryContext,
   options: {
     narrationStyle?: string;
+    audience?: string;
     accent?: string | null;
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
@@ -776,6 +779,7 @@ export async function generateStoryNarrationOnlyWithOverlay(
     {
       taskKey: 'tts',
       narrationStyle: options.narrationStyle,
+      audience: options.audience,
       accent: options.accent,
     }
   );

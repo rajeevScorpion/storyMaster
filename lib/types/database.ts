@@ -450,21 +450,83 @@ export interface DbManagedPage {
 
 export interface GalleryItem {
   id: string;
-  type: 'tree' | 'storyline';
+  /**
+   * Retained as a discriminator so cards/keys stay stable, but discovery is
+   * storyline-only — raw story trees are no longer surfaced in the feed.
+   */
+  type: 'storyline';
   title: string;
   coverImageUrl: string | null;
   coverIsStoryboard: boolean;
+  /**
+   * The storyline's opening beat image, for surfaces that show artwork
+   * full-bleed rather than in a card. Cover art can be poster-like — the title
+   * burned into the image — so cropping it to a wide billboard slices the
+   * lettering; beat artwork is clean.
+   *
+   * Always a 2×2 storyboard grid, so consumers must render a single panel from
+   * it and never the grid itself. The billboard uses it as its backdrop, and
+   * cards whose cover is a poster cycle its panels on hover. Null for
+   * storylines whose opening beat has no image, where consumers fall back to
+   * the cover.
+   */
+  openingImageUrl: string | null;
   isVerticalStory: boolean;
   aspectRatio: StoryAspectRatio;
   authorName: string | null;
   storyId: string;
   beatCount: number | null;
+  /** Stored catalogue intro, or a deterministic beat-1 fallback. */
+  intro: string | null;
   genre: string | null;
   ageGroup: string | null;
   settingCountry: string | null;
   likeCount: number;
   viewCount: number;
   createdAt: string;
+  /**
+   * This viewer's reading position (migration 090). Null for signed-out
+   * visitors and for storylines they have not started.
+   */
+  progress: GalleryProgress | null;
+  /**
+   * Series membership (migration 093). Null on standalone storylines, which is
+   * the overwhelming majority — episodes are opt-in.
+   */
+  seriesId: string | null;
+  seriesTitle: string | null;
+  episodeNumber: number | null;
+  /**
+   * Published, publicly-visible episodes in this series. Set only on a
+   * collapsed series card; null everywhere else, including on the individual
+   * episode cards the browse grid still lists.
+   */
+  episodeCount: number | null;
+  /**
+   * Jump list for a collapsed series card. Carries no artwork on purpose —
+   * signing a cover per episode is the expensive part of a rail payload, and a
+   * jump list needs a label, not a thumbnail.
+   */
+  episodes: GalleryEpisodeSummary[] | null;
+}
+
+/** Per-viewer reading state for one storyline. */
+export interface GalleryProgress {
+  /** Zero-based index of the beat the reader stopped on. */
+  beatIndex: number;
+  beatCount: number | null;
+  completed: boolean;
+}
+
+/** One episode inside a collapsed series card's jump list. */
+export interface GalleryEpisodeSummary {
+  storylineId: string;
+  storyId: string;
+  title: string;
+  episodeNumber: number;
+  beatCount: number | null;
+  createdAt: string;
+  progress: GalleryProgress | null;
 }
 
 export interface DbStorylineLike {
@@ -481,9 +543,11 @@ export interface DbStorylineView {
   viewed_at: string;
 }
 
+export type GalleryLane = 'storylines' | 'vertical';
+
 export interface GalleryFilters {
   search: string;
-  type: 'storylines' | 'trees' | 'vertical';
+  type: GalleryLane;
   genre: string;
   ageGroup: string;
   country: string;
@@ -496,9 +560,24 @@ export interface GalleryPage {
   hasMore: boolean;
 }
 
-export interface GenreSection {
-  genre: string;
+/** Card shape a rail renders: 16:9 landscape or 9:16 portrait. */
+export type GalleryRailLayout = 'wide' | 'portrait';
+
+export interface GalleryRail {
+  key: string;
+  title: string;
+  layout: GalleryRailLayout;
   items: GalleryItem[];
+}
+
+export interface GalleryRailsResponse {
+  /**
+   * Billboard rotation: up to five spotlight storylines with artwork. The
+   * client crossfades through them; an empty list means no storyline has a
+   * usable cover yet and the page falls back to a plain heading.
+   */
+  featured: GalleryItem[];
+  rails: GalleryRail[];
 }
 
 export interface DbPricingPlan {

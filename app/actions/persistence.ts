@@ -17,7 +17,10 @@ import {
   getBeatPersistedImageUrl,
 } from '@/lib/types/beat-media';
 import type { StorylineChoice } from '@/lib/utils/storyline';
+import { MY_STORIES_PAGE_SIZE, type ListPageInput, type PagedList } from '@/lib/types/my-stories';
 import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-config';
+import { normalizeStoredAgeGroup } from '@/lib/ai/story-audience';
+import { normalizeStoredGenre } from '@/lib/story/genres';
 import {
   extractImageContinuityState,
   summarizeImageContinuityState,
@@ -29,10 +32,12 @@ import {
 } from '@/lib/reel/settings';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { finalizeStorylineShareAssets } from '@/app/actions/storyline-covers';
+import { refreshStorylineDiscoveryMetadata } from '@/app/actions/storyline-discovery';
 import { linkReferenceSetupToStory } from '@/app/actions/references';
 import { recordCharacterNoveltyUsageAction } from '@/app/actions/character-novelty';
 import { processAndUploadStorylineAsset } from '@/lib/story/share-cover';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
+import { isStoryboardBeat } from '@/lib/storyboard/beat';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import {
@@ -469,7 +474,93 @@ const ADDITIVE_STORYLINE_COLUMNS = [
   'unpublished_at',
   'moderation_status',
   'publish_quality',
+  // Migration 089 discovery classification columns.
+  'age_group',
+  'genre',
+  // Migration 093 series columns — stripped when the migration hasn't been
+  // applied yet so publishing keeps working during rollout.
+  'series_id',
+  'episode_number',
+  'series_title',
 ] as const;
+
+type StorylineSeriesFields = {
+  series_id: string | null;
+  episode_number: number | null;
+  series_title: string | null;
+};
+
+const NO_SERIES: StorylineSeriesFields = {
+  series_id: null,
+  episode_number: null,
+  series_title: null,
+};
+
+/**
+ * Series membership to stamp onto a storyline at publish time (migration 093).
+ *
+ * The gallery reads storylines anonymously and cannot see `episode_branches` —
+ * that table is owner-only and points at unpublished work. Publishing, though,
+ * runs on the author's own client, which can read their own branch, so the
+ * display name is resolved here and copied down. Mirrors the COALESCE chain in
+ * the migration's backfill, so a row published now and a row backfilled then
+ * carry the same title.
+ *
+ * Both the branch id and the episode number are required: a branch with no
+ * episode number cannot be ordered, so such a story publishes as standalone
+ * rather than joining a series at an unknown position.
+ *
+ * Queried on its own rather than folded into the caller's `stories` select so
+ * that a database without migration 075 loses the series stamp instead of
+ * failing the publish — a missing column fails the whole row, not one field.
+ */
+async function resolveStorylineSeriesFields(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  storyId: string
+): Promise<StorylineSeriesFields> {
+  try {
+    const { data: story, error } = await supabase
+      .from('stories')
+      .select('title, episode_branch_id, episode_number')
+      .eq('id', storyId)
+      .maybeSingle();
+
+    if (error || !story) return NO_SERIES;
+
+    const branchId = (story.episode_branch_id as string | null) ?? null;
+    const episodeNumber = story.episode_number as number | null;
+    if (!branchId || typeof episodeNumber !== 'number') return NO_SERIES;
+
+    const storyTitle = (story.title as string | null)?.trim() || null;
+
+    const { data: branch } = await supabase
+      .from('episode_branches')
+      .select('branch_name, root_story_id')
+      .eq('id', branchId)
+      .maybeSingle();
+
+    const branchName = (branch?.branch_name as string | null)?.trim() || null;
+    let rootTitle: string | null = null;
+
+    if (!branchName && branch?.root_story_id) {
+      const { data: root } = await supabase
+        .from('stories')
+        .select('title')
+        .eq('id', branch.root_story_id as string)
+        .maybeSingle();
+      rootTitle = (root?.title as string | null)?.trim() || null;
+    }
+
+    return {
+      series_id: branchId,
+      episode_number: episodeNumber,
+      series_title: branchName ?? rootTitle ?? storyTitle,
+    };
+  } catch (error) {
+    console.warn('Failed to resolve storyline series fields:', error);
+    return NO_SERIES;
+  }
+}
 
 function isMissingBeatColumnError(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error?.message) return false;
@@ -626,7 +717,13 @@ function nodeToBeatRow(
     row.active_narration_preview_id = normalizedBeat.activeNarrationPreviewId;
   }
 
-  if (normalizedBeat.isStoryboard) {
+  // `isStoryboardBeat` rather than the raw field: every read path infers a
+  // storyboard from a plan or a full set of panel captions too, and writing
+  // only the raw flag left grids persisted as `is_storyboard = false`. Gallery
+  // surfaces then rendered the whole 2×2 grid instead of one panel. Never
+  // written false — a beat that has been a storyboard once stays one, and the
+  // column already defaults to false.
+  if (isStoryboardBeat(normalizedBeat)) {
     row.is_storyboard = true;
   }
 
@@ -1719,13 +1816,15 @@ export async function autoPublishStoryline(
 
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
-    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', storyId)
     .maybeSingle();
 
   if (sourceStoryError) {
     throw new Error(`Failed to fetch story orientation: ${sourceStoryError.message}`);
   }
+
+  const seriesFields = await resolveStorylineSeriesFields(supabase, storyId);
 
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
@@ -1835,6 +1934,9 @@ export async function autoPublishStoryline(
       node_path: nodePath,
       beats: refreshedLegacyBeats as unknown as Record<string, unknown>[],
       choices: refreshedChoices as unknown as Record<string, unknown>[],
+      age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+      genre: normalizeStoredGenre(sourceStory?.genre),
+      ...seriesFields,
       is_public: true,
     };
 
@@ -1858,6 +1960,16 @@ export async function autoPublishStoryline(
         throw new Error(`Failed to refresh published storyline: ${refreshError.message}`);
       }
     }
+    // The refresh above rewrote title and beats without going through
+    // finalizeStorylineShareAssets, so the stored discovery intro would
+    // otherwise describe the previous version.
+    await refreshStorylineDiscoveryMetadata({
+      storylineId: existing.id,
+      storyId,
+      title: storyTitle,
+      beats: refreshedLegacyBeats,
+    });
+
     // Already published — just auto-save to user's profile
     await supabase
       .from('saved_storylines')
@@ -1956,6 +2068,9 @@ export async function autoPublishStoryline(
     node_path: nodePath,
     beats: legacyBeats as unknown as Record<string, unknown>[],
     choices: choices as unknown as Record<string, unknown>[],
+    age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+    genre: normalizeStoredGenre(sourceStory?.genre),
+    ...seriesFields,
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
     path_hash: pathHash,
@@ -2268,14 +2383,30 @@ async function resolveStorylineListThumbnails(
  * List the current user's created stories.
  */
 /**
+ * Resolves a paging window. One extra row past the page is requested so "is
+ * there more?" is answered by the same round trip, with no count query; the
+ * probe row is sliced off by `takePage` before it reaches the client.
+ */
+function listRange(input?: ListPageInput): { limit: number; offset: number; last: number } {
+  const limit = Math.max(1, input?.limit ?? MY_STORIES_PAGE_SIZE);
+  const offset = Math.max(0, input?.offset ?? 0);
+  return { limit, offset, last: offset + limit };
+}
+
+function takePage<T>(rows: T[], limit: number): PagedList<T> {
+  return { items: rows.slice(0, limit), hasMore: rows.length > limit };
+}
+
+/**
  * Story-list loader threaded with an already-resolved auth context, so a
  * bundled bootstrap can authenticate once and fan out. `listUserStories` below
  * is the thin per-request wrapper.
  */
 export async function loadUserStoriesData(
   supabase: SupabaseClient,
-  userId: string
-): Promise<Array<{
+  userId: string,
+  page?: ListPageInput
+): Promise<PagedList<{
   id: string;
   title: string;
   status: string;
@@ -2289,12 +2420,14 @@ export async function loadUserStoriesData(
   thumbnail_url: string | null;
   thumbnail_is_storyboard: boolean;
 }>> {
+  const { limit, offset, last } = listRange(page);
   const { data, error } = await supabase
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, episode_number, is_vertical_story, aspect_ratio')
     .eq('user_id', userId)
     .neq('story_kind', 'reel')
-    .order('updated_at', { ascending: false });
+    .order('updated_at', { ascending: false })
+    .range(offset, last);
 
   let rows: Array<{
     id: string;
@@ -2315,27 +2448,33 @@ export async function loadUserStoriesData(
       .select('id, title, status, is_archived, updated_at, user_prompt, cover_image_url, is_vertical_story, aspect_ratio')
       .eq('user_id', userId)
       .neq('story_kind', 'reel')
-      .order('updated_at', { ascending: false });
+      .order('updated_at', { ascending: false })
+      .range(offset, last);
 
     if (fallbackError) throw new Error(`Failed to list stories: ${fallbackError.message}`);
     rows = fallbackData || [];
   }
 
-  const stories = rows;
+  // Thumbnails resolve for the page only — the probe row is dropped first so it
+  // never costs a beats lookup or a signature.
+  const { items: stories, hasMore } = takePage(rows, limit);
   const thumbnails = await resolveStoryListThumbnails(supabase, stories);
 
-  return stories.map((story) => ({
-    ...story,
-    thumbnail_url: thumbnails.get(story.id)?.url ?? null,
-    thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
-  }));
+  return {
+    items: stories.map((story) => ({
+      ...story,
+      thumbnail_url: thumbnails.get(story.id)?.url ?? null,
+      thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
+    })),
+    hasMore,
+  };
 }
 
-export async function listUserStories() {
+export async function listUserStories(page?: ListPageInput) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
-  return loadUserStoriesData(supabase, user.id);
+  return loadUserStoriesData(supabase, user.id, page);
 }
 
 /**
@@ -2344,8 +2483,9 @@ export async function listUserStories() {
  */
 export async function loadUserReelsData(
   supabase: SupabaseClient,
-  userId: string
-): Promise<Array<{
+  userId: string,
+  page?: ListPageInput
+): Promise<PagedList<{
   id: string;
   title: string;
   status: string;
@@ -2360,19 +2500,21 @@ export async function loadUserReelsData(
   thumbnail_url: string | null;
   thumbnail_is_storyboard: boolean;
 }>> {
+  const { limit, offset, last } = listRange(page);
   const { data, error } = await supabase
     .from('stories')
     .select('id, title, status, is_archived, updated_at, user_prompt, story_kind, story_config, story_map, cover_image_url, is_vertical_story, aspect_ratio')
     .eq('user_id', userId)
     .eq('story_kind', 'reel')
-    .order('updated_at', { ascending: false });
+    .order('updated_at', { ascending: false })
+    .range(offset, last);
 
   if (error) throw new Error(`Failed to list reels: ${error.message}`);
 
-  const reels = data || [];
+  const { items: reels, hasMore } = takePage(data || [], limit);
   const thumbnails = await resolveStoryListThumbnails(supabase, reels);
 
-  return reels.map((story: any) => {
+  const items = reels.map((story: any) => {
     const storyMap = story.story_map && typeof story.story_map === 'object' ? story.story_map : null;
     const nodeCount = storyMap?.nodes && typeof storyMap.nodes === 'object'
       ? Object.keys(storyMap.nodes).length
@@ -2386,7 +2528,7 @@ export async function loadUserReelsData(
       is_archived: Boolean(story.is_archived),
       updated_at: story.updated_at,
       user_prompt: story.user_prompt,
-      story_kind: 'reel',
+      story_kind: 'reel' as const,
       beat_count: nodeCount || (Number.isFinite(configBeatCount) ? configBeatCount : 0),
       cover_image_url: story.cover_image_url,
       is_vertical_story: story.is_vertical_story,
@@ -2395,16 +2537,18 @@ export async function loadUserReelsData(
       thumbnail_is_storyboard: thumbnails.get(story.id)?.isStoryboard === true,
     };
   });
+
+  return { items, hasMore };
 }
 
 /**
  * List the current user's generated reels.
  */
-export async function listUserReels() {
+export async function listUserReels(page?: ListPageInput) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
-  return loadUserReelsData(supabase, user.id);
+  return loadUserReelsData(supabase, user.id, page);
 }
 
 /**
@@ -2503,8 +2647,9 @@ export async function unsaveStoryline(storylineId: string): Promise<void> {
  */
 export async function loadSavedStorylinesData(
   supabase: SupabaseClient,
-  userId: string
-): Promise<Array<{
+  userId: string,
+  page?: ListPageInput
+): Promise<PagedList<{
   id: string;
   storyline_id: string;
   saved_at: string;
@@ -2522,6 +2667,7 @@ export async function loadSavedStorylinesData(
     thumbnail_is_storyboard?: boolean;
   };
 }>> {
+  const { limit, offset, last } = listRange(page);
   const { data, error } = await supabase
     .from('saved_storylines')
     .select(`
@@ -2542,11 +2688,12 @@ export async function loadSavedStorylinesData(
       )
     `)
     .eq('user_id', userId)
-    .order('saved_at', { ascending: false });
+    .order('saved_at', { ascending: false })
+    .range(offset, last);
 
   if (error) throw new Error(`Failed to list saved storylines: ${error.message}`);
 
-  const rows = data || [];
+  const { items: rows, hasMore } = takePage(data || [], limit);
   const thumbnails = await resolveStorylineListThumbnails(
     supabase,
     rows
@@ -2561,7 +2708,7 @@ export async function loadSavedStorylinesData(
       }))
   );
 
-  return rows.map((row: any) => {
+  const items = rows.map((row: any) => {
     if (!row.storylines) {
       return {
         id: row.id,
@@ -2586,16 +2733,18 @@ export async function loadSavedStorylinesData(
       },
     };
   });
+
+  return { items, hasMore };
 }
 
 /**
  * List storylines saved to the user's profile.
  */
-export async function listSavedStorylines() {
+export async function listSavedStorylines(page?: ListPageInput) {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
-  return loadSavedStorylinesData(supabase, user.id);
+  return loadSavedStorylinesData(supabase, user.id, page);
 }
 
 // ============================================================
@@ -2648,9 +2797,10 @@ export async function publishStoryline(params: {
 
   const { data: sourceStory } = await supabase
     .from('stories')
-    .select('story_config, story_kind, is_vertical_story, aspect_ratio')
+    .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
     .eq('id', params.storyId)
     .maybeSingle();
+  const seriesFields = await resolveStorylineSeriesFields(supabase, params.storyId);
   const storyConfig = normalizeStoryConfig({
     ...((sourceStory?.story_config as Record<string, unknown> | null) ?? {}),
     story_kind: sourceStory?.story_kind,
@@ -2698,6 +2848,11 @@ export async function publishStoryline(params: {
     node_path: params.nodePath,
     beats: publishedBeats as unknown as Record<string, unknown>[],
     choices: params.choices as unknown as Record<string, unknown>[],
+    // Denormalized for discovery filtering. Unrecognised values persist as
+    // NULL rather than a plausible-looking default.
+    age_group: normalizeStoredAgeGroup(storyConfig.ageGroup),
+    genre: normalizeStoredGenre(sourceStory?.genre),
+    ...seriesFields,
     author_name: profile?.display_name || 'Anonymous',
     is_public: requestedVisibility === 'public',
     visibility: requestedVisibility,

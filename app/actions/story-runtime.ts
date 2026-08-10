@@ -79,6 +79,12 @@ import {
   normalizeStoryboardImageQualitySettings,
   type StoryboardImageQualitySettings,
 } from '@/lib/types/storyboard-settings';
+import {
+  countStoryWords,
+  formatAudienceNarrativeContract,
+  getStoryAudienceProfile,
+  resolveStoryBeatLength,
+} from '@/lib/ai/story-audience';
 
 // Text-side orchestration (beat generation, storyboard planning, prompt
 // formatting) lives in lib/ai/beat-orchestration.ts so the server beat bundle
@@ -182,28 +188,50 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
       ].join('\n')
     : resolvedPrompt;
   const prompt = appendExtraVisualGuidanceContract(
-    strictPrompt,
+    `${strictPrompt}\n\n${formatAudienceNarrativeContract(storyConfig.ageGroup, storyConfig.beatLength?.level)}`,
     storyConfig.authoring.guidanceText
   );
 
-  const text = await callGeminiText({
-    task: 'seed_plan_generation',
-    model: input.modelOverrides?.seedPlanModel || DEFAULT_TEXT_MODEL_ID,
-    prompt,
-    temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
-    telemetry: input.costTelemetry,
-  });
+  const generatePlanAttempt = async (repairNote?: string): Promise<SeedPlan> => {
+    const text = await callGeminiText({
+      task: 'seed_plan_generation',
+      model: input.modelOverrides?.seedPlanModel || DEFAULT_TEXT_MODEL_ID,
+      prompt: repairNote ? `${prompt}\n\nQuality Repair Note:\n${repairNote}` : prompt,
+      temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
+      telemetry: input.costTelemetry,
+    });
 
-  let parsed: SeedPlan;
-  try {
-    parsed = JSON.parse(text) as SeedPlan;
-  } catch {
-    throw new Error(`Failed to parse seed plan JSON: ${text.slice(0, 200)}`);
-  }
+    try {
+      return normalizeSeedPlanResult(JSON.parse(text) as SeedPlan, storyConfig);
+    } catch {
+      throw new Error(`Failed to parse seed plan JSON: ${text.slice(0, 200)}`);
+    }
+  };
 
-  const normalizedPlan = normalizeSeedPlanResult(parsed, storyConfig);
-  if (normalizedPlan.beats.length !== input.beatCount) {
-    throw new Error(`Seed plan returned ${normalizedPlan.beats.length} beats, expected ${input.beatCount}.`);
+  const validatePlan = (plan: SeedPlan): string[] => {
+    if (plan.beats.length !== input.beatCount) {
+      return [`Seed plan returned ${plan.beats.length} beats, expected ${input.beatCount}.`];
+    }
+    if (strictSourceSegments) return [];
+
+    const length = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
+    const audience = getStoryAudienceProfile(storyConfig.ageGroup);
+    return plan.beats.flatMap((beat) => {
+      const words = countStoryWords(beat.storyText);
+      return words >= length.targetMinWords && words <= length.targetMaxWords
+        ? []
+        : [`Beat ${beat.beatIndex} has ${words} words; ${audience.label} at ${length.label} requires ${length.targetMinWords}-${length.targetMaxWords}.`];
+    });
+  };
+
+  let normalizedPlan = await generatePlanAttempt();
+  let planIssues = validatePlan(normalizedPlan);
+  if (planIssues.length > 0) {
+    normalizedPlan = await generatePlanAttempt(buildValidationRepairNote(planIssues));
+    planIssues = validatePlan(normalizedPlan);
+    if (planIssues.length > 0) {
+      throw new Error(`Seed plan validation failed after retry: ${planIssues.join('; ')}`);
+    }
   }
 
   if (!strictSourceSegments) {
@@ -251,7 +279,7 @@ export async function materializeSeededBeat(
         storyConfig.authoring.guidanceText
       )
     )
-  );
+  ) + `\n\n${formatAudienceNarrativeContract(storyConfig.ageGroup, storyConfig.beatLength?.level)}`;
 
   const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
     const text = await callGeminiText({
@@ -640,8 +668,18 @@ function normalizeSeedPlanResult(plan: SeedPlan, storyConfig: StoryConfig): Seed
   }
 
   const beats = normalizedPlan.beats.map(reorderCanonicalOptions);
-  if (beats.some((beat) => !beat.isEnding && beat.options.length !== 3)) {
-    throw new Error('Seed plan generation must return exactly 3 options for each non-ending beat.');
+  const audience = getStoryAudienceProfile(storyConfig.ageGroup);
+  if (beats.some((beat) => (
+    !beat.isEnding
+    && (audience.optionCount === 'exactly_3'
+      ? beat.options.length !== 3
+      : beat.options.length < 3 || beat.options.length > 4)
+  ))) {
+    throw new Error(
+      audience.optionCount === 'exactly_3'
+        ? `Seed plan generation must return exactly 3 options for ${audience.label}.`
+        : `Seed plan generation must return 3 or 4 options for ${audience.label}.`
+    );
   }
   if (beats.some((beat, index) => beat.beatIndex !== index + 1)) {
     throw new Error('Seed plan beat indexes must be sequential starting from 1.');
@@ -671,7 +709,7 @@ function reorderCanonicalOptions(seedBeat: SeedBeatOutline): SeedBeatOutline {
 
   return {
     ...seedBeat,
-    options: [canonical, ...alternates].slice(0, 3).map((option, index) => ({
+    options: [canonical, ...alternates].map((option, index) => ({
       ...option,
       isCanonical: index === 0,
     })),

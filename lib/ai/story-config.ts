@@ -20,6 +20,11 @@ import type {
   VisualSettings,
   VisualStylePreset,
 } from '@/lib/types/story';
+import {
+  DEFAULT_STORY_BEAT_LENGTH_LEVEL,
+  normalizeAgeGroup,
+  normalizeStoryBeatLengthLevel,
+} from '@/lib/ai/story-audience';
 import type {
   StoryConfigCharacterReference,
   StoryConfigReferences,
@@ -45,6 +50,7 @@ import {
   normalizeReelLength,
   normalizeReelTextLength,
 } from '@/lib/reel/settings';
+import { DEFAULT_STORY_GENRE, normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeReelNarrationSettings } from '@/lib/reel/narration';
 import { normalizeReelTextOverlayStyle } from '@/lib/reel/styles';
 import { DEFAULT_REEL_TRANSITION_SETTINGS, normalizeReelTransitionSettings } from '@/lib/reel/transitions';
@@ -250,6 +256,7 @@ export const DEFAULT_STORY_CONFIG: StoryConfig = {
   storyKind: 'story',
   language: 'english',
   ageGroup: 'all_ages',
+  beatLength: { level: DEFAULT_STORY_BEAT_LENGTH_LEVEL },
   settingCountry: 'generic',
   maxBeats: 6,
   imageGenerationMode: 'prompt_only',
@@ -362,7 +369,15 @@ export function normalizeStoryConfig(input?: RawStoryConfig | null): StoryConfig
   return {
     storyKind,
     language: normalizeStoryLanguage(input?.language),
-    ageGroup: input?.ageGroup || DEFAULT_STORY_CONFIG.ageGroup,
+    ageGroup: normalizeAgeGroup(input?.ageGroup),
+    genre: normalizeStoredGenre(input?.genre) ?? DEFAULT_STORY_GENRE,
+    ...(storyKind === 'story'
+      ? {
+          beatLength: {
+            level: normalizeStoryBeatLengthLevel(input?.beatLength?.level),
+          },
+        }
+      : {}),
     settingCountry: input?.settingCountry || DEFAULT_STORY_CONFIG.settingCountry,
     maxBeats,
     imageGenerationMode: normalizeImageGenerationMode(input?.imageGenerationMode),

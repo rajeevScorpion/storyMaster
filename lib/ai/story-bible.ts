@@ -1,5 +1,10 @@
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
-import { getPreludeText } from '@/lib/ai/story-config';
+import { getPreludeText, normalizeStoryConfig } from '@/lib/ai/story-config';
+import {
+  countStoryWords,
+  getStoryAudienceProfile,
+  resolveStoryBeatLength,
+} from '@/lib/ai/story-audience';
 import { buildWorldAnchorSummaries } from '@/lib/references/reference-routing';
 
 interface PromptCharacterAnchor {
@@ -72,11 +77,12 @@ const SERIES_BIBLE_MAX_LENGTH = 2000;
 const SERIES_JOURNAL_MAX_LENGTH = 1200;
 const CHARACTER_APPEARANCE_MAX_LENGTH = 120;
 const CHARACTER_PERSONALITY_MAX_LENGTH = 100;
-const STORY_TEXT_EXCERPT_MAX_LENGTH = 160;
+const STORY_TEXT_EXCERPT_MAX_LENGTH = 360;
+const LATEST_STORY_TEXT_EXCERPT_MAX_LENGTH = 1200;
 const IMAGE_PROMPT_EXCERPT_MAX_LENGTH = 140;
 const SCENE_SUMMARY_MAX_LENGTH = 140;
 const NEXT_BEAT_GOAL_MAX_LENGTH = 120;
-const CONTINUITY_NOTE_MAX_LENGTH = 100;
+const CONTINUITY_NOTE_MAX_LENGTH = 140;
 const ENDING_FORECAST_MAX_LENGTH = 60;
 const VISUAL_DIRECTION_MAX_LENGTH = 120;
 const WORLD_ANCHOR_MAX_LENGTH = 220;
@@ -142,6 +148,12 @@ export function validateGeneratedBeat(
   const newCharacterIds = Array.isArray(beat.newCharacterIds) ? beat.newCharacterIds : [];
   const changedCharacterIds = Array.isArray(beat.changedCharacterIds) ? beat.changedCharacterIds : [];
   const storyTextParts = Array.isArray(beat.storyTextParts) ? beat.storyTextParts : [];
+  const storyConfig = normalizeStoryConfig(sessionState?.storyConfig);
+  const audience = getStoryAudienceProfile(storyConfig.ageGroup);
+  const beatLength = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
+  const strictCanonicalSource = beat.originKind === 'seeded_canonical'
+    && storyConfig.authoring.mode === 'seeded'
+    && storyConfig.authoring.sourceFidelity === 'strictly_follow';
 
   if (!beat.title?.trim()) issues.push('title is missing');
   if (!beat.storyText?.trim()) issues.push('storyText is missing');
@@ -149,6 +161,18 @@ export function validateGeneratedBeat(
     issues.push('storyTextParts must contain exactly 4 hidden narration chunks');
   } else if (storyTextParts.some((part) => typeof part !== 'string' || !part.trim())) {
     issues.push('storyTextParts must contain 4 non-empty strings');
+  } else if (
+    normalizeNarrativeContent(storyTextParts.join('')) !== normalizeNarrativeContent(beat.storyText || '')
+  ) {
+    issues.push('storyTextParts must preserve all storyText content exactly and in order');
+  }
+  if (beat.storyText?.trim() && !strictCanonicalSource) {
+    const wordCount = countStoryWords(beat.storyText);
+    if (wordCount < beatLength.targetMinWords || wordCount > beatLength.targetMaxWords) {
+      issues.push(
+        `storyText has ${wordCount} words; ${audience.label} at ${beatLength.label} must use ${beatLength.targetMinWords}-${beatLength.targetMaxWords} words`
+      );
+    }
   }
   if (!beat.sceneSummary?.trim()) issues.push('sceneSummary is missing');
   if (!beat.imagePrompt?.trim()) issues.push('imagePrompt is missing');
@@ -173,8 +197,10 @@ export function validateGeneratedBeat(
     if (beat.options.length !== 0) {
       issues.push('ending beats must return an empty options array');
     }
-  } else if (beat.options.length < 3 || beat.options.length > 4) {
-    issues.push('non-ending beats must return 3 or 4 options');
+  } else if (audience.optionCount === 'exactly_3' && beat.options.length !== 3) {
+    issues.push(`${audience.label} non-ending beats must return exactly 3 options`);
+  } else if (audience.optionCount === '3_or_4' && (beat.options.length < 3 || beat.options.length > 4)) {
+    issues.push(`${audience.label} non-ending beats must return 3 or 4 options`);
   }
 
   if (beat.characters.length === 0) {
@@ -272,7 +298,11 @@ function buildStoryBible(
   sessionState: Partial<StorySession> | null,
   selectedOptionLabel?: string
 ): StoryBible {
-  const beats = (sessionState?.beats || []).map((beat) => sanitizeBeatForBible(beat));
+  const sourceBeats = sessionState?.beats || [];
+  const beats = sourceBeats.map((beat, index) => sanitizeBeatForBible(
+    beat,
+    index === sourceBeats.length - 1
+  ));
   const currentBeat = beats[beats.length - 1];
   const castRegistry = buildCastRegistry(sessionState);
   const openThreads = buildOpenThreads(sessionState, beats);
@@ -371,15 +401,18 @@ function buildCastRegistry(sessionState: Partial<StorySession> | null): PromptCh
   return Array.from(registry.values()).sort((left, right) => left.introducedAtBeat - right.introducedAtBeat);
 }
 
-function sanitizeBeatForBible(beat: StoryBeat): StoryBibleBeatSummary {
+function sanitizeBeatForBible(beat: StoryBeat, isLatestBeat: boolean): StoryBibleBeatSummary {
   return {
     beatNumber: beat.beatNumber,
     title: truncateText(beat.title, 80),
     sceneSummary: truncateText(beat.sceneSummary, SCENE_SUMMARY_MAX_LENGTH),
-    storyTextExcerpt: truncateText(beat.storyText, STORY_TEXT_EXCERPT_MAX_LENGTH),
+    storyTextExcerpt: truncateMiddleText(
+      beat.storyText,
+      isLatestBeat ? LATEST_STORY_TEXT_EXCERPT_MAX_LENGTH : STORY_TEXT_EXCERPT_MAX_LENGTH
+    ),
     nextBeatGoal: truncateText(beat.nextBeatGoal, NEXT_BEAT_GOAL_MAX_LENGTH),
     continuityNotes: (beat.continuityNotes || [])
-      .slice(0, 2)
+      .slice(0, 3)
       .map((note) => truncateText(note, CONTINUITY_NOTE_MAX_LENGTH)),
     imagePromptExcerpt: truncateText(beat.imagePrompt, IMAGE_PROMPT_EXCERPT_MAX_LENGTH),
     endingForecast: (beat.endingForecast || [])
@@ -418,6 +451,20 @@ function truncateText(value: string, maxLength: number): string {
   const trimmed = value.trim();
   if (trimmed.length <= maxLength) return trimmed;
   return `${trimmed.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function truncateMiddleText(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= maxLength) return trimmed;
+  const marker = ' ... ';
+  const available = maxLength - marker.length;
+  const headLength = Math.ceil(available / 2);
+  const tailLength = Math.floor(available / 2);
+  return `${trimmed.slice(0, headLength).trimEnd()}${marker}${trimmed.slice(-tailLength).trimStart()}`;
+}
+
+function normalizeNarrativeContent(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/gu, '');
 }
 
 function uniqueStrings(values: string[]): string[] {

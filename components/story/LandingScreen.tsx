@@ -42,11 +42,11 @@ import type { PricingRuntimeContext } from '@/lib/types/pricing';
 import { Lock, Sparkles, ChevronDown, ChevronUp, RefreshCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AdvancedOptions from './AdvancedOptions';
-import Gallery from './Gallery';
 import PromptCarousel from './PromptCarousel';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import InfoPopover from '@/components/ui/InfoPopover';
 import { buildDefaultVisualSettings, DEFAULT_STORY_CONFIG, normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import { DEFAULT_STORY_GENRE } from '@/lib/story/genres';
 import ReferencePersonalizationPanel, { type ReferencePanelState } from '@/components/story/ReferencePersonalizationPanel';
 import ReferenceDirectInputStrip from '@/components/story/ReferenceDirectInputStrip';
 import { loadReadyReferenceSeed, loadDirectReferenceSeed } from '@/app/actions/references';
@@ -158,9 +158,13 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [language, setLanguage] = useState<StoryLanguage>('english');
   const [ageGroup, setAgeGroup] = useState<AgeGroup>('all_ages');
+  const [genre, setGenre] = useState<string>(DEFAULT_STORY_GENRE);
   const [settingCountry, setSettingCountry] = useState('generic');
   const [customSetting, setCustomSetting] = useState('');
   const [maxBeats, setMaxBeats] = useState(6);
+  const [beatLengthLevel, setBeatLengthLevel] = useState(
+    initialLandingData.storyBeatLengthDefaultLevel
+  );
   const [visualSettings, setVisualSettings] = useState<VisualSettings>(() => (
     buildDefaultVisualSettings(initialLandingData.storyVisualCatalog)
   ));
@@ -348,7 +352,14 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     );
     useMyStoriesStore
       .getState()
-      .bootstrapSession({ force: true, imageTaskKey, imageModelSelection: imageModelSelection ?? null })
+      .bootstrapSession({
+        // The landing payload is never cached client-side, so it must come
+        // back on every mount; the drawer lists keep their 5-minute cache
+        // instead of being re-queried and re-signed on every visit here.
+        requireLandingPayload: true,
+        imageTaskKey,
+        imageModelSelection: imageModelSelection ?? null,
+      })
       .then((bootstrap) => {
         if (cancelled) return;
         if (!bootstrap) {
@@ -526,10 +537,12 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
             setLanguage(config.language);
             setReelLanguage(config.language);
             setAgeGroup(config.ageGroup);
-            const isPresetSetting = ['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
+            setGenre(config.genre || DEFAULT_STORY_GENRE);
+            const isPresetSetting =['generic', 'India', 'Japan', 'USA', 'Medieval Europe', 'Fantasy Land', 'Space', 'Underwater'].includes(config.settingCountry);
             setSettingCountry(isPresetSetting ? config.settingCountry : 'custom');
             setCustomSetting(isPresetSetting ? '' : config.settingCountry);
             setMaxBeats(config.maxBeats);
+            setBeatLengthLevel(config.beatLength?.level ?? initialLandingData.storyBeatLengthDefaultLevel);
             setVisualSettings(config.visualSettings);
             setAuthoringMode(config.authoring.mode);
             setReelBeatCount(config.reel.beatCount);
@@ -566,7 +579,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         }
       });
     }
-  }, []);
+  }, [initialLandingData.storyBeatLengthDefaultLevel]);
 
   const previewSeedPlanCoinCost = (pricing.actionCosts.preview_seed_plan ?? 0) * 10;
   const promptWordCount = countAuthoringWords(prompt);
@@ -692,8 +705,10 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
       storyKind: 'story',
       language,
       ageGroup,
+      genre,
       settingCountry: settingCountry === 'custom' ? customSetting || 'generic' : settingCountry,
       maxBeats: effectiveMaxBeats,
+      beatLength: { level: beatLengthLevel },
       imageGenerationMode,
       imageDeliveryMode: imageGenerationMode === 'generate' ? imageDeliveryMode : 'live',
       episodicCharacters: imageGenerationMode === 'generate' && imageDeliveryMode === 'stateful' && episodicCharacters,
@@ -1695,6 +1710,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                   setAgeGroup(value);
                   clearSeedPreview();
                 }}
+                genre={genre}
+                onGenreChange={(value) => {
+                  setGenre(value);
+                  clearSeedPreview();
+                }}
                 settingCountry={settingCountry}
                 onSettingCountryChange={(value) => {
                   setSettingCountry(value);
@@ -1708,6 +1728,11 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
                 maxBeats={effectiveMaxBeats}
                 onMaxBeatsChange={(value) => {
                   setMaxBeats(storyLengthUiEnabled ? Math.min(value, storyLengthCap) : value);
+                  clearSeedPreview();
+                }}
+                beatLengthLevel={beatLengthLevel}
+                onBeatLengthLevelChange={(value) => {
+                  setBeatLengthLevel(value);
                   clearSeedPreview();
                 }}
                 visualSettings={visualSettings}
@@ -1923,10 +1948,6 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         </section>
       )}
 
-      {/* Public Storylines Gallery — hidden for now */}
-      <div id="gallery-section" className="hidden">
-        <Gallery />
-      </div>
     </div>
   );
 }

@@ -57,6 +57,12 @@ import {
   EMPTY_CHARACTER_NOVELTY_CONTEXT,
   validateCharacterNovelty,
 } from '@/lib/ai/character-novelty.shared';
+import {
+  formatAudienceNarrativeContract,
+  formatAudienceVisualContract,
+  getStoryAudienceProfile,
+  resolveStoryBeatLength,
+} from '@/lib/ai/story-audience';
 
 const STORYBOARD_LAYOUT_HARD_REQUIREMENTS = [
   'Storyboard layout hard requirements:',
@@ -190,6 +196,14 @@ function hasUsableStoryTextParts(value: unknown): value is string[] {
     && value.every((part) => typeof part === 'string' && compactWhitespace(part).length > 0);
 }
 
+function canonicalTextContent(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/gu, '');
+}
+
+function storyTextPartsPreserveSource(parts: string[], storyText: string): boolean {
+  return canonicalTextContent(parts.join('')) === canonicalTextContent(storyText);
+}
+
 function splitStoryTextByWords(storyText: string): StoryTextParts {
   const text = compactWhitespace(storyText);
   const words = text.split(/\s+/).filter(Boolean);
@@ -212,14 +226,18 @@ function splitStoryTextByWords(storyText: string): StoryTextParts {
 
 function splitStoryTextIntoBalancedParts(storyText: string): StoryTextParts {
   const sentencePanels = splitTextIntoCompleteCaptionPanels(storyText, STORY_TEXT_PART_COUNT);
-  if (sentencePanels.length === STORY_TEXT_PART_COUNT && sentencePanels.every((part) => compactWhitespace(part))) {
+  if (
+    sentencePanels.length === STORY_TEXT_PART_COUNT
+    && sentencePanels.every((part) => compactWhitespace(part))
+    && storyTextPartsPreserveSource(sentencePanels, storyText)
+  ) {
     return toStoryTextParts(sentencePanels);
   }
   return splitStoryTextByWords(storyText);
 }
 
 export function normalizeStoryTextParts(value: unknown, storyText: string): StoryTextParts {
-  return hasUsableStoryTextParts(value)
+  return hasUsableStoryTextParts(value) && storyTextPartsPreserveSource(value, storyText)
     ? toStoryTextParts(value)
     : splitStoryTextIntoBalancedParts(storyText);
 }
@@ -471,7 +489,7 @@ export async function generateStoryBeat(
       storyState: formatNarrativeStoryState(normalizedSessionState, selectedOptionLabel),
       selectedOptionLabel: selectedOptionLabel || 'None yet - first beat',
     }))
-  )}\n\n${characterNoveltyInstructions}`;
+  )}\n\n${formatAudienceNarrativeContract(storyConfig.ageGroup, storyConfig.beatLength?.level)}\n\n${characterNoveltyInstructions}`;
 
   try {
     const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => timeRuntimeStep(
@@ -498,7 +516,9 @@ export async function generateStoryBeat(
     );
 
     const validateAttempt = (candidate: StoryBeat): string[] => [
-      ...validateGeneratedBeat(candidate, normalizedSessionState),
+      // Panel timing metadata is derived deterministically when the model omits
+      // or rewrites it; prose remains the sole canonical narration source.
+      ...validateGeneratedBeat(normalizeStoryBeatTextParts(candidate), normalizedSessionState),
       ...validateCharacterNovelty(
         candidate,
         normalizedSessionState,
@@ -539,6 +559,7 @@ export function buildFallbackStoryboardPlan(
   sessionState: Partial<StorySession> | null,
   visualStyle: string
 ): StoryboardPlan {
+  const storyConfig = normalizeStoryConfig(sessionState?.storyConfig);
   const scene = compactPromptText(beat.sceneSummary || beat.imagePrompt || beat.storyText, 220);
   const imageIntent = compactPromptText(beat.imagePrompt || beat.sceneSummary || beat.storyText, 260);
   const characterAnchors = compactPromptText(buildPromptCharacterAnchors(beat.characters), 700);
@@ -574,6 +595,9 @@ export function buildFallbackStoryboardPlan(
       scene,
       'Maintain the same character identities, clothing, proportions, colors, and visual style across all four panels.',
       'Use a full-bleed four-panel 2x2 storyboard composition in reading order with no outer padding or white gutters.',
+      ...(!isReelStoryConfig(storyConfig)
+        ? formatAudienceVisualContract(storyConfig.ageGroup).split('\n')
+        : []),
     ],
     portraitTasks: beat.characters
       .filter((character) => newCharacterIds.has(character.id) || changedCharacterIds.has(character.id))
@@ -681,10 +705,13 @@ export async function composeStoryboardPlan(
       const promptWithTextParts = isReel
         ? resolvedComposerPrompt
         : appendStoryTextPartsComposerContract(resolvedComposerPrompt, composerTemplate, storyTextParts);
+      const promptWithAudience = isReel
+        ? promptWithTextParts
+        : `${promptWithTextParts}\n\n${formatAudienceVisualContract(storyConfig.ageGroup)}`;
       const prompt = isReel
         ? promptWithTextParts
         : appendSeedAuthoringContextComposerContract(
-            promptWithTextParts,
+            promptWithAudience,
             composerTemplate,
             seedAuthoringContext
           );
@@ -705,6 +732,11 @@ export async function composeStoryboardPlan(
         const parsedPlan = JSON.parse(text) as StoryboardPlan;
         if (isReel) {
           parsedPlan.portraitTasks = [];
+        } else {
+          parsedPlan.sharedVisualInvariants = [
+            ...(Array.isArray(parsedPlan.sharedVisualInvariants) ? parsedPlan.sharedVisualInvariants : []),
+            ...formatAudienceVisualContract(storyConfig.ageGroup).split('\n'),
+          ];
         }
         return parsedPlan;
       } catch (error) {
@@ -817,13 +849,16 @@ export function summarizePreviousStoryboard(previousBeat: StoryBeat | undefined)
 
 export function formatNarrativeStoryConfig(sessionState: Partial<StorySession> | null): string {
   const cfg = normalizeStoryConfig(sessionState?.storyConfig);
+  const audience = getStoryAudienceProfile(cfg.ageGroup);
+  const beatLength = resolveStoryBeatLength(cfg.ageGroup, cfg.beatLength?.level);
   const prelude = getPreludeText(cfg);
   const seedSourceText = getSeedSourceText(cfg);
   const seedPlan = getSeedPlan(cfg);
   return [
     `- Story Kind: ${cfg.storyKind}`,
     `- Language: ${cfg.language || 'english'}`,
-    `- Age Group: ${cfg.ageGroup}`,
+    `- Audience: ${audience.label}`,
+    `- Beat Length: ${beatLength.label} (${beatLength.targetMinWords}-${beatLength.targetMaxWords} words; target ${beatLength.targetWords})`,
     `- Setting/Country: ${cfg.settingCountry}`,
     `- Maximum Beats: ${cfg.maxBeats}`,
     `- Current Beat: ${((sessionState?.currentBeat || 0) + 1)} of ${cfg.maxBeats}`,

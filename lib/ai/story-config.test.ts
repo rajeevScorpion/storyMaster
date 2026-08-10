@@ -112,6 +112,25 @@ describe('story config normalization', () => {
     } as unknown as Parameters<typeof normalizeStoryConfig>[0]).imageContinuityStrategy)
       .toBe(DEFAULT_STORY_CONFIG.imageContinuityStrategy);
   });
+
+  it('defaults and clamps the standard-story Beat length level', () => {
+    expect(DEFAULT_STORY_CONFIG.beatLength?.level).toBe(3);
+    expect(normalizeStoryConfig({}).beatLength?.level).toBe(3);
+    expect(normalizeStoryConfig({ beatLength: { level: 5 } }).beatLength?.level).toBe(5);
+    expect(normalizeStoryConfig({
+      beatLength: { level: 99 },
+    } as unknown as Parameters<typeof normalizeStoryConfig>[0]).beatLength?.level).toBe(5);
+  });
+
+  it('keeps reel text length independent from standard-story Beat length', () => {
+    const reel = normalizeStoryConfig({
+      storyKind: 'reel',
+      beatLength: { level: 5 },
+      reel: { ...DEFAULT_STORY_CONFIG.reel, textLength: 'short' },
+    });
+    expect(reel.beatLength).toBeUndefined();
+    expect(reel.reel.textLength).toBe('short');
+  });
 });
 
 describe('story config references normalization', () => {
