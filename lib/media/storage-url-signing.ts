@@ -13,6 +13,66 @@ type StoryMapGalleryEntry = { nodeId: string; galleryIdx: number; url: string };
 type StoryMapCharacterEntry = { nodeId: string; characterIdx: number; url: string };
 type StoryMapCharacterGalleryEntry = { nodeId: string; characterIdx: number; galleryIdx: number; url: string };
 
+/**
+ * Signature reuse cache.
+ *
+ * Supabase and R2 mint a *fresh token* every time an object is signed, so
+ * signing the same thumbnail on every request handed the browser a new URL
+ * string each visit. Same bytes, different URL — which misses the browser
+ * cache, and misses Next's image optimizer too, whose cache key is the whole
+ * URL including the query. The result was that every drawer/gallery open
+ * re-downloaded and re-encoded artwork that had not changed in weeks, no
+ * matter how long `minimumCacheTTL` was set to.
+ *
+ * Reusing a live signature fixes that: the same object yields the same URL
+ * until the token is half-spent, so repeat visits hit cache all the way down.
+ * Entries are dropped at the halfway mark rather than at expiry, so a URL
+ * handed out here always has at least 50% of its lifetime left — long enough
+ * for the client to finish loading it, and for the 24h list TTL that still
+ * means a URL stable for 12 hours.
+ *
+ * Process-local by design: a cold serverless instance simply signs again. It
+ * is a latency cache, never a source of truth, and it holds no user identity —
+ * a storage signature authorizes the object, not the requester, exactly as
+ * before.
+ */
+const SIGNATURE_REUSE_FRACTION = 0.5;
+const SIGNATURE_CACHE_LIMIT = 4000;
+
+const signatureCache = new Map<string, { signedUrl: string; reuseUntil: number }>();
+
+function signatureCacheKey(bucket: string, url: string, expiresIn: number): string {
+  // A newline can't appear in a bucket name or URL, so it's a delimiter no
+  // key part can smuggle in to collide with a different triple.
+  return `${bucket}\n${expiresIn}\n${url}`;
+}
+
+function readCachedSignature(key: string): string | null {
+  const entry = signatureCache.get(key);
+  if (!entry) return null;
+  if (entry.reuseUntil <= Date.now()) {
+    signatureCache.delete(key);
+    return null;
+  }
+  // Re-insert to move the entry to the tail — Map iterates in insertion order,
+  // so the eviction sweep below drops the least recently used first.
+  signatureCache.delete(key);
+  signatureCache.set(key, entry);
+  return entry.signedUrl;
+}
+
+function writeCachedSignature(key: string, signedUrl: string, expiresIn: number): void {
+  signatureCache.set(key, {
+    signedUrl,
+    reuseUntil: Date.now() + expiresIn * 1000 * SIGNATURE_REUSE_FRACTION,
+  });
+  if (signatureCache.size <= SIGNATURE_CACHE_LIMIT) return;
+  for (const staleKey of signatureCache.keys()) {
+    signatureCache.delete(staleKey);
+    if (signatureCache.size <= SIGNATURE_CACHE_LIMIT) break;
+  }
+}
+
 async function signR2Url(value: string, expiresIn: number): Promise<string | null> {
   const parsedReference = parseR2Reference(value) ?? parseR2UrlLikeReference(value);
   if (!parsedReference) return null;
@@ -61,15 +121,38 @@ export async function signMixedUrls(
   expiresIn: number
 ): Promise<Map<string, string>> {
   const uniqueUrls = Array.from(new Set(urls.filter(Boolean)));
+
+  // Serve live signatures from cache and only pay the signing round trip for
+  // what's genuinely missing or half-spent (see the cache note above).
+  const signed = new Map<string, string>();
+  const pending: string[] = [];
+  for (const url of uniqueUrls) {
+    const cached = readCachedSignature(signatureCacheKey(bucket, url, expiresIn));
+    if (cached) {
+      signed.set(url, cached);
+    } else {
+      pending.push(url);
+    }
+  }
+  if (pending.length === 0) return signed;
+
   const [supabaseSigned, r2Pairs] = await Promise.all([
-    signSupabaseUrls(supabase, bucket, uniqueUrls, expiresIn),
-    Promise.all(uniqueUrls.map(async (url) => [url, await signR2Url(url, expiresIn)] as const)),
+    signSupabaseUrls(supabase, bucket, pending, expiresIn),
+    Promise.all(pending.map(async (url) => [url, await signR2Url(url, expiresIn)] as const)),
   ]);
 
-  for (const [url, signed] of r2Pairs) {
-    if (signed) supabaseSigned.set(url, signed);
+  for (const [url, signedUrl] of supabaseSigned) {
+    signed.set(url, signedUrl);
   }
-  return supabaseSigned;
+  // R2 references win over the Supabase pass, as before.
+  for (const [url, signedUrl] of r2Pairs) {
+    if (signedUrl) signed.set(url, signedUrl);
+  }
+  for (const url of pending) {
+    const signedUrl = signed.get(url);
+    if (signedUrl) writeCachedSignature(signatureCacheKey(bucket, url, expiresIn), signedUrl, expiresIn);
+  }
+  return signed;
 }
 
 function addUrl(list: string[], value: string | undefined | null) {
