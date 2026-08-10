@@ -21,6 +21,7 @@ import {
   SERIES_EPISODE_LIST_LIMIT,
   SERIES_MIN_EPISODES,
 } from '@/lib/gallery/series';
+import { buildSearchOrFilter } from '@/lib/gallery/search-query';
 import type { StoryAspectRatio } from '@/lib/types/story';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { deriveDiscoveryIntro } from '@/lib/story/discovery-intro';
@@ -1435,7 +1436,16 @@ export async function getGalleryItems(
       }
 
       if (filters.search) {
-        query = query.ilike('title', `%${filters.search}%`);
+        // Rebuilt per attempt so a retry that drops a column group also stops
+        // searching in it.
+        const searchColumns = ['title', 'author_name'];
+        if (discoveryColumnsAvailable()) searchColumns.push('discovery_intro', 'genre');
+        if (seriesColumnsAvailable()) searchColumns.push('series_title');
+
+        const searchFilter = buildSearchOrFilter(filters.search, searchColumns);
+        // Null means the term was only wildcards or punctuation. That is "no
+        // search", not "matches nothing".
+        if (searchFilter) query = query.or(searchFilter);
       }
       // Genre and audience read the indexed storyline columns (migration 089)
       // instead of the unindexable jsonb path on the joined story.

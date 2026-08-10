@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, SlidersHorizontal, X } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { SlidersHorizontal, X } from 'lucide-react';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import Sheet from '@/components/ui/Sheet';
@@ -54,10 +54,6 @@ const DROPDOWNS = [
 
 type DropdownKey = (typeof DROPDOWNS)[number]['key'];
 
-function normalizeSearch(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function optionLabel(key: DropdownKey, value: string): string {
   const dropdown = DROPDOWNS.find((entry) => entry.key === key);
   return dropdown?.options.find((option) => option.value === value)?.label ?? value;
@@ -66,97 +62,53 @@ function optionLabel(key: DropdownKey, value: string): string {
 interface GalleryFiltersProps {
   filters: Filters;
   onFiltersChange: (filters: Filters) => void;
+  /**
+   * `kids` drops the controls that make no sense once the surface is already
+   * age-scoped: the audience band is fixed, and there is no vertical lane.
+   */
+  variant?: 'full' | 'kids';
 }
 
-export default function GalleryFilters({ filters, onFiltersChange }: GalleryFiltersProps) {
-  const [searchInput, setSearchInput] = useState(filters.search);
+export default function GalleryFilters({
+  filters,
+  onFiltersChange,
+  variant = 'full',
+}: GalleryFiltersProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latestFiltersRef = useRef(filters);
-  const latestOnFiltersChangeRef = useRef(onFiltersChange);
 
-  useEffect(() => {
-    latestFiltersRef.current = filters;
-    latestOnFiltersChangeRef.current = onFiltersChange;
-  }, [filters, onFiltersChange]);
-
-  useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      const trimmedSearch = searchInput.trim();
-      const normalizedInput = normalizeSearch(trimmedSearch);
-      const normalizedFilter = normalizeSearch(filters.search);
-
-      if (normalizedInput !== normalizedFilter) {
-        latestOnFiltersChangeRef.current({
-          ...latestFiltersRef.current,
-          search: trimmedSearch,
-        });
-        if (trimmedSearch !== searchInput) {
-          setSearchInput(trimmedSearch);
-        }
-      } else if (trimmedSearch !== searchInput) {
-        setSearchInput(filters.search);
-      }
-    }, 300);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [searchInput, filters.search]);
-
+  // The query itself is owned by the top bar; this bar never touches it, so a
+  // refinement always carries the current search through untouched.
   const update = (partial: Partial<Filters>) => {
     const nextFilters = { ...filters, ...partial };
-    const isSameSearch = normalizeSearch(nextFilters.search) === normalizeSearch(filters.search);
     const isSameFilters =
       nextFilters.type === filters.type &&
       nextFilters.genre === filters.genre &&
       nextFilters.ageGroup === filters.ageGroup &&
       nextFilters.country === filters.country &&
-      nextFilters.language === filters.language &&
-      isSameSearch;
+      nextFilters.language === filters.language;
 
     if (isSameFilters) return;
 
     onFiltersChange(nextFilters);
   };
 
+  const dropdowns = useMemo(
+    () =>
+      variant === 'kids'
+        ? DROPDOWNS.filter((dropdown) => dropdown.key === 'genre' || dropdown.key === 'language')
+        : DROPDOWNS,
+    [variant]
+  );
+
   const activeChips = useMemo(
     () =>
-      DROPDOWNS
+      dropdowns
         .filter((dropdown) => filters[dropdown.key] !== 'all')
         .map((dropdown) => ({
           key: dropdown.key,
           label: optionLabel(dropdown.key, filters[dropdown.key]),
         })),
-    [filters]
-  );
-
-  const searchField = (
-    <div className="relative min-w-[200px] flex-1 md:max-w-md">
-      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
-      <input
-        type="text"
-        value={searchInput}
-        onChange={(e) => setSearchInput(e.target.value)}
-        placeholder="Search stories..."
-        aria-label="Search stories"
-        className="min-h-11 w-full rounded-xl border border-white/10 bg-neutral-800/80 py-2 pl-10 pr-11 text-sm text-neutral-200 placeholder-neutral-500 outline-none transition-colors focus:border-emerald-500/50"
-      />
-      {searchInput && (
-        <button
-          type="button"
-          onClick={() => {
-            if (!searchInput && !filters.search) return;
-            setSearchInput('');
-            update({ search: '' });
-          }}
-          aria-label="Clear search"
-          className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-neutral-500 transition-colors hover:text-neutral-300"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      )}
-    </div>
+    [dropdowns, filters]
   );
 
   const laneSwitch = (
@@ -172,9 +124,8 @@ export default function GalleryFilters({ filters, onFiltersChange }: GalleryFilt
     <div className="space-y-3">
       {/* Desktop: everything inline. */}
       <div className="hidden flex-wrap items-center gap-3 md:flex">
-        {searchField}
-        {laneSwitch}
-        {DROPDOWNS.map((dropdown) => (
+        {variant === 'full' && laneSwitch}
+        {dropdowns.map((dropdown) => (
           <FilterDropdown
             key={dropdown.key}
             value={filters[dropdown.key]}
@@ -185,13 +136,12 @@ export default function GalleryFilters({ filters, onFiltersChange }: GalleryFilt
         ))}
       </div>
 
-      {/* Mobile: search plus a filter sheet, so the bar never wraps to four rows. */}
+      {/* Mobile: a filter sheet, so the bar never wraps to four rows. */}
       <div className="flex items-center gap-3 md:hidden">
-        {searchField}
         <button
           type="button"
           onClick={() => setSheetOpen(true)}
-          className="flex min-h-11 shrink-0 items-center gap-2 rounded-xl border border-white/10 bg-neutral-800/80 px-4 text-sm text-neutral-200 transition-colors hover:border-white/20"
+          className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-white/10 bg-neutral-800/80 px-4 text-sm text-neutral-200 transition-colors hover:border-white/20"
         >
           <SlidersHorizontal className="h-4 w-4" />
           Filters
@@ -231,8 +181,8 @@ export default function GalleryFilters({ filters, onFiltersChange }: GalleryFilt
 
       <Sheet isOpen={sheetOpen} onClose={() => setSheetOpen(false)} title="Filters">
         <div className="space-y-4 pb-2">
-          {laneSwitch}
-          {DROPDOWNS.map((dropdown) => (
+          {variant === 'full' && laneSwitch}
+          {dropdowns.map((dropdown) => (
             <FilterDropdown
               key={dropdown.key}
               value={filters[dropdown.key]}

@@ -1,35 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
-import { ArrowLeft } from 'lucide-react';
+import { LibraryBig } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
-import KissagoLogo from '@/components/ui/KissagoLogo';
-import UserMenu from '@/components/auth/UserMenu';
 import MyStoriesDrawer from '@/components/story/MyStoriesDrawer';
 import ManagedFooter from '@/components/layout/ManagedFooter';
 import GalleryRail from '@/components/gallery/GalleryRail';
-import StorylineCard from '@/components/gallery/StorylineCard';
+import GalleryTopBar from '@/components/gallery/GalleryTopBar';
+import GallerySearchPanel from '@/components/gallery/GallerySearchPanel';
 import { GalleryErrorState } from '@/components/gallery/GalleryStates';
-import { GalleryRailsSkeleton, GridSkeleton } from '@/components/gallery/GallerySkeletons';
-import { getGalleryRails, getGalleryItems } from '@/app/actions/gallery';
+import { GalleryRailsSkeleton } from '@/components/gallery/GallerySkeletons';
+import { getGalleryRails } from '@/app/actions/gallery';
 import { useSavedStorylines } from '@/lib/hooks/useSavedStorylines';
-import type {
-  GalleryFilters,
-  GalleryItem,
-  GalleryPage,
-  GalleryRailsResponse,
-} from '@/lib/types/database';
-
-export const KIDS_FILTERS: GalleryFilters = {
-  search: '',
-  type: 'storylines',
-  genre: 'all',
-  ageGroup: 'all',
-  country: 'all',
-  language: 'all',
-};
+import { useGallerySearchMode } from '@/lib/hooks/useGallerySearchMode';
+import { useGalleryResults } from '@/lib/hooks/useGalleryResults';
+import type { GalleryFilters, GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
 export const PAGE_SIZE = 12;
 const GRID_CLASS = 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3';
@@ -37,7 +23,10 @@ const CARD_SIZES = '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, 31vw';
 
 interface KidsGalleryBrowserProps {
   initialRails: GalleryRailsResponse | null;
-  initialGrid: GalleryPage | null;
+  /** Resolved from the request URL, so a shared search link renders as one. */
+  initialSearchOpen?: boolean;
+  initialSearchFilters?: GalleryFilters | null;
+  initialSearchPage?: GalleryPage | null;
   /** Undefined only if the server could not resolve them; see useSavedStorylines. */
   initialSavedIds?: string[];
 }
@@ -47,13 +36,18 @@ interface KidsGalleryBrowserProps {
  *
  * A separate route rather than a toggle on /gallery: the audience scope is
  * decided server-side per request, so there is no client state a curious child
- * can flip to widen the catalogue. Following the product rules for this band,
- * the surface also drops popularity counts and infinite scroll — browsing here
- * is deliberate, not endless.
+ * can flip to widen the catalogue. Search here is the same surface as the main
+ * gallery, still pinned to `mode: 'kids'` on every request, and the lane and
+ * audience controls are dropped because neither is the viewer's to choose.
+ *
+ * Following the product rules for this band, the surface also drops popularity
+ * counts and infinite scroll — browsing here is deliberate, not endless.
  */
 export default function KidsGalleryBrowser({
   initialRails,
-  initialGrid,
+  initialSearchOpen = false,
+  initialSearchFilters = null,
+  initialSearchPage = null,
   initialSavedIds,
 }: KidsGalleryBrowserProps) {
   const { user } = useAuth();
@@ -63,21 +57,32 @@ export default function KidsGalleryBrowser({
   const [railsData, setRailsData] = useState<GalleryRailsResponse | null>(initialRails);
   const [railsLoading, setRailsLoading] = useState(!initialRails);
   const [railsError, setRailsError] = useState(false);
-
-  const [items, setItems] = useState<GalleryItem[]>(initialGrid?.items ?? []);
-  const [total, setTotal] = useState(initialGrid?.total ?? 0);
-  const [hasMore, setHasMore] = useState(initialGrid?.hasMore ?? false);
-  const [gridLoading, setGridLoading] = useState(!initialGrid);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [gridError, setGridError] = useState(false);
   const { savedIds, toggleSave } = useSavedStorylines(!!user, initialSavedIds);
 
+  const search = useGallerySearchMode({
+    initialOpen: initialSearchOpen,
+    initialFilters: initialSearchFilters,
+  });
+
+  // A hand-typed `?type=vertical&age=teen` must not widen anything here. The
+  // server would ignore it anyway — this keeps the controls honest too.
+  const filters = useMemo<GalleryFilters>(
+    () => ({ ...search.filters, type: 'storylines', ageGroup: 'all' }),
+    [search.filters]
+  );
+
+  const results = useGalleryResults({
+    filters,
+    pageSize: PAGE_SIZE,
+    enabled: search.isOpen,
+    mode: 'kids',
+    initialPage: initialSearchPage,
+    initialFilters: initialSearchFilters,
+  });
+
   // Bumping a token re-runs the fetch effect; every state change then happens
-  // in an async callback rather than synchronously during the effect. Starting
-  // above zero when the server already delivered data keeps the effect inert
-  // until a retry asks for a refetch.
+  // in an async callback rather than synchronously during the effect.
   const [railsToken, setRailsToken] = useState(0);
-  const [gridToken, setGridToken] = useState(0);
 
   useEffect(() => {
     if (initialRails && railsToken === 0) return;
@@ -86,7 +91,9 @@ export default function KidsGalleryBrowser({
 
     getGalleryRails('kids')
       .then((data) => {
-        if (!cancelled) setRailsData(data);
+        if (cancelled) return;
+        setRailsData(data);
+        setRailsError(false);
       })
       .catch((error) => {
         console.error('Failed to fetch kids rails:', error);
@@ -101,57 +108,42 @@ export default function KidsGalleryBrowser({
     };
   }, [initialRails, railsToken]);
 
-  useEffect(() => {
-    if (initialGrid && gridToken === 0) return;
-
-    let cancelled = false;
-
-    getGalleryItems(KIDS_FILTERS, PAGE_SIZE, 0, 'kids')
-      .then((page) => {
-        if (cancelled) return;
-        setItems(page.items);
-        setTotal(page.total);
-        setHasMore(page.hasMore);
-      })
-      .catch((error) => {
-        console.error('Failed to fetch kids stories:', error);
-        if (!cancelled) setGridError(true);
-      })
-      .finally(() => {
-        if (!cancelled) setGridLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [initialGrid, gridToken]);
-
   const retryRails = useCallback(() => {
     setRailsLoading(true);
     setRailsError(false);
     setRailsToken((token) => token + 1);
   }, []);
 
-  const retryGrid = useCallback(() => {
-    setGridLoading(true);
-    setGridError(false);
-    setGridToken((token) => token + 1);
-  }, []);
+  const feedScrollRef = useRef(0);
+  const wasSearchOpenRef = useRef(search.isOpen);
 
-  const loadMore = useCallback(async () => {
-    setIsLoadingMore(true);
-    try {
-      const page = await getGalleryItems(KIDS_FILTERS, PAGE_SIZE, items.length, 'kids');
-      setItems((prev) => [...prev, ...page.items]);
-      setHasMore(page.hasMore);
-      setGridError(false);
-    } catch (error) {
-      console.error('Failed to fetch more kids stories:', error);
-      setGridError(true);
-    } finally {
-      setIsLoadingMore(false);
+  useEffect(() => {
+    if (search.isOpen === wasSearchOpenRef.current) return;
+    wasSearchOpenRef.current = search.isOpen;
+
+    if (search.isOpen) {
+      feedScrollRef.current = window.scrollY;
+      window.scrollTo({ top: 0, behavior: 'auto' });
+      return;
     }
-  }, [items.length]);
+
+    const restoreTo = feedScrollRef.current;
+    const frame = requestAnimationFrame(() =>
+      window.scrollTo({ top: restoreTo, behavior: 'auto' })
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [search.isOpen]);
+
+  const { isOpen: searchIsOpen, close: closeSearch } = search;
+
+  useEffect(() => {
+    if (!searchIsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeSearch();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [closeSearch, searchIsOpen]);
 
   const enterProps = prefersReducedMotion
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, transition: { duration: 0.2 } }
@@ -161,22 +153,54 @@ export default function KidsGalleryBrowser({
         transition: { duration: 0.4 },
       };
 
-  const isEmpty = !gridLoading && !gridError && items.length === 0 && (railsData?.rails.length ?? 0) === 0;
+  const hasRails = (railsData?.rails.length ?? 0) > 0;
 
   return (
     <main className="relative min-h-dvh bg-neutral-950 font-sans text-neutral-200 selection:bg-emerald-500/30">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-[calc(8rem+var(--safe-top))] bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-[calc(10rem+var(--safe-top))]"
+      {!search.isOpen && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-x-0 top-0 z-30 h-[calc(8rem+var(--safe-top))] bg-gradient-to-b from-neutral-950 via-neutral-950/90 to-transparent sm:h-[calc(10rem+var(--safe-top))]"
+        />
+      )}
+      {search.isOpen && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-x-0 top-0 z-30 h-[calc(4.25rem+var(--safe-top))] bg-neutral-950"
+        />
+      )}
+
+      <GalleryTopBar
+        variant="kids"
+        searchOpen={search.isOpen}
+        query={search.filters.search}
+        onQueryChange={search.setQuery}
+        onOpenSearch={() => search.open()}
+        onCloseSearch={search.close}
+        onMyStories={() => setShowMyStories(true)}
       />
-      <KissagoLogo />
-      <div className="fixed right-[max(1rem,var(--safe-right))] top-[max(1rem,var(--safe-top))] z-40">
-        <UserMenu onMyStories={() => setShowMyStories(true)} />
-      </div>
 
       <MyStoriesDrawer isOpen={showMyStories} onClose={() => setShowMyStories(false)} />
 
-      <div className="pb-[calc(4rem+var(--safe-bottom))]">
+      {search.isOpen && (
+        <GallerySearchPanel
+          filters={filters}
+          onFiltersChange={search.setFilters}
+          onClearFilters={search.clearRefinements}
+          results={results}
+          savedIds={savedIds}
+          isLoggedIn={!!user}
+          onToggleSave={toggleSave}
+          pageSize={PAGE_SIZE}
+          variant="kids"
+          infiniteScroll={false}
+          hideEngagementCounts
+          gridClassName={GRID_CLASS}
+          sizes={CARD_SIZES}
+        />
+      )}
+
+      <div className={`pb-[calc(4rem+var(--safe-bottom))] ${search.isOpen ? 'hidden' : ''}`}>
         <header className="px-4 pb-10 pt-[calc(clamp(5.125rem,17vh,8.125rem)+var(--safe-top))] text-center lg:px-8">
           <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
             Kissago Kids
@@ -187,13 +211,6 @@ export default function KidsGalleryBrowser({
           <p className="mx-auto max-w-lg text-sm text-neutral-500">
             Picture-led adventures written for ages 3 to 8.
           </p>
-          <Link
-            href="/gallery"
-            className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-5 text-sm text-neutral-300 transition-colors hover:border-white/20 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Kissago
-          </Link>
         </header>
 
         <section className="space-y-10">
@@ -207,7 +224,7 @@ export default function KidsGalleryBrowser({
                 onRetry={retryRails}
               />
             </div>
-          ) : (
+          ) : hasRails ? (
             railsData?.rails.map((rail) => (
               <motion.div key={rail.key} {...enterProps}>
                 <GalleryRail
@@ -219,62 +236,31 @@ export default function KidsGalleryBrowser({
                 />
               </motion.div>
             ))
+          ) : (
+            <div className="px-6 py-16 text-center">
+              <p className="font-serif text-lg text-neutral-300">No kids stories yet</p>
+              <p className="mt-1 text-sm text-neutral-500">
+                Stories appear here once they are published for ages 3 to 8.
+              </p>
+            </div>
           )}
         </section>
 
-        <div className="mt-16 border-t border-white/[0.06] bg-neutral-900/25 pb-4 pt-12">
-          <div className="mx-auto max-w-7xl px-4 lg:px-8">
-            <h2 className="mb-6 font-serif text-2xl text-neutral-100 md:text-3xl">All Kids Stories</h2>
-
-            {gridLoading && items.length === 0 ? (
-              <GridSkeleton count={PAGE_SIZE} className={GRID_CLASS} />
-            ) : gridError && items.length === 0 ? (
-              <GalleryErrorState onRetry={retryGrid} />
-            ) : isEmpty ? (
-              <div className="px-6 py-16 text-center">
-                <p className="font-serif text-lg text-neutral-300">No kids stories yet</p>
-                <p className="mt-1 text-sm text-neutral-500">
-                  Stories appear here once they are published for ages 3 to 8.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div className={GRID_CLASS}>
-                  {items.map((item) => (
-                    <motion.div key={item.id} {...enterProps}>
-                      <StorylineCard
-                        item={item}
-                        layout="wide"
-                        sizes={CARD_SIZES}
-                        isSaved={savedIds.has(item.id)}
-                        isLoggedIn={!!user}
-                        hideEngagementCounts
-                        onToggleSave={toggleSave}
-                      />
-                    </motion.div>
-                  ))}
-                </div>
-
-                {isLoadingMore && (
-                  <GridSkeleton count={3} className={`${GRID_CLASS} mt-5`} />
-                )}
-
-                {/* Deliberate paging rather than infinite scroll. */}
-                {hasMore && (
-                  <button
-                    onClick={loadMore}
-                    disabled={isLoadingMore}
-                    className="mx-auto mt-10 block min-h-12 rounded-2xl border border-white/10 bg-white/5 px-8 text-sm font-medium text-neutral-300 transition-all hover:border-white/20 hover:bg-white/10 disabled:opacity-50"
-                  >
-                    {isLoadingMore ? 'Loading...' : `Show more (${items.length} of ${total})`}
-                  </button>
-                )}
-              </>
-            )}
+        {!railsLoading && !railsError && hasRails && (
+          <div className="mt-14 px-4 lg:px-8">
+            <button
+              type="button"
+              onClick={() => search.open()}
+              className="mx-auto flex min-h-14 w-full max-w-md items-center justify-center gap-2.5 rounded-2xl border border-white/10 bg-white/[0.04] px-6 text-sm font-medium text-neutral-300 transition-colors hover:border-emerald-500/30 hover:bg-white/[0.08] hover:text-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
+            >
+              <LibraryBig className="h-4 w-4" aria-hidden="true" />
+              Explore all kids stories
+            </button>
           </div>
-        </div>
+        )}
       </div>
-      <ManagedFooter />
+
+      {!search.isOpen && <ManagedFooter />}
     </main>
   );
 }
