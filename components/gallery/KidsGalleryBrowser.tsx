@@ -18,8 +18,8 @@ import { useGalleryResults } from '@/lib/hooks/useGalleryResults';
 import type { GalleryFilters, GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
 export const PAGE_SIZE = 12;
-const GRID_CLASS = 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3';
-const CARD_SIZES = '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, 31vw';
+const GRID_CLASS = 'grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
+const CARD_SIZES = '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, (max-width: 1536px) 24vw, 19vw';
 
 interface KidsGalleryBrowserProps {
   initialRails: GalleryRailsResponse | null;

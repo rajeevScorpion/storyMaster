@@ -106,7 +106,7 @@ export default function GallerySearchPanel({
         className="sticky z-20 border-b border-white/[0.06] bg-neutral-950/85 backdrop-blur-xl"
         style={{ top: TOP_BAR_OFFSET }}
       >
-        <div className="mx-auto max-w-7xl px-4 py-3 lg:px-8">
+        <div className="px-4 py-3 lg:px-8">
           <GalleryFiltersBar
             filters={filters}
             onFiltersChange={onFiltersChange}
@@ -116,7 +116,7 @@ export default function GallerySearchPanel({
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl px-4 pt-6 lg:px-8">
+      <div className="px-4 pt-6 lg:px-8">
         <div className="mb-5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <h1 className="font-serif text-2xl text-neutral-100 md:text-3xl">{heading}</h1>
           <p className="text-xs text-neutral-500" aria-live="polite">

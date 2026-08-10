@@ -5,13 +5,13 @@ import StorylineCard from '@/components/gallery/StorylineCard';
 import type { GalleryItem, GalleryRailLayout } from '@/lib/types/database';
 
 export const RESULTS_GRID_CLASS: Record<GalleryRailLayout, string> = {
-  wide: 'grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4',
-  portrait: 'grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6',
+  wide: 'grid grid-cols-1 gap-x-4 gap-y-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5',
+  portrait: 'grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8',
 };
 
 export const RESULTS_CARD_SIZES: Record<GalleryRailLayout, string> = {
-  wide: '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, 23vw',
-  portrait: '(max-width: 640px) 46vw, (max-width: 768px) 31vw, (max-width: 1280px) 23vw, 16vw',
+  wide: '(max-width: 640px) 92vw, (max-width: 1024px) 46vw, (max-width: 1280px) 31vw, (max-width: 1536px) 24vw, 19vw',
+  portrait: '(max-width: 640px) 46vw, (max-width: 768px) 31vw, (max-width: 1280px) 23vw, (max-width: 1536px) 16vw, 12vw',
 };
 
 interface GalleryResultsGridProps {

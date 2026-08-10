@@ -1,6 +1,10 @@
 import GalleryBrowser, { PAGE_SIZE } from '@/components/gallery/GalleryBrowser';
 import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
-import { filtersFromParams, isSearchOpen } from '@/lib/gallery/search-params';
+import {
+  DEFAULT_GALLERY_FILTERS,
+  filtersFromParams,
+  isSearchOpen,
+} from '@/lib/gallery/search-params';
 import type { GalleryFilters, GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
 // The feed depends on the viewer's session (My List) and on freshly published
@@ -28,9 +32,10 @@ function toURLSearchParams(raw: RawSearchParams): URLSearchParams {
  * component still owns search, paging, and saves, and refetches on its own
  * when either half fails.
  *
- * Results are prerendered only for a request that already carries a search —
- * a shared link or a reload inside search mode. A plain feed visit no longer
- * pays for a catalogue query it will not render.
+ * The catalogue's first page is resolved here whether or not search is open. On
+ * a shared search link it is the results; on a plain feed visit it is the seed
+ * that makes opening search instant instead of a spinner over a server-action
+ * round trip. It runs in parallel with the rails, so it costs no wall time.
  *
  * Saved ids are resolved here too. They are cheap, but fetching them from the
  * client costs a server action, and a server action re-renders this whole route
@@ -43,11 +48,13 @@ export default async function GalleryRoute({
 }) {
   const params = toURLSearchParams(await searchParams);
   const searchOpen = isSearchOpen(params);
-  const searchFilters: GalleryFilters | null = searchOpen ? filtersFromParams(params) : null;
+  const searchFilters: GalleryFilters = searchOpen
+    ? filtersFromParams(params)
+    : DEFAULT_GALLERY_FILTERS;
 
   const [railsResult, searchResult, savedResult] = await Promise.allSettled([
     getGalleryRails(),
-    searchFilters ? getGalleryItems(searchFilters, PAGE_SIZE, 0) : Promise.resolve(null),
+    getGalleryItems(searchFilters, PAGE_SIZE, 0),
     getSavedStorylineIds(),
   ]);
 

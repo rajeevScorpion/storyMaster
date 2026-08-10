@@ -16,6 +16,11 @@ interface UseGallerySearchModeOptions {
   initialFilters: GalleryFilters | null;
 }
 
+interface SearchModeState {
+  open: boolean;
+  filters: GalleryFilters;
+}
+
 interface GallerySearchMode {
   isOpen: boolean;
   filters: GalleryFilters;
@@ -27,7 +32,7 @@ interface GallerySearchMode {
   clearRefinements: () => void;
 }
 
-function readWindowState(): { open: boolean; filters: GalleryFilters } {
+function readWindowState(): SearchModeState {
   const params = new URLSearchParams(window.location.search);
   return { open: isSearchOpen(params), filters: filtersFromParams(params) };
 }
@@ -44,6 +49,13 @@ function readWindowState(): { open: boolean; filters: GalleryFilters } {
  * `useSearchParams`, so the first client render provably matches the HTML and
  * the route keeps no opinion about Suspense boundaries. `popstate` covers
  * everything after that.
+ *
+ * Every mutator reads the current state from a ref and calls history *before*
+ * `setState`, never from inside an updater. React runs updaters during render
+ * and re-runs them when a render is retried, so a `pushState` in there fires
+ * during render, updates the Next router mid-render, and re-renders — a loop
+ * that also stacks duplicate history entries, which then take two Backs to
+ * escape.
  */
 export function useGallerySearchMode({
   initialOpen,
@@ -51,82 +63,87 @@ export function useGallerySearchMode({
 }: UseGallerySearchModeOptions): GallerySearchMode {
   const pathname = usePathname();
 
-  const [state, setState] = useState(() => ({
+  const [state, setState] = useState<SearchModeState>(() => ({
     open: initialOpen,
     filters: initialFilters ?? DEFAULT_GALLERY_FILTERS,
   }));
+  const stateRef = useRef(state);
   // Whether the entry currently on screen is one we pushed, and can therefore
   // be left with a plain Back instead of stacking another entry.
   const pushedRef = useRef(false);
 
+  const commit = useCallback((next: SearchModeState) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
+
   useEffect(() => {
     const onPopState = () => {
       pushedRef.current = false;
-      setState(readWindowState());
+      commit(readWindowState());
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
-  }, []);
+  }, [commit]);
+
+  /** Writes the URL for an open panel: push on entry, replace once inside. */
+  const writeUrl = useCallback(
+    (filters: GalleryFilters) => {
+      const url = searchUrl(pathname, filters);
+      if (stateRef.current.open) {
+        // Replace, or every keystroke becomes a history entry.
+        window.history.replaceState(null, '', url);
+      } else {
+        window.history.pushState(null, '', url);
+        pushedRef.current = true;
+      }
+    },
+    [pathname]
+  );
 
   const open = useCallback(
     (overrides?: Partial<GalleryFilters>) => {
-      setState((current) => {
-        const next = { ...DEFAULT_GALLERY_FILTERS, ...overrides };
-        if (current.open) {
-          // Refining an open panel replaces its entry rather than stacking a
-          // second one on top of the first.
-          window.history.replaceState(null, '', searchUrl(pathname, next));
-        } else {
-          window.history.pushState(null, '', searchUrl(pathname, next));
-          pushedRef.current = true;
-        }
-        return { open: true, filters: next };
-      });
+      const filters = { ...DEFAULT_GALLERY_FILTERS, ...overrides };
+      writeUrl(filters);
+      commit({ open: true, filters });
     },
-    [pathname]
+    [commit, writeUrl]
   );
 
   const close = useCallback(() => {
     if (pushedRef.current) {
       pushedRef.current = false;
       // Leaves no search entry behind, so Back does not walk back into it.
+      // `popstate` applies the resulting state.
       window.history.back();
       return;
     }
     window.history.pushState(null, '', pathname);
-    setState({ open: false, filters: DEFAULT_GALLERY_FILTERS });
-  }, [pathname]);
+    commit({ open: false, filters: DEFAULT_GALLERY_FILTERS });
+  }, [commit, pathname]);
 
   const setQuery = useCallback(
     (query: string) => {
-      setState((current) => {
-        const next = { ...current.filters, search: query };
-        if (current.open) {
-          // Replace, or every keystroke becomes a history entry.
-          window.history.replaceState(null, '', searchUrl(pathname, next));
-        } else {
-          window.history.pushState(null, '', searchUrl(pathname, next));
-          pushedRef.current = true;
-        }
-        return { open: true, filters: next };
-      });
+      const filters = { ...stateRef.current.filters, search: query };
+      writeUrl(filters);
+      commit({ open: true, filters });
     },
-    [pathname]
+    [commit, writeUrl]
   );
 
   const setFilters = useCallback(
     (filters: GalleryFilters) => {
-      window.history.replaceState(null, '', searchUrl(pathname, filters));
-      setState({ open: true, filters });
+      writeUrl(filters);
+      commit({ open: true, filters });
     },
-    [pathname]
+    [commit, writeUrl]
   );
 
   const clearRefinements = useCallback(() => {
-    const next = { ...DEFAULT_GALLERY_FILTERS };
-    window.history.replaceState(null, '', searchUrl(pathname, next));
-    setState({ open: true, filters: next });
-  }, [pathname]);
+    const filters = { ...DEFAULT_GALLERY_FILTERS };
+    writeUrl(filters);
+    commit({ open: true, filters });
+  }, [commit, writeUrl]);
 
   return {
     isOpen: state.open,

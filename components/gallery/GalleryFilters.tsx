@@ -117,6 +117,7 @@ export default function GalleryFilters({
       value={filters.type}
       onChange={(value) => update({ type: value })}
       ariaLabel="Story format"
+      stretch={false}
     />
   );
 

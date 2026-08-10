@@ -1,6 +1,10 @@
 import KidsGalleryBrowser, { PAGE_SIZE } from '@/components/gallery/KidsGalleryBrowser';
 import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
-import { filtersFromParams, isSearchOpen } from '@/lib/gallery/search-params';
+import {
+  DEFAULT_GALLERY_FILTERS,
+  filtersFromParams,
+  isSearchOpen,
+} from '@/lib/gallery/search-params';
 import type { GalleryFilters, GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
 export const dynamic = 'force-dynamic';
@@ -27,15 +31,18 @@ export default async function KidsGalleryRoute({
   searchParams: Promise<RawSearchParams>;
 }) {
   const params = toURLSearchParams(await searchParams);
-  const searchFilters: GalleryFilters | null = isSearchOpen(params)
-    ? { ...filtersFromParams(params), type: 'storylines', ageGroup: 'all' }
-    : null;
+  const searchOpen = isSearchOpen(params);
+  // Clamped, then resolved whether or not search is open: on a plain visit this
+  // is the seed that makes opening search instant.
+  const searchFilters: GalleryFilters = {
+    ...(searchOpen ? filtersFromParams(params) : DEFAULT_GALLERY_FILTERS),
+    type: 'storylines',
+    ageGroup: 'all',
+  };
 
   const [railsResult, searchResult, savedResult] = await Promise.allSettled([
     getGalleryRails('kids'),
-    searchFilters
-      ? getGalleryItems(searchFilters, PAGE_SIZE, 0, 'kids')
-      : Promise.resolve(null),
+    getGalleryItems(searchFilters, PAGE_SIZE, 0, 'kids'),
     getSavedStorylineIds(),
   ]);
 
@@ -56,7 +63,7 @@ export default async function KidsGalleryRoute({
   return (
     <KidsGalleryBrowser
       initialRails={initialRails}
-      initialSearchOpen={searchFilters !== null}
+      initialSearchOpen={searchOpen}
       initialSearchFilters={searchFilters}
       initialSearchPage={initialSearchPage}
       initialSavedIds={savedResult.status === 'fulfilled' ? savedResult.value : undefined}
