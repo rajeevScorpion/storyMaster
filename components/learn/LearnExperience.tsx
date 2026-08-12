@@ -341,7 +341,7 @@ export default function LearnExperience() {
 
         <div className={styles.topActions}>
           <Link
-            href="/"
+            href="/create"
             className={`${NAV_BUTTON_CLASS} learn-secondary-action ${styles.topActionLabel}`}
           >
             Experience product
@@ -476,12 +476,12 @@ export default function LearnExperience() {
 
                   {slide.visualType === 'cta' || slide.visualType === 'collaboration-ask' ? (
                     <div className={styles.ctaRow}>
-                      <Link href="/" className={PRIMARY_ACTION_CLASS}>
+                      <Link href="/create" className={PRIMARY_ACTION_CLASS}>
                         Experience product
                         <ArrowRight className="h-4 w-4" />
                       </Link>
                       <Link
-                        href="/gallery"
+                        href="/"
                         className={`${NAV_BUTTON_CLASS} min-h-12 px-6`}
                       >
                         <Play className="h-4 w-4" />

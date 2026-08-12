@@ -11,7 +11,7 @@ Branch: `rollout-pages`
 - Global settings are mostly stored in Supabase `feature_flags` and read/written through server actions.
 - Pricing runtime state uses `pricing_snapshot_enabled` to decide whether live plan/wallet state is visible.
 - The app has no existing CMS, legal-page system, blog/news page system, docs page system, or reusable public footer.
-- Existing public routes include `/`, `/gallery`, `/wallet`, `/signed-out`, `/story/[id]`, `/storyline/[id]`, `/explore/[id]`, `/auth/*`, `/api/*`, and `/admin/*`.
+- Existing public routes include `/` (the gallery), `/create`, `/gallery` (redirects to `/`), `/wallet`, `/signed-out`, `/story/[id]`, `/storyline/[id]`, `/explore/[id]`, `/auth/*`, `/api/*`, and `/admin/*`.
 - Existing content editing patterns are textarea-based admin screens with immediate server-action saves.
 - Story and media persistence uses Supabase tables plus `story-assets` and `public-storylines` storage buckets.
 - Public storylines, saved storylines, likes, views, wallet coins, and video export are implemented.

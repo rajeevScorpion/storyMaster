@@ -71,7 +71,7 @@ export default function SignedOutScreen({ coverImageUrl }: SignedOutScreenProps)
               </button>
 
               <Link
-                href="/gallery"
+                href="/"
                 className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all duration-200 font-medium"
               >
                 <BookOpen className="w-5 h-5" />

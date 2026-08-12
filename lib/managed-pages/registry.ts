@@ -22,6 +22,7 @@ export const RESERVED_ROOT_SLUGS = [
   'admin',
   'api',
   'auth',
+  'create',
   'explore',
   'favicon.ico',
   'gallery',

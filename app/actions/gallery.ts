@@ -249,7 +249,7 @@ export type GalleryAudienceMode = 'all' | 'kids';
 /**
  * Narrow the requested scope by the active viewer profile's own eligibility
  * (migration 091). A kids profile stays on the kids catalogue even when the
- * request came from `/gallery`, because eligibility must be enforced where the
+ * request came from the main feed, because eligibility must be enforced where the
  * query is built rather than by which page the viewer navigated to.
  *
  * Can only ever narrow: `kids` never widens to `all`.

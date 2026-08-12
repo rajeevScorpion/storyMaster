@@ -23,9 +23,10 @@ Requires `GEMINI_API_KEY` in `.env.local`.
 **Data flow:** LandingScreen (prompt) → Zustand store action → Server action (Gemini API) → StoryScreen (display beat + options) → user picks option → loop
 
 Key layers:
-- **`app/page.tsx`** — Client component entry point; conditionally renders LandingScreen or StoryScreen based on session state
+- **`app/page.tsx`** — The gallery: the discovery feed is the front door, for signed-in and signed-out visitors alike. Server component; renders `GalleryBrowser`. `/gallery` redirects here
+- **`app/create/page.tsx`** — The authoring entry point, reached from the Create pill in the gallery top bar. Renders `HomeContent`, which conditionally shows LandingScreen or StoryScreen based on session state
 - **`app/actions/story.ts`** — Server actions: `generateStoryBeat()` (structured JSON output from Gemini) and `generateImage()` (via `gemini-2.5-flash-image`)
-- **`lib/store/story-store.ts`** — Zustand store with IndexedDB persistence (`idb-keyval`). Contains `startStory`, `continueStory`, `resetStory` actions that orchestrate API calls and state updates
+- **`lib/store/story-store.ts`** — Zustand store holding the active `session`. Contains `startStory`, `continueStory`, `resetStory` actions that orchestrate API calls and state updates. The store itself is **not** persisted — it is a module singleton, so a session survives client-side navigation but not a reload. Durable story state lives in Supabase; IndexedDB (`lib/persistence/`) caches media, manifests, and reading progress
 - **`lib/ai/prompts.ts`** — Two system prompts: `STORY_MASTER_SYSTEM_PROMPT` (generates beats as JSON schema) and `VISUAL_PROMPT_COMPOSER_PROMPT` (generates image descriptions)
 - **`lib/types/story.ts`** — Core types: `StorySession`, `StoryBeat`, `Character`, `Option`
 - **`components/story/`** — Three components: LandingScreen, StoryScreen, LoadingState

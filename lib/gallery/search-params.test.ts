@@ -98,9 +98,11 @@ describe('paramsFromFilters', () => {
 });
 
 describe('searchUrl', () => {
+  // The gallery is the root route, so this is the pathname the hook actually
+  // passes in — a shared search link is `/?q=…`, not `/gallery?q=…`.
   it('builds a shareable url', () => {
-    expect(searchUrl('/gallery', { ...DEFAULT_GALLERY_FILTERS, search: 'moon' })).toBe(
-      '/gallery?q=moon'
+    expect(searchUrl('/', { ...DEFAULT_GALLERY_FILTERS, search: 'moon' })).toBe(
+      '/?q=moon'
     );
   });
 

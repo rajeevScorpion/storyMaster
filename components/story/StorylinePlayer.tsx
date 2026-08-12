@@ -1906,7 +1906,7 @@ export default function StorylinePlayer({
                   </button>
                 ) : (
                   <button
-                    onClick={() => { setShowEndModal(false); router.push('/gallery'); }}
+                    onClick={() => { setShowEndModal(false); router.push('/'); }}
                     className="w-full flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-500/40 transition-all cursor-pointer font-sans text-sm"
                   >
                     <Compass className="w-4 h-4" />
@@ -1919,7 +1919,7 @@ export default function StorylinePlayer({
                       there is a next episode to offer. */}
                   {nextEpisode && (
                     <button
-                      onClick={() => { setShowEndModal(false); router.push('/gallery'); }}
+                      onClick={() => { setShowEndModal(false); router.push('/'); }}
                       className="flex-1 flex items-center justify-center gap-1.5 px-2 py-3.5 rounded-xl bg-white/5 border border-white/10 text-neutral-300 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer font-sans text-xs"
                     >
                       <Compass className="w-4 h-4 shrink-0" />

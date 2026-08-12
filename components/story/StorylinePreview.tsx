@@ -49,7 +49,7 @@ export default function StorylinePreview({
       <header className="relative z-10 p-4 md:p-6 flex justify-between items-center shrink-0">
         <KissagoLogo fixed={false} />
         <Link
-          href="/gallery"
+          href="/"
           className="px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-sm text-neutral-400 hover:text-neutral-200 hover:bg-white/10 transition-all"
         >
           Browse Gallery

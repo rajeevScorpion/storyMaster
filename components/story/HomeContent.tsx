@@ -33,21 +33,38 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
   const { user, openAuthDialog } = useAuth();
   const router = useRouter();
   const [showMyStories, setShowMyStories] = useState(false);
-  const [isConsumingHomeReset, setIsConsumingHomeReset] = useState(() => hasHomeStoryResetRequest());
+  const [isClearingStaleSession, setIsClearingStaleSession] = useState(
+    // The store is a module singleton with no persistence, so a session is still
+    // in memory after any client-side navigation — including the one that just
+    // brought us here from a story. Arriving with one already saved would make
+    // the redirect below fire on mount and throw the visitor straight back into
+    // that story, which would leave Create looking broken for anyone who had
+    // opened anything in this tab. Asking for /create means asking for the
+    // composer, so a stale session is cleared instead of resumed.
+    //
+    // Only when it has a `savedStoryId`: that story is durable, reachable at
+    // /story/[id] and listed in My Stories. A session without one exists nowhere
+    // else — it is mid-generation — so it is left alone and StoryScreen picks it
+    // up rather than discarding work.
+    () => hasHomeStoryResetRequest() || !!useStoryStore.getState().session?.savedStoryId
+  );
   const hasRedirected = useRef(false);
-  const sessionForDisplay = isConsumingHomeReset ? null : session;
+  const sessionForDisplay = isClearingStaleSession ? null : session;
 
   useEffect(() => {
-    if (!isConsumingHomeReset) return;
+    if (!isClearingStaleSession) return;
     consumeHomeStoryResetRequest();
     hasRedirected.current = false;
     resetStory();
-    const timeoutId = window.setTimeout(() => setIsConsumingHomeReset(false), 0);
+    const timeoutId = window.setTimeout(() => setIsClearingStaleSession(false), 0);
     return () => window.clearTimeout(timeoutId);
-  }, [isConsumingHomeReset, resetStory]);
+  }, [isClearingStaleSession, resetStory]);
 
+  // The redirect that remains is the tail of the creation flow, not a resume:
+  // a story started here gains a `savedStoryId` on its early save, and that is
+  // the moment the author is handed over to the real story route.
   useEffect(() => {
-    if (isConsumingHomeReset) return;
+    if (isClearingStaleSession) return;
     if (
       sessionForDisplay?.savedStoryId &&
       !sessionForDisplay.explorationMode &&
@@ -59,7 +76,7 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
     if (!sessionForDisplay) {
       hasRedirected.current = false;
     }
-  }, [isConsumingHomeReset, sessionForDisplay, router]);
+  }, [isClearingStaleSession, sessionForDisplay, router]);
 
   const handleBegin = async (
     prompt: string,
@@ -105,8 +122,11 @@ export default function HomeContent({ initialLandingData, initialPricing }: Home
       <KissagoLogo onClick={handleLogoClick} />
 
       <div className="fixed top-4 right-4 z-40 flex items-center gap-2">
+        {/* The mirror of the gallery's Create pill: the way back out of
+            authoring and into watching. Points at the root, which is the
+            gallery now, so it never pays for the /gallery redirect hop. */}
         <Link
-          href="/gallery"
+          href="/"
           className="px-5 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md text-sm font-sans text-neutral-300 hover:bg-white/10 hover:border-emerald-500/30 hover:text-neutral-100 transition-all duration-200"
         >
           Gallery
