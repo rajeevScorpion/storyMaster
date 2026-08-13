@@ -1,58 +1,94 @@
-import { Suspense } from 'react';
-import { unstable_cache } from 'next/cache';
-import { getReelStorySetupSettings, getStoryboardSettings } from '@/app/actions/admin';
-import { getNarrationVoiceSelectionConfig } from '@/app/actions/narration';
-import { getEnabledStoryLanguageOptionsForClient } from '@/lib/ai/story-language-settings';
-import { getPublishedStoryVisualCatalog } from '@/lib/ai/story-visual-options.server';
-import HomeContent from '@/components/story/HomeContent';
+import GalleryBrowser from '@/components/gallery/GalleryBrowser';
+import { getGalleryItems, getGalleryRails, getSavedStorylineIds } from '@/app/actions/gallery';
+import { GALLERY_PAGE_SIZE } from '@/lib/gallery/paging';
 import {
-  DEFAULT_LANDING_SETUP_SETTINGS,
-  FALLBACK_REEL_SETUP,
-  normalizeLandingInitialData,
-  type LandingInitialData,
-} from '@/lib/story/landing-ui';
+  DEFAULT_GALLERY_FILTERS,
+  filtersFromParams,
+  isSearchOpen,
+} from '@/lib/gallery/search-params';
+import type { GalleryFilters, GalleryPage, GalleryRailsResponse } from '@/lib/types/database';
 
-const getCachedLandingInitialData = unstable_cache(
-  async (): Promise<LandingInitialData> => {
-    const [storyboardSettings, reelSetup, narrationVoiceConfig, storyLanguageOptions, storyVisualCatalog] = await Promise.all([
-      getStoryboardSettings().catch(() => null),
-      getReelStorySetupSettings().catch(() => FALLBACK_REEL_SETUP),
-      // Cached, cross-user landing payload — skip the per-user (cookie-reading)
-      // plan lookup; LandingScreen re-resolves accent gating per user at runtime.
-      getNarrationVoiceSelectionConfig('english', { skipPlanResolution: true }).catch(() => null),
-      getEnabledStoryLanguageOptionsForClient().catch(() => undefined),
-      getPublishedStoryVisualCatalog().catch(() => undefined),
-    ]);
+// The feed depends on the viewer's session (My List) and on freshly published
+// storylines, so it is resolved per request rather than at build time.
+export const dynamic = 'force-dynamic';
 
-    return normalizeLandingInitialData({
-      setupSettings: storyboardSettings
-        ? {
-            freePlusCharacterSheetsEnabled: storyboardSettings.freePlusCharacterSheetsEnabled,
-            creatorCharacterSheetsEnabled: storyboardSettings.creatorCharacterSheetsEnabled,
-            storyPromptOnlyModeEnabled: storyboardSettings.storyPromptOnlyModeEnabled,
-            verticalStoriesSettingEnabled: storyboardSettings.verticalStoriesSettingEnabled,
-          }
-        : DEFAULT_LANDING_SETUP_SETTINGS,
-      authoringWordCap: storyboardSettings?.authoringWordCap,
-      storyBeatLengthDefaultLevel: storyboardSettings?.storyBeatLengthDefaultLevel,
-      reelSetup,
-      narrationVoiceConfig,
-      storyLanguageOptions,
-      storyVisualCatalog,
-    });
-  },
-  ['kissago-landing-initial-data-v3'],
-  { revalidate: 60 }
-);
+type RawSearchParams = Record<string, string | string[] | undefined>;
 
-export default async function Home() {
-  const initialLandingData = await getCachedLandingInitialData();
+function toURLSearchParams(raw: RawSearchParams): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string') params.set(key, value);
+    else if (Array.isArray(value) && value.length > 0) params.set(key, value[0]);
+  }
+  return params;
+}
+
+/**
+ * The front door: the discovery gallery.
+ *
+ * Kissago is a place you watch stories, so the catalogue is what a cold visitor
+ * meets — signed in or not, both are served the same feed. Authoring lives at
+ * `/create`, one pill away in the top bar. This route used to be the prompt
+ * composer, and `/gallery` used to be here; that URL now redirects in.
+ *
+ * The browser used to be a client component that fetched everything after
+ * hydration, so the first paint was skeletons and the real content waited on
+ * bundle download → hydrate → server action → database. Resolving the
+ * above-the-fold payload here collapses that into the initial HTML; the client
+ * component still owns search, paging, and saves, and refetches on its own
+ * when either half fails.
+ *
+ * The catalogue's first page is resolved here whether or not search is open. On
+ * a shared search link it is the results; on a plain feed visit it is the seed
+ * that makes opening search instant instead of a spinner over a server-action
+ * round trip. It runs in parallel with the rails, so it costs no wall time.
+ *
+ * Saved ids are resolved here too. They are cheap, but fetching them from the
+ * client costs a server action, and a server action re-renders this whole route
+ * — so that one mount-time call would re-run the entire feed.
+ */
+export default async function HomeRoute({
+  searchParams,
+}: {
+  searchParams: Promise<RawSearchParams>;
+}) {
+  const params = toURLSearchParams(await searchParams);
+  const searchOpen = isSearchOpen(params);
+  const searchFilters: GalleryFilters = searchOpen
+    ? filtersFromParams(params)
+    : DEFAULT_GALLERY_FILTERS;
+
+  const [railsResult, searchResult, savedResult] = await Promise.allSettled([
+    getGalleryRails(),
+    getGalleryItems(searchFilters, GALLERY_PAGE_SIZE, 0),
+    getSavedStorylineIds(),
+  ]);
+
+  let initialRails: GalleryRailsResponse | null = null;
+  if (railsResult.status === 'fulfilled') {
+    initialRails = railsResult.value;
+  } else {
+    console.error('Failed to prerender gallery rails:', railsResult.reason);
+  }
+
+  let initialSearchPage: GalleryPage | null = null;
+  if (searchResult.status === 'fulfilled') {
+    initialSearchPage = searchResult.value;
+  } else {
+    console.error('Failed to prerender gallery search results:', searchResult.reason);
+  }
+
+  // Undefined (not []) on failure, so the client falls back to fetching them
+  // rather than rendering an empty My List as though nothing were saved.
+  const initialSavedIds = savedResult.status === 'fulfilled' ? savedResult.value : undefined;
 
   return (
-    <Suspense>
-      <HomeContent
-        initialLandingData={initialLandingData}
-      />
-    </Suspense>
+    <GalleryBrowser
+      initialRails={initialRails}
+      initialSearchOpen={searchOpen}
+      initialSearchFilters={searchFilters}
+      initialSearchPage={initialSearchPage}
+      initialSavedIds={initialSavedIds}
+    />
   );
 }

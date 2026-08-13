@@ -8,12 +8,17 @@ kids) are described in the plan file and the per-phase commits.
 ## Read path
 
 ```
-/gallery (server component)
+/ (server component)
   ├─ getGalleryRails()      → billboard + rails
   └─ getGalleryItems(...)   → first page of Browse All
         ↓ passed as props
   GalleryBrowser (client)   → filters, paging, saves, rotation
 ```
+
+The gallery is the root route: Kissago opens on the catalogue, and authoring
+lives at `/create`, one Create pill away in the top bar. `/gallery` is kept as a
+307 redirect to `/` so older links and shared search URLs still resolve. Search
+state is read from `usePathname()`, so a shared search link is now `/?q=…`.
 
 The page is a server component. It used to be a client component that fetched
 everything after hydration, which meant the first paint was skeletons and real

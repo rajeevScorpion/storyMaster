@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, Baby, Search, X } from 'lucide-react';
+import { ArrowLeft, Baby, Plus, Search, X } from 'lucide-react';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 import UserMenu from '@/components/auth/UserMenu';
 import GallerySearchField from '@/components/gallery/GallerySearchField';
@@ -28,6 +28,13 @@ interface GalleryTopBarProps {
  * On desktop the field is always present. On phones there is no room beside the
  * logo and the account controls, so search is an icon that expands this bar into
  * a dedicated search header.
+ *
+ * Create is the one filled control here. The gallery is the front door and
+ * authoring is the other half of the platform, so it cannot read as another
+ * utility link sitting between Search and the avatar. It is shown signed-out
+ * too: the composer already stashes an anonymous prompt and opens sign-in on
+ * Begin, so "compose, then sign in" is the funnel — hiding Create would mean
+ * never telling a visitor they can make one of these.
  */
 export default function GalleryTopBar({
   searchOpen,
@@ -97,9 +104,18 @@ export default function GalleryTopBar({
             <Search className="h-5 w-5" />
           </button>
 
+          <Link
+            href="/create"
+            className="flex min-h-11 items-center gap-1.5 rounded-full bg-emerald-300 px-4 text-sm font-semibold text-neutral-950 shadow-[0_10px_40px_rgba(52,211,153,0.2)] transition-colors hover:bg-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
+          >
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Create
+          </Link>
+
           {variant === 'kids' ? (
             <Link
-              href="/gallery"
+              href="/"
+              aria-label="Back to Kissago"
               className="flex min-h-11 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-neutral-200 backdrop-blur-md transition-colors hover:border-emerald-500/30 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
             >
               <ArrowLeft className="h-4 w-4" aria-hidden="true" />
@@ -108,10 +124,13 @@ export default function GalleryTopBar({
           ) : (
             <Link
               href="/gallery/kids"
+              aria-label="Kids"
               className="flex min-h-11 items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-4 text-sm text-neutral-200 backdrop-blur-md transition-colors hover:border-emerald-500/30 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70"
             >
               <Baby className="h-4 w-4" aria-hidden="true" />
-              Kids
+              {/* Create took the room this label used to have. The icon alone
+                  carries it on phones; the word returns from sm up. */}
+              <span className="hidden sm:inline">Kids</span>
             </Link>
           )}
 
