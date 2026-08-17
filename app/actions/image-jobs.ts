@@ -147,7 +147,7 @@ export async function enqueueBeatImageJob(input: EnqueueBeatImageJobInput): Prom
     // Snapshot the owner's plan so the cookieless worker resolves tier-gated
     // models and retention exactly as the interactive request would have.
     const planKey = await getPricingRuntimeContext()
-      .then((pricing) => pricing.snapshot.planKey)
+      .then((pricing) => pricing.snapshot.entitlementPlanKey)
       .catch(() => 'free' as const);
 
     const payload: BeatImageJobRequestPayload = {

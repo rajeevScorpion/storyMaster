@@ -49,7 +49,7 @@ export async function maybePersistInlineBeatImage(input: {
     if (!story || story.user_id !== user.id) return null;
 
     const planKey = await getPricingRuntimeContext()
-      .then((pricing) => pricing.snapshot.planKey)
+      .then((pricing) => pricing.snapshot.entitlementPlanKey)
       .catch(() => 'free' as const);
 
     const variants = await processAndStoreImageVariants({

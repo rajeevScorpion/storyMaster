@@ -58,7 +58,7 @@ export async function authorizeImageModelBillableActionForUser(
   }
 
   const pricing = await getPricingPolicyContextForUser(userId);
-  if (pricing.planKey === 'free') {
+  if (pricing.entitlementPlanKey === 'free') {
     const freeTierGate = await authorizeCoinOperationForUser({
       userId,
       operationKey: input.actionKey,
@@ -82,7 +82,7 @@ export async function authorizeImageModelBillableActionForUser(
   const imageModelSnapshot = await resolveImageModelSnapshot({
     taskKey,
     selection: storyConfig.imageModelSelection ?? null,
-    currentPlanKey: pricing.planKey,
+    currentPlanKey: pricing.entitlementPlanKey,
   });
   const imageCount = Math.max(1, Math.round(input.imageCount ?? 1));
   const promptOnlyActionKey = getPromptOnlyBaseActionKey(input.actionKey);

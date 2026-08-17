@@ -1,4 +1,5 @@
-import { COINS_PER_BEAT } from '@/lib/types/pricing';
+import { COINS_PER_BEAT, type PlanKey } from '@/lib/types/pricing';
+import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 
 export const ADMIN_USER_PAGE_SIZES = [25, 50, 100] as const;
 export const DEFAULT_ADMIN_USER_PAGE_SIZE = ADMIN_USER_PAGE_SIZES[0];
@@ -33,7 +34,12 @@ export interface AdminUserRow {
   accountStatus: AdminAccountStatus;
   suspendedUntil: string | null;
   moderationReason: string | null;
+  /** Billing truth: the plan an active subscription pays for. */
   currentPlanKey: string;
+  /** Admin-granted feature tier, or null when the account was never promoted. */
+  entitlementOverridePlanKey: PlanKey | null;
+  /** What feature gates actually read — the higher of plan and override. */
+  effectiveEntitlementPlanKey: PlanKey;
   availableCoins: number;
   lifetimeGrantedCoins: number;
   lifetimeConsumedCoins: number;
@@ -71,7 +77,8 @@ export interface AdminUserAuditItem {
     | 'account_blocked'
     | 'account_reactivated'
     | 'coins_granted'
-    | 'cohort_executed';
+    | 'cohort_executed'
+    | 'entitlement_tier_changed';
   reason: string;
   actorUserId: string | null;
   createdAt: string;
@@ -263,6 +270,33 @@ export function normalizeCoinGrantInput(input: {
     reason,
     expiresAt,
   };
+}
+
+export const ENTITLEMENT_TIER_OPTIONS: readonly { value: PlanKey; label: string }[] = [
+  { value: 'free', label: 'Free' },
+  { value: 'plus', label: 'Plus' },
+  { value: 'studio', label: 'Studio' },
+];
+
+/**
+ * A tier change grants feature access only, so the input carries no coin fields
+ * by design. 'free' means "no promotion" and clears any existing row.
+ */
+export function normalizeEntitlementTierInput(input: {
+  entitlementPlanKey: unknown;
+  reason?: string | null;
+}): { entitlementPlanKey: PlanKey; reason: string | null } {
+  const entitlementPlanKey = normalizeEntitlementPlanKey(input.entitlementPlanKey);
+  if (!entitlementPlanKey) {
+    throw new Error('Pick a valid access tier: free, plus, or studio.');
+  }
+
+  const reason = String(input.reason ?? '').trim();
+  if (reason.length > 500) {
+    throw new Error('Reason must be 500 characters or fewer.');
+  }
+
+  return { entitlementPlanKey, reason: reason || null };
 }
 
 export function beatsToCoins(value: number | string | null | undefined): number {

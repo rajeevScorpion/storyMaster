@@ -250,6 +250,7 @@ export default function AdvancedOptions({
   const imageModelDropdownOptions: FilterDropdownOption[] = imageModelOptions.map((option) => ({
     value: option.modelKey,
     label: `${option.displayName}${option.badge ? ` · ${option.badge}` : ''}`,
+    hint: option.description || undefined,
   }));
   const orientationLabel = isVerticalStory ? 'Portrait' : 'Landscape';
   const optionsForCategory = (category: StoryVisualCategory, selectedKey: string) => {
@@ -745,7 +746,8 @@ export default function AdvancedOptions({
                       <h4 className="text-sm font-sans text-neutral-200">Image model</h4>
                       {selectedImageModel && (
                         <p className="mt-1 truncate text-xs text-neutral-500">
-                          {selectedImageModel.providerLabel} · {selectedImageModel.coinCostPerImage.toLocaleString()} coins/image
+                          {selectedImageModel.description ? `${selectedImageModel.description} · ` : ''}
+                          {selectedImageModel.coinCostPerImage.toLocaleString()} coins/image
                         </p>
                       )}
                     </div>

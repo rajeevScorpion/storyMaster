@@ -65,7 +65,7 @@ export async function getLandingBootstrap(input: {
   const pricing = await getPricingRuntimeContext({
     pricingMarketKey: input.pricingMarketKey ?? null,
   }).catch(() => null);
-  const planKey = pricing?.snapshot.planKey ?? 'free';
+  const planKey = pricing?.snapshot.entitlementPlanKey ?? 'free';
 
   const [imageModelPicker, reelVisualStyleCards, reelMoods] = await Promise.all([
     buildImageModelPickerState(input.imageTaskKey, input.imageModelSelection ?? null, planKey)

@@ -20,7 +20,7 @@ import { findCharacterNameConflicts, masterToCharacter } from '@/lib/character-l
 import type { CharacterMaster } from '@/lib/types/character-library';
 import { useMentionAutocomplete } from '@/lib/hooks/useMentionAutocomplete';
 import MentionSuggestionList from '@/components/ui/MentionSuggestionList';
-import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import { type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
@@ -247,7 +247,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     ?? imageModelPicker?.options.find((option) => option.isDefault)
     ?? null;
   const statefulContinuityAvailable = selectedImageModel
-    ? imageProviderSupportsStatefulContinuity(selectedImageModel.providerKey)
+    ? selectedImageModel.supportsStatefulContinuity
     : true;
   const promptOnlyActionCost = isReelMode
     ? pricing.actionCosts.start_reel_full_generation_prompt_only ?? 1.5
@@ -348,7 +348,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     pickerRequestSignatureRef.current = buildPickerRequestSignature(
       imageTaskKey,
       imageModelSelection,
-      pricing.snapshot.planKey
+      pricing.snapshot.entitlementPlanKey
     );
     useMyStoriesStore
       .getState()
@@ -373,7 +373,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
           pickerRequestSignatureRef.current = buildPickerRequestSignature(
             state.taskKey,
             { taskKey: state.taskKey, modelKey: state.selectedModelKey },
-            pricing.snapshot.planKey
+            pricing.snapshot.entitlementPlanKey
           );
           setImageModelPicker(state);
           if (
@@ -412,7 +412,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
   // Change-only picker sync: refetches when the image task, selection, or plan
   // diverges from what the bootstrap (or a previous sync) already applied.
   useEffect(() => {
-    const signature = buildPickerRequestSignature(imageTaskKey, imageModelSelection, pricing.snapshot.planKey);
+    const signature = buildPickerRequestSignature(imageTaskKey, imageModelSelection, pricing.snapshot.entitlementPlanKey);
     if (pickerRequestSignatureRef.current === signature) {
       return;
     }
@@ -425,7 +425,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
         pickerRequestSignatureRef.current = buildPickerRequestSignature(
           state.taskKey,
           { taskKey: state.taskKey, modelKey: state.selectedModelKey },
-          pricing.snapshot.planKey
+          pricing.snapshot.entitlementPlanKey
         );
         setImageModelPicker(state);
         if (
@@ -444,7 +444,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     return () => {
       cancelled = true;
     };
-  }, [imageTaskKey, imageModelSelection, pricing.snapshot.planKey]);
+  }, [imageTaskKey, imageModelSelection, pricing.snapshot.entitlementPlanKey]);
 
   useEffect(() => {
     if (initialData?.reelSetup) {

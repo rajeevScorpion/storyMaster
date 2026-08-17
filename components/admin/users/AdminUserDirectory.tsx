@@ -13,14 +13,18 @@ import {
   UsersRound,
   WalletCards,
 } from 'lucide-react';
-import { getAdminUsersPage } from '@/app/actions/admin-users';
+import { getAdminUsersPage, setAdminUserEntitlementTier } from '@/app/actions/admin-users';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import {
   ADMIN_USER_PAGE_SIZES,
+  ENTITLEMENT_TIER_OPTIONS,
   type AdminAccountStatus,
   type AdminAccountStatusFilter,
+  type AdminUserRow,
   type AdminUsersPageData,
 } from '@/lib/admin/user-management.shared';
+import { isPlanKey, resolveEffectiveEntitlementTier } from '@/lib/pricing/entitlement-tier.shared';
+import type { PlanKey } from '@/lib/types/pricing';
 import UserAvatar from './UserAvatar';
 
 const STATUS_OPTIONS = [
@@ -41,6 +45,7 @@ export default function AdminUserDirectory({
   const [status, setStatus] = useState<AdminAccountStatusFilter>('all');
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [savingTierUserId, setSavingTierUserId] = useState<string | null>(null);
 
   function load(input: {
     page?: number;
@@ -61,6 +66,51 @@ export default function AdminUserDirectory({
         setData(result);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load users.');
+      }
+    });
+  }
+
+  function changeEntitlementTier(user: AdminUserRow, nextTier: PlanKey) {
+    setError(null);
+    setSavingTierUserId(user.userId);
+    // Optimistic: the dropdown is the only thing that changes, and a failure
+    // rolls the row back below, so the table does not flash a full reload.
+    // The effective tier is recomputed here too, otherwise the hint under the
+    // dropdown reads from a stale value until the server answers.
+    const optimistic: AdminUserRow = {
+      ...user,
+      entitlementOverridePlanKey: nextTier === 'free' ? null : nextTier,
+      effectiveEntitlementPlanKey: resolveEffectiveEntitlementTier({
+        billingPlanKey: (isPlanKey(user.currentPlanKey) ? user.currentPlanKey : 'free'),
+        overridePlanKey: nextTier,
+        // Only the admin account sits above its plan with no override stored.
+        isAdmin: !user.entitlementOverridePlanKey
+          && user.effectiveEntitlementPlanKey !== user.currentPlanKey,
+      }),
+    };
+    setData((current) => ({
+      ...current,
+      users: current.users.map((row) => (row.userId === user.userId ? optimistic : row)),
+    }));
+
+    startTransition(async () => {
+      try {
+        const updated = await setAdminUserEntitlementTier({
+          userId: user.userId,
+          entitlementPlanKey: nextTier,
+        });
+        setData((current) => ({
+          ...current,
+          users: current.users.map((row) => (row.userId === updated.userId ? updated : row)),
+        }));
+      } catch (tierError) {
+        setData((current) => ({
+          ...current,
+          users: current.users.map((row) => (row.userId === user.userId ? user : row)),
+        }));
+        setError(tierError instanceof Error ? tierError.message : 'Unable to change the access tier.');
+      } finally {
+        setSavingTierUserId(null);
       }
     });
   }
@@ -174,11 +224,12 @@ export default function AdminUserDirectory({
         )}
 
         <div className={`relative overflow-x-auto transition-opacity ${isPending ? 'opacity-55' : ''}`}>
-          <table className="w-full min-w-[980px] text-sm">
+          <table className="w-full min-w-[1140px] text-sm">
             <thead>
               <tr className="border-b border-white/10 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
                 <th className="px-4 py-3 font-medium">User</th>
                 <th className="px-4 py-3 font-medium">Access</th>
+                <th className="px-4 py-3 font-medium">Feature tier</th>
                 <th className="px-4 py-3 font-medium">Stories</th>
                 <th className="px-4 py-3 font-medium">Coins</th>
                 <th className="px-4 py-3 font-medium">Activity</th>
@@ -210,6 +261,22 @@ export default function AdminUserDirectory({
                   <td className="px-4 py-4">
                     <StatusBadge status={user.accountStatus} suspendedUntil={user.suspendedUntil} />
                     <p className="mt-1.5 text-xs capitalize text-neutral-500">{user.currentPlanKey} plan</p>
+                  </td>
+                  <td className="px-4 py-4">
+                    <div className={savingTierUserId === user.userId ? 'pointer-events-none opacity-60' : ''}>
+                      <FilterDropdown
+                        value={user.entitlementOverridePlanKey ?? 'free'}
+                        options={ENTITLEMENT_TIER_OPTIONS.map((option) => ({
+                          value: option.value,
+                          label: option.label,
+                        }))}
+                        ariaLabel={`Feature tier for ${user.displayName}`}
+                        onChange={(value) => changeEntitlementTier(user, value as PlanKey)}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-xs text-neutral-500">
+                      {describeEntitlementTier(user)}
+                    </p>
                   </td>
                   <td className="px-4 py-4">
                     <div className="grid grid-cols-3 gap-3">
@@ -337,6 +404,28 @@ function SummaryCard({
       <p className="mt-1 text-xs text-neutral-600">{hint}</p>
     </article>
   );
+}
+
+/**
+ * Says what the tier actually buys, so the column is not mistaken for a plan
+ * change: promotions unlock features and never move coins.
+ */
+function describeEntitlementTier(user: AdminUserRow): string {
+  const override = user.entitlementOverridePlanKey;
+  if (!override) {
+    // Only the admin account resolves above its plan without a stored override.
+    if (user.effectiveEntitlementPlanKey !== user.currentPlanKey) {
+      return 'Administrator · full access';
+    }
+    return user.effectiveEntitlementPlanKey === 'free'
+      ? 'No image generation'
+      : `Follows ${user.currentPlanKey} plan`;
+  }
+  if (user.effectiveEntitlementPlanKey !== override) {
+    // Promote-only: the paid plan already sits at or above the picked tier.
+    return `${user.currentPlanKey} plan already higher`;
+  }
+  return 'Promoted · features only, no coins';
 }
 
 function StoryMetric({ label, value }: { label: string; value: number }) {

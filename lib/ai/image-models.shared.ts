@@ -3,12 +3,14 @@ import type { PlanKey } from '@/lib/types/pricing';
 
 export type ImageTaskKey = Extract<TaskKey, 'image_generation' | 'reel_image_generation' | 'portrait_generation'>;
 
-export type ImageProviderKey = 'gemini' | 'openai' | 'xai';
+export type ImageProviderKey = 'gemini' | 'openai' | 'xai' | 'runware';
 
+/** Admin-facing only. Never send these to the browser — see toPublicImageModelOption. */
 export const IMAGE_PROVIDER_LABELS: Record<ImageProviderKey, string> = {
   gemini: 'Gemini',
   openai: 'OpenAI',
   xai: 'xAI',
+  runware: 'Runware',
 };
 
 export interface ImageModelSelection {
@@ -21,6 +23,15 @@ export interface ImageModelCapabilities {
   supportsReferences?: boolean;
   supportsBase64?: boolean;
   outputFormats?: string[];
+  /**
+   * Groups models that share a visual identity, so a storyboard model is paired with a
+   * portrait model that renders faces the same way. Matters when one provider key fronts
+   * several unrelated model families (an aggregator); providers with a single family leave
+   * this unset and fall back to provider-level matching.
+   */
+  continuityFamily?: string;
+  /** Explicit pixel dimensions per aspect ratio, for providers that take pixels not ratios. */
+  dimensions?: Record<string, { width: number; height: number }>;
   // Image prompt compiler settings (Kissago JSON image prompt optimization).
   // Stored in the image_model_registry `capabilities` JSONB; read by
   // normalizePromptCompilerCapability. All fields optional and fail-closed.
@@ -47,32 +58,43 @@ export interface ImageModelSnapshot {
   resolvedAt: string;
 }
 
+/**
+ * What the browser is allowed to know about a model. Deliberately the plainly-named type:
+ * anything that reaches the client should be this, so a new internal field is private by
+ * default rather than leaking until someone notices. Built by toPublicImageModelOption.
+ */
 export interface ImageModelOption {
   id: string;
   taskKey: ImageTaskKey;
-  providerKey: ImageProviderKey;
-  providerLabel: string;
   modelKey: string;
-  providerModelId: string;
   displayName: string;
   description: string;
   badge: string | null;
   coinCostPerImage: number;
+  isDefault: boolean;
+  isRecommended: boolean;
+  isAvailableToCurrentPlan: boolean;
+  sortOrder: number;
+  /** Derived server-side so the client never needs providerKey to reason about continuity. */
+  supportsStatefulContinuity: boolean;
+}
+
+/** Server-side view. Carries provider identity and our per-image cost of goods. */
+export interface ImageModelInternalOption extends ImageModelOption {
+  providerKey: ImageProviderKey;
+  providerLabel: string;
+  providerModelId: string;
   providerCostPerOutputImageUsd: number;
   providerCostPerInputImageUsd: number;
   allowedPlanKeys: PlanKey[];
   capabilities: ImageModelCapabilities;
-  isDefault: boolean;
-  isRecommended: boolean;
   isEnabled: boolean;
   isUserVisible: boolean;
-  isAvailableToCurrentPlan: boolean;
   isProviderConfigured: boolean;
   missingEnvVars: string[];
-  sortOrder: number;
 }
 
-export interface ImageModelRegistryRecord extends ImageModelOption {
+export interface ImageModelRegistryRecord extends ImageModelInternalOption {
   isAdminTestEnabled: boolean;
   requiredEnvVars: string[];
   createdAt: string;
