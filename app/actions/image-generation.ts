@@ -126,11 +126,15 @@ export async function generateSelectedImage(input: GenerateSelectedImageInput): 
 
   if (shouldRecordProviderCost && input.telemetry) {
     const inputImageCount = result.inputImageCount ?? input.referenceParts?.length ?? 0;
-    const imageProviderCostUsd = estimateImageProviderCostUsd({
-      snapshot: modelSnapshot,
-      outputImageCount: 1,
-      inputImageCount,
-    });
+    const hasReportedCost = typeof result.providerReportedCostUsd === 'number'
+      && Number.isFinite(result.providerReportedCostUsd);
+    const imageProviderCostUsd = hasReportedCost
+      ? Number(result.providerReportedCostUsd!.toFixed(6))
+      : estimateImageProviderCostUsd({
+          snapshot: modelSnapshot,
+          outputImageCount: 1,
+          inputImageCount,
+        });
     const statefulEstimate = metadata.resolvedContinuityStrategy === 'provider_stateful' && runtimePricing && result.providerUsage
       ? estimateStatefulRuntimeCostUsd({
           pricing: runtimePricing,
@@ -172,6 +176,7 @@ export async function generateSelectedImage(input: GenerateSelectedImageInput): 
         fallbackReason: metadata.fallbackReason ?? result.fallbackReason ?? null,
         statefulRuntimeCostUsd: statefulEstimate?.runtimeCostUsd ?? 0,
         imageProviderCostUsd,
+        costSource: hasReportedCost ? 'provider_reported' : 'estimated',
         providerMetadata: metadata,
       },
     });

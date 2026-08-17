@@ -23,6 +23,8 @@ export interface ImageProviderResult {
   fallbackText: string | null;
   metadata: Record<string, unknown>;
   providerUsage?: Record<string, unknown>;
+  /** Actual USD billed, for providers that report it. Preferred over the registry estimate. */
+  providerReportedCostUsd?: number;
   inputImageCount?: number;
   continuityState?: ImageContinuityProviderState | null;
   resolvedContinuityStrategy?: ResolvedImageContinuityStrategy;

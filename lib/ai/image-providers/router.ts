@@ -2,6 +2,7 @@ import 'server-only';
 
 import { geminiImageProvider } from './gemini-provider';
 import { openAiImageProvider } from './openai-provider';
+import { runwareImageProvider } from './runware-provider';
 import { xaiImageProvider } from './xai-provider';
 import type {
   ImageBatchAdapter,
@@ -18,6 +19,7 @@ const PROVIDERS: Record<ImageProviderKey, ImageProviderAdapter> = {
   gemini: geminiImageProvider,
   openai: openAiImageProvider,
   xai: xaiImageProvider,
+  runware: runwareImageProvider,
 };
 
 export async function generateImageWithProvider(request: ImageProviderRequest): Promise<ImageProviderResult> {

@@ -20,7 +20,7 @@ import { findCharacterNameConflicts, masterToCharacter } from '@/lib/character-l
 import type { CharacterMaster } from '@/lib/types/character-library';
 import { useMentionAutocomplete } from '@/lib/hooks/useMentionAutocomplete';
 import MentionSuggestionList from '@/components/ui/MentionSuggestionList';
-import { imageProviderSupportsStatefulContinuity, type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
+import { type ImageContinuityStrategy } from '@/lib/ai/image-continuity.shared';
 import { imageTaskForStoryKind, type ImageModelPickerState, type ImageModelSelection } from '@/lib/ai/image-models.shared';
 import {
   getReelLegacyLengthForBeatCount,
@@ -247,7 +247,7 @@ export default function LandingScreen({ onBegin, initialData, initialPricing }: 
     ?? imageModelPicker?.options.find((option) => option.isDefault)
     ?? null;
   const statefulContinuityAvailable = selectedImageModel
-    ? imageProviderSupportsStatefulContinuity(selectedImageModel.providerKey)
+    ? selectedImageModel.supportsStatefulContinuity
     : true;
   const promptOnlyActionCost = isReelMode
     ? pricing.actionCosts.start_reel_full_generation_prompt_only ?? 1.5
