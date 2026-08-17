@@ -43,7 +43,7 @@ export async function quoteCoinOperationForUser(input: {
   const context = await getPricingPolicyContextForUser(input.userId);
   return buildCoinEconomyQuote({
     operationKey: input.operationKey,
-    planKey: input.assumedPlanKey ?? context.planKey,
+    planKey: input.assumedPlanKey ?? context.entitlementPlanKey,
     components: input.components,
     catalog: context.actionCosts,
   });
@@ -60,7 +60,7 @@ export async function quoteCoinOperationsForUser(input: {
   const context = await getPricingPolicyContextForUser(input.userId);
   return input.operations.map((operation) => buildCoinEconomyQuote({
     operationKey: operation.operationKey,
-    planKey: operation.assumedPlanKey ?? context.planKey,
+    planKey: operation.assumedPlanKey ?? context.entitlementPlanKey,
     components: operation.components,
     catalog: context.actionCosts,
   }));
@@ -70,9 +70,12 @@ export async function authorizeCoinOperationForUser(
   input: AuthorizeCoinOperationInput
 ): Promise<PricingBillableActionAuthorization> {
   const context = await getPricingPolicyContextForUser(input.userId);
+  // The tier gate runs on the entitlement tier (an admin promotion unlocks the
+  // meter); the coin cost comes from the same catalog either way, so a promoted
+  // account pays exactly what a subscriber pays.
   const quote = buildCoinEconomyQuote({
     operationKey: input.operationKey,
-    planKey: context.planKey,
+    planKey: context.entitlementPlanKey,
     components: input.components,
     catalog: context.actionCosts,
   });
@@ -123,6 +126,7 @@ export async function authorizeCoinOperationForUser(
       ...(input.metadata ?? {}),
       coinEconomyVersion: 1,
       planKey: quote.planKey,
+      billingPlanKey: context.planKey,
       componentTotalBeatCost: quote.totalBeatCost,
       componentTotalCoinCost: quote.totalCoinCost,
       components: quote.components,

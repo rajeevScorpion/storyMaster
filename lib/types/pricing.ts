@@ -347,7 +347,14 @@ export interface PricingRuntimeControls {
 export interface EffectivePricingSnapshot {
   pricingMarketKey: PricingMarketKey;
   routingProvider: BillingProvider;
+  /** Billing truth: what the user actually pays for. Drives plan/wallet display. */
   planKey: PlanKey;
+  /**
+   * What every free/plus/studio feature gate reads. Equals `planKey` unless an
+   * admin promoted the account (or it is the admin account). Access only —
+   * coin costs and wallet balance are unaffected.
+   */
+  entitlementPlanKey: PlanKey;
   planTierRank: number;
   planVersionId: string | null;
   monthlyIncludedBeats: number;

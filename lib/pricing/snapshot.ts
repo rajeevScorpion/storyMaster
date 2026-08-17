@@ -20,6 +20,7 @@ import {
   type PricingRuntimeControls,
 } from '@/lib/types/pricing';
 import { computeWalletAvailability } from '@/lib/pricing/wallet';
+import { resolveEffectiveEntitlementTier } from '@/lib/pricing/entitlement-tier.shared';
 
 interface RuntimeFlagRow {
   flag_key: string;
@@ -37,6 +38,9 @@ export interface BuildPricingRuntimeContextInput {
   billingSubscriptions?: DbBillingSubscription[];
   beatGrants?: DbBeatGrant[];
   beatReservations?: DbBeatSpendReservation[];
+  /** Admin-granted feature tier. Lifts entitlements only, never coins or billing. */
+  entitlementOverridePlanKey?: PlanKey | null;
+  isAdmin?: boolean;
   now?: Date;
 }
 
@@ -127,7 +131,16 @@ function buildEffectivePricingSnapshotWithControls(
     now
   );
   if (!selectedPlan || !selectedVersion) {
-    return buildFallbackFreeSnapshot(resolvedMarket, controls, currentCustomer?.country_code ?? input.countryCode ?? null);
+    return buildFallbackFreeSnapshot(
+      resolvedMarket,
+      controls,
+      currentCustomer?.country_code ?? input.countryCode ?? null,
+      resolveEffectiveEntitlementTier({
+        billingPlanKey: 'free',
+        overridePlanKey: input.entitlementOverridePlanKey ?? null,
+        isAdmin: input.isAdmin,
+      })
+    );
   }
 
   const isInGracePeriod = activeSubscription ? isSubscriptionInGracePeriod(activeSubscription, now) : false;
@@ -139,6 +152,11 @@ function buildEffectivePricingSnapshotWithControls(
     pricingMarketKey: resolvedMarket,
     routingProvider: getRoutingProviderForMarket(controls, resolvedMarket),
     planKey: selectedPlan.plan_key,
+    entitlementPlanKey: resolveEffectiveEntitlementTier({
+      billingPlanKey: selectedPlan.plan_key,
+      overridePlanKey: input.entitlementOverridePlanKey ?? null,
+      isAdmin: input.isAdmin,
+    }),
     planTierRank: selectedPlan.tier_rank,
     planVersionId: selectedVersion.id,
     monthlyIncludedBeats: selectedVersion.monthly_included_beats,
@@ -166,7 +184,8 @@ function buildEffectivePricingSnapshotWithControls(
 function buildFallbackFreeSnapshot(
   pricingMarketKey: PricingMarketKey,
   controls: PricingRuntimeControls,
-  billingCountryCode: string | null
+  billingCountryCode: string | null,
+  entitlementPlanKey: PlanKey = 'free'
 ): EffectivePricingSnapshot {
   const currencyCode = pricingMarketKey === 'IN' ? 'INR' : 'USD';
 
@@ -174,6 +193,7 @@ function buildFallbackFreeSnapshot(
     pricingMarketKey,
     routingProvider: getRoutingProviderForMarket(controls, pricingMarketKey),
     planKey: 'free',
+    entitlementPlanKey,
     planTierRank: 1,
     planVersionId: null,
     monthlyIncludedBeats: 0,

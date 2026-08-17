@@ -27,7 +27,7 @@ export async function resolveValidatedPublishQuality(
 
   const settings = await getMediaPipelineSettings();
   const pricing = await getPricingRuntimeContext().catch(() => null);
-  if (!isHqEntitled(pricing?.snapshot.planKey ?? 'free', settings)) {
+  if (!isHqEntitled(pricing?.snapshot.entitlementPlanKey ?? 'free', settings)) {
     return {
       quality: 'standard',
       notice: 'High quality publishing is not included in your plan; published in standard quality.',

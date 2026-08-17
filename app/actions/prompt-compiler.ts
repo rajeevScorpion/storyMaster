@@ -33,7 +33,7 @@ export async function resolveImagePromptCompilerRuntimeAction(input: {
     if (mode === 'legacy') return LEGACY_RUNTIME;
 
     const pricing = await getPricingRuntimeContext().catch(() => null);
-    const planKey = pricing?.snapshot.planKey ?? 'free';
+    const planKey = pricing?.snapshot.entitlementPlanKey ?? 'free';
     const snapshot = await resolveImageModelSnapshot({
       taskKey: input.taskKey,
       selection: input.selection ?? null,

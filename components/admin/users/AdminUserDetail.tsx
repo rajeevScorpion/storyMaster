@@ -614,6 +614,7 @@ function auditLabel(actionType: string): string {
     account_blocked: 'Account blocked',
     account_reactivated: 'Account access restored',
     coins_granted: 'Coins granted',
+    entitlement_tier_changed: 'Access tier changed',
   };
   return labels[actionType] ?? actionType.replaceAll('_', ' ');
 }

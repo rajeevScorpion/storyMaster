@@ -24,7 +24,7 @@ import {
 import {
   finalizeBillableAction,
   releaseBillableAction,
-  resolvePlanKeyForUser,
+  resolveEntitlementPlanKeyForUser,
 } from '@/lib/pricing/enforcement';
 import { authorizeCoinOperationForUser, quoteCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
@@ -70,7 +70,7 @@ interface StoryRow {
 }
 
 async function assertImageGenerationEntitled(userId: string): Promise<PlanKey> {
-  const planKey = await resolvePlanKeyForUser(userId);
+  const planKey = await resolveEntitlementPlanKeyForUser(userId);
   const quote = await quoteCoinOperationForUser({
     userId,
     operationKey: 'batch_image_generation',
@@ -659,7 +659,7 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
 
   const pipelineSettings = await getMediaPipelineSettings();
   const variantsEnabled = pipelineSettings.variantsForBulkJobs;
-  const jobPlanKey: PlanKey = variantsEnabled ? await resolvePlanKeyForUser(job.user_id) : 'free';
+  const jobPlanKey: PlanKey = variantsEnabled ? await resolveEntitlementPlanKeyForUser(job.user_id) : 'free';
 
   const readyByNode = new Map<string, string>();
   await mapWithConcurrency(items, MATERIALIZE_CONCURRENCY, async (item) => {
@@ -989,7 +989,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
   const visualStyle = deriveVisualStyleSummary(config.visualSettings);
   const pipelineSettings = await getMediaPipelineSettings();
   const variantsEnabled = pipelineSettings.variantsForBulkJobs;
-  const jobPlanKey: PlanKey = variantsEnabled ? await resolvePlanKeyForUser(job.user_id) : 'free';
+  const jobPlanKey: PlanKey = variantsEnabled ? await resolveEntitlementPlanKeyForUser(job.user_id) : 'free';
 
   // Resolve whether the selected model can actually thread state. Providers without
   // stateful support (e.g. groq, and future integrations) resolve to resend_refs —

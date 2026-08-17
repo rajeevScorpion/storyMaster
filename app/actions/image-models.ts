@@ -42,7 +42,7 @@ export async function getImageModelPickerState(
   selection?: ImageModelSelection | null
 ): Promise<ImageModelPickerState> {
   const pricing = await getPricingRuntimeContext().catch(() => null);
-  const planKey = pricing?.snapshot.planKey ?? 'free';
+  const planKey = pricing?.snapshot.entitlementPlanKey ?? 'free';
   return buildImageModelPickerState(taskKey, selection ?? null, planKey);
 }
 

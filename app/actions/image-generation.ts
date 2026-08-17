@@ -60,7 +60,7 @@ function toTelemetryImageSize(value: string | undefined): '512' | '0.5K' | '1K' 
 
 export async function generateSelectedImage(input: GenerateSelectedImageInput): Promise<GenerateSelectedImageResult> {
   const pricing = await getPricingRuntimeContext().catch(() => null);
-  const currentPlanKey = input.currentPlanKey ?? pricing?.snapshot.planKey ?? 'free';
+  const currentPlanKey = input.currentPlanKey ?? pricing?.snapshot.entitlementPlanKey ?? 'free';
   const shouldLinkPortraitToStoryboard =
     input.task === 'portrait_generation'
     && input.selection?.taskKey

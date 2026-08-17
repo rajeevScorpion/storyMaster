@@ -1,6 +1,12 @@
 'use server';
 
-import { ensureFreeWelcomeGrantForUser, expireStaleReservations, loadCachedPricingGlobals } from '@/lib/pricing/enforcement';
+import {
+  ensureFreeWelcomeGrantForUser,
+  expireStaleReservations,
+  isAdminUserId,
+  loadCachedPricingGlobals,
+  loadEntitlementOverridePlanKey,
+} from '@/lib/pricing/enforcement';
 import {
   buildPricingRuntimeCacheKey,
   getCachedPricingRuntimeContext,
@@ -68,9 +74,10 @@ export async function getPricingRuntimeContext(
   let billingSubscriptions: DbBillingSubscription[] = [];
   let beatGrants: DbBeatGrant[] = [];
   let beatReservations: DbBeatSpendReservation[] = [];
+  let entitlementOverridePlanKey: PlanKey | null = null;
 
   if (userId) {
-    const [customersResult, subscriptionsResult, grantsResult, reservationsResult] = await Promise.all([
+    const [customersResult, subscriptionsResult, grantsResult, reservationsResult, overridePlanKey] = await Promise.all([
       supabase
         .from('billing_customers')
         .select('*')
@@ -91,6 +98,7 @@ export async function getPricingRuntimeContext(
         .select('*')
         .eq('user_id', userId)
         .order('created_at', { ascending: false }),
+      loadEntitlementOverridePlanKey(supabase, userId),
     ]);
 
     throwIfQueryFailed(customersResult.error, 'Failed to load billing customers');
@@ -102,6 +110,7 @@ export async function getPricingRuntimeContext(
     billingSubscriptions = (subscriptionsResult.data ?? []) as DbBillingSubscription[];
     beatGrants = (grantsResult.data ?? []) as DbBeatGrant[];
     beatReservations = (reservationsResult.data ?? []) as DbBeatSpendReservation[];
+    entitlementOverridePlanKey = overridePlanKey;
 
     const withWalletBase = buildPricingRuntimeContextData({
       pricingMarketKey: input.pricingMarketKey ?? null,
@@ -113,6 +122,8 @@ export async function getPricingRuntimeContext(
       billingSubscriptions,
       beatGrants,
       beatReservations,
+      entitlementOverridePlanKey,
+      isAdmin: isAdminUserId(userId),
     });
 
     if (
@@ -158,6 +169,8 @@ export async function getPricingRuntimeContext(
     billingSubscriptions,
     beatGrants,
     beatReservations,
+    entitlementOverridePlanKey,
+    isAdmin: isAdminUserId(userId),
   });
 
   const context: PricingRuntimeContext = {
@@ -165,7 +178,9 @@ export async function getPricingRuntimeContext(
     controls,
     snapshot,
     actionCosts: buildActionCostMap(globals.actionCosts),
-    meterEntitlements: buildMeterEntitlementMap(globals.actionCosts, snapshot.planKey),
+    // Feature gates read the entitlement tier so a promoted account sees the
+    // storyboard-image toggle unlocked; costs below stay on the same catalog.
+    meterEntitlements: buildMeterEntitlementMap(globals.actionCosts, snapshot.entitlementPlanKey),
   };
 
   setCachedPricingRuntimeContext(cacheKey, context);

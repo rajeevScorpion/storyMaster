@@ -87,7 +87,7 @@ export async function listReelVisualStylesForAdminAction(): Promise<ReelVisualSt
 
 export async function listReelVisualStyleCardsAction(): Promise<ReelVisualStyleCard[]> {
   const pricing = await getPricingRuntimeContext().catch(() => null);
-  return buildReelVisualStyleCards(pricing?.snapshot.planKey);
+  return buildReelVisualStyleCards(pricing?.snapshot.entitlementPlanKey);
 }
 
 export async function getPublishedReelVisualStylesForRuntime(): Promise<ReelVisualStyleRuntime[]> {
