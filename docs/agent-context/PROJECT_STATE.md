@@ -107,6 +107,31 @@ this as-is (2026-07-19) and use shadow for comparison until ready.
 
 ---
 
+## Framework
+
+**Next 16.3.3 since 2026-08-25** (from 15.5.24), React 19.2.8. Turbopack is the default bundler for both dev
+and build. What the upgrade touched, and what it did not:
+
+- `middleware.ts` is now `proxy.ts` with the export renamed to `proxy`. The runtime is nodejs and is not
+  configurable — `edge` is only available under the old `middleware` name. The Supabase session refresh and the
+  moderation gate ride on this file, and the e2e suite covers it (a signed-out visitor is still redirected away
+  from `/admin`).
+- `experimental.middlewareClientMaxBodySize` is now `experimental.proxyClientMaxBodySize` (20mb, for uploads).
+- The `eslint` config option was **removed** from Next; `next build` no longer lints. `npm run lint` is the
+  only linting path, and it is unchanged.
+- The custom `webpack` function was deleted. It existed only for `DISABLE_HMR`, an AI Studio env var referenced
+  nowhere else in the repo, and a custom webpack config makes a Turbopack build **fail outright**.
+- Not affected, though the upgrade notes flag them: no `revalidateTag` calls (the new second argument is
+  mandatory), no parallel routes (each slot would now need `default.js`), no `serverRuntimeConfig` /
+  `publicRuntimeConfig`, no AMP, no `next/legacy/image`, no `unstable_` cache APIs, no sync `params` access,
+  and `scroll-behavior: smooth` is scoped to `.custom-scrollbar` rather than `html`.
+- `images.qualities` now defaults to `[75]` only. Nothing in the app passes a `quality` prop, so nothing is
+  coerced — but adding one now needs the value allowlisted in `next.config.ts`.
+- `images.minimumCacheTTL` defaults to 4h in Next 16; this project overrides it to 30 days regardless.
+
+**Still on Next 15 semantics elsewhere:** nothing. Vercel must be building on Node 20.9+ (Next 16's floor);
+local dev is on 22.17.
+
 ## Pending verification
 
 Work that is built and merged but has **not** been QA'd in a browser. The owner does this manually.

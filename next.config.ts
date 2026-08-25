@@ -27,9 +27,6 @@ const nextConfig: NextConfig = {
       },
     ];
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: false,
   },
@@ -83,7 +80,8 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: '20mb',
     },
-    middlewareClientMaxBodySize: '20mb',
+    // Renamed in Next 16 alongside middleware -> proxy; the old key is deprecated.
+    proxyClientMaxBodySize: '20mb',
   },
   output: 'standalone',
   // Ensure the admin manual markdown is traced into the standalone server
@@ -92,16 +90,6 @@ const nextConfig: NextConfig = {
     '/admin/help': ['./docs/admin-settings-manual.md'],
   },
   transpilePackages: ['motion'],
-  webpack: (config, {dev}) => {
-    // HMR is disabled in AI Studio via DISABLE_HMR env var.
-    // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-    if (dev && process.env.DISABLE_HMR === 'true') {
-      config.watchOptions = {
-        ignored: /.*/,
-      };
-    }
-    return config;
-  },
 };
 
 export default nextConfig;
