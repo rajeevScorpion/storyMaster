@@ -16,6 +16,10 @@
     "start": "next start",
     "test": "vitest run",
     "test:character-novelty-smoke": "vitest run --config vitest.smoke.config.ts",
+    "//e2e": "Browser smoke tests (Playwright, chromium). test:e2e starts the agent dev server on 3100 first \u2014 it is idempotent, so it reuses one that is already running. Run `npx playwright install chromium` once per machine.",
+    "test:e2e": "node scripts/agent-dev.mjs start && playwright test",
+    "test:e2e:headed": "node scripts/agent-dev.mjs start && playwright test --headed",
+    "test:e2e:ui": "node scripts/agent-dev.mjs start && playwright test --ui",
     "compare:image-prompts": "vitest run lib/ai/prompt-compiler/compare.shared.test.ts",
     "lint": "eslint .",
     "clean": "next clean"
@@ -48,6 +52,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "4.1.11",
     "@tailwindcss/typography": "^0.5.19",
     "@types/node": "^20",

@@ -9,6 +9,11 @@ Traps this project has already paid for once. Each one cost real debugging time,
 
 ### `next build` and `next dev` fight over `.next` on Windows
 
+> **Fixed structurally as of 2026-08-25 — use `npm run build:verify`.** `distDir` is now
+> `process.env.NEXT_DIST_DIR || '.next'`, and the agent tooling points elsewhere: `build:verify` builds into
+> `.next-verify`, `npm run dev:agent` serves port 3100 from `.next-agent`. A build and a dev server can now run
+> at the same time. The rest of this section still applies to plain `npm run build`, which writes `.next`.
+
 Both write `d:\AiCoding\storyMaster\.next`, and on Windows they do not fail cleanly when they collide:
 
 - Starting a build while dev runs throws `EPERM: operation not permitted, open '.next\trace'` — or, worse,
@@ -17,17 +22,21 @@ Both write `d:\AiCoding\storyMaster\.next`, and on Windows they do not fail clea
 - `rm -rf .next` under a live dev server makes it serve a bare `Internal Server Error` on every route until
   restarted.
 
-**Always stop the dev server before building.** Find strays with
+**Always stop the dev server before running plain `npm run build`** (`build:verify` is unaffected). Find strays with
 `Get-CimInstance Win32_Process -Filter "Name='node.exe'"` filtered on `CommandLine -like '*storyMaster*'` —
 an unrelated Adobe Creative Cloud `node.exe` also runs on this machine, so never blanket-kill by name.
 
 Killing a backgrounded `npm run …` kills the npm wrapper but **orphans the child** (`next build` /
 `start-server.js`), which can sit on multiple GB. Kill the child by PID.
 
-If you must build while dev runs, build into a separate directory: temporarily set
-`distDir: process.env.NEXT_BUILD_DIR || '.next'` in `next.config.ts`, run
-`NEXT_BUILD_DIR=.next-verify npm run build`, then revert the config and delete the directory. Next also
-auto-patches `tsconfig.json` during a build — revert that too.
+To build while dev runs, use `npm run build:verify` — the separate-directory trick this section used to
+describe by hand is now permanent in `next.config.ts` and wired into `scripts/agent-build.mjs`.
+
+One thing that hand-rolled version got wrong, and which the script now handles: Next repoints **both**
+`tsconfig.json` *and* `next-env.d.ts` at the active distDir, and both are tracked. `next-env.d.ts` carries a
+`/// <reference path>` to `<distDir>/types/routes.d.ts`, so leaving it rewritten points `tsc` at a directory
+another machine does not have. `scripts/lib/preserve-generated.mjs` snapshots both and restores them on every
+exit path, including signals.
 
 ### Node version
 

@@ -34,18 +34,27 @@ The expected gate for any change:
 npx tsc --noEmit
 npm run lint
 npm test
-npm run build      # dev server must be stopped first
+npm run build:verify   # builds into .next-verify; safe while a dev server runs
+npm run test:e2e       # Playwright smoke, signed-out
 ```
 
-`npm run lint` has one pre-existing warning in `AdvancedOptions.tsx`; that is the known-clean baseline.
+`npm run lint` is clean — no expected warnings. It previously carried one in `AdvancedOptions.tsx`; that is
+gone as of the 2026-08-25 dependency update.
 
-**Do not launch the dev server or drive the app in a browser to verify a change unless the owner asks or
-approves it first.** For UI and layout work, typecheck plus lint is the expected level of proof. Offer browser
-QA as an option and let them decide. (This rule exists because an unprompted browser-verification effort —
-spinning up a dev server and building a DevTools driver — was interrupted as a waste of time and tokens.)
+**Browser verification is now expected where it adds proof, and the agent owns the tooling for it.** This
+reverses the earlier rule. `npm run dev:agent` runs a dev server on port 3100 against `.next-agent`, entirely
+separate from the developer's port 3000 and `.next`; `npm run test:e2e` drives it with Playwright. The
+guardrails: never take port 3000 or `.next`, always stop what you start, and prefer adding a durable spec in
+`e2e/` over one-off clicking, so the next change re-runs the same proof in seconds.
 
-Report honestly what was and wasn't verified. "tsc and tests green, build not run because the dev server holds
-`.next`, browser QA pending" is a good report. Claiming a build passed when it never ran is not.
+The earlier rule existed because an unprompted browser-verification effort — spinning up a dev server and
+hand-building a DevTools driver — was interrupted as a waste of time. The objection was to the improvised
+harness, not to browser testing; with a real one in the repo, that cost is paid once.
+
+Report honestly what was and wasn't verified. "tsc, lint, unit tests and build:verify green; e2e smoke covers
+the signed-out surfaces only, so the owner path is unverified" is a good report. Claiming a build passed when
+it never ran is not. Note that "the dev server holds `.next`" is no longer a valid excuse for an unrun build —
+`build:verify` writes elsewhere.
 
 ## Git
 
