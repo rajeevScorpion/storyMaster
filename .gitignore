@@ -8,3 +8,7 @@ coverage/
 .env*
 !.env.example
 .vercel
+
+# Agent-owned build dirs and dev-server state (see scripts/agent-dev.mjs)
+.next-*/
+.agent/
