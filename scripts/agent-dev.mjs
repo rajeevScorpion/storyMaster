@@ -18,12 +18,13 @@ import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { snapshot, restore } from './lib/preserve-generated.mjs';
+import { snapshot, restore, persist, loadPersisted } from './lib/preserve-generated.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const STATE_DIR = join(ROOT, '.agent');
 const STATE_FILE = join(STATE_DIR, 'dev-server.json');
 const LOG_FILE = join(STATE_DIR, 'dev-server.log');
+const GENERATED_SNAPSHOT = join(STATE_DIR, 'generated-snapshot.json');
 
 const PORT = Number(process.env.AGENT_DEV_PORT || 3100);
 const HOST = '127.0.0.1';
@@ -82,6 +83,8 @@ async function start() {
   const saved = snapshot();
 
   mkdirSync(STATE_DIR, { recursive: true });
+  // Hand the pre-spawn state to whoever stops this server later.
+  persist(saved, GENERATED_SNAPSHOT);
   // Truncate the log so what we read back belongs to this run only.
   writeFileSync(LOG_FILE, '');
   const out = openSync(LOG_FILE, 'a');
@@ -130,14 +133,18 @@ async function start() {
 }
 
 async function stop() {
-  const saved = snapshot();
+  // Deliberately NOT snapshot(): by now the running server has already repointed
+  // these files, so a fresh snapshot would preserve the pollution rather than undo it.
+  const saved = loadPersisted(GENERATED_SNAPSHOT);
   const state = readState();
   if (!state) { console.log('not running (no state file)'); return 0; }
   killTree(state.pid);
   for (let i = 0; i < 20 && isAlive(state.pid); i++) await sleep(250);
   const stillAlive = isAlive(state.pid);
   rmSync(STATE_FILE, { force: true });
-  restore(saved);
+  const restored = restore(saved);
+  rmSync(GENERATED_SNAPSHOT, { force: true });
+  if (restored.length) console.log(`restored generated file(s): ${restored.join(', ')}`);
   console.log(stillAlive ? `WARNING: pid ${state.pid} survived the kill` : `stopped  pid=${state.pid}`);
   return stillAlive ? 1 : 0;
 }

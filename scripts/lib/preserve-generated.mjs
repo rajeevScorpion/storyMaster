@@ -10,7 +10,7 @@
  *
  * Contract: agent tooling never modifies a tracked file as a side effect.
  */
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -49,4 +49,27 @@ export async function preserving(fn) {
     const restored = restore(saved);
     if (restored.length) console.log(`restored generated file(s): ${restored.join(', ')}`);
   }
+}
+
+/**
+ * Persist a snapshot so a *later* process can restore it. The dev server is detached
+ * and long-lived: whoever stops it is not the process that started it, and by then the
+ * files on disk are already repointed — so snapshotting at stop time captures the
+ * pollution instead of the original.
+ */
+export function persist(saved, file) {
+  const payload = {};
+  for (const [abs, buf] of saved) payload[abs] = buf.toString('base64');
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify(payload));
+}
+
+/** Read back a persisted snapshot. Returns an empty map if there is none. */
+export function loadPersisted(file) {
+  const saved = new Map();
+  try {
+    const payload = JSON.parse(readFileSync(file, 'utf8'));
+    for (const [abs, b64] of Object.entries(payload)) saved.set(abs, Buffer.from(b64, 'base64'));
+  } catch { /* no snapshot on disk */ }
+  return saved;
 }
