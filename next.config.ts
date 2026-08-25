@@ -2,6 +2,12 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // `next dev` and `next build` both write the build directory, and on Windows they
+  // do not fail cleanly when they collide — the build stalls indefinitely with no
+  // output. Letting a second process point somewhere else removes the collision
+  // instead of scheduling around it. Unset (the normal case) this is exactly '.next',
+  // so the developer's workflow and every deployment are unaffected.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Pin server-action requests to the deployment that served the page, so open
   // tabs from an older build don't 404 with "Failed to find Server Action"
   // after a new deploy. On Vercel this pairs with Skew Protection; the env var
