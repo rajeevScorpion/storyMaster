@@ -88,6 +88,10 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
         useMyStoriesStore.getState().prefetchAll();
       } else if (event === 'SIGNED_OUT') {
         useMyStoriesStore.getState().clear();
+        // A full document navigation on purpose, not a client-side push: the story
+        // store is a module singleton and the RSC payload cache is in memory, so a
+        // SPA navigation would carry signed-in state into the signed-out session.
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
         window.location.href = '/signed-out';
       }
     });

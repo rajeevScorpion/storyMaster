@@ -9,10 +9,14 @@ Traps this project has already paid for once. Each one cost real debugging time,
 
 ### `next build` and `next dev` fight over `.next` on Windows
 
-> **Fixed structurally as of 2026-08-25 — use `npm run build:verify`.** `distDir` is now
-> `process.env.NEXT_DIST_DIR || '.next'`, and the agent tooling points elsewhere: `build:verify` builds into
-> `.next-verify`, `npm run dev:agent` serves port 3100 from `.next-agent`. A build and a dev server can now run
-> at the same time. The rest of this section still applies to plain `npm run build`, which writes `.next`.
+> **Fixed twice over as of 2026-08-25.** Next 16 gives `next dev` its own output directory (`.next/dev`), so
+> dev and build no longer collide at all — and it takes a per-directory lock rather than a per-project one, so
+> two dev servers on different `distDir`s coexist (verified: ports 3000 and 3100 serving 200 simultaneously).
+> On top of that, `distDir` is `process.env.NEXT_DIST_DIR || '.next'`, and the agent tooling points elsewhere:
+> `npm run build:verify` builds into `.next-verify`, `npm run dev:agent` serves port 3100 from `.next-agent`.
+>
+> The history below is kept because it explains why the tooling is shaped this way, and because the
+> orphaned-child and silent-stall behaviours are still true of Windows generally.
 
 Both write `d:\AiCoding\storyMaster\.next`, and on Windows they do not fail cleanly when they collide:
 

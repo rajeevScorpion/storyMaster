@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kissago (kissago.cc) is an AI-powered interactive branching-story platform built on Next.js 15 (App Router) and React 19. A user writes a one-line prompt; the app generates story "beats" — a scene, an illustration, and a few meaningful choices — and branches from whatever the reader picks. Characters, setting, and visual style stay consistent across beats.
+Kissago (kissago.cc) is an AI-powered interactive branching-story platform built on Next.js 16 (App Router, Turbopack) and React 19. A user writes a one-line prompt; the app generates story "beats" — a scene, an illustration, and a few meaningful choices — and branches from whatever the reader picks. Characters, setting, and visual style stay consistent across beats.
 
 It is positioned as a platform you come to **watch** stories on, not only to write them: the public discovery gallery is the front door, and authoring is an opt-in second act. Finished stories can be published, browsed by others, narrated, turned into vertical reels, and exported to video.
 
@@ -60,7 +60,7 @@ Secrets are **not** in the repo and must never be committed — `.gitignore` exc
 | `/admin/**` | ~40 admin pages: pricing, users, cost, image models, playgrounds, and ~20 settings panels. |
 | `/api/**` | Batch and media workers, Razorpay billing, R2 presign/object routes, admin backfills. |
 
-`middleware.ts` refreshes the Supabase session on every request and enforces user moderation — blocked/suspended accounts are redirected to `/account-restricted`.
+`proxy.ts` (the Next 16 name for what was `middleware.ts`) refreshes the Supabase session on every request and enforces user moderation — blocked/suspended accounts are redirected to `/account-restricted`.
 
 ### Layers
 
