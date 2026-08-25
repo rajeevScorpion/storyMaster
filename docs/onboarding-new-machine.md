@@ -105,12 +105,21 @@ Then:
 
 ```bash
 npx tsc --noEmit   # should be clean
-npm run lint       # one pre-existing warning in AdvancedOptions.tsx is expected
-npm test           # full vitest suite
+npm run lint       # should be clean
+npm test           # full vitest suite (543 tests, 81 files)
 ```
 
-**Stop the dev server before running `npm run build`.** On Windows they fight over `.next`: the build stalls
-silently with no output, and deleting `.next` under a live dev server makes it 500 on every route. See
+For browser smoke tests, install the Chromium binary once per machine (it lands outside the repo, in
+`%LOCALAPPDATA%\ms-playwright`):
+
+```bash
+npx playwright install chromium
+npm run test:e2e   # starts a dev server on 3100 and drives it with Playwright
+```
+
+**Stop the dev server before running plain `npm run build`.** On Windows they fight over `.next`: the build
+stalls silently with no output, and deleting `.next` under a live dev server makes it 500 on every route.
+`npm run build:verify` builds into `.next-verify` instead and is safe to run at any time. See
 [docs/agent-context/GOTCHAS.md](agent-context/GOTCHAS.md).
 
 Type `mock` as a story prompt to exercise the UI with hardcoded data — no API calls, no coins spent.

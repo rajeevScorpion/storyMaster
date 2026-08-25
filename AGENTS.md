@@ -21,8 +21,10 @@ These are repeated here because violating them causes real damage, not just styl
 2. **Never commit secrets.** Every `.env*` file except `.env.example` is gitignored and must stay that way.
    If you add an env var, document it in `.env.example` with an empty value.
 
-3. **Stop the dev server before `npm run build`.** On Windows both write `.next`; the build stalls silently with
-   no output, and deleting `.next` under a live dev server makes it 500 on every route.
+3. **Build with `npm run build:verify`, not `npm run build`.** Both `next dev` and `next build` write the same
+   directory, and on Windows the collision makes the build stall silently with no output. `build:verify` builds
+   into `.next-verify` instead, so it is safe to run while a dev server is up. Plain `npm run build` still writes
+   `.next` and still requires the dev server to be stopped.
 
 4. **Never export a non-function value from a `'use server'` file.** Typecheck and lint pass; production throws
    a 500 at runtime. Shared constants belong in a plain module.
@@ -30,8 +32,10 @@ These are repeated here because violating them causes real damage, not just styl
 5. **Never import a plain value from a `'use client'` module into server code.** You silently receive a
    client-reference stub instead of the value.
 
-6. **Don't launch the dev server or drive a browser to verify a change unless asked.** `npx tsc --noEmit`
-   plus `npm run lint` is the expected verification for UI work. Offer browser QA; don't assume it.
+6. **Verify in a browser when the change warrants it — using the agent's own server.** `npm run dev:agent` runs
+   Next on port 3100 writing `.next-agent`, and `npm run test:e2e` drives it with Playwright. Never touch port
+   3000 or `.next`; those belong to the developer. Stop what you start (`npm run dev:agent:stop`). Typecheck and
+   lint remain the floor, not the ceiling — a UI change a smoke test could have caught should have one.
 
 7. **Merge to `main` with `--no-ff`**, always — so any deploy can be reverted with a single `git revert -m 1`.
 
@@ -47,10 +51,14 @@ These are repeated here because violating them causes real damage, not just styl
 
 ```bash
 npx tsc --noEmit     # must be clean
-npm run lint         # one pre-existing warning in AdvancedOptions.tsx is expected
-npm test             # full vitest suite
-npm run build        # only with the dev server stopped
+npm run lint         # must be clean
+npm test             # full vitest suite (543 tests, 81 files)
+npm run build:verify # builds into .next-verify; safe while a dev server runs
+npm run test:e2e     # Playwright smoke over the signed-out surfaces
 ```
+
+`npm run test:e2e` starts the agent dev server itself if it is not already up. Browser binaries are a
+one-time per-machine install: `npx playwright install chromium`.
 
 ## Branches
 
