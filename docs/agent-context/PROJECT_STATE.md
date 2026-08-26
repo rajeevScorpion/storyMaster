@@ -3,7 +3,8 @@
 The standing ledger of what is shipped, what is pending, and what is deliberately deferred. This is the
 context that does not live in the code or in git history.
 
-**Snapshot taken:** 2026-08-18, on `dev` at `f8fdb33`.
+**Snapshot taken:** 2026-08-26, on `dev` at `4c34dbd`. The migration ledger and flag states below were
+**verified directly against the development database** on that date, not carried over from notes.
 
 Keep this file current. When you finish a pack, move it out of "pending"; when you defer something, add it to
 "deferred".
@@ -33,26 +34,34 @@ Storage as fallback. Deployment: Vercel (Hobby — which is why the reconcile cr
 the last known status of everything after that — **verify against the live database before relying on it**,
 using the query at the bottom of this section.
 
-| # | File | Introduces | Last known status |
+| # | File | Introduces | Status on **dev** (verified 2026-08-26) |
 |---|---|---|---|
-| 069 | `narration_accent` | `narration_batch_jobs.accent` | **Applied on both.** Prod was missed and fixed by hand 2026-07-13 after a live 500. |
-| 074 | `beat_control_pack1` | tables `timeline_rewrite_events`, `beat_revisions` | Recorded pending — but beat-control features are in use, so likely applied. Verify. |
-| 075 | `character_universe_pack2` | tables `character_masters`, `episode_branches`, `story_bibles` | Recorded pending — but the character library and episodes ship in the product, so almost certainly applied. Verify. |
-| 076 | `video_export_engine_presets` | flag `video_export_presets_json` | Pending. **Optional** — code defaults cover its absence. |
-| 077 | `beat_bundle_flag` | flag `beat_bundle_enabled` (seeded off) | Pending. The admin toggle's `setFeatureFlag` upsert creates the row anyway if 077 never ran. |
-| 078 | `reference_personalization` | tables `reference_sources`, `reference_adoptions` | **Pending.** Required before enabling references. |
-| 079 | `reference_direct_input` | `reference_sources.description`, mode flag, cost row | **Pending.** Must go in with 078. |
-| 080 | `beats_realtime` | `REPLICA IDENTITY FULL` + `beats` added to `supabase_realtime` | **Pending.** Without it the client falls back to polling — no breakage, just slower media delivery. |
-| 081 | `image_prompt_compiler` | compiler mode flag + Gemini capability | **Applied on dev** 2026-07-19. Prod unverified. |
-| 088 | `storyline_discovery_metadata` | `storylines.discovery_intro`, `discovery_intro_status` | **Applied** — confirmed indirectly 2026-08-10 by querying `discovery_intro` across 39 published storylines. |
-| 089 | `storyline_audience_genre` | `storylines.age_group`, `genre` | Very likely applied (kids mode and genre filters work). Verify. |
-| 090 | `storyline_progress` | table `storyline_progress` | Very likely applied (Continue Watching rail depends on it). Verify. |
-| 091 | `viewer_profiles` | table `viewer_profiles` | Very likely applied. Verify. |
-| 092 | `backfill_beat_is_storyboard` | backfill audit table | Unverified. Backfill only. |
-| 093 | `storyline_series` | `storylines.series_id`, `episode_number`, `series_title` | **Applied** — verified directly against the live database 2026-08-10. |
-| 094 | `storyline_search_trgm` | `pg_trgm` + partial GIN indexes | **Pending.** Search works without it, just on sequential scans. |
-| 095 | `runware_image_provider` | Runware rows in `image_model_registry` | **Pending.** ⚠ The seeded AIR ids and prices are **unverified guesses** — check each model in Runware's own Playground before enabling any row. |
-| 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Pending.** |
+| 069 | `narration_accent` | `narration_batch_jobs.accent` | **Applied.** Prod was missed once and fixed by hand 2026-07-13 after a live 500. |
+| 074 | `beat_control_pack1` | tables `timeline_rewrite_events`, `beat_revisions` | **Applied.** |
+| 075 | `character_universe_pack2` | tables `character_masters`, `episode_branches`, `story_bibles` | **Applied.** |
+| 076 | `video_export_engine_presets` | flag `video_export_presets_json` | **Applied** — the flag is enabled and carries real preset JSON. |
+| 077 | `beat_bundle_flag` | flag `beat_bundle_enabled` | **Applied**, and the flag is **on**. |
+| 078 | `reference_personalization` | tables `reference_sources`, `reference_adoptions` | **Applied**, and in real use (9 reference sources, 2 adoptions). |
+| 079 | `reference_direct_input` | `reference_sources.description`, mode flag, cost row | **Applied.** |
+| 080 | `beats_realtime` | `REPLICA IDENTITY FULL` + `beats` in `supabase_realtime` | **Applied** — `beats` is in the publication, so Realtime is live and the client is not polling. |
+| 081 | `image_prompt_compiler` | compiler mode flag + Gemini capability | **Applied.** Mode is `new`, not `shadow` — see below. |
+| 088 | `storyline_discovery_metadata` | `storylines.discovery_intro`, `discovery_intro_status` | **Applied.** |
+| 089 | `storyline_audience_genre` | `storylines.age_group`, `genre` | **Applied.** |
+| 090 | `storyline_progress` | table `storyline_progress` | **Applied** (4 rows). |
+| 091 | `viewer_profiles` | table `viewer_profiles` | **Applied** (0 rows). |
+| 092 | `backfill_beat_is_storyboard` | backfill audit table | **Applied.** |
+| 093 | `storyline_series` | `storylines.series_id`, `episode_number`, `series_title` | **Applied.** |
+| 094 | `storyline_search_trgm` | `pg_trgm` + partial GIN indexes | **Applied** — the extension is installed, so search is index-backed. |
+| 095 | `runware_image_provider` | Runware rows in `image_model_registry` | **Applied.** ⚠ The seeded AIR ids and prices are still **unverified guesses** — check each model in Runware's own Playground before enabling any row. |
+| 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Applied** (0 rows — nobody promoted yet). |
+| 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **PENDING on both.** Closes a live anon-key exposure — see "Security" below. |
+
+Everything up to 068 is long-applied.
+
+**Production (`pddjsopcemsfiwyvhlkr`) remains unverified.** The agent's Supabase MCP access is scoped to
+development on purpose, so nothing above says anything about prod. Run the query below against it before
+assuming parity — and note that the ledger was wrong in the *safe* direction here (features recorded as
+pending were actually live), which is exactly the kind of drift that makes a prod assumption dangerous.
 
 ### Verifying what is actually applied
 
@@ -86,24 +95,63 @@ Flag-only migrations (076, 077, 081, 095) are not covered above — check them w
 
 ---
 
+## Security
+
+**Six admin configuration tables run with Row Level Security disabled** on dev, and almost certainly on prod
+too (unverified — check it):
+
+`model_config`, `model_config_history`, `prompt_configs`, `prompt_drafts`, `prompt_history`, `prompt_test_runs`
+
+With RLS off, these are readable **and writable** by the `anon` and `authenticated` roles. The anon key ships
+in the browser bundle by design, so this is reachable by anyone with devtools open. The consequence is worse
+than a leak: `model_config` chooses the model and cost for every task, and `prompt_configs` holds the
+published prompts every generated story is built from. Both are rewritable.
+
+Migration **097** closes it by enabling RLS with no policies, matching what `feature_flags`,
+`pricing_action_costs`, `operational_policies` and `image_model_registry` already do. That is safe here
+because every reference to these six tables lives in `lib/ai/model-config.ts` and `lib/ai/prompt-config.ts`,
+both `import 'server-only'` and both using `createAdminClient()` (service role, which bypasses RLS) — and no
+view or database function reads them.
+
+**Do not enable RLS on a table without checking its call sites first.** RLS with no policies denies everyone
+except the service role; if any surface reads the table with the anon or user-session client, it silently
+returns zero rows rather than erroring.
+
+Run this against either environment to check the current state:
+
+```sql
+select c.relname,
+       c.relrowsecurity as rls_enabled,
+       (select count(*) from pg_policies p
+          where p.schemaname = 'public' and p.tablename = c.relname) as policies
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'r'
+  and not c.relrowsecurity
+order by c.relname;
+```
+
+---
+
 ## Dormant / gated features
 
 Built and merged, but not live for users. Each is behind a flag that defaults to off or to a no-op mode.
 
-| Feature | Flag | State |
+| Feature | Flag | State on dev (verified 2026-08-26) |
 |---|---|---|
-| Reference Personalization (upload character/world refs) | `reference_personalization_enabled` | **Off by default** — the whole feature is dormant. Apply 078 + 079 **first**, then flip the flag. Enabling before the migrations breaks uploads. |
-| Reference input mode | `reference_input_mode` | Seeded `direct` (v2). `adoption` is the older v1 pipeline, kept but switchable off. |
-| Reference attachment on custom options / branches | `reference_custom_option_attachment_enabled` | Off. Phase deliberately deferred. |
-| Image prompt compiler | `image_prompt_compiler_mode` | `shadow` on dev — compiles and records a comparison but still **sends the legacy prompt**. Modes: `legacy` / `shadow` / `new` / `new_with_legacy_fallback`. `npm run compare:image-prompts` reports ~48–67% prompt reduction on fixtures. |
-| Server-side beat bundle | `beat_bundle_enabled` | Off. Requires `server_pipeline` image mode. Toggle at `/admin/settings/media`. |
-| Video export presets | `video_export_presets_json` | Code defaults cover absence. The 60fps ultra-smooth preset is **admin-only until mobile-verified**. |
-| Runware image models | rows in `image_model_registry` | Not enabled — prices unverified. |
+| Reference Personalization (upload character/world refs) | `reference_personalization_enabled` | **ENABLED and in use** — 9 reference sources exist. Previously documented as dormant; it is not. |
+| Reference input mode | `reference_input_mode` | `direct` (v2). `adoption` is the older v1 pipeline, kept but switchable. |
+| Reference attachment on custom options / branches | `reference_custom_option_attachment_enabled` | **Off.** Phase deliberately deferred. |
+| Image prompt compiler | `image_prompt_compiler_mode` | **`new`** — the compiled prompt is what actually reaches the image provider. This is no longer a shadow comparison. |
+| Server-side beat bundle | `beat_bundle_enabled` | **ENABLED.** Requires `server_pipeline` image mode; toggle at `/admin/settings/media`. |
+| Video export presets | `video_export_presets_json` | **ENABLED** with real preset JSON. The 60fps ultra-smooth preset stays admin-only until mobile-verified. |
+| Runware image models | rows in `image_model_registry` | Migration applied, but prices remain unverified — do not enable a row before checking it in Runware's Playground. |
 
-Note on the prompt compiler: in `shadow` mode, prompt-only stories copy the **legacy** prompt; the optimized
-one exists only in `image_generation_metadata.promptCompiler.compiledPreview`. Switching to `new` also makes
-with-image stories send the compiled prompt — it is a global setting, not per-story. The owner chose to leave
-this as-is (2026-07-19) and use shadow for comparison until ready.
+Note on the prompt compiler: it is in **`new`** mode, so both prompt-only and with-image stories send the
+compiled prompt. The earlier `shadow` behaviour — compile, record a comparison, but still send the legacy
+prompt — is no longer what is running, so any difference in image quality or adherence is live behaviour and
+not a dormant experiment. `npm run compare:image-prompts` still reports the fixture-level size delta
+(~48–67% reduction). It is a global setting, not per-story.
 
 ---
 
@@ -156,17 +204,23 @@ Work that is built and merged but has **not** been QA'd in a browser. The owner 
 - **Gallery as landing / `/create`** — the composer move and the bounce-back guard.
 - **My Stories drawer** — ⋮ overflow menu, paging at 30 rows, localStorage cache hydration.
 - **Character library UX** — session bootstrap, thumbnail self-repair, sheet-first modal.
-- **Runware provider + entitlement tier promotions** — needs 095/096 applied first.
+- **Runware provider + entitlement tier promotions** — 095/096 are applied, so this is now testable. Runware
+  model prices are still unverified; check each in Runware's Playground before enabling a row.
 - **Video export** — VLC / native player / YouTube / `ffprobe` checklist in
   [docs/video-export-fix-report.md](../video-export-fix-report.md).
-- **Beat image pending UX** — the 20s foreground ceiling and adaptive polling, plus Realtime once 080 is
-  applied.
+- **Beat image pending UX** — the 20s foreground ceiling and adaptive polling. 080 is applied and `beats` is
+  in the `supabase_realtime` publication, so the Realtime path is live rather than pending: verify media
+  actually arrives over Realtime and not by polling fallback.
 - **`@google/genai` 2.x live smoke** — confirm the legacy Interactions 400 warning is gone and stateful
   continuity actually carries via `previous_interaction_id`.
 
-`npm run build` has repeatedly **never been run** on several of these packs, because the dev server held
-`.next` (see [GOTCHAS.md](GOTCHAS.md)). A fresh machine is a good opportunity to run a clean build and clear
-that backlog.
+That build backlog is cleared: `npm run build:verify` builds into its own directory, so the dev server can no
+longer block it, and a full production build now runs as part of the standard gate. Browser QA above is
+still manual — though `npm run test:e2e` covers the signed-out surfaces (gallery, `/create`, the `/admin`
+redirect, cross-origin isolation, the image optimizer), so those no longer need re-checking by hand.
+
+The signed-in half is the real gap: beat generation, image upload, narration, overlay and export were
+hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 
 ---
 
