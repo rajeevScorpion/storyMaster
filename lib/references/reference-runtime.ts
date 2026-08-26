@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
-import { resolvePlanKeyForUser } from '@/lib/pricing/enforcement';
+import { resolveEntitlementPlanKeyForUser } from '@/lib/pricing/enforcement';
 import {
   REFERENCE_FLAG_KEYS,
   normalizeReferenceInputMode,
@@ -46,7 +46,7 @@ export async function getReferenceRuntimeContext(userId: string | null): Promise
     getReferenceInputMode(),
     getReferenceSettings(),
   ]);
-  const planKey: PlanKey = userId ? await resolvePlanKeyForUser(userId) : 'free';
+  const planKey: PlanKey = userId ? await resolveEntitlementPlanKeyForUser(userId) : 'free';
   const entitlements = resolveReferenceEntitlements({ masterEnabled, planKey, settings });
   return { masterEnabled, inputMode, settings, entitlements, planKey };
 }

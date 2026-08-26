@@ -2,10 +2,17 @@
 
 import { revalidatePath } from 'next/cache';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
+import { invalidatePricingRuntimeCacheForUser } from '@/lib/pricing/runtime-context-cache';
+import {
+  normalizeEntitlementPlanKey,
+  resolveEffectiveEntitlementTier,
+} from '@/lib/pricing/entitlement-tier.shared';
+import type { PlanKey } from '@/lib/types/pricing';
 import {
   beatsToCoins,
   normalizeAdminUserListInput,
   normalizeCoinGrantInput,
+  normalizeEntitlementTierInput,
   normalizePromotionalCohortInput,
   type AdminAccountStatus,
   type AdminPromotionalCohortCandidate,
@@ -142,9 +149,10 @@ export async function getAdminUsersPage(
   const summaryRow = ((summaryResult.data ?? []) as AdminSummaryRpcRow[])[0];
   const totalCount = integerValue(rows[0]?.total_count);
   const totalPages = Math.max(1, Math.ceil(totalCount / normalized.pageSize));
+  const overrides = await loadEntitlementOverrides(rows.map((row) => row.user_id));
 
   return {
-    users: rows.map(mapAdminUserRow),
+    users: rows.map((row) => mapAdminUserRow(row, overrides.get(row.user_id) ?? null)),
     summary: mapSummary(summaryRow),
     page: normalized.page,
     pageSize: normalized.pageSize,
@@ -267,6 +275,81 @@ export async function grantAdminUserCoins(input: {
   };
 }
 
+/**
+ * Promote (or un-promote) one account's feature tier. Access only: no coins are
+ * granted, no wallet or subscription row is touched, and the promoted user pays
+ * the normal coin price for every image they generate.
+ *
+ * Resolution stays promote-only, so 'free' on a paying subscriber just clears
+ * the promotion rather than revoking what they bought.
+ */
+export async function setAdminUserEntitlementTier(input: {
+  userId: string;
+  entitlementPlanKey: PlanKey;
+  reason?: string | null;
+}): Promise<AdminUserRow> {
+  const { user: actor } = await verifyAdmin();
+  const userId = assertUuid(input.userId);
+  const { entitlementPlanKey, reason } = normalizeEntitlementTierInput(input);
+  const admin = createAdminClient();
+
+  const previous = (await loadEntitlementOverrides([userId])).get(userId) ?? null;
+  if (previous === entitlementPlanKey || (previous === null && entitlementPlanKey === 'free')) {
+    const unchanged = await getAdminUserDetailInternal(userId);
+    if (!unchanged) throw new Error('User not found.');
+    return unchanged.user;
+  }
+
+  if (entitlementPlanKey === 'free') {
+    // 'free' is the absence of a promotion, so drop the row instead of storing
+    // one that would read as "pinned to free".
+    const { error } = await admin
+      .from('user_entitlement_overrides')
+      .delete()
+      .eq('user_id', userId);
+    throwAdminUserQueryError(error, 'clear the access tier');
+  } else {
+    const { error } = await admin
+      .from('user_entitlement_overrides')
+      .upsert({
+        user_id: userId,
+        entitlement_plan_key: entitlementPlanKey,
+        reason,
+        updated_by: actor.id,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' });
+    throwAdminUserQueryError(error, 'update the access tier');
+  }
+
+  const { error: auditError } = await admin
+    .from('admin_user_audit_events')
+    .insert({
+      target_user_id: userId,
+      actor_user_id: actor.id,
+      action_type: 'entitlement_tier_changed',
+      reason: reason ?? `Access tier set to ${entitlementPlanKey}`,
+      before_json: { entitlementPlanKey: previous },
+      after_json: { entitlementPlanKey: entitlementPlanKey === 'free' ? null : entitlementPlanKey },
+      metadata_json: { grantsCoins: false },
+    });
+  // The tier change already landed; losing its audit row must not fail the call.
+  if (auditError) {
+    console.error('Failed to record entitlement tier audit event:', auditError.message);
+  }
+
+  // Without this the target keeps their old entitlements for up to the runtime
+  // cache TTL on this instance.
+  invalidatePricingRuntimeCacheForUser(userId);
+  revalidatePath('/admin/users');
+  revalidatePath(`/admin/users/${userId}`);
+
+  const detail = await getAdminUserDetailInternal(userId);
+  if (!detail) {
+    throw new Error('The access tier was updated, but the user could not be reloaded.');
+  }
+  return detail.user;
+}
+
 export async function getAdminPromotionalCohortRuns(): Promise<AdminPromotionalCohortRun[]> {
   await verifyAdmin();
   return getAdminPromotionalCohortRunsInternal();
@@ -355,6 +438,34 @@ export async function executeAdminPromotionalCohort(input: {
   };
 }
 
+/**
+ * Promotions live outside the directory RPC, so one indexed read covers the
+ * whole page (at most `pageSize` ids) instead of a join per row.
+ */
+async function loadEntitlementOverrides(userIds: string[]): Promise<Map<string, PlanKey>> {
+  const overrides = new Map<string, PlanKey>();
+  if (userIds.length === 0) return overrides;
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('user_entitlement_overrides')
+    .select('user_id, entitlement_plan_key')
+    .in('user_id', userIds);
+
+  // A directory that renders without the promotion column beats one that fails
+  // to render at all, so a read error degrades to "no promotions".
+  if (error) {
+    console.error('Failed to load entitlement overrides:', error.message);
+    return overrides;
+  }
+
+  for (const row of (data ?? []) as Array<{ user_id: string; entitlement_plan_key: string }>) {
+    const planKey = normalizeEntitlementPlanKey(row.entitlement_plan_key);
+    if (planKey) overrides.set(row.user_id, planKey);
+  }
+  return overrides;
+}
+
 async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDetailData | null> {
   const admin = createAdminClient();
   const [overviewResult, auditResult, grantsResult, usageResult, storiesResult] = await Promise.all([
@@ -400,8 +511,10 @@ async function getAdminUserDetailInternal(userId: string): Promise<AdminUserDeta
   const overview = ((overviewResult.data ?? []) as AdminListUsersRpcRow[])[0];
   if (!overview) return null;
 
+  const overrides = await loadEntitlementOverrides([userId]);
+
   return {
-    user: mapAdminUserRow(overview),
+    user: mapAdminUserRow(overview, overrides.get(userId) ?? null),
     auditEvents: ((auditResult.data ?? []) as AuditRow[]).map(mapAuditItem),
     walletActivity: buildWalletActivity(
       (grantsResult.data ?? []) as GrantRow[],
@@ -461,12 +574,16 @@ async function syncSupabaseAuthBan(input: {
     : null;
 }
 
-function mapAdminUserRow(row: AdminListUsersRpcRow): AdminUserRow {
+function mapAdminUserRow(
+  row: AdminListUsersRpcRow,
+  entitlementOverridePlanKey: PlanKey | null = null
+): AdminUserRow {
   const accountStatus: AdminAccountStatus = (
     row.account_status === 'suspended' || row.account_status === 'blocked'
   )
     ? row.account_status
     : 'active';
+  const currentPlanKey = row.current_plan_key || 'free';
 
   return {
     userId: row.user_id,
@@ -480,7 +597,13 @@ function mapAdminUserRow(row: AdminListUsersRpcRow): AdminUserRow {
     accountStatus,
     suspendedUntil: row.suspended_until,
     moderationReason: row.moderation_reason,
-    currentPlanKey: row.current_plan_key || 'free',
+    currentPlanKey,
+    entitlementOverridePlanKey,
+    effectiveEntitlementPlanKey: resolveEffectiveEntitlementTier({
+      billingPlanKey: normalizeEntitlementPlanKey(currentPlanKey) ?? 'free',
+      overridePlanKey: entitlementOverridePlanKey,
+      isAdmin: row.user_id === process.env.ADMIN_USER_ID,
+    }),
     availableCoins: beatsToCoins(row.available_beats),
     lifetimeGrantedCoins: beatsToCoins(row.lifetime_granted_beats),
     lifetimeConsumedCoins: beatsToCoins(row.lifetime_consumed_beats),

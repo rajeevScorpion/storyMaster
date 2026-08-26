@@ -414,7 +414,7 @@ export async function getNarrationVoiceSelectionConfig(
     if (!options.skipPlanResolution) {
       try {
         const pricing = await getPricingRuntimeContext();
-        planKey = pricing.snapshot.planKey ?? null;
+        planKey = pricing.snapshot.entitlementPlanKey ?? null;
       } catch (error) {
         console.warn('[narration] Failed to load plan for accent options:', error);
       }
@@ -2112,7 +2112,7 @@ async function resolveNarrationAccentServer(input: {
   let planKey: string | null = null;
   try {
     const pricing = await getPricingRuntimeContext();
-    planKey = pricing.snapshot.planKey ?? null;
+    planKey = pricing.snapshot.entitlementPlanKey ?? null;
   } catch (error) {
     console.warn('[narration.accent_resolver] Failed to load plan for accent gating:', error);
   }

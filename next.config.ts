@@ -2,6 +2,12 @@ import type {NextConfig} from 'next';
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // `next dev` and `next build` both write the build directory, and on Windows they
+  // do not fail cleanly when they collide — the build stalls indefinitely with no
+  // output. Letting a second process point somewhere else removes the collision
+  // instead of scheduling around it. Unset (the normal case) this is exactly '.next',
+  // so the developer's workflow and every deployment are unaffected.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Pin server-action requests to the deployment that served the page, so open
   // tabs from an older build don't 404 with "Failed to find Server Action"
   // after a new deploy. On Vercel this pairs with Skew Protection; the env var
@@ -20,9 +26,6 @@ const nextConfig: NextConfig = {
         ],
       },
     ];
-  },
-  eslint: {
-    ignoreDuringBuilds: true,
   },
   typescript: {
     ignoreBuildErrors: false,
@@ -77,25 +80,21 @@ const nextConfig: NextConfig = {
     serverActions: {
       bodySizeLimit: '20mb',
     },
-    middlewareClientMaxBodySize: '20mb',
+    // Renamed in Next 16 alongside middleware -> proxy; the old key is deprecated.
+    proxyClientMaxBodySize: '20mb',
   },
-  output: 'standalone',
+  // Vercel builds its own output and never needed standalone — and on Next 16.3.x the
+  // combination breaks Vercel's post-build packaging: onBuildComplete looks for
+  // .next/next-server.js.nft.json and fails with ENOENT, even though the build itself
+  // emits it. Standalone is kept for self-hosting (Cloud Run / Docker), where it is
+  // required. VERCEL is set on preview *and* production, so both are covered.
+  output: process.env.VERCEL ? undefined : 'standalone',
   // Ensure the admin manual markdown is traced into the standalone server
   // bundle so /admin/help can fs.readFile it at runtime.
   outputFileTracingIncludes: {
     '/admin/help': ['./docs/admin-settings-manual.md'],
   },
   transpilePackages: ['motion'],
-  webpack: (config, {dev}) => {
-    // HMR is disabled in AI Studio via DISABLE_HMR env var.
-    // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-    if (dev && process.env.DISABLE_HMR === 'true') {
-      config.watchOptions = {
-        ignored: /.*/,
-      };
-    }
-    return config;
-  },
 };
 
 export default nextConfig;

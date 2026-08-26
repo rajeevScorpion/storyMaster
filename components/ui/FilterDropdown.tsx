@@ -8,6 +8,8 @@ import { AnimatePresence, motion } from 'motion/react';
 export interface FilterDropdownOption {
   value: string;
   label: string;
+  /** Optional second line in the menu, e.g. what an option is best at. Trigger stays label-only. */
+  hint?: string;
 }
 
 type DropdownSize = 'compact' | 'form';
@@ -238,7 +240,14 @@ export default function FilterDropdown({
                     opt.value === value ? 'opacity-100' : 'opacity-0'
                   }`}
                 />
-                {opt.label}
+                {opt.hint ? (
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className="truncate">{opt.label}</span>
+                    <span className="truncate text-[11px] text-neutral-500">{opt.hint}</span>
+                  </span>
+                ) : (
+                  opt.label
+                )}
               </button>
             ))}
           </div>

@@ -7,6 +7,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig([{
+    // Agent-owned build dirs (scripts/agent-dev.mjs, scripts/agent-build.mjs).
+    // eslint-config-next ignores .next by default but knows nothing about these,
+    // so without this `eslint .` lints generated webpack output and fails.
+    ignores: [".next-*/**", ".agent/**"],
+}, {
     extends: [...next],
 }, {
     files: [

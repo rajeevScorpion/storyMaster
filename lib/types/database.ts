@@ -652,6 +652,19 @@ export interface DbPricingActionCost {
   updated_by: string | null;
 }
 
+/**
+ * Admin-granted feature tier. Access only — carries no coins, wallet, or
+ * subscription state; billing truth stays in billing_subscriptions.
+ */
+export interface DbUserEntitlementOverride {
+  user_id: string;
+  entitlement_plan_key: PlanKey;
+  reason: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DbPricingPromotion {
   id: string;
   promo_key: string;

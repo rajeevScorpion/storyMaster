@@ -2,7 +2,7 @@ import { updateSession } from '@/lib/supabase/middleware';
 import { loadModerationForMiddleware } from '@/lib/supabase/user-moderation-middleware';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   try {
     const { response, user } = await updateSession(request);
     const adminUserId = process.env.ADMIN_USER_ID;
@@ -43,7 +43,7 @@ export async function middleware(request: NextRequest) {
 
     return response;
   } catch (error) {
-    console.error('Middleware error:', error);
+    console.error('Proxy error:', error);
     return NextResponse.next({ request });
   }
 }

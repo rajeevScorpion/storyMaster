@@ -6,7 +6,7 @@ import {
   quoteCoinOperationForUser,
   quoteCoinOperationsForUser,
 } from '@/lib/pricing/coin-economy';
-import { resolvePlanKeyForUser } from '@/lib/pricing/enforcement';
+import { resolveEntitlementPlanKeyForUser } from '@/lib/pricing/enforcement';
 import { verifyAdmin } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -56,7 +56,7 @@ export async function getAvailableVideoExportPresets(): Promise<ResolvedExportPr
   const adminUserId = process.env.ADMIN_USER_ID;
   const adminBypassEnabled = await getFeatureFlag('video_download_admin_bypass', false);
   const isAdmin = Boolean(adminBypassEnabled && user && adminUserId && user.id === adminUserId);
-  const planKey = user ? await resolvePlanKeyForUser(user.id) : 'free';
+  const planKey = user ? await resolveEntitlementPlanKeyForUser(user.id) : 'free';
   const value = await getFeatureFlagValue(VIDEO_EXPORT_PRESETS_FLAG_KEY);
   const resolved = resolveExportPresetsForPlan(normalizeExportPresets(value), planKey, isAdmin);
 
@@ -91,7 +91,7 @@ export async function authorizeCurrentUserVideoExport(input: {
 }): Promise<PricingBillableActionAuthorization> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  const planKey = user ? await resolvePlanKeyForUser(user.id) : 'free';
+  const planKey = user ? await resolveEntitlementPlanKeyForUser(user.id) : 'free';
   const presets = normalizeExportPresets(await getFeatureFlagValue(VIDEO_EXPORT_PRESETS_FLAG_KEY));
   const preset = presets.find((candidate) => candidate.id === input.presetId && candidate.enabled);
 

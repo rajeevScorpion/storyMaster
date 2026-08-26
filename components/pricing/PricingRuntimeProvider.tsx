@@ -116,6 +116,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     pricingMarketKey: 'IN',
     routingProvider: 'razorpay',
     planKey: 'free',
+    entitlementPlanKey: 'free',
     planTierRank: 1,
     planVersionId: null,
     monthlyIncludedBeats: 0,

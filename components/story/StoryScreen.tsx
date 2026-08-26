@@ -2777,7 +2777,7 @@ function StoryScreenInner({
     [reelTransitionDraft]
   );
   const effectiveReelNarrationAdminSettings = reelNarrationAdminSettings ?? DEFAULT_REEL_NARRATION_ADMIN_SETTINGS;
-  const reelNarrationTier = pricing.snapshot.planKey;
+  const reelNarrationTier = pricing.snapshot.entitlementPlanKey;
   const reelNarrationLanguageValue = storyLanguageToNarrationLanguage(session.storyConfig.language);
   const reelNarrationLanguageOptions = useMemo(() => {
     const available = getAvailableReelNarrationLanguages(

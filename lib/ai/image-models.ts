@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
+import { imageProviderSupportsStatefulContinuity } from '@/lib/ai/image-continuity.shared';
 import {
   IMAGE_PROVIDER_LABELS,
   isStoryboardImageTask,
@@ -82,6 +83,7 @@ function rowToRegistryRecord(row: ImageModelRegistryRow, currentPlanKey: PlanKey
     isAdminTestEnabled: Boolean(row.is_admin_test_enabled),
     isAvailableToCurrentPlan: allowedPlanKeys.includes(currentPlanKey),
     isProviderConfigured: missingEnvVars.length === 0,
+    supportsStatefulContinuity: imageProviderSupportsStatefulContinuity(row.provider_key),
     missingEnvVars,
     requiredEnvVars,
     sortOrder: row.sort_order ?? 0,
@@ -104,11 +106,29 @@ function isReadyForCurrentPlan(record: ImageModelRegistryRecord): boolean {
     && record.isAvailableToCurrentPlan;
 }
 
+function continuityFamilyOf(record: ImageModelRegistryRecord): string | null {
+  const value = record.capabilities.continuityFamily;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+/**
+ * A portrait model can stand in for a storyboard model only if it renders faces the same way.
+ * Same provider is the baseline; when both sides declare a continuityFamily they must also
+ * agree, which is what keeps one aggregator key from pairing unrelated model families.
+ */
+function isPortraitMatchFor(portrait: ImageModelRegistryRecord, storyboard: ImageModelRegistryRecord): boolean {
+  if (portrait.taskKey !== 'portrait_generation') return false;
+  if (portrait.providerKey !== storyboard.providerKey) return false;
+  const storyboardFamily = continuityFamilyOf(storyboard);
+  const portraitFamily = continuityFamilyOf(portrait);
+  if (!storyboardFamily || !portraitFamily) return true;
+  return storyboardFamily === portraitFamily;
+}
+
 function hasProviderMatchedPortrait(records: ImageModelRegistryRecord[], record: ImageModelRegistryRecord): boolean {
   if (!isStoryboardImageTask(record.taskKey)) return true;
   return records.some((candidate) =>
-    candidate.taskKey === 'portrait_generation'
-    && candidate.providerKey === record.providerKey
+    isPortraitMatchFor(candidate, record)
     && isReadyForCurrentPlan(candidate)
   );
 }
@@ -160,7 +180,7 @@ export async function listUserVisibleImageModelOptions(
     && hasProviderMatchedPortrait(records, record)
   );
   const available = options.filter((record) => record.isAvailableToCurrentPlan);
-  return sortImageModels((available.length > 0 ? available : options).map(stripAdminFields));
+  return sortImageModels(available.length > 0 ? available : options).map(toPublicImageModelOption);
 }
 
 export async function buildImageModelPickerState(
@@ -217,7 +237,11 @@ export async function resolveImageModelSnapshot(input: {
 
   const resolved = selected ?? fallback;
   if (!input.allowAdminDisabled && !hasProviderMatchedPortrait(records, resolved)) {
-    throw new Error(`${resolved.displayName} is unavailable because no ready ${resolved.providerLabel} portrait model is configured for character continuity.`);
+    console.error(
+      `[image-models] No ready portrait model for ${resolved.providerKey}/${resolved.modelKey}`
+      + ` (family: ${continuityFamilyOf(resolved) ?? 'none'}).`
+    );
+    throw new Error(`${resolved.displayName} is unavailable because no matching portrait model is configured for character continuity.`);
   }
 
   return toSnapshot(resolved);
@@ -259,19 +283,25 @@ export async function resolveLinkedPortraitImageModelSnapshot(input: {
     });
   }
 
-  const portraitRecords = records.filter((record) =>
-    record.taskKey === 'portrait_generation'
-    && record.providerKey === fallbackStoryboard.providerKey
-  );
+  const portraitRecords = records.filter((record) => isPortraitMatchFor(record, fallbackStoryboard));
   const portraitCandidates = input.allowAdminDisabled
     ? portraitRecords.filter((record) => record.isProviderConfigured)
     : portraitRecords.filter(isReadyForCurrentPlan);
+  const storyboardFamily = continuityFamilyOf(fallbackStoryboard);
+  const sameFamily = storyboardFamily
+    ? portraitCandidates.filter((record) => continuityFamilyOf(record) === storyboardFamily)
+    : [];
+  const preferred = sameFamily.length > 0 ? sameFamily : portraitCandidates;
   const portrait =
-    portraitCandidates.find((record) => record.isDefault)
-    ?? portraitCandidates[0];
+    preferred.find((record) => record.isDefault)
+    ?? preferred[0];
 
   if (!portrait) {
-    throw new Error(`${fallbackStoryboard.displayName} is unavailable because no ready ${fallbackStoryboard.providerLabel} portrait model is configured for character continuity.`);
+    console.error(
+      `[image-models] No ready portrait model for ${fallbackStoryboard.providerKey}`
+      + `/${fallbackStoryboard.modelKey} (family: ${storyboardFamily ?? 'none'}).`
+    );
+    throw new Error(`${fallbackStoryboard.displayName} is unavailable because no matching portrait model is configured for character continuity.`);
   }
 
   return toSnapshot(portrait);
@@ -353,15 +383,26 @@ export async function saveImageModelRegistryRecord(
   return listImageModelRegistry();
 }
 
-function stripAdminFields(record: ImageModelRegistryRecord): ImageModelOption {
-  const {
-    isAdminTestEnabled: _isAdminTestEnabled,
-    requiredEnvVars: _requiredEnvVars,
-    createdAt: _createdAt,
-    updatedAt: _updatedAt,
-    ...option
-  } = record;
-  return option;
+/**
+ * Builds the client-safe view field by field. Constructed as an allowlist rather than by
+ * omitting keys so that provider identity and our per-image cost of goods can never reach
+ * the browser by being added to the record later.
+ */
+export function toPublicImageModelOption(record: ImageModelRegistryRecord): ImageModelOption {
+  return {
+    id: record.id,
+    taskKey: record.taskKey,
+    modelKey: record.modelKey,
+    displayName: record.displayName,
+    description: record.description,
+    badge: record.badge,
+    coinCostPerImage: record.coinCostPerImage,
+    isDefault: record.isDefault,
+    isRecommended: record.isRecommended,
+    isAvailableToCurrentPlan: record.isAvailableToCurrentPlan,
+    sortOrder: record.sortOrder,
+    supportsStatefulContinuity: record.supportsStatefulContinuity,
+  };
 }
 
 function getFallbackImageModelRecords(currentPlanKey: PlanKey): ImageModelRegistryRecord[] {
@@ -396,6 +437,7 @@ function getFallbackImageModelRecords(currentPlanKey: PlanKey): ImageModelRegist
       isAdminTestEnabled: true,
       isAvailableToCurrentPlan: allowedPlanKeys.includes(currentPlanKey),
       isProviderConfigured: missingEnvVars.length === 0,
+      supportsStatefulContinuity: imageProviderSupportsStatefulContinuity('gemini'),
       missingEnvVars,
       requiredEnvVars,
       sortOrder: 10 + index,

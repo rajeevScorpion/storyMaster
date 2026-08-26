@@ -64,7 +64,7 @@ export async function getBeatHqDownloadState(storyId: string, nodeId: string): P
     getMediaPipelineSettings(),
     getPricingRuntimeContext().catch(() => null),
   ]);
-  const entitled = isHqEntitled(pricing?.snapshot.planKey ?? 'free', settings);
+  const entitled = isHqEntitled(pricing?.snapshot.entitlementPlanKey ?? 'free', settings);
   if (!row || row.user_id !== user.id) return { ...empty, entitled };
   if (originalIsExpired(row)) {
     return { available: false, reason: 'expired', mediaGroupId: row.media_group_id, expiresAt: row.original_expires_at, entitled };
@@ -96,7 +96,7 @@ export async function createHqDownloadUrl(input: { storyId: string; nodeId: stri
   ]);
   if (!row || row.user_id !== user.id) return { error: 'none' };
   if (originalIsExpired(row)) return { error: 'expired' };
-  if (!isHqEntitled(pricing?.snapshot.planKey ?? 'free', settings)) return { error: 'not_entitled' };
+  if (!isHqEntitled(pricing?.snapshot.entitlementPlanKey ?? 'free', settings)) return { error: 'not_entitled' };
 
   const exists = await r2ObjectExists({ bucket: row.bucket, objectKey: row.object_key });
   if (!exists) return { error: 'expired' };

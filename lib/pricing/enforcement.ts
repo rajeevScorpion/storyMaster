@@ -3,6 +3,7 @@ import 'server-only';
 import { fetchRazorpaySubscription } from '@/lib/billing/razorpay';
 import { grantTopupIfMissing, syncRazorpaySubscriptionState } from '@/lib/billing/razorpay-sync';
 import { buildPricingRuntimeContextData } from '@/lib/pricing/snapshot';
+import { normalizeEntitlementPlanKey } from '@/lib/pricing/entitlement-tier.shared';
 import {
   invalidateAllPricingRuntimeCaches,
   invalidatePricingRuntimeCacheForUser,
@@ -569,6 +570,9 @@ export async function reconcileRazorpayTopup(
  * Cookieless plan lookup for background workers: resolves the user's
  * effective plan key from the same pricing state the enforcement paths use.
  * Falls back to 'free' on any failure.
+ *
+ * This is billing truth. Anything gating a *feature* wants
+ * `resolveEntitlementPlanKeyForUser` instead, so admin promotions are honoured.
  */
 export async function resolvePlanKeyForUser(userId: string): Promise<PlanKey> {
   try {
@@ -581,8 +585,27 @@ export async function resolvePlanKeyForUser(userId: string): Promise<PlanKey> {
   }
 }
 
+/**
+ * The tier every free/plus/studio feature gate should read: the billing plan
+ * lifted by any admin promotion. Never affects coin cost or wallet balance.
+ */
+export async function resolveEntitlementPlanKeyForUser(userId: string): Promise<PlanKey> {
+  try {
+    const supabase = createAdminClient();
+    const state = await loadPricingState(supabase, userId);
+    return state.snapshot.entitlementPlanKey;
+  } catch (error) {
+    console.error(
+      'resolveEntitlementPlanKeyForUser failed, defaulting to free:',
+      error instanceof Error ? error.message : error
+    );
+    return 'free';
+  }
+}
+
 export async function getPricingPolicyContextForUser(userId: string | null): Promise<{
   planKey: PlanKey;
+  entitlementPlanKey: PlanKey;
   availableBeats: number;
   actionCosts: DbPricingActionCost[];
 }> {
@@ -591,6 +614,7 @@ export async function getPricingPolicyContextForUser(userId: string | null): Pro
   if (!userId) {
     return {
       planKey: 'free',
+      entitlementPlanKey: 'free',
       availableBeats: 0,
       actionCosts: globals.actionCosts,
     };
@@ -599,9 +623,38 @@ export async function getPricingPolicyContextForUser(userId: string | null): Pro
   const state = await loadPricingState(supabase, userId);
   return {
     planKey: state.snapshot.planKey,
+    entitlementPlanKey: state.snapshot.entitlementPlanKey,
     availableBeats: state.snapshot.availableTotalBeats,
     actionCosts: globals.actionCosts,
   };
+}
+
+export function isAdminUserId(userId: string | null): boolean {
+  const adminUserId = process.env.ADMIN_USER_ID;
+  return Boolean(adminUserId && userId && adminUserId === userId);
+}
+
+/**
+ * Reads the admin-granted entitlement tier. A missing row (the common case) and
+ * a read failure both mean "no promotion" — this must never widen access by
+ * accident, and must never block generation when the table is unreachable.
+ */
+export async function loadEntitlementOverridePlanKey(
+  supabase: AdminClient,
+  userId: string
+): Promise<PlanKey | null> {
+  const { data, error } = await supabase
+    .from('user_entitlement_overrides')
+    .select('entitlement_plan_key')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Failed to load entitlement override, treating as none:', error.message);
+    return null;
+  }
+
+  return normalizeEntitlementPlanKey(data?.entitlement_plan_key);
 }
 
 async function loadPricingState(
@@ -616,7 +669,14 @@ async function loadPricingState(
     'pricing.load_state',
     { userId, pricingMarketKey: options.pricingMarketKey ?? null },
     async () => {
-      const [globalConfig, customersResult, subscriptionsResult, grantsResult, reservationsResult] = await Promise.all([
+      const [
+        globalConfig,
+        customersResult,
+        subscriptionsResult,
+        grantsResult,
+        reservationsResult,
+        entitlementOverridePlanKey,
+      ] = await Promise.all([
         loadCachedPricingGlobals(supabase),
         supabase
           .from('billing_customers')
@@ -642,6 +702,7 @@ async function loadPricingState(
           .eq('status', 'pending')
           .gt('expires_at', new Date().toISOString())
           .order('created_at', { ascending: false }),
+        loadEntitlementOverridePlanKey(supabase, userId),
       ]);
       throwIfQueryFailed(customersResult.error, 'Failed to load billing customers');
       throwIfQueryFailed(subscriptionsResult.error, 'Failed to load billing subscriptions');
@@ -666,6 +727,8 @@ async function loadPricingState(
         billingSubscriptions,
         beatGrants,
         beatReservations,
+        entitlementOverridePlanKey,
+        isAdmin: isAdminUserId(userId),
       });
 
       return {
