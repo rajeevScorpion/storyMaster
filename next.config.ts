@@ -83,7 +83,12 @@ const nextConfig: NextConfig = {
     // Renamed in Next 16 alongside middleware -> proxy; the old key is deprecated.
     proxyClientMaxBodySize: '20mb',
   },
-  output: 'standalone',
+  // Vercel builds its own output and never needed standalone — and on Next 16.3.x the
+  // combination breaks Vercel's post-build packaging: onBuildComplete looks for
+  // .next/next-server.js.nft.json and fails with ENOENT, even though the build itself
+  // emits it. Standalone is kept for self-hosting (Cloud Run / Docker), where it is
+  // required. VERCEL is set on preview *and* production, so both are covered.
+  output: process.env.VERCEL ? undefined : 'standalone',
   // Ensure the admin manual markdown is traced into the standalone server
   // bundle so /admin/help can fs.readFile it at runtime.
   outputFileTracingIncludes: {

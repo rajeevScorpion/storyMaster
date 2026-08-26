@@ -129,8 +129,19 @@ and build. What the upgrade touched, and what it did not:
   coerced — but adding one now needs the value allowlisted in `next.config.ts`.
 - `images.minimumCacheTTL` defaults to 4h in Next 16; this project overrides it to 30 days regardless.
 
+**Deployment shape changed with the upgrade:** `output` is now
+`process.env.VERCEL ? undefined : 'standalone'`. On Next 16.3.x, standalone breaks Vercel's post-build
+packaging (`ENOENT ... next-server.js.nft.json`) even though the build succeeds — see
+[GOTCHAS.md](GOTCHAS.md). Because `VERCEL` is set on preview **and** production, the same behaviour carries
+to production automatically when `dev` is promoted; there is no separate production step to remember. If the
+upstream bug is fixed later, this can go back to an unconditional `'standalone'` — verify a Vercel deploy
+before doing so.
+
 **Still on Next 15 semantics elsewhere:** nothing. Vercel must be building on Node 20.9+ (Next 16's floor);
-local dev is on 22.17.
+local dev is on 22.17. The Node version is a **project-level** Vercel setting applying to all future builds,
+preview and production alike — existing deployments are immutable and keep their build-time version. To pin
+it per branch instead, use `engines.node` in `package.json`, which overrides the dashboard setting and travels
+with the branch.
 
 ## Pending verification
 

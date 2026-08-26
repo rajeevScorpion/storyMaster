@@ -42,6 +42,37 @@ One thing that hand-rolled version got wrong, and which the script now handles: 
 another machine does not have. `scripts/lib/preserve-generated.mjs` snapshots both and restores them on every
 exit path, including signals.
 
+### `output: 'standalone'` breaks Vercel packaging on Next 16.3.x
+
+A Vercel deploy fails **after a successful compile**, during Vercel's own `onBuildComplete`
+packaging step:
+
+```
+Error: ENOENT: no such file or directory, open '/vercel/path0/.next/next-server.js.nft.json'
+Error: Command "npm run build" exited with 1
+```
+
+It reads like a broken build or a Node version problem. It is neither. Next compiles fine and
+**does** emit that trace file — verified locally, 157 `.nft.json` files and a populated
+`standalone/`. The failure is in the handoff to Vercel's packager, which looks for the file
+somewhere else. It is a known Next 16.3.x + Vercel interaction, reported by others with the same
+combination of Turbopack and `output: "standalone"`, passing locally and in other CI.
+
+**Fix:** Vercel builds its own output and never needed standalone at all, so turn it off there:
+
+```ts
+output: process.env.VERCEL ? undefined : 'standalone',
+```
+
+`VERCEL` is set on **preview and production alike**, so one line covers both — there is nothing
+separate to remember when promoting to `main`. Standalone still applies when self-hosting
+(Cloud Run / Docker), where it is required. `outputFileTracingIncludes` is unaffected: the
+`/admin/help` manual is still traced into both outputs.
+
+**Do not diagnose this as a Node version issue.** Next 16 requires Node 20.9+ and Vercel defaults
+to 24.x; too old a runtime fails early with an explicit version message, not an ENOENT during
+packaging.
+
 ### Node version
 
 `@google/genai` 2.12 declares `node ^22.13.0 || >=24`. The project has run on Node 22.11.0 with an

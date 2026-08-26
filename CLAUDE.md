@@ -20,7 +20,7 @@ Durable state lives in **Supabase** (Postgres + auth + RLS). Media lives in **Cl
 
 ```bash
 npm run dev       # Dev server at localhost:3000 (raised 32KB header cap — see below)
-npm run build     # Production build (standalone output)
+npm run build     # Production build (standalone output when self-hosting; not on Vercel)
 npm run preview   # Run the production build locally with the raised header cap
 npm start         # Plain production start
 npm run lint      # ESLint (flat config)
