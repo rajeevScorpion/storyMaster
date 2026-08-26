@@ -61,26 +61,27 @@ using the query at the bottom of this section.
 | 094 | `storyline_search_trgm` | `pg_trgm` + partial GIN indexes | **Applied** — the extension is installed, so search is index-backed. |
 | 095 | `runware_image_provider` | Runware rows in `image_model_registry` | **Applied.** ⚠ The seeded AIR ids and prices are still **unverified guesses** — check each model in Runware's own Playground before enabling any row. |
 | 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Applied** (0 rows — nobody promoted yet). |
-| 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **PENDING on both.** Closes a live anon-key exposure — see "Security" below. |
+| 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **Applied on both** 2026-08-26. |
+| 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
 
 Everything up to 068 is long-applied.
 
-### Production (`pddjsopcemsfiwyvhlkr`), verified 2026-08-26
+### Production (`pddjsopcemsfiwyvhlkr`)
 
-Prod matches dev on everything above **except two migrations, both belonging to dev code that has not
-shipped to `main` yet**:
+**At parity with dev as of 2026-08-26**, verified directly: every migration in the table above is applied on
+both environments, including 095 (9 Runware rows, all disabled), 096, 097 and 098.
 
-| # | Status on prod | Consequence |
-|---|---|---|
-| 095 | **Not applied.** `image_model_registry` holds gemini/openai/xai rows only — no Runware. | Harmless today; prod code has no Runware provider. |
-| 096 | **Not applied.** `user_entitlement_overrides` does not exist. | Harmless today; prod code has no entitlement-override reader. |
+Getting there closed a real gap. Prod had been missing 095 and 096 — harmless while that code sat unmerged on
+`dev`, and an outage the moment it promoted, since the entitlement resolver would have deployed against a
+database with no `user_entitlement_overrides` table. That is the same shape as the incident on record (batch
+narration 500ing because 069 never reached prod).
 
-**Both must be applied to prod *before* `dev` is promoted to `main`.** The moment that merge deploys, the
-entitlement resolver and the Runware provider go live against a database missing their schema. This is
-precisely the shape of the incident already on record (batch narration 500ing because 069 was never applied
-to prod), and it is the single most important thing to do before a release.
+**The rule this establishes: migrations go to production *before* the code that needs them, not with it.**
+Schema parity is a precondition of promotion, not a step inside it.
 
-Everything else — 069, 074, 075, 078, 079, 080, 088, 089, 090, 091, 093, 094 — is applied on prod.
+095 was applied twice by accident with no consequence — it ends `ON CONFLICT (task_key, model_key) DO UPDATE`,
+so the second run rewrote the same nine rows with the same values. Worth knowing that seed migrations here are
+upserts, but worth checking rather than assuming for any given migration.
 
 ### Verifying what is actually applied
 
@@ -116,33 +117,47 @@ Flag-only migrations (076, 077, 081, 095) are not covered above — check them w
 
 ## Security
 
-**RLS status, verified 2026-08-26 after migration 097 was applied to dev:**
+**Both environments are clean as of 2026-08-26**, verified by query after migrations 097 and 098 were applied
+to each:
 
-- **dev — clean.** Zero tables in `public` run without Row Level Security.
-- **prod — one gap.** `model_config_history` is the only table without RLS. The other five that 097 targets
-  were already protected there, so prod was never as exposed as dev was.
+| check | dev | prod |
+|---|---|---|
+| Tables without RLS | 0 | 0 |
+| `SECURITY DEFINER` functions callable by `anon` | 0 | 0 |
+| Our functions with mutable `search_path` | 0 | 0 |
 
-097 is safe to run on prod as-is: `ENABLE ROW LEVEL SECURITY` on an already-enabled table is a no-op, so it
-closes `model_config_history` and leaves the rest untouched.
+What 097 and 098 closed, and why each was real rather than lint noise:
 
-The pattern in use for admin-only tables is **RLS enabled with no policies** — anon and authenticated match
-nothing, and the service role bypasses RLS entirely. Roughly 40 tables here do this, `feature_flags` and
-`billing_orders` among them. Supabase's linter reports each as `rls_enabled_no_policy` at INFO level; that is
-the intended end state, not a defect.
+- **097** — six admin config tables ran without RLS on dev (five of the six were already protected on prod).
+  The anon key ships in the browser bundle, so `model_config` (which picks the model and cost for every task)
+  and `prompt_configs` (the published generation prompts) were rewritable by anyone with devtools open.
+- **098** — `prune_orphaned_beat_images` and `prune_orphaned_character_sheets` delete media, are driven by
+  pg_cron with no application callers, and were invocable over `/rest/v1/rpc/` by any signed-out visitor. A
+  feature flag was the only thing in the way. Also pinned `search_path` on 15 functions, three of them
+  `SECURITY DEFINER`, where a mutable path is a privilege-escalation vector.
 
-**Do not enable RLS on a table without checking its call sites first.** With no policies it denies everyone
-but the service role, and a surface reading through the anon or user-session client then gets **zero rows
-instead of an error** — silent, and invisible to tests.
+Two things learned doing it, both worth not rediscovering:
 
-Outstanding, both environments (from Supabase's security advisor, not yet addressed):
+1. **A revoke must name `PUBLIC`.** Supabase grants EXECUTE to PUBLIC *and* explicitly to anon/authenticated
+   (`=X/postgres` is the PUBLIC grant). Revoking from anon and authenticated alone changes nothing.
+2. **Revoking EXECUTE does not stop a trigger firing.** Trigger execution does not check the invoking user's
+   EXECUTE privilege — confirmed empirically after 098: stored `like_count` / `view_count` still match actual
+   row counts.
 
-- Five `SECURITY DEFINER` functions are executable by `anon` over `/rest/v1/rpc/`: `handle_new_user`,
-  `prune_orphaned_beat_images`, `prune_orphaned_character_sheets`, `update_storyline_like_count`,
-  `update_storyline_view_count`. The two `prune_orphaned_*` ones warrant a look first — a signed-out visitor
-  can invoke them, and the names suggest deletion.
-- 15 functions have a mutable `search_path`, including `pricing_authorize_spend`,
-  `pricing_finalize_reservation` and `pricing_release_reservation`.
-- Leaked-password protection is disabled in Supabase Auth (a dashboard toggle, not a migration).
+The pattern for admin-only tables is **RLS enabled with no policies** — anon and authenticated match nothing,
+service role bypasses RLS. Around 40 tables do this. Supabase's linter reports each as `rls_enabled_no_policy`
+at INFO; that is the intended end state, not a defect.
+
+**Do not enable RLS on a table without checking its call sites first.** With no policies it denies everyone but
+the service role, and a surface reading through the anon or user-session client then gets **zero rows instead
+of an error** — silent, and invisible to tests.
+
+Deliberately left alone: pg_trgm's 31 extension-owned functions (altering them can be undone by an extension
+upgrade, and revoking EXECUTE would break trigram search — Supabase's own advisor excludes them), and moving
+pg_trgm out of the `public` schema, which would invalidate 094's GIN indexes and needs its own migration.
+
+Still open: **leaked-password protection is disabled** in Supabase Auth on both environments. It is a dashboard
+toggle, not SQL — Authentication -> Policies.
 
 Audit either environment with:
 
