@@ -15,8 +15,15 @@ Keep this file current. When you finish a pack, move it out of "pending"; when y
 
 | | Supabase project | Notes |
 |---|---|---|
-| Development | `dxbwzcpbfacrwrauhdbk` | Where migrations get applied first |
-| Production | `pddjsopcemsfiwyvhlkr` | `www.kissago.cc` / `kissago.cc` |
+| Development | `dxbwzcpbfacrwrauhdbk` | Named **kissagoStage**, ap-southeast-1. Where migrations get applied first. |
+| Production | `pddjsopcemsfiwyvhlkr` | Named **kissago**, ap-northeast-1. `www.kissago.cc` / `kissago.cc` |
+
+An agent working here has **read-only** database visibility on both, via two separately named Supabase MCP
+servers: `supabase` (dev) and `supabase-prod`. The names are distinct so touching production is always a
+deliberate choice. Read-only is not a courtesy — it is what enforces the rule below that migrations are
+applied by hand. An agent cannot apply one even if asked; it can only produce the file and verify the result
+afterwards. Config is machine-local (`~/.claude.json`, `local` scope), so a new machine sets this up itself.
+Prod holds real user data: query it for schema, migration state and config, not to browse user content.
 
 Migrations are applied **by hand, per environment, in the Supabase dashboard** — never by CLI. Drift between
 the two is normal and expected; code must fail closed when a column or table is missing. This has already
@@ -58,10 +65,22 @@ using the query at the bottom of this section.
 
 Everything up to 068 is long-applied.
 
-**Production (`pddjsopcemsfiwyvhlkr`) remains unverified.** The agent's Supabase MCP access is scoped to
-development on purpose, so nothing above says anything about prod. Run the query below against it before
-assuming parity — and note that the ledger was wrong in the *safe* direction here (features recorded as
-pending were actually live), which is exactly the kind of drift that makes a prod assumption dangerous.
+### Production (`pddjsopcemsfiwyvhlkr`), verified 2026-08-26
+
+Prod matches dev on everything above **except two migrations, both belonging to dev code that has not
+shipped to `main` yet**:
+
+| # | Status on prod | Consequence |
+|---|---|---|
+| 095 | **Not applied.** `image_model_registry` holds gemini/openai/xai rows only — no Runware. | Harmless today; prod code has no Runware provider. |
+| 096 | **Not applied.** `user_entitlement_overrides` does not exist. | Harmless today; prod code has no entitlement-override reader. |
+
+**Both must be applied to prod *before* `dev` is promoted to `main`.** The moment that merge deploys, the
+entitlement resolver and the Runware provider go live against a database missing their schema. This is
+precisely the shape of the incident already on record (batch narration 500ing because 069 was never applied
+to prod), and it is the single most important thing to do before a release.
+
+Everything else — 069, 074, 075, 078, 079, 080, 088, 089, 090, 091, 093, 094 — is applied on prod.
 
 ### Verifying what is actually applied
 
@@ -97,37 +116,40 @@ Flag-only migrations (076, 077, 081, 095) are not covered above — check them w
 
 ## Security
 
-**Six admin configuration tables run with Row Level Security disabled** on dev, and almost certainly on prod
-too (unverified — check it):
+**RLS status, verified 2026-08-26 after migration 097 was applied to dev:**
 
-`model_config`, `model_config_history`, `prompt_configs`, `prompt_drafts`, `prompt_history`, `prompt_test_runs`
+- **dev — clean.** Zero tables in `public` run without Row Level Security.
+- **prod — one gap.** `model_config_history` is the only table without RLS. The other five that 097 targets
+  were already protected there, so prod was never as exposed as dev was.
 
-With RLS off, these are readable **and writable** by the `anon` and `authenticated` roles. The anon key ships
-in the browser bundle by design, so this is reachable by anyone with devtools open. The consequence is worse
-than a leak: `model_config` chooses the model and cost for every task, and `prompt_configs` holds the
-published prompts every generated story is built from. Both are rewritable.
+097 is safe to run on prod as-is: `ENABLE ROW LEVEL SECURITY` on an already-enabled table is a no-op, so it
+closes `model_config_history` and leaves the rest untouched.
 
-Migration **097** closes it by enabling RLS with no policies, matching what `feature_flags`,
-`pricing_action_costs`, `operational_policies` and `image_model_registry` already do. That is safe here
-because every reference to these six tables lives in `lib/ai/model-config.ts` and `lib/ai/prompt-config.ts`,
-both `import 'server-only'` and both using `createAdminClient()` (service role, which bypasses RLS) — and no
-view or database function reads them.
+The pattern in use for admin-only tables is **RLS enabled with no policies** — anon and authenticated match
+nothing, and the service role bypasses RLS entirely. Roughly 40 tables here do this, `feature_flags` and
+`billing_orders` among them. Supabase's linter reports each as `rls_enabled_no_policy` at INFO level; that is
+the intended end state, not a defect.
 
-**Do not enable RLS on a table without checking its call sites first.** RLS with no policies denies everyone
-except the service role; if any surface reads the table with the anon or user-session client, it silently
-returns zero rows rather than erroring.
+**Do not enable RLS on a table without checking its call sites first.** With no policies it denies everyone
+but the service role, and a surface reading through the anon or user-session client then gets **zero rows
+instead of an error** — silent, and invisible to tests.
 
-Run this against either environment to check the current state:
+Outstanding, both environments (from Supabase's security advisor, not yet addressed):
+
+- Five `SECURITY DEFINER` functions are executable by `anon` over `/rest/v1/rpc/`: `handle_new_user`,
+  `prune_orphaned_beat_images`, `prune_orphaned_character_sheets`, `update_storyline_like_count`,
+  `update_storyline_view_count`. The two `prune_orphaned_*` ones warrant a look first — a signed-out visitor
+  can invoke them, and the names suggest deletion.
+- 15 functions have a mutable `search_path`, including `pricing_authorize_spend`,
+  `pricing_finalize_reservation` and `pricing_release_reservation`.
+- Leaked-password protection is disabled in Supabase Auth (a dashboard toggle, not a migration).
+
+Audit either environment with:
 
 ```sql
-select c.relname,
-       c.relrowsecurity as rls_enabled,
-       (select count(*) from pg_policies p
-          where p.schemaname = 'public' and p.tablename = c.relname) as policies
-from pg_class c
-join pg_namespace n on n.oid = c.relnamespace
-where n.nspname = 'public' and c.relkind = 'r'
-  and not c.relrowsecurity
+select c.relname
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity
 order by c.relname;
 ```
 
@@ -137,15 +159,22 @@ order by c.relname;
 
 Built and merged, but not live for users. Each is behind a flag that defaults to off or to a no-op mode.
 
-| Feature | Flag | State on dev (verified 2026-08-26) |
-|---|---|---|
-| Reference Personalization (upload character/world refs) | `reference_personalization_enabled` | **ENABLED and in use** — 9 reference sources exist. Previously documented as dormant; it is not. |
-| Reference input mode | `reference_input_mode` | `direct` (v2). `adoption` is the older v1 pipeline, kept but switchable. |
-| Reference attachment on custom options / branches | `reference_custom_option_attachment_enabled` | **Off.** Phase deliberately deferred. |
-| Image prompt compiler | `image_prompt_compiler_mode` | **`new`** — the compiled prompt is what actually reaches the image provider. This is no longer a shadow comparison. |
-| Server-side beat bundle | `beat_bundle_enabled` | **ENABLED.** Requires `server_pipeline` image mode; toggle at `/admin/settings/media`. |
-| Video export presets | `video_export_presets_json` | **ENABLED** with real preset JSON. The 60fps ultra-smooth preset stays admin-only until mobile-verified. |
-| Runware image models | rows in `image_model_registry` | Migration applied, but prices remain unverified — do not enable a row before checking it in Runware's Playground. |
+Flag state **differs between environments**, and that difference is the point — dev runs ahead. Both columns
+verified 2026-08-26.
+
+| Feature | Flag | dev | production |
+|---|---|---|---|
+| Reference Personalization | `reference_personalization_enabled` | **on** (9 reference sources in use) | **off** — dormant, as designed |
+| Reference input mode | `reference_input_mode` | `direct` | `direct` |
+| Reference attachment on custom options | `reference_custom_option_attachment_enabled` | off | off |
+| Image prompt compiler | `image_prompt_compiler_mode` | **`new`** — compiled prompts are sent | **`shadow`** — legacy prompt still sent |
+| Server-side beat bundle | `beat_bundle_enabled` | on | on |
+| Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
+| Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
+
+Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
+accurate description of **production** filed under a heading that read as though it covered dev. When
+recording a flag here, say which environment it refers to.
 
 Note on the prompt compiler: it is in **`new`** mode, so both prompt-only and with-image stories send the
 compiled prompt. The earlier `shadow` behaviour — compile, record a comparison, but still send the legacy
