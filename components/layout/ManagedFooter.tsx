@@ -206,10 +206,11 @@ export default function ManagedFooter() {
     };
   }, [openMenu]);
 
-  if (links.length === 0) return null;
-
   return (
-    <footer ref={footerRef} className="mt-[150px] border-t border-white/10 bg-black px-4 py-7 text-neutral-400 sm:px-6">
+    <footer
+      ref={footerRef}
+      className="mt-[150px] min-h-[76px] border-t border-white/10 bg-black px-4 py-7 text-neutral-400 sm:px-6"
+    >
       <div className="mx-auto max-w-6xl">
         <nav
           aria-label="Footer pages"

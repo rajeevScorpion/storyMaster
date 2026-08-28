@@ -15,6 +15,7 @@ import {
   type ManagedPageAccessLevel,
   type ManagedPageRecord,
   type ManagedPageSaveInput,
+  type ManagedPageSummary,
   type ManagedPageType,
   type ManagedPagesAdminState,
 } from '@/lib/managed-pages/types';
@@ -79,6 +80,31 @@ export function mapDbManagedPage(row: DbManagedPage): ManagedPageRecord {
   };
 }
 
+type DbManagedPageSummaryRow = Omit<DbManagedPage, 'content'>;
+
+function mapDbManagedPageSummary(row: DbManagedPageSummaryRow): ManagedPageSummary {
+  return {
+    pageKey: row.page_key,
+    title: row.title,
+    slug: row.slug,
+    enabled: row.enabled,
+    showInFooter: row.show_in_footer,
+    footerOrder: row.footer_order,
+    openInNewTab: row.open_in_new_tab,
+    accessLevel: row.access_level,
+    pageType: row.page_type,
+    seedVersion: row.seed_version,
+    excerpt: row.excerpt,
+    metadata: row.metadata_json ?? {},
+    isSystemPage: row.is_system_page,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+  };
+}
+
+const MANAGED_PAGE_SUMMARY_COLUMNS =
+  'page_key, title, slug, enabled, show_in_footer, footer_order, open_in_new_tab, access_level, page_type, seed_version, excerpt, metadata_json, is_system_page, created_at, updated_at, updated_by';
+
 async function getCurrentUserId(): Promise<string | null> {
   try {
     const supabase = await createClient();
@@ -117,6 +143,25 @@ export async function listManagedPages(): Promise<ManagedPageRecord[]> {
   if (error) throw new Error(`Failed to load managed pages: ${error.message}`);
 
   return ((data ?? []) as DbManagedPage[]).map(mapDbManagedPage);
+}
+
+/**
+ * Same rows as listManagedPages() but without `content` — the footer and the
+ * Help & Legal index only need labels/metadata, and listManagedPages()'s
+ * `select('*')` was pulling the full body of all 11 pages just to build a
+ * list of link labels.
+ */
+export async function listManagedPageSummaries(): Promise<ManagedPageSummary[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('managed_pages')
+    .select(MANAGED_PAGE_SUMMARY_COLUMNS)
+    .order('footer_order', { ascending: true })
+    .order('title', { ascending: true });
+
+  if (error) throw new Error(`Failed to load managed page summaries: ${error.message}`);
+
+  return ((data ?? []) as DbManagedPageSummaryRow[]).map(mapDbManagedPageSummary);
 }
 
 export async function getManagedPageBySlug(slug: string): Promise<ManagedPageRecord | null> {
@@ -165,7 +210,7 @@ export async function getManagedFooterLinks(): Promise<ManagedFooterLink[]> {
     return cached.links;
   }
 
-  const pages = await listManagedPages();
+  const pages = await listManagedPageSummaries();
 
   const links = pages
     .filter((page) => canShowManagedPageInFooter(page, context))

@@ -50,6 +50,9 @@ export interface ManagedPageSaveInput {
   excerpt: string | null;
 }
 
+/** A managed page without its `content` body — for listings (footer, Help & Legal index) that only need labels/metadata and shouldn't pay to fetch every page's full text. */
+export type ManagedPageSummary = Omit<ManagedPageRecord, 'content'>;
+
 export interface ManagedFooterLink {
   key: string;
   title: string;
