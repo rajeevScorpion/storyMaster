@@ -2,14 +2,20 @@
 
 import { updateTag } from 'next/cache';
 
-import { MANAGED_PAGES_CACHE_TAG } from '@/lib/managed-pages/cache';
+import { getCachedAllowedManagedPageByKey, MANAGED_PAGES_CACHE_TAG } from '@/lib/managed-pages/cache';
 import {
   getEssentialLegalFooterLinks,
   getManagedPagesAdminState,
   resetManagedPageToSeed,
   saveManagedPage,
 } from '@/lib/managed-pages/service';
-import type { ManagedFooterLink, ManagedPageSaveInput, ManagedPagesAdminState } from '@/lib/managed-pages/types';
+import { resolveManagedPageTokens } from '@/lib/managed-pages/render';
+import type {
+  ManagedFooterLink,
+  ManagedPageSaveInput,
+  ManagedPageType,
+  ManagedPagesAdminState,
+} from '@/lib/managed-pages/types';
 import { publishManagedPageVersion, type ManagedPageChangeType } from '@/lib/managed-pages/versioning';
 import { verifyAdmin } from '@/lib/supabase/admin';
 
@@ -36,6 +42,36 @@ export async function resetManagedPageToSeedAction(pageKey: string): Promise<Man
 
 export async function getEssentialLegalFooterLinksAction(): Promise<ManagedFooterLink[]> {
   return getEssentialLegalFooterLinks();
+}
+
+export interface ManagedPageModalContent {
+  title: string;
+  content: string;
+  docVersion: string | null;
+  effectiveDate: string | null;
+  updatedAt: string;
+  pageType: ManagedPageType;
+}
+
+/**
+ * Content for components/legal/LegalDocumentModal.tsx — the {{SUPPORT_EMAIL}}
+ * token is resolved here (server-side, via the server-only support-email
+ * lookup) so the client component can render the body with the pure
+ * lib/managed-pages/render.shared.tsx parser without needing any
+ * 'server-only'-gated import.
+ */
+export async function getManagedPageContentForModalAction(pageKey: string): Promise<ManagedPageModalContent | null> {
+  const page = await getCachedAllowedManagedPageByKey(pageKey);
+  if (!page) return null;
+
+  return {
+    title: page.title,
+    content: resolveManagedPageTokens(page.content),
+    docVersion: page.docVersion,
+    effectiveDate: page.effectiveDate,
+    updatedAt: page.updatedAt,
+    pageType: page.pageType,
+  };
 }
 
 export async function publishManagedPageVersionAction(

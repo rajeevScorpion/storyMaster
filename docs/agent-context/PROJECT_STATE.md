@@ -68,10 +68,13 @@ using the query at the bottom of this section.
 
 Everything up to 068 is long-applied.
 
-**099/100 must be applied to dev before Phase 6/7 of the legal/auth UX pack land** (checkbox UI, OAuth gate,
-seed content) — the code is written to degrade gracefully without them, but the actual consent flow needs
-both tables to do anything. `legal_consent_gate_enabled` stays off after applying; flip it deliberately once
-Phase 7's content is published. See `docs/legal-consent-model.md` for the full schema and gate logic.
+Phase 6 of the legal/auth UX pack (the sign-up checkbox, the legal document modal, and the post-OAuth
+`/auth/accept-terms` gate) has since **landed in code** without either migration applied — by design, it
+degrades to fully inert: `recordLegalAcceptance` no-ops, `getRequiredLegalDocuments()` returns `[]`, and the
+`proxy.ts` gate never redirects anyone. **099/100 must be applied to dev before Phase 7** (seed content,
+publishing real versions) can do anything observable. `legal_consent_gate_enabled` stays off after applying;
+flip it deliberately once Phase 7's content is published. See `docs/legal-consent-model.md` for the full
+schema and gate logic.
 
 ### Production (`pddjsopcemsfiwyvhlkr`)
 

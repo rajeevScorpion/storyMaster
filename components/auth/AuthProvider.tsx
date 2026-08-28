@@ -7,6 +7,7 @@ import AuthDialog, { type AuthActionResult, type AuthDialogMode } from '@/compon
 import type { User } from '@supabase/supabase-js';
 import { getStoryPersistence } from '@/lib/persistence';
 import { startNavigationProgress } from '@/lib/navigation/progress';
+import { recordLegalAcceptanceAction } from '@/app/actions/legal';
 
 export interface AuthContextType {
   user: User | null;
@@ -166,6 +167,16 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     if (data.session) {
+      // Awaited, not fire-and-forget: finishAuthFlow() below does a full
+      // window.location.href navigation, which can abort an in-flight
+      // request from the page that's unloading. This is best-effort, not the
+      // sole enforcement -- proxy.ts's consent gate (once enabled) backstops
+      // any gap here, including the "confirm your email first" path below
+      // where there's no session yet to record acceptance against.
+      await recordLegalAcceptanceAction({
+        documentKeys: ['terms', 'privacy_policy'],
+        surface: 'email_signup',
+      });
       finishAuthFlow();
       return { message: 'Account created and signed in.' };
     }

@@ -123,6 +123,10 @@ export interface LegalAcceptanceState {
   hasAllRequiredAcceptances: boolean;
   /** page_key of every required document the user has not accepted at its current version. */
   missingDocumentKeys: string[];
+  /** Subset of missingDocumentKeys where the user previously accepted an older version -- this is a re-consent, not a first-time gate. */
+  reconsentDocumentKeys: string[];
+  /** Subset of missingDocumentKeys the user has never accepted at any version -- a genuine first-time gate (e.g. fresh OAuth signup). */
+  firstTimeDocumentKeys: string[];
   requiredDocuments: RequiredLegalDocument[];
 }
 
@@ -133,13 +137,27 @@ export async function getUserAcceptanceState(userId: string): Promise<LegalAccep
     fetchUserAcceptedVersions(userId),
   ]);
 
-  const missingDocumentKeys = required
-    .filter((doc) => !(accepted.get(doc.pageKey) ?? []).includes(doc.docVersion))
-    .map((doc) => doc.pageKey);
+  const missingDocumentKeys: string[] = [];
+  const reconsentDocumentKeys: string[] = [];
+  const firstTimeDocumentKeys: string[] = [];
+
+  for (const doc of required) {
+    const acceptedVersions = accepted.get(doc.pageKey) ?? [];
+    if (acceptedVersions.includes(doc.docVersion)) continue;
+
+    missingDocumentKeys.push(doc.pageKey);
+    if (acceptedVersions.length > 0) {
+      reconsentDocumentKeys.push(doc.pageKey);
+    } else {
+      firstTimeDocumentKeys.push(doc.pageKey);
+    }
+  }
 
   return {
     hasAllRequiredAcceptances: missingDocumentKeys.length === 0,
     missingDocumentKeys,
+    reconsentDocumentKeys,
+    firstTimeDocumentKeys,
     requiredDocuments: required,
   };
 }

@@ -6,6 +6,7 @@ import { unstable_cache } from 'next/cache';
 import { canViewManagedPage } from '@/lib/managed-pages/access';
 import {
   getCurrentManagedPageAccessContext,
+  getManagedPageByKey,
   getManagedPageBySlug,
   listManagedPageSummaries,
 } from '@/lib/managed-pages/service';
@@ -40,6 +41,29 @@ export const getCachedAllowedManagedPageBySlug = cache(
 
     // Only non-public pages pay for the per-user check, and it always runs
     // live — never cached — because its result depends on who is asking.
+    const context = await getCurrentManagedPageAccessContext();
+    return canViewManagedPage(page, context) ? page : null;
+  }
+);
+
+const cachedManagedPageRowByKey = unstable_cache(
+  (pageKey: string) => getManagedPageByKey(pageKey),
+  ['managed-page-row-by-key'],
+  { revalidate: MANAGED_PAGE_ROW_REVALIDATE_SECONDS, tags: [MANAGED_PAGES_CACHE_TAG] }
+);
+
+/**
+ * Looked up by `page_key` rather than slug — used by the legal document
+ * viewer (components/legal/LegalDocumentModal.tsx), which links to "Terms"
+ * and "Privacy" as fixed concepts, not as whatever slug an admin happens to
+ * have set. Same public-page fast path as getCachedAllowedManagedPageBySlug.
+ */
+export const getCachedAllowedManagedPageByKey = cache(
+  async (pageKey: string): Promise<ManagedPageRecord | null> => {
+    const page = await cachedManagedPageRowByKey(pageKey);
+    if (!page || !page.enabled) return null;
+    if (page.accessLevel === 'public') return page;
+
     const context = await getCurrentManagedPageAccessContext();
     return canViewManagedPage(page, context) ? page : null;
   }

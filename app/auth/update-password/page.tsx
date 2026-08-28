@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { KeyRound } from 'lucide-react';
+import { KeyRound, Loader2 } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import KissagoLogo from '@/components/ui/KissagoLogo';
 
@@ -90,7 +90,7 @@ export default function UpdatePasswordPage() {
                   <label htmlFor="new-password" className="text-xs uppercase tracking-[0.16em] text-neutral-500">
                     New password
                   </label>
-                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition-colors focus-within:border-emerald-400/40 focus-within:shadow-[0_0_0_1px_rgba(52,211,153,0.25)]">
                     <KeyRound className="h-4 w-4 text-neutral-500" />
                     <input
                       id="new-password"
@@ -98,7 +98,7 @@ export default function UpdatePasswordPage() {
                       autoComplete="new-password"
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
-                      className="w-full bg-transparent text-sm text-neutral-100 outline-none placeholder:text-neutral-600"
+                      className="w-full bg-transparent text-sm text-neutral-100 outline-none placeholder:text-neutral-500"
                       placeholder="At least 8 characters"
                       disabled={isSubmitting}
                     />
@@ -109,7 +109,7 @@ export default function UpdatePasswordPage() {
                   <label htmlFor="confirm-new-password" className="text-xs uppercase tracking-[0.16em] text-neutral-500">
                     Confirm new password
                   </label>
-                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                  <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition-colors focus-within:border-emerald-400/40 focus-within:shadow-[0_0_0_1px_rgba(52,211,153,0.25)]">
                     <KeyRound className="h-4 w-4 text-neutral-500" />
                     <input
                       id="confirm-new-password"
@@ -117,7 +117,7 @@ export default function UpdatePasswordPage() {
                       autoComplete="new-password"
                       value={confirmPassword}
                       onChange={(event) => setConfirmPassword(event.target.value)}
-                      className="w-full bg-transparent text-sm text-neutral-100 outline-none placeholder:text-neutral-600"
+                      className="w-full bg-transparent text-sm text-neutral-100 outline-none placeholder:text-neutral-500"
                       placeholder="Repeat your password"
                       disabled={isSubmitting}
                     />
@@ -139,8 +139,10 @@ export default function UpdatePasswordPage() {
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full rounded-2xl bg-white px-4 py-3.5 text-sm font-semibold text-neutral-950 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-busy={isSubmitting}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-300 px-4 py-3.5 text-sm font-semibold text-neutral-950 shadow-[0_10px_40px_rgba(52,211,153,0.2)] transition-colors hover:bg-emerald-200 focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(52,211,153,0.5)] active:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-neutral-700 disabled:text-neutral-400 disabled:shadow-none"
                 >
+                  {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                   {isSubmitting ? 'Updating password...' : 'Save new password'}
                 </button>
               </form>
