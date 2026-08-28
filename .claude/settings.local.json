@@ -83,5 +83,11 @@
         "d:/AiCoding/storyMaster/tsconfig.tsbuildinfo"
       ]
     }
-  }
+  },
+  "enabledMcpjsonServers": [
+    "vercel",
+    "github",
+    "supabase",
+    "shadcn"
+  ]
 }
