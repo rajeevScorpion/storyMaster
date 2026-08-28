@@ -19,6 +19,7 @@ export interface ManagedPageSeedDefinition {
 export const RESERVED_ROOT_SLUGS = [
   '',
   '_next',
+  'account-restricted',
   'admin',
   'api',
   'auth',
@@ -26,11 +27,14 @@ export const RESERVED_ROOT_SLUGS = [
   'explore',
   'favicon.ico',
   'gallery',
+  'help-legal',
   'icon',
+  'learn',
   'signed-out',
   'sounds',
   'story',
   'storyline',
+  'tutorial',
   'wallet',
 ] as const;
 

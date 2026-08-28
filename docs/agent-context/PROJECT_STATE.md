@@ -304,6 +304,16 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   blurbs have nothing to show until intros are generated.
 - Published `story_generation` prompts need a **republish** to pick up series rules.
 - Auto-build stories reject character mixing.
+- `/blog` (`page_key: blog_news`) is unlinked from the whole app since the Help & Legal rework (2026-08-28) —
+  the legal/auth UX pack is explicit that News does not belong in a legal destination, and there is no
+  About/Updates surface to relocate it to yet. The route and content are untouched; only navigation was
+  removed. Build one before re-linking it, rather than putting it back in Help & Legal.
+- **Age assurance and verifiable parental consent are explicitly deferred**, not an oversight. The
+  legal/auth UX pack's audit (`docs/legal-auth-audit.md`) confirmed a minor can create a Kissago account with
+  no restriction at any layer (dialog, `AuthProvider`, `proxy.ts`, or the DB). The pack's adopted default is
+  adult-held accounts with children supervised under a parent/guardian/educator's account — a policy and
+  copy change, not an age-verification system. Real age assurance (DPDP-style verifiable parental consent,
+  COPPA if the US is ever targeted) is a materially larger build and stays out of this pack's scope.
 
 **Duplication to keep in sync**
 - Portrait/reference helpers are copied into `lib/ai/portraits-server.ts`, and

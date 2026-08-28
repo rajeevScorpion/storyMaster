@@ -4,8 +4,12 @@ import { cache } from 'react';
 import { unstable_cache } from 'next/cache';
 
 import { canViewManagedPage } from '@/lib/managed-pages/access';
-import { getCurrentManagedPageAccessContext, getManagedPageBySlug } from '@/lib/managed-pages/service';
-import type { ManagedPageRecord } from '@/lib/managed-pages/types';
+import {
+  getCurrentManagedPageAccessContext,
+  getManagedPageBySlug,
+  listManagedPageSummaries,
+} from '@/lib/managed-pages/service';
+import type { ManagedPageRecord, ManagedPageSummary } from '@/lib/managed-pages/types';
 
 /** Bump-invalidated by app/actions/managed-pages.ts via updateTag() after any admin save/reset. */
 export const MANAGED_PAGES_CACHE_TAG = 'managed-pages';
@@ -39,4 +43,21 @@ export const getCachedAllowedManagedPageBySlug = cache(
     const context = await getCurrentManagedPageAccessContext();
     return canViewManagedPage(page, context) ? page : null;
   }
+);
+
+const cachedManagedPageSummaries = unstable_cache(
+  () => listManagedPageSummaries(),
+  ['managed-page-summaries'],
+  { revalidate: MANAGED_PAGE_ROW_REVALIDATE_SECONDS, tags: [MANAGED_PAGES_CACHE_TAG] }
+);
+
+/**
+ * The full summary list (no `content`), cross-request cached and per-request
+ * deduped. Used by the Help & Legal index, which — unlike the single-page
+ * route — genuinely needs to know about every page (including non-public
+ * ones) to decide what to list, so the per-user access filtering happens at
+ * the call site rather than being skippable here.
+ */
+export const getCachedManagedPageSummaries = cache(
+  async (): Promise<ManagedPageSummary[]> => cachedManagedPageSummaries()
 );

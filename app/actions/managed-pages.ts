@@ -4,7 +4,7 @@ import { updateTag } from 'next/cache';
 
 import { MANAGED_PAGES_CACHE_TAG } from '@/lib/managed-pages/cache';
 import {
-  getManagedFooterLinks,
+  getEssentialLegalFooterLinks,
   getManagedPagesAdminState,
   resetManagedPageToSeed,
   saveManagedPage,
@@ -20,9 +20,8 @@ export async function getManagedPagesAdminStateAction(): Promise<ManagedPagesAdm
 export async function saveManagedPageAction(input: ManagedPageSaveInput): Promise<ManagedPagesAdminState> {
   const { user } = await verifyAdmin();
   await saveManagedPage(input, user.id);
-  // Cross-request Data Cache invalidation (unstable_cache tag) for other
-  // viewers; saveManagedPage() already cleared the in-process footer-link
-  // cache so the admin's own next fetch is immediate either way.
+  // Cross-request Data Cache invalidation (unstable_cache tag) for read-your-
+  // own-writes on the admin's own next fetch and for every other viewer.
   updateTag(MANAGED_PAGES_CACHE_TAG);
   return getManagedPagesAdminState();
 }
@@ -34,6 +33,6 @@ export async function resetManagedPageToSeedAction(pageKey: string): Promise<Man
   return getManagedPagesAdminState();
 }
 
-export async function getManagedFooterLinksAction(): Promise<ManagedFooterLink[]> {
-  return getManagedFooterLinks();
+export async function getEssentialLegalFooterLinksAction(): Promise<ManagedFooterLink[]> {
+  return getEssentialLegalFooterLinks();
 }

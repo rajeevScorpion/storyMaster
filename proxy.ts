@@ -8,10 +8,17 @@ export async function proxy(request: NextRequest) {
     const adminUserId = process.env.ADMIN_USER_ID;
     const pathname = request.nextUrl.pathname;
     const restrictionRoute = '/account-restricted';
+    // A restricted user must still be able to read the legal documents they're
+    // being held to and find the Help & Legal centre — this hardcodes the
+    // current default managed-page slugs (see lib/managed-pages/registry.ts)
+    // rather than adding a DB round trip to this already-narrow code path; if
+    // an admin renames one of these slugs, update this list to match.
+    const legalSlugPattern = /^\/(terms|privacy|content-usage-policy|ai-disclosure|refund-policy|account-deletion|contact|help-legal)$/;
     const allowedWhileRestricted = (
       pathname === restrictionRoute
       || pathname.startsWith('/auth/')
       || pathname === '/signed-out'
+      || legalSlugPattern.test(pathname)
     );
 
     if (user && user.id !== adminUserId) {

@@ -19,7 +19,7 @@ import {
   type ManagedPageType,
   type ManagedPagesAdminState,
 } from '@/lib/managed-pages/types';
-import { canShowManagedPageInFooter, canViewManagedPage, type ManagedPageAccessContext } from '@/lib/managed-pages/access';
+import { canViewManagedPage, type ManagedPageAccessContext } from '@/lib/managed-pages/access';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type { DbManagedPage } from '@/lib/types/database';
@@ -43,9 +43,6 @@ type ManagedPageUpdateRow = Partial<
     | 'updated_by'
   >
 >;
-
-const FOOTER_LINK_CACHE_TTL_MS = 60_000;
-const footerLinkCache = new Map<string, { links: ManagedFooterLink[]; cachedAt: number }>();
 
 function isManagedPageAccessLevel(value: string): value is ManagedPageAccessLevel {
   return (MANAGED_PAGE_ACCESS_LEVELS as readonly string[]).includes(value);
@@ -191,40 +188,29 @@ export async function getManagedPagesAdminState(): Promise<ManagedPagesAdminStat
   };
 }
 
-function getFooterCacheKey(context: ManagedPageAccessContext): string {
-  const role = context.isAdmin ? 'admin' : context.userId ? 'authenticated' : 'public';
-  const billing = context.billingEnabled ? 'billing-on' : 'billing-off';
-  return `${role}:${billing}`;
-}
+const ESSENTIAL_LEGAL_FOOTER_KEYS = ['terms', 'privacy_policy'] as const;
 
-export function invalidateManagedFooterLinksCache(): void {
-  footerLinkCache.clear();
-}
-
-export async function getManagedFooterLinks(): Promise<ManagedFooterLink[]> {
-  const context = await getCurrentManagedPageAccessContext();
-  const cacheKey = getFooterCacheKey(context);
-  const cached = footerLinkCache.get(cacheKey);
-
-  if (cached && Date.now() - cached.cachedAt < FOOTER_LINK_CACHE_TTL_MS) {
-    return cached.links;
-  }
-
+/**
+ * Terms + Privacy hrefs for the minimal site-wide footer. Deliberately
+ * independent of `show_in_footer`/`footer_order` (the old generic,
+ * admin-configurable footer list): these two must remain reachable from
+ * every page regardless of that toggle, since the pack's stop condition is
+ * that legal content stay accessible to logged-out and restricted users.
+ * Filtered to `enabled && accessLevel === 'public'` — never gated on the
+ * viewer, so this needs no per-request auth check at all.
+ */
+export async function getEssentialLegalFooterLinks(): Promise<ManagedFooterLink[]> {
   const pages = await listManagedPageSummaries();
 
-  const links = pages
-    .filter((page) => canShowManagedPageInFooter(page, context))
-    .sort((a, b) => a.footerOrder - b.footerOrder || a.title.localeCompare(b.title))
+  return ESSENTIAL_LEGAL_FOOTER_KEYS.map((key) => pages.find((page) => page.pageKey === key))
+    .filter((page): page is ManagedPageSummary => Boolean(page && page.enabled && page.accessLevel === 'public'))
     .map((page) => ({
       key: page.pageKey,
       title: page.title,
       href: `/${page.slug}`,
-      openInNewTab: page.openInNewTab,
-      footerOrder: page.footerOrder,
+      openInNewTab: false,
+      footerOrder: 0,
     }));
-
-  footerLinkCache.set(cacheKey, { links, cachedAt: Date.now() });
-  return links;
 }
 
 export async function getAllowedManagedPageBySlug(slug: string): Promise<ManagedPageRecord | null> {
@@ -332,7 +318,6 @@ export async function saveManagedPage(
     .single();
 
   if (error) throw new Error(`Failed to save managed page: ${error.message}`);
-  invalidateManagedFooterLinksCache();
   return mapDbManagedPage(data as DbManagedPage);
 }
 
@@ -371,7 +356,6 @@ export async function resetManagedPageToSeed(
     .single();
 
   if (error) throw new Error(`Failed to reset managed page: ${error.message}`);
-  invalidateManagedFooterLinksCache();
   return mapDbManagedPage(data as DbManagedPage);
 }
 

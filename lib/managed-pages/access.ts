@@ -19,10 +19,3 @@ export function canViewManagedPage(
 
   return false;
 }
-
-export function canShowManagedPageInFooter(
-  page: Pick<ManagedPageRecord, 'enabled' | 'showInFooter' | 'accessLevel'>,
-  context: ManagedPageAccessContext
-): boolean {
-  return page.showInFooter && canViewManagedPage(page, context);
-}
