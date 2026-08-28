@@ -68,7 +68,11 @@ export default async function ManagedPageRoute({ params }: ManagedPageRouteProps
           {page.excerpt ? (
             <p className="mt-5 max-w-3xl text-lg leading-8 text-neutral-300">{page.excerpt}</p>
           ) : null}
-          <p className="mt-5 text-sm text-neutral-500">Last updated {formatManagedPageDate(page.updatedAt)}</p>
+          <p className="mt-5 text-sm text-neutral-500">
+            {page.docVersion ? <>Version {page.docVersion} · </> : null}
+            {page.effectiveDate ? <>Effective {formatManagedPageDate(page.effectiveDate)} · </> : null}
+            Last updated {formatManagedPageDate(page.updatedAt)}
+          </p>
 
           {isLegal && headings.length > 0 ? (
             <details className="mt-8 rounded-2xl border border-white/10 bg-white/[0.03] p-4 lg:hidden">

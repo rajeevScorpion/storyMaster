@@ -63,8 +63,15 @@ using the query at the bottom of this section.
 | 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Applied** (0 rows — nobody promoted yet). |
 | 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **Applied on both** 2026-08-26. |
 | 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
+| 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Not yet applied to either environment** — produced 2026-08-28 as part of the legal/auth UX pack. Additive and inert: a database without it renders exactly as before. |
+| 100 | `legal_acceptances` | table `legal_acceptances` | **Not yet applied to either environment** — same pack, same date. `lib/legal/consent.ts` fails closed (gate stays inert) when this table is absent. |
 
 Everything up to 068 is long-applied.
+
+**099/100 must be applied to dev before Phase 6/7 of the legal/auth UX pack land** (checkbox UI, OAuth gate,
+seed content) — the code is written to degrade gracefully without them, but the actual consent flow needs
+both tables to do anything. `legal_consent_gate_enabled` stays off after applying; flip it deliberately once
+Phase 7's content is published. See `docs/legal-consent-model.md` for the full schema and gate logic.
 
 ### Production (`pddjsopcemsfiwyvhlkr`)
 
@@ -186,6 +193,7 @@ verified 2026-08-26.
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
+| Legal consent gate | `legal_consent_gate_enabled` | **absent** — migration 099 not applied yet | **absent** — same |
 
 Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
 accurate description of **production** filed under a heading that read as though it covered dev. When

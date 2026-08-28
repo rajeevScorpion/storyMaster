@@ -9,9 +9,11 @@ import {
   normalizeManagedPageSlug,
 } from '@/lib/managed-pages/registry';
 import {
+  MANAGED_PAGE_ACCEPTANCE_KINDS,
   MANAGED_PAGE_ACCESS_LEVELS,
   MANAGED_PAGE_TYPES,
   type ManagedFooterLink,
+  type ManagedPageAcceptanceKind,
   type ManagedPageAccessLevel,
   type ManagedPageRecord,
   type ManagedPageSaveInput,
@@ -41,6 +43,10 @@ type ManagedPageUpdateRow = Partial<
     | 'metadata_json'
     | 'updated_at'
     | 'updated_by'
+    | 'doc_version'
+    | 'effective_date'
+    | 'requires_acceptance'
+    | 'acceptance_kind'
   >
 >;
 
@@ -50,6 +56,10 @@ function isManagedPageAccessLevel(value: string): value is ManagedPageAccessLeve
 
 function isManagedPageType(value: string): value is ManagedPageType {
   return (MANAGED_PAGE_TYPES as readonly string[]).includes(value);
+}
+
+function isManagedPageAcceptanceKind(value: string): value is ManagedPageAcceptanceKind {
+  return (MANAGED_PAGE_ACCEPTANCE_KINDS as readonly string[]).includes(value);
 }
 
 export function getSupportEmail(): string {
@@ -74,6 +84,15 @@ export function mapDbManagedPage(row: DbManagedPage): ManagedPageRecord {
     isSystemPage: row.is_system_page,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
+    // select('*') simply omits these keys on a database that hasn't applied
+    // migration 099 — `?? null`/`?? false` turns "key absent" and "column
+    // exists but unset" into the same safe value rather than `undefined`.
+    docVersion: row.doc_version ?? null,
+    effectiveDate: row.effective_date ?? null,
+    requiresAcceptance: row.requires_acceptance ?? false,
+    acceptanceKind: row.acceptance_kind ?? null,
+    reacceptanceRequired: row.reacceptance_required ?? false,
+    publishedAt: row.published_at ?? null,
   };
 }
 
@@ -96,6 +115,16 @@ function mapDbManagedPageSummary(row: DbManagedPageSummaryRow): ManagedPageSumma
     isSystemPage: row.is_system_page,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
+    // Listings (footer, Help & Legal index) don't need version info, and
+    // MANAGED_PAGE_SUMMARY_COLUMNS deliberately excludes these columns so this
+    // query never has to fail-closed-retry around migration 099 — the single
+    // full-row [slug] page is where doc_version/effectiveDate actually render.
+    docVersion: null,
+    effectiveDate: null,
+    requiresAcceptance: false,
+    acceptanceKind: null,
+    reacceptanceRequired: false,
+    publishedAt: null,
   };
 }
 
@@ -170,6 +199,20 @@ export async function getManagedPageBySlug(slug: string): Promise<ManagedPageRec
     .from('managed_pages')
     .select('*')
     .eq('slug', normalizedSlug)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load managed page: ${error.message}`);
+  if (!data) return null;
+
+  return mapDbManagedPage(data as DbManagedPage);
+}
+
+export async function getManagedPageByKey(pageKey: string): Promise<ManagedPageRecord | null> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('managed_pages')
+    .select('*')
+    .eq('page_key', pageKey)
     .maybeSingle();
 
   if (error) throw new Error(`Failed to load managed page: ${error.message}`);
@@ -272,6 +315,19 @@ function validateManagedPageInput(input: ManagedPageSaveInput): ManagedPageSaveI
     throw new Error('Footer order must be a number.');
   }
 
+  const docVersion = input.docVersion?.trim() || null;
+  const effectiveDate = input.effectiveDate?.trim() || null;
+  const acceptanceKind = input.acceptanceKind;
+  const requiresAcceptance = Boolean(input.requiresAcceptance);
+
+  if (acceptanceKind !== null && !isManagedPageAcceptanceKind(acceptanceKind)) {
+    throw new Error('Invalid acceptance kind.');
+  }
+
+  if (requiresAcceptance && (!docVersion || !acceptanceKind)) {
+    throw new Error('A document version and acceptance kind are required before a page can require acceptance.');
+  }
+
   return {
     pageKey,
     title,
@@ -284,6 +340,10 @@ function validateManagedPageInput(input: ManagedPageSaveInput): ManagedPageSaveI
     pageType,
     content: input.content,
     excerpt: input.excerpt?.trim() || null,
+    docVersion,
+    effectiveDate,
+    requiresAcceptance,
+    acceptanceKind,
   };
 }
 
@@ -307,6 +367,10 @@ export async function saveManagedPage(
     excerpt: normalized.excerpt,
     updated_at: new Date().toISOString(),
     updated_by: updatedBy,
+    doc_version: normalized.docVersion,
+    effective_date: normalized.effectiveDate,
+    requires_acceptance: normalized.requiresAcceptance,
+    acceptance_kind: normalized.acceptanceKind,
   };
 
   const supabase = createAdminClient();

@@ -444,6 +444,13 @@ export interface DbManagedPage {
   created_at: string;
   updated_at: string;
   updated_by: string | null;
+  /** Migration 099; absent (undefined via `select('*')`) until it is applied. */
+  doc_version?: string | null;
+  effective_date?: string | null;
+  requires_acceptance?: boolean;
+  acceptance_kind?: 'accepted' | 'acknowledged' | null;
+  reacceptance_required?: boolean;
+  published_at?: string | null;
 }
 
 // Gallery types
