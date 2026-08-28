@@ -8,6 +8,7 @@ import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
 import { COINS_PER_BEAT } from '@/lib/types/pricing';
+import { startNavigationProgress } from '@/lib/navigation/progress';
 
 interface UserMenuProps {
   onMyStories?: () => void;
@@ -159,6 +160,10 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
               <button
                 onClick={() => {
                   setIsOpen(false);
+                  // signOut() ends in a full document navigation to /signed-out
+                  // (see AuthProvider's SIGNED_OUT handler), which the progress
+                  // bar's click listener can't see coming — start it manually.
+                  startNavigationProgress();
                   signOut();
                 }}
                 className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-red-300 transition-colors"

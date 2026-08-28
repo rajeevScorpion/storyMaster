@@ -6,6 +6,7 @@ import { useMyStoriesStore } from '@/lib/store/my-stories-store';
 import AuthDialog, { type AuthActionResult, type AuthDialogMode } from '@/components/auth/AuthDialog';
 import type { User } from '@supabase/supabase-js';
 import { getStoryPersistence } from '@/lib/persistence';
+import { startNavigationProgress } from '@/lib/navigation/progress';
 
 export interface AuthContextType {
   user: User | null;
@@ -124,6 +125,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
 
     const currentPath = `${window.location.pathname}${window.location.search}`;
     if (next !== currentPath) {
+      startNavigationProgress();
       window.location.href = next;
     }
   }, [pendingReturnTo]);
