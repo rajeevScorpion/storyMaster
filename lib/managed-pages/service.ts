@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { getFeatureFlag } from '@/lib/ai/model-config';
+import { getFeatureFlag, setFeatureFlag } from '@/lib/ai/model-config';
 import {
   MANAGED_PAGE_DEFINITIONS,
   RESERVED_ROOT_SLUGS,
@@ -222,13 +222,21 @@ export async function getManagedPageByKey(pageKey: string): Promise<ManagedPageR
 }
 
 export async function getManagedPagesAdminState(): Promise<ManagedPagesAdminState> {
-  const pages = await listManagedPages();
+  const [pages, legalConsentGateEnabled] = await Promise.all([
+    listManagedPages(),
+    getFeatureFlag('legal_consent_gate_enabled', false),
+  ]);
 
   return {
     pages,
     supportEmailConfigured: Boolean(getSupportEmail()),
     reservedSlugs: [...RESERVED_ROOT_SLUGS],
+    legalConsentGateEnabled,
   };
+}
+
+export async function setLegalConsentGateEnabled(enabled: boolean): Promise<void> {
+  await setFeatureFlag('legal_consent_gate_enabled', enabled);
 }
 
 const ESSENTIAL_LEGAL_FOOTER_KEYS = ['terms', 'privacy_policy'] as const;

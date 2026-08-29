@@ -8,6 +8,7 @@ import {
   getManagedPagesAdminState,
   resetManagedPageToSeed,
   saveManagedPage,
+  setLegalConsentGateEnabled,
 } from '@/lib/managed-pages/service';
 import { resolveManagedPageTokens } from '@/lib/managed-pages/render';
 import type {
@@ -21,6 +22,19 @@ import { verifyAdmin } from '@/lib/supabase/admin';
 
 export async function getManagedPagesAdminStateAction(): Promise<ManagedPagesAdminState> {
   await verifyAdmin();
+  return getManagedPagesAdminState();
+}
+
+/**
+ * The switch that turns the consent gate from inert to enforced (proxy.ts
+ * starts redirecting non-compliant sessions to /auth/accept-terms). Kept
+ * deliberately separate from saving/publishing a page — flipping it is a
+ * site-wide behaviour change, not a content edit.
+ */
+export async function setLegalConsentGateEnabledAction(enabled: boolean): Promise<ManagedPagesAdminState> {
+  await verifyAdmin();
+  await setLegalConsentGateEnabled(enabled);
+  updateTag(MANAGED_PAGES_CACHE_TAG);
   return getManagedPagesAdminState();
 }
 

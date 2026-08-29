@@ -12,6 +12,7 @@ import {
   publishManagedPageVersionAction,
   resetManagedPageToSeedAction,
   saveManagedPageAction,
+  setLegalConsentGateEnabledAction,
 } from '@/app/actions/managed-pages';
 import {
   MANAGED_PAGE_ACCEPTANCE_KINDS,
@@ -102,6 +103,7 @@ export default function ManagedPagesSettings() {
   const [draft, setDraft] = useState<ManagedPageSaveInput | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [gateSaving, setGateSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -231,6 +233,29 @@ export default function ManagedPagesSettings() {
     }
   };
 
+  const toggleConsentGate = async (enabled: boolean) => {
+    if (enabled) {
+      const confirmed = window.confirm(
+        'Turning this on redirects every signed-in user without a current acceptance to /auth/accept-terms on their next request. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
+    setGateSaving(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const nextState = await setLegalConsentGateEnabledAction(enabled);
+      setState(nextState);
+      setMessage(enabled ? 'Legal consent gate is now enforced.' : 'Legal consent gate is now off.');
+    } catch (gateError) {
+      setError(gateError instanceof Error ? gateError.message : 'Failed to update the legal consent gate.');
+    } finally {
+      setGateSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-neutral-950 p-8 text-neutral-200">
@@ -268,6 +293,31 @@ export default function ManagedPagesSettings() {
           Settings overview
         </Link>
       </div>
+
+      <div
+        className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4 ${
+          state?.legalConsentGateEnabled
+            ? 'border-emerald-500/30 bg-emerald-500/10'
+            : 'border-amber-500/30 bg-amber-500/10'
+        }`}
+      >
+        <div>
+          <p className={`text-sm font-medium ${state?.legalConsentGateEnabled ? 'text-emerald-200' : 'text-amber-100'}`}>
+            Legal consent gate {state?.legalConsentGateEnabled ? '— enforced' : '— off'}
+          </p>
+          <p className="mt-1 text-xs text-neutral-400">
+            Site-wide switch (`legal_consent_gate_enabled`). While off, sign-up still records acceptance but
+            proxy.ts never redirects anyone — safe to publish documents and test before turning this on.
+          </p>
+        </div>
+        <Toggle
+          checked={Boolean(state?.legalConsentGateEnabled)}
+          onChange={toggleConsentGate}
+          label="Toggle legal consent gate"
+        />
+      </div>
+
+      {gateSaving ? <p className="mb-5 text-xs text-neutral-500">Updating…</p> : null}
 
       {error ? (
         <div className="mb-5 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">

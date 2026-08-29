@@ -80,4 +80,6 @@ export interface ManagedPagesAdminState {
   pages: ManagedPageRecord[];
   supportEmailConfigured: boolean;
   reservedSlugs: string[];
+  /** `legal_consent_gate_enabled` feature flag — enforced in proxy.ts, not by this admin screen itself. */
+  legalConsentGateEnabled: boolean;
 }
