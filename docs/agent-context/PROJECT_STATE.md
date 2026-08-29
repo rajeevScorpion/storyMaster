@@ -63,8 +63,51 @@ using the query at the bottom of this section.
 | 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Applied** (0 rows — nobody promoted yet). |
 | 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **Applied on both** 2026-08-26. |
 | 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
+| 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Not yet applied to either environment** — produced 2026-08-28 as part of the legal/auth UX pack. Additive and inert: a database without it renders exactly as before. |
+| 100 | `legal_acceptances` | table `legal_acceptances` | **Not yet applied to either environment** — same pack, same date. `lib/legal/consent.ts` fails closed (gate stays inert) when this table is absent. |
 
 Everything up to 068 is long-applied.
+
+Phase 6 of the legal/auth UX pack (the sign-up checkbox, the legal document modal, and the post-OAuth
+`/auth/accept-terms` gate) has since **landed in code** without either migration applied — by design, it
+degrades to fully inert: `recordLegalAcceptance` no-ops, `getRequiredLegalDocuments()` returns `[]`, and the
+`proxy.ts` gate never redirects anyone. **099/100 must be applied to dev before Phase 7** (seed content,
+publishing real versions) can do anything observable. `legal_consent_gate_enabled` stays off after applying;
+flip it deliberately once Phase 7's content is published. See `docs/legal-consent-model.md` for the full
+schema and gate logic.
+
+**Phase 7 (seed content reconciliation) landed in code 2026-08-29.** The owner supplied the previously-blocked
+legal facts (entity, address, jurisdiction, contact aliases, Grievance Officer, effective date — see
+`lib/legal/business-config.ts`, the single source of truth for all of it). `lib/managed-pages/registry.ts`'s
+seed content for `terms`, `privacy_policy`, `ai_disclosure`, and `content_usage_policy` (retitled *Safety,
+Community & Grievance Policy*) was rewritten from scratch against those facts — no bracket placeholders remain
+(`lib/managed-pages/registry.legal-content.test.ts` asserts this). The rewrite also corrects every factual gap
+the old starter drafts glossed over: the real vendor list (Supabase, Google, OpenAI, xAI, Runware, ElevenLabs,
+Cloudflare R2, Razorpay, Vercel), the `store: true` retention disclosure on the OpenAI and Gemini image calls,
+no self-serve account deletion, the real media-retention schedule, no moderation queue/report flow yet, no
+self-serve subscription cancellation, and Kids mode being a catalogue filter with no parental controls.
+
+**Still owner-only, not done by this change:** the live `managed_pages` rows in both databases still hold
+whatever content was seeded historically — this code change updates the *seed source*, not the database. To
+make the new text live once 099/100 are applied to an environment:
+1. In `/admin/settings/pages`, open each of the four pages and use **Reset to seed** (or paste the new content
+   if the admin has since hand-edited it) to pull in the rewritten text.
+2. Set `Document version` = `1.0.0` and `Effective date` = `2026-08-29` on all four.
+3. Set `Acceptance kind` = `accepted` on `terms`, `acknowledged` on `privacy_policy`; leave `ai_disclosure` and
+   `content_usage_policy` as notices with `Requires acceptance` off (matching what `AcceptTermsGate` actually
+   gates on today — only `terms`/`privacy_policy`).
+4. Set `Requires acceptance` = on for `terms` and `privacy_policy` only, then **Publish (major)** on each of
+   the four (first real content, following every starter draft).
+5. Only then flip `legal_consent_gate_enabled` on.
+
+**Deliberately not built in this change:** the pack's "Future Viewer Subscription" section asks for
+entitlement architecture flexible enough to add paid viewer plans later without a rewrite. Kissago already has
+exactly that separation on the *creator* side (`lib/pricing/entitlement-tier.shared.ts`'s `PlanKey` /
+`resolveEffectiveEntitlementTier`, decoupled from billing truth in `snapshot.planKey`). A viewer-subscription
+dimension is a genuinely new product feature, not a documentation gap, and was not built speculatively here —
+the Terms (`terms`, §7) already use non-hardcoded language ("usage limits communicated within the Service")
+precisely so that feature can land later without a Terms rewrite. Design the viewer entitlement as a parallel
+dimension to `PlanKey` (not a repurposing of it) when that feature is actually scoped.
 
 ### Production (`pddjsopcemsfiwyvhlkr`)
 
@@ -186,6 +229,7 @@ verified 2026-08-26.
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
+| Legal consent gate | `legal_consent_gate_enabled` | **absent** — migration 099 not applied yet | **absent** — same |
 
 Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
 accurate description of **production** filed under a heading that read as though it covered dev. When
@@ -304,6 +348,16 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   blurbs have nothing to show until intros are generated.
 - Published `story_generation` prompts need a **republish** to pick up series rules.
 - Auto-build stories reject character mixing.
+- `/blog` (`page_key: blog_news`) is unlinked from the whole app since the Help & Legal rework (2026-08-28) —
+  the legal/auth UX pack is explicit that News does not belong in a legal destination, and there is no
+  About/Updates surface to relocate it to yet. The route and content are untouched; only navigation was
+  removed. Build one before re-linking it, rather than putting it back in Help & Legal.
+- **Age assurance and verifiable parental consent are explicitly deferred**, not an oversight. The
+  legal/auth UX pack's audit (`docs/legal-auth-audit.md`) confirmed a minor can create a Kissago account with
+  no restriction at any layer (dialog, `AuthProvider`, `proxy.ts`, or the DB). The pack's adopted default is
+  adult-held accounts with children supervised under a parent/guardian/educator's account — a policy and
+  copy change, not an age-verification system. Real age assurance (DPDP-style verifiable parental consent,
+  COPPA if the US is ever targeted) is a materially larger build and stays out of this pack's scope.
 
 **Duplication to keep in sync**
 - Portrait/reference helpers are copied into `lib/ai/portraits-server.ts`, and

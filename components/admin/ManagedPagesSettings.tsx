@@ -2,22 +2,27 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, FileText, RotateCcw, Save } from 'lucide-react';
+import { ExternalLink, FileText, RotateCcw, Save, UploadCloud } from 'lucide-react';
 
 import AdminToggle from '@/components/admin/AdminToggle';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 
 import {
   getManagedPagesAdminStateAction,
+  publishManagedPageVersionAction,
   resetManagedPageToSeedAction,
   saveManagedPageAction,
+  setLegalConsentGateEnabledAction,
 } from '@/app/actions/managed-pages';
 import {
+  MANAGED_PAGE_ACCEPTANCE_KINDS,
   MANAGED_PAGE_ACCESS_LEVELS,
   MANAGED_PAGE_TYPES,
   type ManagedPageRecord,
   type ManagedPageSaveInput,
   type ManagedPagesAdminState,
 } from '@/lib/managed-pages/types';
+import type { ManagedPageChangeType } from '@/lib/managed-pages/versioning';
 
 const LEGAL_REVIEW_KEYS = new Set([
   'privacy_policy',
@@ -53,8 +58,20 @@ function pageToInput(page: ManagedPageRecord): ManagedPageSaveInput {
     pageType: page.pageType,
     content: page.content,
     excerpt: page.excerpt,
+    docVersion: page.docVersion,
+    effectiveDate: page.effectiveDate,
+    requiresAcceptance: page.requiresAcceptance,
+    acceptanceKind: page.acceptanceKind,
   };
 }
+
+const ACCEPTANCE_KIND_OPTIONS = [
+  { value: '', label: 'None' },
+  ...MANAGED_PAGE_ACCEPTANCE_KINDS.map((kind) => ({
+    value: kind,
+    label: kind === 'accepted' ? 'Accepted (contract action)' : 'Acknowledged (notice shown)',
+  })),
+];
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -86,6 +103,7 @@ export default function ManagedPagesSettings() {
   const [draft, setDraft] = useState<ManagedPageSaveInput | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [gateSaving, setGateSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,6 +143,10 @@ export default function ManagedPagesSettings() {
   const supportWarning = Boolean(draft?.content.includes('{{SUPPORT_EMAIL}}') && !state?.supportEmailConfigured);
   const legalDisableWarning = Boolean(draft && LEGAL_REVIEW_KEYS.has(draft.pageKey) && !draft.enabled);
   const canSave = Boolean(draft?.title.trim() && normalizedSlug && !duplicateSlug && !reservedSlug && !saving);
+  const hasUnsavedChanges = Boolean(
+    draft && selectedPage && JSON.stringify(draft) !== JSON.stringify(pageToInput(selectedPage))
+  );
+  const canPublish = Boolean(draft?.docVersion && draft?.acceptanceKind && !hasUnsavedChanges && !saving);
 
   const updateDraft = <Key extends keyof ManagedPageSaveInput>(key: Key, value: ManagedPageSaveInput[Key]) => {
     setDraft((current) => (current ? { ...current, [key]: value } : current));
@@ -180,6 +202,60 @@ export default function ManagedPagesSettings() {
     }
   };
 
+  const publish = async (changeType: ManagedPageChangeType) => {
+    if (!draft || !selectedPage) return;
+
+    if (changeType === 'material') {
+      const confirmed = window.confirm(
+        'Publishing a material change requires every user to re-accept before they can continue using Kissago. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const nextState = await publishManagedPageVersionAction(draft.pageKey, changeType);
+      setState(nextState);
+      const updated = nextState.pages.find((page) => page.pageKey === draft.pageKey);
+      if (updated) setDraft(pageToInput(updated));
+      setMessage(
+        changeType === 'material'
+          ? `Version ${selectedPage.docVersion} published as a material change. Re-acceptance is now required.`
+          : `Version ${selectedPage.docVersion} published as a minor change. Existing acceptances still satisfy it.`
+      );
+    } catch (publishError) {
+      setError(publishError instanceof Error ? publishError.message : 'Failed to publish version.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleConsentGate = async (enabled: boolean) => {
+    if (enabled) {
+      const confirmed = window.confirm(
+        'Turning this on redirects every signed-in user without a current acceptance to /auth/accept-terms on their next request. Continue?'
+      );
+      if (!confirmed) return;
+    }
+
+    setGateSaving(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const nextState = await setLegalConsentGateEnabledAction(enabled);
+      setState(nextState);
+      setMessage(enabled ? 'Legal consent gate is now enforced.' : 'Legal consent gate is now off.');
+    } catch (gateError) {
+      setError(gateError instanceof Error ? gateError.message : 'Failed to update the legal consent gate.');
+    } finally {
+      setGateSaving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-neutral-950 p-8 text-neutral-200">
@@ -217,6 +293,31 @@ export default function ManagedPagesSettings() {
           Settings overview
         </Link>
       </div>
+
+      <div
+        className={`mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4 ${
+          state?.legalConsentGateEnabled
+            ? 'border-emerald-500/30 bg-emerald-500/10'
+            : 'border-amber-500/30 bg-amber-500/10'
+        }`}
+      >
+        <div>
+          <p className={`text-sm font-medium ${state?.legalConsentGateEnabled ? 'text-emerald-200' : 'text-amber-100'}`}>
+            Legal consent gate {state?.legalConsentGateEnabled ? '— enforced' : '— off'}
+          </p>
+          <p className="mt-1 text-xs text-neutral-400">
+            Site-wide switch (`legal_consent_gate_enabled`). While off, sign-up still records acceptance but
+            proxy.ts never redirects anyone — safe to publish documents and test before turning this on.
+          </p>
+        </div>
+        <Toggle
+          checked={Boolean(state?.legalConsentGateEnabled)}
+          onChange={toggleConsentGate}
+          label="Toggle legal consent gate"
+        />
+      </div>
+
+      {gateSaving ? <p className="mb-5 text-xs text-neutral-500">Updating…</p> : null}
 
       {error ? (
         <div className="mb-5 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
@@ -409,6 +510,95 @@ export default function ManagedPagesSettings() {
                   <Toggle checked={draft.openInNewTab} onChange={(value) => updateDraft('openInNewTab', value)} label="Toggle new tab" />
                 </div>
               </div>
+            </div>
+
+            <div className="mt-5 rounded-lg border border-white/10 bg-neutral-950 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-white">Version &amp; consent</p>
+                  <p className="mt-1 text-xs text-neutral-500">
+                    {selectedPage.publishedAt
+                      ? `Published v${selectedPage.docVersion} on ${formatDate(selectedPage.publishedAt)}${
+                          selectedPage.reacceptanceRequired ? ' — re-acceptance required' : ''
+                        }`
+                      : 'Not published yet.'}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => publish('minor')}
+                    disabled={!canPublish}
+                    className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-neutral-300 transition-colors hover:border-sky-500/30 hover:text-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <UploadCloud size={15} />
+                    Publish (minor)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => publish('material')}
+                    disabled={!canPublish}
+                    className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <UploadCloud size={15} />
+                    Publish (material)
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wider text-neutral-500">Document version</span>
+                  <input
+                    value={draft.docVersion ?? ''}
+                    onChange={(event) => updateDraft('docVersion', event.target.value || null)}
+                    placeholder="1.0.0"
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/50"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-medium uppercase tracking-wider text-neutral-500">Effective date</span>
+                  <input
+                    type="date"
+                    value={draft.effectiveDate ?? ''}
+                    onChange={(event) => updateDraft('effectiveDate', event.target.value || null)}
+                    className="mt-2 w-full rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/50"
+                  />
+                </label>
+
+                <div className="block">
+                  <span className="text-xs font-medium uppercase tracking-wider text-neutral-500">Acceptance kind</span>
+                  <div className="mt-2">
+                    <FilterDropdown
+                      fullWidth
+                      size="form"
+                      value={draft.acceptanceKind ?? ''}
+                      options={ACCEPTANCE_KIND_OPTIONS}
+                      onChange={(value) =>
+                        updateDraft('acceptanceKind', (value || null) as ManagedPageSaveInput['acceptanceKind'])
+                      }
+                      ariaLabel="Acceptance kind"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-neutral-900 p-3">
+                  <div>
+                    <p className="text-sm text-white">Requires acceptance</p>
+                    <p className="mt-1 text-xs text-neutral-500">Gates entry once legal_consent_gate_enabled is on.</p>
+                  </div>
+                  <Toggle
+                    checked={draft.requiresAcceptance}
+                    onChange={(value) => updateDraft('requiresAcceptance', value)}
+                    label="Toggle requires acceptance"
+                  />
+                </div>
+              </div>
+
+              {hasUnsavedChanges ? (
+                <p className="mt-3 text-xs text-amber-200">Save your changes before publishing — publishing snapshots the saved content, not this draft.</p>
+              ) : null}
             </div>
 
             <div className="mt-5 space-y-2">

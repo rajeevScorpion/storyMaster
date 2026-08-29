@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, LogOut } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
+import { startNavigationProgress } from '@/lib/navigation/progress';
 
 export default function RestrictedAccountActions() {
   const { signOut } = useAuth();
@@ -16,6 +17,7 @@ export default function RestrictedAccountActions() {
       disabled={busy}
       onClick={async () => {
         setBusy(true);
+        startNavigationProgress();
         await signOut();
         router.replace('/signed-out');
         router.refresh();
