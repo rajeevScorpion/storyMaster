@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { getFeatureFlag } from '@/lib/ai/model-config';
+import { getFeatureFlag, setFeatureFlag } from '@/lib/ai/model-config';
 import {
   MANAGED_PAGE_DEFINITIONS,
   RESERVED_ROOT_SLUGS,
@@ -9,16 +9,19 @@ import {
   normalizeManagedPageSlug,
 } from '@/lib/managed-pages/registry';
 import {
+  MANAGED_PAGE_ACCEPTANCE_KINDS,
   MANAGED_PAGE_ACCESS_LEVELS,
   MANAGED_PAGE_TYPES,
   type ManagedFooterLink,
+  type ManagedPageAcceptanceKind,
   type ManagedPageAccessLevel,
   type ManagedPageRecord,
   type ManagedPageSaveInput,
+  type ManagedPageSummary,
   type ManagedPageType,
   type ManagedPagesAdminState,
 } from '@/lib/managed-pages/types';
-import { canShowManagedPageInFooter, canViewManagedPage, type ManagedPageAccessContext } from '@/lib/managed-pages/access';
+import { canViewManagedPage, type ManagedPageAccessContext } from '@/lib/managed-pages/access';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import type { DbManagedPage } from '@/lib/types/database';
@@ -40,11 +43,12 @@ type ManagedPageUpdateRow = Partial<
     | 'metadata_json'
     | 'updated_at'
     | 'updated_by'
+    | 'doc_version'
+    | 'effective_date'
+    | 'requires_acceptance'
+    | 'acceptance_kind'
   >
 >;
-
-const FOOTER_LINK_CACHE_TTL_MS = 60_000;
-const footerLinkCache = new Map<string, { links: ManagedFooterLink[]; cachedAt: number }>();
 
 function isManagedPageAccessLevel(value: string): value is ManagedPageAccessLevel {
   return (MANAGED_PAGE_ACCESS_LEVELS as readonly string[]).includes(value);
@@ -52,6 +56,10 @@ function isManagedPageAccessLevel(value: string): value is ManagedPageAccessLeve
 
 function isManagedPageType(value: string): value is ManagedPageType {
   return (MANAGED_PAGE_TYPES as readonly string[]).includes(value);
+}
+
+function isManagedPageAcceptanceKind(value: string): value is ManagedPageAcceptanceKind {
+  return (MANAGED_PAGE_ACCEPTANCE_KINDS as readonly string[]).includes(value);
 }
 
 export function getSupportEmail(): string {
@@ -76,8 +84,52 @@ export function mapDbManagedPage(row: DbManagedPage): ManagedPageRecord {
     isSystemPage: row.is_system_page,
     updatedAt: row.updated_at,
     updatedBy: row.updated_by,
+    // select('*') simply omits these keys on a database that hasn't applied
+    // migration 099 — `?? null`/`?? false` turns "key absent" and "column
+    // exists but unset" into the same safe value rather than `undefined`.
+    docVersion: row.doc_version ?? null,
+    effectiveDate: row.effective_date ?? null,
+    requiresAcceptance: row.requires_acceptance ?? false,
+    acceptanceKind: row.acceptance_kind ?? null,
+    reacceptanceRequired: row.reacceptance_required ?? false,
+    publishedAt: row.published_at ?? null,
   };
 }
+
+type DbManagedPageSummaryRow = Omit<DbManagedPage, 'content'>;
+
+function mapDbManagedPageSummary(row: DbManagedPageSummaryRow): ManagedPageSummary {
+  return {
+    pageKey: row.page_key,
+    title: row.title,
+    slug: row.slug,
+    enabled: row.enabled,
+    showInFooter: row.show_in_footer,
+    footerOrder: row.footer_order,
+    openInNewTab: row.open_in_new_tab,
+    accessLevel: row.access_level,
+    pageType: row.page_type,
+    seedVersion: row.seed_version,
+    excerpt: row.excerpt,
+    metadata: row.metadata_json ?? {},
+    isSystemPage: row.is_system_page,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+    // Listings (footer, Help & Legal index) don't need version info, and
+    // MANAGED_PAGE_SUMMARY_COLUMNS deliberately excludes these columns so this
+    // query never has to fail-closed-retry around migration 099 — the single
+    // full-row [slug] page is where doc_version/effectiveDate actually render.
+    docVersion: null,
+    effectiveDate: null,
+    requiresAcceptance: false,
+    acceptanceKind: null,
+    reacceptanceRequired: false,
+    publishedAt: null,
+  };
+}
+
+const MANAGED_PAGE_SUMMARY_COLUMNS =
+  'page_key, title, slug, enabled, show_in_footer, footer_order, open_in_new_tab, access_level, page_type, seed_version, excerpt, metadata_json, is_system_page, created_at, updated_at, updated_by';
 
 async function getCurrentUserId(): Promise<string | null> {
   try {
@@ -119,6 +171,25 @@ export async function listManagedPages(): Promise<ManagedPageRecord[]> {
   return ((data ?? []) as DbManagedPage[]).map(mapDbManagedPage);
 }
 
+/**
+ * Same rows as listManagedPages() but without `content` — the footer and the
+ * Help & Legal index only need labels/metadata, and listManagedPages()'s
+ * `select('*')` was pulling the full body of all 11 pages just to build a
+ * list of link labels.
+ */
+export async function listManagedPageSummaries(): Promise<ManagedPageSummary[]> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('managed_pages')
+    .select(MANAGED_PAGE_SUMMARY_COLUMNS)
+    .order('footer_order', { ascending: true })
+    .order('title', { ascending: true });
+
+  if (error) throw new Error(`Failed to load managed page summaries: ${error.message}`);
+
+  return ((data ?? []) as DbManagedPageSummaryRow[]).map(mapDbManagedPageSummary);
+}
+
 export async function getManagedPageBySlug(slug: string): Promise<ManagedPageRecord | null> {
   const normalizedSlug = normalizeManagedPageSlug(slug);
   if (!normalizedSlug || isReservedManagedPageSlug(normalizedSlug)) return null;
@@ -136,50 +207,61 @@ export async function getManagedPageBySlug(slug: string): Promise<ManagedPageRec
   return mapDbManagedPage(data as DbManagedPage);
 }
 
+export async function getManagedPageByKey(pageKey: string): Promise<ManagedPageRecord | null> {
+  const supabase = createAdminClient();
+  const { data, error } = await supabase
+    .from('managed_pages')
+    .select('*')
+    .eq('page_key', pageKey)
+    .maybeSingle();
+
+  if (error) throw new Error(`Failed to load managed page: ${error.message}`);
+  if (!data) return null;
+
+  return mapDbManagedPage(data as DbManagedPage);
+}
+
 export async function getManagedPagesAdminState(): Promise<ManagedPagesAdminState> {
-  const pages = await listManagedPages();
+  const [pages, legalConsentGateEnabled] = await Promise.all([
+    listManagedPages(),
+    getFeatureFlag('legal_consent_gate_enabled', false),
+  ]);
 
   return {
     pages,
     supportEmailConfigured: Boolean(getSupportEmail()),
     reservedSlugs: [...RESERVED_ROOT_SLUGS],
+    legalConsentGateEnabled,
   };
 }
 
-function getFooterCacheKey(context: ManagedPageAccessContext): string {
-  const role = context.isAdmin ? 'admin' : context.userId ? 'authenticated' : 'public';
-  const billing = context.billingEnabled ? 'billing-on' : 'billing-off';
-  return `${role}:${billing}`;
+export async function setLegalConsentGateEnabled(enabled: boolean): Promise<void> {
+  await setFeatureFlag('legal_consent_gate_enabled', enabled);
 }
 
-export function invalidateManagedFooterLinksCache(): void {
-  footerLinkCache.clear();
-}
+const ESSENTIAL_LEGAL_FOOTER_KEYS = ['terms', 'privacy_policy'] as const;
 
-export async function getManagedFooterLinks(): Promise<ManagedFooterLink[]> {
-  const context = await getCurrentManagedPageAccessContext();
-  const cacheKey = getFooterCacheKey(context);
-  const cached = footerLinkCache.get(cacheKey);
+/**
+ * Terms + Privacy hrefs for the minimal site-wide footer. Deliberately
+ * independent of `show_in_footer`/`footer_order` (the old generic,
+ * admin-configurable footer list): these two must remain reachable from
+ * every page regardless of that toggle, since the pack's stop condition is
+ * that legal content stay accessible to logged-out and restricted users.
+ * Filtered to `enabled && accessLevel === 'public'` — never gated on the
+ * viewer, so this needs no per-request auth check at all.
+ */
+export async function getEssentialLegalFooterLinks(): Promise<ManagedFooterLink[]> {
+  const pages = await listManagedPageSummaries();
 
-  if (cached && Date.now() - cached.cachedAt < FOOTER_LINK_CACHE_TTL_MS) {
-    return cached.links;
-  }
-
-  const pages = await listManagedPages();
-
-  const links = pages
-    .filter((page) => canShowManagedPageInFooter(page, context))
-    .sort((a, b) => a.footerOrder - b.footerOrder || a.title.localeCompare(b.title))
+  return ESSENTIAL_LEGAL_FOOTER_KEYS.map((key) => pages.find((page) => page.pageKey === key))
+    .filter((page): page is ManagedPageSummary => Boolean(page && page.enabled && page.accessLevel === 'public'))
     .map((page) => ({
       key: page.pageKey,
       title: page.title,
       href: `/${page.slug}`,
-      openInNewTab: page.openInNewTab,
-      footerOrder: page.footerOrder,
+      openInNewTab: false,
+      footerOrder: 0,
     }));
-
-  footerLinkCache.set(cacheKey, { links, cachedAt: Date.now() });
-  return links;
 }
 
 export async function getAllowedManagedPageBySlug(slug: string): Promise<ManagedPageRecord | null> {
@@ -241,6 +323,19 @@ function validateManagedPageInput(input: ManagedPageSaveInput): ManagedPageSaveI
     throw new Error('Footer order must be a number.');
   }
 
+  const docVersion = input.docVersion?.trim() || null;
+  const effectiveDate = input.effectiveDate?.trim() || null;
+  const acceptanceKind = input.acceptanceKind;
+  const requiresAcceptance = Boolean(input.requiresAcceptance);
+
+  if (acceptanceKind !== null && !isManagedPageAcceptanceKind(acceptanceKind)) {
+    throw new Error('Invalid acceptance kind.');
+  }
+
+  if (requiresAcceptance && (!docVersion || !acceptanceKind)) {
+    throw new Error('A document version and acceptance kind are required before a page can require acceptance.');
+  }
+
   return {
     pageKey,
     title,
@@ -253,6 +348,10 @@ function validateManagedPageInput(input: ManagedPageSaveInput): ManagedPageSaveI
     pageType,
     content: input.content,
     excerpt: input.excerpt?.trim() || null,
+    docVersion,
+    effectiveDate,
+    requiresAcceptance,
+    acceptanceKind,
   };
 }
 
@@ -276,6 +375,10 @@ export async function saveManagedPage(
     excerpt: normalized.excerpt,
     updated_at: new Date().toISOString(),
     updated_by: updatedBy,
+    doc_version: normalized.docVersion,
+    effective_date: normalized.effectiveDate,
+    requires_acceptance: normalized.requiresAcceptance,
+    acceptance_kind: normalized.acceptanceKind,
   };
 
   const supabase = createAdminClient();
@@ -287,7 +390,6 @@ export async function saveManagedPage(
     .single();
 
   if (error) throw new Error(`Failed to save managed page: ${error.message}`);
-  invalidateManagedFooterLinksCache();
   return mapDbManagedPage(data as DbManagedPage);
 }
 
@@ -326,7 +428,6 @@ export async function resetManagedPageToSeed(
     .single();
 
   if (error) throw new Error(`Failed to reset managed page: ${error.message}`);
-  invalidateManagedFooterLinksCache();
   return mapDbManagedPage(data as DbManagedPage);
 }
 

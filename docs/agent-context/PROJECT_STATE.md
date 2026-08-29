@@ -37,9 +37,17 @@ Storage as fallback. Deployment: Vercel (Hobby — which is why the reconcile cr
 
 ## Migration ledger
 
-96 numbered migrations exist, each with a `_rollback.sql` twin. Everything up to 068 is long-applied. Below is
-the last known status of everything after that — **verify against the live database before relying on it**,
-using the query at the bottom of this section.
+101 numbered migrations exist, each with a `_rollback.sql` twin. Everything up to 068 is long-applied. Below is
+the last known status of everything after that — **verify against the live database before relying on it**.
+
+**As of migration 101, there is a real per-environment source of truth for this**: `public.schema_migration_ledger`.
+Every migration from 102 onward inserts its own row as its last statement; 001–100 were backfilled after being
+verified applied on both dev and prod on 2026-08-29. Query it directly instead of inferring from column/table
+existence or trusting this table:
+
+```sql
+select exists (select 1 from public.schema_migration_ledger where migration_number = 99) as applied;
+```
 
 | # | File | Introduces | Status on **dev** (verified 2026-08-26) |
 |---|---|---|---|
@@ -63,8 +71,51 @@ using the query at the bottom of this section.
 | 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Applied** (0 rows — nobody promoted yet). |
 | 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **Applied on both** 2026-08-26. |
 | 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
+| 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Applied on both** 2026-08-29, verified by query. |
+| 100 | `legal_acceptances` | table `legal_acceptances` | **Applied on both** 2026-08-29, verified by query. |
+| 101 | `schema_migration_ledger` | table `schema_migration_ledger`, self-recorded by every migration from here on | **Not yet applied anywhere** — new as of 2026-08-29, awaiting the owner's manual apply to dev and prod. |
 
 Everything up to 068 is long-applied.
+
+**The legal/auth UX pack (Phases 0-7) merged into `dev` 2026-08-29** (`--no-ff`, commit `b2092ea`). On dev: the
+four legal documents (`terms`, `privacy_policy`, `ai_disclosure`, `content_usage_policy`) are published at
+`doc_version 1.0.0`, and **`legal_consent_gate_enabled` is ON** — signed-in sessions without a current
+acceptance are redirected to `/auth/accept-terms`. See `docs/legal-consent-model.md` for the schema and gate
+logic, and `lib/legal/business-config.ts` for the entity/address/contact facts the documents are built from.
+
+Migrations 099, 100 and 101 are now applied on both dev and production. **Before promoting to production:**
+prod's `managed_pages` rows still need the same publish steps run against them as were run on dev, before
+enabling `legal_consent_gate_enabled` there — do not assume enabling the flag on prod can happen in the same
+step as the code promotion; verify prod's documents are actually published first, exactly as was done on dev.
+
+**Phase 8 landed 2026-08-29**: `docs/legal-content-architecture.md` and `docs/auth-legal-release-checklist.md`
+were written, the two remaining unit-test gaps (acceptance-state classification, missing-schema error
+classifier — both required extracting a pure `lib/legal/consent.shared.ts` since `consent.ts` starts with
+`import 'server-only'` and can't be imported into a vitest test) were closed, and two new e2e specs
+(`e2e/legal-pages.spec.ts`, `e2e/navigation-progress.spec.ts`) were added. **A full WCAG 2.2 AA audit was
+deliberately skipped — the owner reviewed the interface directly and made the call that it's acceptable
+as-is**; see the release checklist for exactly what accessibility work *is* and isn't covered. Owner-run
+manual QA (Google OAuth first-time gate, re-consent flow, suspended-account access) is still outstanding —
+see the checklist's manual QA section.
+
+**How the four documents were published on dev**, for reference if this needs repeating on prod:
+1. In `/admin/settings/pages`, open each of the four pages and use **Reset to seed** to pull in the current
+   text from `lib/managed-pages/registry.ts`.
+2. Set `Document version` = `1.0.0` and `Effective date` = `2026-08-29` on all four.
+3. Set `Acceptance kind` = `accepted` on `terms`, `acknowledged` on the other three; `Requires acceptance` = on
+   for `terms` and `privacy_policy` only — `ai_disclosure` and `content_usage_policy` stay notices, matching
+   what `AcceptTermsGate` actually gates on.
+4. **Publish (material)** on each of the four (first real content, following every starter draft).
+5. Only then flip `legal_consent_gate_enabled`.
+
+**Deliberately not built in this change:** the pack's "Future Viewer Subscription" section asks for
+entitlement architecture flexible enough to add paid viewer plans later without a rewrite. Kissago already has
+exactly that separation on the *creator* side (`lib/pricing/entitlement-tier.shared.ts`'s `PlanKey` /
+`resolveEffectiveEntitlementTier`, decoupled from billing truth in `snapshot.planKey`). A viewer-subscription
+dimension is a genuinely new product feature, not a documentation gap, and was not built speculatively here —
+the Terms (`terms`, §7) already use non-hardcoded language ("usage limits communicated within the Service")
+precisely so that feature can land later without a Terms rewrite. Design the viewer entitlement as a parallel
+dimension to `PlanKey` (not a repurposing of it) when that feature is actually scoped.
 
 ### Production (`pddjsopcemsfiwyvhlkr`)
 
@@ -186,6 +237,7 @@ verified 2026-08-26.
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
+| Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
 
 Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
 accurate description of **production** filed under a heading that read as though it covered dev. When
@@ -304,6 +356,16 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   blurbs have nothing to show until intros are generated.
 - Published `story_generation` prompts need a **republish** to pick up series rules.
 - Auto-build stories reject character mixing.
+- `/blog` (`page_key: blog_news`) is unlinked from the whole app since the Help & Legal rework (2026-08-28) —
+  the legal/auth UX pack is explicit that News does not belong in a legal destination, and there is no
+  About/Updates surface to relocate it to yet. The route and content are untouched; only navigation was
+  removed. Build one before re-linking it, rather than putting it back in Help & Legal.
+- **Age assurance and verifiable parental consent are explicitly deferred**, not an oversight. The
+  legal/auth UX pack's audit (`docs/legal-auth-audit.md`) confirmed a minor can create a Kissago account with
+  no restriction at any layer (dialog, `AuthProvider`, `proxy.ts`, or the DB). The pack's adopted default is
+  adult-held accounts with children supervised under a parent/guardian/educator's account — a policy and
+  copy change, not an age-verification system. Real age assurance (DPDP-style verifiable parental consent,
+  COPPA if the US is ever targeted) is a materially larger build and stays out of this pack's scope.
 
 **Duplication to keep in sync**
 - Portrait/reference helpers are copied into `lib/ai/portraits-server.ts`, and

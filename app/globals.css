@@ -8,6 +8,22 @@
   --safe-right: env(safe-area-inset-right, 0px);
 }
 
+/* Chrome/Edge/Safari force a white input background on autofill that no
+   Tailwind class can override directly — only this inset-box-shadow trick
+   (painted behind the text) and -webkit-text-fill-color beat it. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+input:autofill {
+  box-shadow: 0 0 0 1000px rgba(23, 23, 23, 1) inset !important;
+  -webkit-text-fill-color: #f5f5f5 !important;
+  background-color: rgba(23, 23, 23, 1) !important;
+  color: #f5f5f5 !important;
+  caret-color: #f5f5f5 !important;
+  transition: background-color 9999s ease-in-out 0s, box-shadow 9999s ease-in-out 0s;
+}
+
 /* Dynamic viewport height — accounts for mobile browser chrome */
 .h-dvh {
   height: 100vh;

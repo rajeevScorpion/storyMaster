@@ -1,12 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { X } from 'lucide-react';
 
-const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+import { useDialogBehavior } from '@/components/ui/useDialogBehavior';
 
 interface SheetProps {
   isOpen: boolean;
@@ -14,6 +12,8 @@ interface SheetProps {
   title?: string;
   ariaLabel?: string;
   children: React.ReactNode;
+  /** Stacking order for the outer overlay. Defaults to 1100 (matches Modal); bump it to layer a sheet on top of another already-open one. */
+  zIndex?: number;
 }
 
 /**
@@ -21,67 +21,16 @@ interface SheetProps {
  * ancestors, locks background scroll, keeps focus inside while open, and pads
  * for the device's bottom safe area.
  */
-export default function Sheet({ isOpen, onClose, title, ariaLabel, children }: SheetProps) {
-  const panelRef = useRef<HTMLDivElement>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+export default function Sheet({ isOpen, onClose, title, ariaLabel, children, zIndex = 1100 }: SheetProps) {
+  const { panelRef, handleKeyDown } = useDialogBehavior({ isOpen, onClose });
   const prefersReducedMotion = useReducedMotion();
-
-  // Lock background scroll for as long as the sheet is open.
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [isOpen]);
-
-  // Move focus in on open and restore it on close.
-  useEffect(() => {
-    if (!isOpen) return;
-
-    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    const panel = panelRef.current;
-    const firstFocusable = panel?.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
-    (firstFocusable ?? panel)?.focus();
-
-    return () => previouslyFocusedRef.current?.focus?.();
-  }, [isOpen]);
-
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onClose();
-      return;
-    }
-
-    if (event.key !== 'Tab') return;
-
-    const focusable = Array.from(
-      panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []
-    ).filter((el) => el.offsetParent !== null || el === document.activeElement);
-
-    if (focusable.length === 0) return;
-
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }, [onClose]);
 
   if (typeof document === 'undefined') return null;
 
   return createPortal(
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[1100] flex items-end" onKeyDown={handleKeyDown}>
+        <div className="fixed inset-0 flex items-end" style={{ zIndex }} onKeyDown={handleKeyDown}>
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
