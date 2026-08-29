@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ArrowLeft } from 'lucide-react';
 
 import ManagedFooter from '@/components/layout/ManagedFooter';
 import KissagoLogo from '@/components/ui/KissagoLogo';
@@ -59,7 +61,14 @@ export default async function ManagedPageRoute({ params }: ManagedPageRouteProps
         </header>
 
         <article className="py-14 sm:py-20">
-          <p className="text-sm uppercase tracking-[0.2em] text-emerald-300/80">
+          <Link
+            href="/help-legal"
+            className="inline-flex items-center gap-1.5 text-sm text-neutral-400 transition-colors hover:text-emerald-300"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Help &amp; Legal
+          </Link>
+          <p className="mt-6 text-sm uppercase tracking-[0.2em] text-emerald-300/80">
             {page.pageType.replaceAll('_', ' ')}
           </p>
           <h1 className="mt-4 text-4xl font-semibold tracking-normal text-white sm:text-5xl">
