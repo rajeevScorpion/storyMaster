@@ -76,6 +76,39 @@ publishing real versions) can do anything observable. `legal_consent_gate_enable
 flip it deliberately once Phase 7's content is published. See `docs/legal-consent-model.md` for the full
 schema and gate logic.
 
+**Phase 7 (seed content reconciliation) landed in code 2026-08-29.** The owner supplied the previously-blocked
+legal facts (entity, address, jurisdiction, contact aliases, Grievance Officer, effective date — see
+`lib/legal/business-config.ts`, the single source of truth for all of it). `lib/managed-pages/registry.ts`'s
+seed content for `terms`, `privacy_policy`, `ai_disclosure`, and `content_usage_policy` (retitled *Safety,
+Community & Grievance Policy*) was rewritten from scratch against those facts — no bracket placeholders remain
+(`lib/managed-pages/registry.legal-content.test.ts` asserts this). The rewrite also corrects every factual gap
+the old starter drafts glossed over: the real vendor list (Supabase, Google, OpenAI, xAI, Runware, ElevenLabs,
+Cloudflare R2, Razorpay, Vercel), the `store: true` retention disclosure on the OpenAI and Gemini image calls,
+no self-serve account deletion, the real media-retention schedule, no moderation queue/report flow yet, no
+self-serve subscription cancellation, and Kids mode being a catalogue filter with no parental controls.
+
+**Still owner-only, not done by this change:** the live `managed_pages` rows in both databases still hold
+whatever content was seeded historically — this code change updates the *seed source*, not the database. To
+make the new text live once 099/100 are applied to an environment:
+1. In `/admin/settings/pages`, open each of the four pages and use **Reset to seed** (or paste the new content
+   if the admin has since hand-edited it) to pull in the rewritten text.
+2. Set `Document version` = `1.0.0` and `Effective date` = `2026-08-29` on all four.
+3. Set `Acceptance kind` = `accepted` on `terms`, `acknowledged` on `privacy_policy`; leave `ai_disclosure` and
+   `content_usage_policy` as notices with `Requires acceptance` off (matching what `AcceptTermsGate` actually
+   gates on today — only `terms`/`privacy_policy`).
+4. Set `Requires acceptance` = on for `terms` and `privacy_policy` only, then **Publish (major)** on each of
+   the four (first real content, following every starter draft).
+5. Only then flip `legal_consent_gate_enabled` on.
+
+**Deliberately not built in this change:** the pack's "Future Viewer Subscription" section asks for
+entitlement architecture flexible enough to add paid viewer plans later without a rewrite. Kissago already has
+exactly that separation on the *creator* side (`lib/pricing/entitlement-tier.shared.ts`'s `PlanKey` /
+`resolveEffectiveEntitlementTier`, decoupled from billing truth in `snapshot.planKey`). A viewer-subscription
+dimension is a genuinely new product feature, not a documentation gap, and was not built speculatively here —
+the Terms (`terms`, §7) already use non-hardcoded language ("usage limits communicated within the Service")
+precisely so that feature can land later without a Terms rewrite. Design the viewer entitlement as a parallel
+dimension to `PlanKey` (not a repurposing of it) when that feature is actually scoped.
+
 ### Production (`pddjsopcemsfiwyvhlkr`)
 
 **At parity with dev as of 2026-08-26**, verified directly: every migration in the table above is applied on

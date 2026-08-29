@@ -15,15 +15,6 @@ export const metadata: Metadata = {
   description: 'Support, policies, rights and important information about using Kissago.',
 };
 
-// Display label for the Help & Legal card only — independent of the page's
-// stored `title`. content_usage_policy's actual title/body still say "Content
-// Usage Policy" until Phase 7 (seed content reconciliation) replaces it with
-// the pack's Safety/Community/Grievance content; this override lets the
-// destination read correctly in the meantime without a misleading interim H1.
-const CARD_LABEL_OVERRIDES: Record<string, string> = {
-  content_usage_policy: 'Safety, Community & Grievance',
-};
-
 const PRIMARY_CARD_ORDER = ['contact_support', 'terms', 'privacy_policy', 'ai_disclosure', 'content_usage_policy'];
 
 // blog_news is deliberately excluded: the pack says News does not belong in
@@ -31,10 +22,6 @@ const PRIMARY_CARD_ORDER = ['contact_support', 'terms', 'privacy_policy', 'ai_di
 // if retained — no such surface exists yet, so /blog stays reachable only by
 // direct URL until one is built (see docs/agent-context/PROJECT_STATE.md).
 const SECONDARY_LINK_ORDER = ['copyright_licensing', 'refund_policy', 'account_deletion', 'faq', 'documentation'];
-
-function cardLabel(page: ManagedPageSummary): string {
-  return CARD_LABEL_OVERRIDES[page.pageKey] ?? page.title;
-}
 
 export default async function HelpAndLegalPage() {
   const [summaries, context] = await Promise.all([
@@ -80,7 +67,7 @@ export default async function HelpAndLegalPage() {
                 >
                   <div>
                     <div className="flex items-start justify-between gap-3">
-                      <h2 className="text-lg font-semibold text-white">{cardLabel(page)}</h2>
+                      <h2 className="text-lg font-semibold text-white">{page.title}</h2>
                       <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-neutral-500 transition-transform group-hover:translate-x-0.5 group-hover:text-emerald-300" />
                     </div>
                     {page.excerpt ? <p className="mt-2 text-sm leading-6 text-neutral-400">{page.excerpt}</p> : null}
@@ -101,7 +88,7 @@ export default async function HelpAndLegalPage() {
                     href={`/${page.slug}`}
                     className="text-sm text-neutral-300 transition-colors hover:text-emerald-300"
                   >
-                    {cardLabel(page)}
+                    {page.title}
                   </Link>
                 ))}
               </nav>

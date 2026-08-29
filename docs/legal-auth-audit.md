@@ -312,31 +312,39 @@ Ranked by what blocks safe rollout of the consent gate:
 
 ---
 
-## 10. UNVERIFIED LEGAL FACTS
+## 10. UNVERIFIED LEGAL FACTS — RESOLVED 2026-08-29
 
-None of the following can be confirmed from code or config. They block Phase 7 (seed content reconciliation)
-and are being collected directly from the product owner:
+All 15 facts below were supplied by the product owner and are now recorded in `lib/legal/business-config.ts`,
+the single source of truth the Phase 7 seed content (`lib/managed-pages/registry.ts`) interpolates from:
 
-1. Legal entity name (Aavriti Design Studio, or another entity).
-2. Registered/business address (full postal).
-3. Country + state/city of registration.
-4. Governing jurisdiction and courts for disputes.
-5. Support email (confirm `SUPPORT_EMAIL` value for dev and prod).
-6. Legal/notices email.
-7. Privacy contact email.
-8. Security/account-compromise email.
-9. Grievance Officer name and title.
-10. Grievance email.
-11. Effective date for v1.0.0 of all four legal documents.
-12. Appeal/report channel (email or form URL).
-13. Rights/copyright complaint contact.
-14. Markets actively targeted (India only vs. India + international).
-15. Confirmed account-holder minimum age (assumed 18 pending confirmation).
+1. Legal entity name — **Aavriti Design Studio**, a partnership firm registered in India (GSTIN
+   `24ACLFA8196N1ZN`).
+2. Registered/business address — B601, Kunj Heights, Vavol, Gandhinagar, Gujarat 382016, India.
+3. Country + state/city of registration — India, Gujarat, Gandhinagar.
+4. Governing jurisdiction and courts — laws of India; courts at Gandhinagar, Gujarat.
+5. Support email — `support@kissago.cc` (unchanged env-driven `SUPPORT_EMAIL`).
+6. Legal/notices email — `legal@kissago.cc`.
+7. Privacy contact email — `privacy@kissago.cc`.
+8. Security/account-compromise email — `security@kissago.cc`.
+9. Grievance Officer — Rajeev Kumar, Partner & Grievance Officer.
+10. Grievance email — `grievance@kissago.cc`.
+11. Effective date for v1.0.0 of all four documents — 2026-08-29.
+12. Appeal/report channel — email, `report@kissago.cc` (no in-app form yet; not invented).
+13. Rights/copyright complaint contact — `copyright@kissago.cc`.
+14. Markets actively targeted — India initial rollout, international expansion planned; the rewritten notices
+    avoid both an India-only claim and any GDPR/CCPA/COPPA-specific compliance claim.
+15. Account-holder minimum age — confirmed 18. Real age assurance / verifiable parental consent remain
+    deferred (see `PROJECT_STATE.md`); this is a policy statement, not a technical age gate.
 
-Two additional facts are established by the code but require a **product decision**, not a lookup:
+The two product decisions are also resolved:
 
-- Whether to disclose or change the `store: true` retention behaviour on the OpenAI and Gemini image calls.
-- How to phrase the account-deletion limitation given no self-serve deletion mechanism exists.
+- **`store: true` retention on the OpenAI and Gemini image calls is disclosed as-is** in the Privacy & Data
+  Notice, rather than changed — the owner's explicit choice, since disabling it would break cross-beat visual
+  continuity.
+- **No self-serve account deletion** is stated plainly rather than promised; deletion requests route to
+  support/privacy email for manual handling, consistent with what the product can actually do.
 
-Nothing with a bracketed placeholder or an unresolved item above will be published; the corresponding
-`managed_pages` row stays at `requires_acceptance = false` until resolved.
+Nothing in the four rewritten documents contains a bracketed placeholder
+(`lib/managed-pages/registry.legal-content.test.ts` asserts this in CI). The remaining step is owner-only: the
+new seed content must be pulled into each live `managed_pages` row and published through the admin workflow
+after migrations 099/100 are applied — see the Phase 7 section of `PROJECT_STATE.md` for the exact steps.
