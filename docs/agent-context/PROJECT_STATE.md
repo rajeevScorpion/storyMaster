@@ -63,42 +63,35 @@ using the query at the bottom of this section.
 | 096 | `user_entitlement_tier_overrides` | table `user_entitlement_overrides` | **Applied** (0 rows — nobody promoted yet). |
 | 097 | `enable_rls_admin_config_tables` | RLS on six admin config tables | **Applied on both** 2026-08-26. |
 | 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
-| 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Not yet applied to either environment** — produced 2026-08-28 as part of the legal/auth UX pack. Additive and inert: a database without it renders exactly as before. |
-| 100 | `legal_acceptances` | table `legal_acceptances` | **Not yet applied to either environment** — same pack, same date. `lib/legal/consent.ts` fails closed (gate stays inert) when this table is absent. |
+| 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Applied to dev** 2026-08-29, verified by query. **Not yet applied to production.** |
+| 100 | `legal_acceptances` | table `legal_acceptances` | **Applied to dev** 2026-08-29, verified by query. **Not yet applied to production.** |
 
 Everything up to 068 is long-applied.
 
-Phase 6 of the legal/auth UX pack (the sign-up checkbox, the legal document modal, and the post-OAuth
-`/auth/accept-terms` gate) has since **landed in code** without either migration applied — by design, it
-degrades to fully inert: `recordLegalAcceptance` no-ops, `getRequiredLegalDocuments()` returns `[]`, and the
-`proxy.ts` gate never redirects anyone. **099/100 must be applied to dev before Phase 7** (seed content,
-publishing real versions) can do anything observable. `legal_consent_gate_enabled` stays off after applying;
-flip it deliberately once Phase 7's content is published. See `docs/legal-consent-model.md` for the full
-schema and gate logic.
+**The legal/auth UX pack (Phases 0-7) merged into `dev` 2026-08-29** (`--no-ff`, commit `b2092ea`). On dev: the
+four legal documents (`terms`, `privacy_policy`, `ai_disclosure`, `content_usage_policy`) are published at
+`doc_version 1.0.0`, and **`legal_consent_gate_enabled` is ON** — signed-in sessions without a current
+acceptance are redirected to `/auth/accept-terms`. See `docs/legal-consent-model.md` for the schema and gate
+logic, and `lib/legal/business-config.ts` for the entity/address/contact facts the documents are built from.
 
-**Phase 7 (seed content reconciliation) landed in code 2026-08-29.** The owner supplied the previously-blocked
-legal facts (entity, address, jurisdiction, contact aliases, Grievance Officer, effective date — see
-`lib/legal/business-config.ts`, the single source of truth for all of it). `lib/managed-pages/registry.ts`'s
-seed content for `terms`, `privacy_policy`, `ai_disclosure`, and `content_usage_policy` (retitled *Safety,
-Community & Grievance Policy*) was rewritten from scratch against those facts — no bracket placeholders remain
-(`lib/managed-pages/registry.legal-content.test.ts` asserts this). The rewrite also corrects every factual gap
-the old starter drafts glossed over: the real vendor list (Supabase, Google, OpenAI, xAI, Runware, ElevenLabs,
-Cloudflare R2, Razorpay, Vercel), the `store: true` retention disclosure on the OpenAI and Gemini image calls,
-no self-serve account deletion, the real media-retention schedule, no moderation queue/report flow yet, no
-self-serve subscription cancellation, and Kids mode being a catalogue filter with no parental controls.
+**Before promoting to production:** apply migrations 099 and 100 to prod first (same rule as every migration
+here — schema before the code that needs it), then repeat the publish steps below against prod's
+`managed_pages` rows before enabling the flag there. Do not assume enabling the flag on prod can happen in the
+same step as the code promotion; verify prod's documents are actually published first, exactly as was done on
+dev.
 
-**Still owner-only, not done by this change:** the live `managed_pages` rows in both databases still hold
-whatever content was seeded historically — this code change updates the *seed source*, not the database. To
-make the new text live once 099/100 are applied to an environment:
-1. In `/admin/settings/pages`, open each of the four pages and use **Reset to seed** (or paste the new content
-   if the admin has since hand-edited it) to pull in the rewritten text.
+**Phase 8 (WCAG pass, security review, `docs/legal-content-architecture.md`, `docs/auth-legal-release-checklist.md`)
+is still outstanding** and should land before `dev` → `main`.
+
+**How the four documents were published on dev**, for reference if this needs repeating on prod:
+1. In `/admin/settings/pages`, open each of the four pages and use **Reset to seed** to pull in the current
+   text from `lib/managed-pages/registry.ts`.
 2. Set `Document version` = `1.0.0` and `Effective date` = `2026-08-29` on all four.
-3. Set `Acceptance kind` = `accepted` on `terms`, `acknowledged` on `privacy_policy`; leave `ai_disclosure` and
-   `content_usage_policy` as notices with `Requires acceptance` off (matching what `AcceptTermsGate` actually
-   gates on today — only `terms`/`privacy_policy`).
-4. Set `Requires acceptance` = on for `terms` and `privacy_policy` only, then **Publish (major)** on each of
-   the four (first real content, following every starter draft).
-5. Only then flip `legal_consent_gate_enabled` on.
+3. Set `Acceptance kind` = `accepted` on `terms`, `acknowledged` on the other three; `Requires acceptance` = on
+   for `terms` and `privacy_policy` only — `ai_disclosure` and `content_usage_policy` stay notices, matching
+   what `AcceptTermsGate` actually gates on.
+4. **Publish (material)** on each of the four (first real content, following every starter draft).
+5. Only then flip `legal_consent_gate_enabled`.
 
 **Deliberately not built in this change:** the pack's "Future Viewer Subscription" section asks for
 entitlement architecture flexible enough to add paid viewer plans later without a rewrite. Kissago already has
@@ -229,7 +222,7 @@ verified 2026-08-26.
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
-| Legal consent gate | `legal_consent_gate_enabled` | **absent** — migration 099 not applied yet | **absent** — same |
+| Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **absent** — migration 099 not applied yet |
 
 Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
 accurate description of **production** filed under a heading that read as though it covered dev. When
