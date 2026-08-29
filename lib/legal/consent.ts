@@ -14,6 +14,14 @@ import {
   CONSENT_COOKIE_NAME,
   encodeConsentCookie,
 } from '@/lib/legal/consent-cookie';
+import {
+  classifyAcceptanceState,
+  isMissingLegalSchemaError,
+  type LegalAcceptanceState,
+  type RequiredLegalDocument,
+} from '@/lib/legal/consent.shared';
+
+export type { LegalAcceptanceState, RequiredLegalDocument } from '@/lib/legal/consent.shared';
 
 /**
  * Migrations are applied by hand per environment (see WORKING_AGREEMENTS.md),
@@ -24,31 +32,12 @@ import {
  */
 let legalSchemaUnavailable = false;
 
-function isMissingLegalSchemaError(error: { code?: string; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  // 42P01 = undefined_table (legal_acceptances / managed_page_versions absent).
-  // 42703/PGRST200/PGRST204 = undefined column (099's managed_pages columns absent).
-  return (
-    error.code === '42P01' ||
-    error.code === '42703' ||
-    error.code === 'PGRST200' ||
-    error.code === 'PGRST204'
-  );
-}
-
 function latchLegalSchemaUnavailable(context: string): void {
   if (legalSchemaUnavailable) return;
   legalSchemaUnavailable = true;
   console.warn(
     `Legal consent schema unavailable (migrations 099/100 not applied); ${context} stays inert until they're applied.`
   );
-}
-
-export interface RequiredLegalDocument {
-  pageKey: string;
-  docVersion: string;
-  acceptanceKind: ManagedPageAcceptanceKind;
-  reacceptanceRequired: boolean;
 }
 
 async function fetchRequiredLegalDocumentsUncached(): Promise<RequiredLegalDocument[]> {
@@ -119,17 +108,6 @@ async function fetchUserAcceptedVersions(userId: string): Promise<Map<string, st
   return accepted;
 }
 
-export interface LegalAcceptanceState {
-  hasAllRequiredAcceptances: boolean;
-  /** page_key of every required document the user has not accepted at its current version. */
-  missingDocumentKeys: string[];
-  /** Subset of missingDocumentKeys where the user previously accepted an older version -- this is a re-consent, not a first-time gate. */
-  reconsentDocumentKeys: string[];
-  /** Subset of missingDocumentKeys the user has never accepted at any version -- a genuine first-time gate (e.g. fresh OAuth signup). */
-  firstTimeDocumentKeys: string[];
-  requiredDocuments: RequiredLegalDocument[];
-}
-
 /** Never cached: this is a per-user, must-be-live answer. */
 export async function getUserAcceptanceState(userId: string): Promise<LegalAcceptanceState> {
   const [required, accepted] = await Promise.all([
@@ -137,29 +115,7 @@ export async function getUserAcceptanceState(userId: string): Promise<LegalAccep
     fetchUserAcceptedVersions(userId),
   ]);
 
-  const missingDocumentKeys: string[] = [];
-  const reconsentDocumentKeys: string[] = [];
-  const firstTimeDocumentKeys: string[] = [];
-
-  for (const doc of required) {
-    const acceptedVersions = accepted.get(doc.pageKey) ?? [];
-    if (acceptedVersions.includes(doc.docVersion)) continue;
-
-    missingDocumentKeys.push(doc.pageKey);
-    if (acceptedVersions.length > 0) {
-      reconsentDocumentKeys.push(doc.pageKey);
-    } else {
-      firstTimeDocumentKeys.push(doc.pageKey);
-    }
-  }
-
-  return {
-    hasAllRequiredAcceptances: missingDocumentKeys.length === 0,
-    missingDocumentKeys,
-    reconsentDocumentKeys,
-    firstTimeDocumentKeys,
-    requiredDocuments: required,
-  };
+  return classifyAcceptanceState(required, accepted);
 }
 
 export type LegalAcceptanceSurface = 'email_signup' | 'oauth_onboarding' | 'reconsent_modal' | 'admin_backfill';

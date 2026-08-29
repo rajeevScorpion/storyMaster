@@ -26,6 +26,28 @@ is unapplied on one environment. Code must therefore *fail closed* — detect th
 degrade, rather than 500. This has already caused one production outage (batch narration 500ing because
 `069_narration_accent.sql` was never applied to prod).
 
+**Every migration from 102 onward records itself in `public.schema_migration_ledger`** (introduced in
+`101_schema_migration_ledger.sql`). Add this as the final statement of the migration file:
+
+```sql
+INSERT INTO public.schema_migration_ledger (migration_number, file_name)
+VALUES (102, '102_short_name.sql')
+ON CONFLICT (migration_number) DO NOTHING;
+```
+
+and the mirror in that migration's `_rollback.sql`:
+
+```sql
+DELETE FROM public.schema_migration_ledger WHERE migration_number = 102;
+```
+
+This exists because there was previously no way to ask a database "has migration NNN actually run here?"
+other than inferring it from column/table existence or trusting `PROJECT_STATE.md`, which has gone stale at
+least once. The ledger is queryable directly per environment via the read-only Supabase MCP connection —
+`select * from public.schema_migration_ledger where migration_number = NNN` — and is the source of truth over
+any doc. The Supabase dashboard's own "saved queries" list is **not** evidence either way; it is client-side
+history unrelated to whether SQL actually executed.
+
 ## Verification before saying "done"
 
 The expected gate for any change:

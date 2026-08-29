@@ -190,6 +190,7 @@ export default function NavigationProgress() {
     <div className="pointer-events-none fixed inset-x-0 top-0 z-[1200] h-[3px]" aria-hidden="true">
       <div
         ref={barRef}
+        data-testid="nav-progress-bar"
         className="relative h-full w-0 rounded-r-full bg-gradient-to-r from-emerald-500 via-emerald-300 to-teal-200 opacity-0 shadow-[0_0_10px_rgba(52,211,153,0.75),0_0_28px_rgba(16,185,129,0.35)]"
       >
         {!prefersReducedMotion && (
