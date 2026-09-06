@@ -329,6 +329,27 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
   ],
 };
 
+// Agentic Creator System admin area. Phase 1 ships only the Overview child,
+// which hosts the kill switch and the five subordinate flags. Later phases
+// append personas / test-lab / tasks / runs / routing children to this same
+// group list, so the sidebar and hub grow without touching this file's shape.
+const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
+  {
+    id: 'general',
+    label: null,
+    items: [
+      {
+        id: 'overview',
+        label: 'Overview',
+        href: '/admin/agents',
+        icon: LayoutGrid,
+        description: 'Master kill switch and the five subordinate agentic flags.',
+        staticSummary: 'Feature flags for the Agentic Creator System',
+      },
+    ],
+  },
+];
+
 export const ADMIN_NAV: AdminNavGroup[] = [
   {
     id: 'operations',
@@ -363,6 +384,13 @@ export const ADMIN_NAV: AdminNavGroup[] = [
       { label: 'Content', href: '/admin/content', icon: BookOpen },
       { label: 'Share Covers', href: '/admin/share-covers', icon: ImageIcon },
       { label: 'Backfill', href: '/admin/backfill', icon: Database },
+    ],
+  },
+  {
+    id: 'agentic',
+    label: 'Agentic',
+    items: [
+      { label: 'Agents', href: '/admin/agents', icon: Workflow, childGroups: AGENTS_CHILD_GROUPS },
     ],
   },
   {

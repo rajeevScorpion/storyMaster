@@ -4,7 +4,9 @@
 must be corrected to reality as each phase lands. The forward-looking design lives in the plan file;
 this one is the map of the territory.
 
-Status: **Phase 0** — nothing implemented yet. Every section below is _(planned)_.
+Status: **Phase 1 complete.** Implemented so far: `lib/agentic/flags.ts`, `app/actions/agentic-admin.ts`,
+the `/admin/agents` shell and its Overview page, and migration 102 (written, not yet applied).
+Everything else below is still _(planned)_.
 
 ---
 

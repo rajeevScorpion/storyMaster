@@ -25,4 +25,25 @@ Minor non-error notices observed (not failures, recorded for completeness):
 
 ## Per-phase deltas
 
-_(appended as each phase lands)_
+### Phase 1 — feature isolation and admin shell (2026-09-06)
+
+| Gate | Result | Delta vs baseline |
+|---|---|---|
+| `npx tsc --noEmit` | pass | none |
+| `npm run lint` | pass | none — still 0 warnings |
+| `npm test` | pass | 86 files, 594 tests, 594 passed — **identical to baseline** |
+| `npm run build:verify` | pass | `/admin/agents` added to the route manifest as `ƒ` (dynamic) |
+| `npm run test:e2e` | pass | 14/14, 19.0s. Agent dev server started on 3100 and stopped afterwards |
+
+**New tests:** none. This phase adds no pure logic worth pinning; the nav tree it touches is already
+covered by `lib/admin/nav.test.ts`.
+
+**Test file modified:** `lib/admin/nav.test.ts` — `/admin/agents` added to the hub-self-link
+exclusion list in the duplicate-href test, alongside the pre-existing `/admin/settings` and
+`/admin/pricing`. Reviewed: this follows the established pattern for a hub item that deliberately
+shares an href with its overview child. It does not weaken the assertion.
+
+**Not covered:** Playwright runs signed-out, so it proves only that `/admin/agents` stays behind the
+admin guard — the same thing `smoke.spec.ts` already asserts for `/admin`. The Overview page's
+toggles, the off-state card and the disabled-subordinate behaviour are **unverified in a browser**;
+they need an admin session. Worth a manual pass once migration 102 is applied to dev.

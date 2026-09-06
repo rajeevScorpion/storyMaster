@@ -8,27 +8,40 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Where we are
 
-- **Phase:** 0 — baseline and branch (in progress)
+- **Phase:** 1 complete — feature isolation and the admin shell. Next is Phase 2 (personas).
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
 
 ## What works right now
 
-Nothing agentic exists yet. The repository is unchanged from `dev@1d93dea` apart from documentation.
+- Six feature flags exist in `supabase/migrations/102_agentic_creator_flags.sql`, all defaulting to
+  `false`. **The migration has not been applied to any environment yet.**
+- `lib/agentic/flags.ts` is the single read path for them, always with `fallback = false`.
+- `/admin/agents` renders an Overview page: an off-state explainer, the master kill switch, and five
+  subordinate toggles that are disabled while the master switch is off.
+- A new **Agentic** group appears in the admin sidebar and mobile drawer.
+- Nothing generates anything. There are no personas, no jobs, no story writing.
 
 ## Next step
 
-Finish Phase 0: land the baseline in `agentic-creator-test-status.md`, commit the docs, then start
-Phase 1 (feature flags + `/admin/agents` shell + kill switch, migration 102).
+**Phase 2 — persona library and the 15 seeds.** Write migrations 103 (`agent_personas`,
+`agent_persona_memory` + trigger, `stories.agent_persona_id`) and 104 (the 15 seed rows), then
+`lib/agentic/personas.shared.ts`, `app/actions/agentic-personas.ts` and the persona catalogue UI.
+
+Before writing migration 104, **print the resolved mapping for operator sight-check**: real age-group
+ids, genre values, Gemini TTS voice ids, style preset, and confirmation that every seed is image-off.
+Fabricating an identifier there is a bug — see the taxonomy table in the plan.
 
 ## Blockers
 
-None.
+None. Migration 102 is waiting to be applied by the owner (dev first).
 
 ## Active flags
 
-None yet. Migration 102 introduces all six, every one defaulting to `false`:
+All six exist in migration 102 and default to `false`. Read them **only** through
+`lib/agentic/flags.ts` — never call `getFeatureFlag` with these keys directly, or the fail-closed
+guarantee stops being a guarantee.
 
 | Flag | Purpose |
 |---|---|
@@ -43,7 +56,7 @@ None yet. Migration 102 introduces all six, every one defaulting to `false`:
 
 | # | File | Phase | dev | prod |
 |---|---|---|---|---|
-| 102 | `102_agentic_creator_flags.sql` | 1 | not written | not written |
+| 102 | `102_agentic_creator_flags.sql` | 1 | **written, NOT applied** | **written, NOT applied** |
 | 103 | `103_agent_personas.sql` | 2 | not written | not written |
 | 104 | `104_seed_agent_personas.sql` | 2 | not written | not written |
 | 105 | `105_agent_story_memory.sql` | 3 | not written | not written |

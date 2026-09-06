@@ -46,8 +46,46 @@ grounded architecture and the operator's decisions.
 **Config / env.** None yet. `AGENTIC_SYSTEM_USER_ID` arrives in Phase 6.
 **Tests.** Baseline only — see `agentic-creator-test-status.md`. No behaviour changed, so no new tests.
 
+**Commit:** `d0cb822`
+
+---
+
+## Phase 1 — Feature isolation and admin shell
+
+**Date:** 2026-09-06
+
+**Work.** The kill switch and the admin surface that hosts it. No generation, no jobs, no personas.
+
+**Files added.**
+
+| Path | Purpose |
+|---|---|
+| `supabase/migrations/102_agentic_creator_flags.sql` (+ rollback) | Six flags, all `false`, self-recording into the ledger |
+| `lib/agentic/flags.ts` | `server-only`. `AGENTIC_FLAG_KEYS`, `AgenticFlags`, `getAgenticFlags()` — the sole read path, always `fallback = false` |
+| `app/actions/agentic-admin.ts` | `'use server'`. Six `verifyAdmin()` → `setFeatureFlag()` setters plus `getAgenticFlagsAction()` |
+| `app/admin/agents/layout.tsx` | Thin server shell, re-verifies admin with the parent's try/redirect shape |
+| `app/admin/agents/page.tsx` | Server component; fetches flags, passes them down (the `admin/policies` pattern) |
+| `components/admin/agentic/AgenticOverview.tsx` | Client. Off-state card, master switch, five subordinate toggles, honest "not yet implemented" list |
+
+**Files modified.**
+
+- `lib/admin/nav.ts` — new `AGENTS_CHILD_GROUPS` (one Overview child) and a top-level `agentic` group after `content`.
+- `lib/admin/nav.test.ts` — added `/admin/agents` to the hub-self-link exclusion in the duplicate-href test. **Reviewed and confirmed legitimate:** `/admin/settings` and `/admin/pricing` are already excluded for the identical reason — a hub item deliberately shares its href with its overview child. The test's intent is intact.
+
+**Migrations.** 102 written; **not applied to dev or prod.** Owner applies by hand.
+
+**Config / env.** None.
+
+**Design notes.**
+
+- The subordinate toggles are *disabled* while the master switch is off, rather than hidden. Hiding them would make the page look complete when it is inert; disabling them says why.
+- The off-state card does **not** redirect or hide the switch — an admin has to be able to reach the toggle from the page that explains it.
+- `lib/agentic/flags.ts` carries a header comment forbidding flag reads elsewhere. That single choke point is what makes "un-migrated database behaves as feature-off" true rather than aspirational.
+
+**Tests.** No new unit tests — this phase adds no pure logic worth pinning; `nav.test.ts` already covers the nav tree it touches. Full gate re-run after a copy correction: tsc clean, lint clean, 594/594 unit, `build:verify` passing, 14/14 Playwright.
+
 **Commit:** _(filled in at commit time)_
 
 ---
 
-_(Phase 1 onward appended here.)_
+_(Phase 2 onward appended here.)_

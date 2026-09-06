@@ -57,10 +57,11 @@ function collectAllHrefs(): string[] {
 
 describe('admin nav config', () => {
   it('has no duplicate hrefs across the whole tree (ignoring hub self-links)', () => {
-    // Parent hub items (Global Settings, Pricing and offers) intentionally
-    // share an href with their overview child, so dedupe those before checking.
+    // Parent hub items (Global Settings, Pricing and offers, Agents)
+    // intentionally share an href with their overview child, so dedupe those
+    // before checking.
     const hrefs = collectAllHrefs().filter(
-      (href) => href !== '/admin/settings' && href !== '/admin/pricing'
+      (href) => href !== '/admin/settings' && href !== '/admin/pricing' && href !== '/admin/agents'
     );
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
