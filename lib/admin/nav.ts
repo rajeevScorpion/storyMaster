@@ -32,6 +32,7 @@ import {
   Sparkles,
   UserRound,
   UsersRound,
+  Users,
   Video,
   WalletCards,
   Wind,
@@ -329,10 +330,11 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
   ],
 };
 
-// Agentic Creator System admin area. Phase 1 ships only the Overview child,
-// which hosts the kill switch and the five subordinate flags. Later phases
-// append personas / test-lab / tasks / runs / routing children to this same
-// group list, so the sidebar and hub grow without touching this file's shape.
+// Agentic Creator System admin area. Phase 1 shipped only the Overview child,
+// which hosts the kill switch and the five subordinate flags. Phase 2 adds
+// Personas (the persona catalogue). Later phases append test-lab / tasks /
+// runs / routing children to this same group list, so the sidebar and hub
+// grow without touching this file's shape.
 const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
   {
     id: 'general',
@@ -345,6 +347,14 @@ const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
         icon: LayoutGrid,
         description: 'Master kill switch and the five subordinate agentic flags.',
         staticSummary: 'Feature flags for the Agentic Creator System',
+      },
+      {
+        id: 'personas',
+        label: 'Personas',
+        href: '/admin/agents/personas',
+        icon: Users,
+        description: 'Creative identity catalogue: language, age group, genres, permissions, and lifecycle status.',
+        staticSummary: 'Persona catalogue for autonomous story creators',
       },
     ],
   },

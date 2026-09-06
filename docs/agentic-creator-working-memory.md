@@ -8,7 +8,8 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Where we are
 
-- **Phase:** 1 complete — feature isolation and the admin shell. Next is Phase 2 (personas).
+- **Phase:** 2a complete — persona schema, logic and catalogue UI. **Phase 2b (the 15 seeds) is
+  blocked on operator sight-check of the taxonomy mapping.**
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
@@ -21,21 +22,32 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 - `/admin/agents` renders an Overview page: an off-state explainer, the master kill switch, and five
   subordinate toggles that are disabled while the master switch is off.
 - A new **Agentic** group appears in the admin sidebar and mobile drawer.
-- Nothing generates anything. There are no personas, no jobs, no story writing.
+- `/admin/agents/personas` renders a filterable catalogue (age group / language / genre / status /
+  search) with create, edit, clone and status actions. The table is empty and correctly says so —
+  distinguishing "migration 103 not applied" from "applied, no personas yet".
+- `lib/agentic/personas.shared.ts` turns a persona into a real `StoryConfig`, forcing
+  `imageGenerationMode: 'prompt_only'` for any image-off persona as its last, unconditional step.
+- Nothing generates anything. There are no seeded personas, no jobs, no story writing.
 
 ## Next step
 
-**Phase 2 — persona library and the 15 seeds.** Write migrations 103 (`agent_personas`,
-`agent_persona_memory` + trigger, `stories.agent_persona_id`) and 104 (the 15 seed rows), then
-`lib/agentic/personas.shared.ts`, `app/actions/agentic-personas.ts` and the persona catalogue UI.
+**Phase 2b — seed the 15 personas (migration 104).** Blocked: the operator must sight-check the
+band→age-group mapping first (see the table in the plan file). Once approved, write migration 104 as an
+idempotent `INSERT … ON CONFLICT (slug) DO NOTHING`.
 
-Before writing migration 104, **print the resolved mapping for operator sight-check**: real age-group
-ids, genre values, Gemini TTS voice ids, style preset, and confirmation that every seed is image-off.
-Fabricating an identifier there is a bug — see the taxonomy table in the plan.
+Non-negotiable when writing it: every prompt authored **natively** in its language, never a translated
+English template; every seed `allow_image_generation = false`, `allow_narration = false`,
+`status = 'draft'`, `schedule_eligible = false`; and every voice / genre / age-group / style
+identifier taken from the real code lists — fabricating one is a bug.
+
+After 2b, Phase 3 (global story memory and novelty checks, migration 105).
 
 ## Blockers
 
-None. Migration 102 is waiting to be applied by the owner (dev first).
+- **Phase 2b needs the mapping sight-check.**
+- Migrations 102 and 103 are written and waiting for the owner to apply them by hand (dev first).
+  Until then the admin pages render their fail-closed empty states, which is correct behaviour, but
+  none of the UI has been browser-verified with real rows.
 
 ## Active flags
 
@@ -57,8 +69,8 @@ guarantee stops being a guarantee.
 | # | File | Phase | dev | prod |
 |---|---|---|---|---|
 | 102 | `102_agentic_creator_flags.sql` | 1 | **written, NOT applied** | **written, NOT applied** |
-| 103 | `103_agent_personas.sql` | 2 | not written | not written |
-| 104 | `104_seed_agent_personas.sql` | 2 | not written | not written |
+| 103 | `103_agent_personas.sql` | 2a | **written, NOT applied** | **written, NOT applied** |
+| 104 | `104_seed_agent_personas.sql` | 2b | blocked on sight-check | blocked on sight-check |
 | 105 | `105_agent_story_memory.sql` | 3 | not written | not written |
 | 106 | `106_agent_tasks.sql` | 4 | not written | not written |
 | 107 | `107_agent_runs.sql` | 5 | not written | not written |

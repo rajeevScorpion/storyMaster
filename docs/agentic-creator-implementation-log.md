@@ -84,8 +84,65 @@ grounded architecture and the operator's decisions.
 
 **Tests.** No new unit tests — this phase adds no pure logic worth pinning; `nav.test.ts` already covers the nav tree it touches. Full gate re-run after a copy correction: tsc clean, lint clean, 594/594 unit, `build:verify` passing, 14/14 Playwright.
 
-**Commit:** _(filled in at commit time)_
+**Commit:** `5329123`
 
 ---
 
-_(Phase 2 onward appended here.)_
+## Phase 2a — Persona library: schema, logic and catalogue UI
+
+**Date:** 2026-09-06
+
+**Work.** The persona table, the pure logic that turns a persona into a `StoryConfig`, admin CRUD, and
+the filterable catalogue. **Deliberately excludes the 15 seed personas** — those are Phase 2b, gated on
+an operator sight-check of the taxonomy mapping. An empty persona table is the correct end state here.
+
+**Files added.**
+
+| Path | Purpose |
+|---|---|
+| `supabase/migrations/103_agent_personas.sql` (+ rollback) | `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger, `stories.agent_persona_id`, RLS on both |
+| `lib/agentic/personas.shared.ts` | Pure. `resolvePersonaStoryConfig`, `applyPersonaOverrides`, `clampBeatCount`, `buildClonedPersonaInput`, `isMissingPersonaSchemaError` |
+| `lib/agentic/personas.shared.test.ts` | 20 tests |
+| `app/actions/agentic-personas.ts` | `'use server'` CRUD + `getPersonaCatalogueStatus()` |
+| `app/admin/agents/personas/page.tsx` | Server component |
+| `components/admin/agentic/PersonaCatalogue.tsx` | Filterable table — `FilterDropdown` throughout, `RowActionsMenu` per row |
+| `components/admin/agentic/PersonaEditorDrawer.tsx` | Create/edit slide-over |
+
+**Files modified.** `lib/admin/nav.ts` — `personas` child added to `AGENTS_CHILD_GROUPS`.
+
+**Migrations.** 103 written; **not applied to dev or prod.**
+
+**Two defects caught in review, both fixed:**
+
+1. **`103_agent_personas_rollback.sql` would have failed on its first `DROP TABLE`.** It dropped
+   `agent_personas` while `stories.agent_persona_id` still held a `REFERENCES` constraint to it, which
+   Postgres refuses ("cannot drop table … because other objects depend on it"). The column drop now
+   comes first. A rollback only ever runs when something has already gone wrong — the worst possible
+   time to discover it does not execute.
+2. **`isMissingPersonaSchemaError` matched on the message text `/agent_persona/i`.** A duplicate-slug
+   insert (23505) carries the message `duplicate key value violates unique constraint
+   "agent_personas_slug_key"`, so a routine, fixable admin mistake would have been reported as
+   "migration 103 has not been applied." Now codes-only, matching `lib/legal/consent.shared.ts`. The
+   existing test missed this because its 23505 fixture used a message that omitted the table name;
+   the fixture is now realistic, plus a check-constraint case.
+
+**Design notes.**
+
+- The image gate is enforced as the **last, unconditional step** of `resolvePersonaStoryConfig`, so no
+  path through the function can return `'generate'` for an image-off persona. Tested from both sides.
+- `language` and `ageGroup` are top-level columns and always win over `defaultStoryConfig`/overrides —
+  they are identity, not tunable knobs.
+- Two distinct empty states in the UI: "migration 103 not applied" vs "applied, no personas yet".
+  Conflating them would send an admin hunting for the wrong problem.
+- Genre and `dynamicSettingKeys` selection use chip toggles, not `FilterDropdown` — they are
+  multi-select, and the shared-dropdown rule governs single-value dropdowns.
+
+**Tests.** 87 files / 614 tests, all passing (baseline 86 / 594; this phase adds 1 file / 20 tests).
+Gate: tsc clean, lint clean, `build:verify` passing with `/admin/agents/personas` in the manifest.
+e2e not re-run — this phase adds no signed-out surface.
+
+**Commit:** `10b314a`
+
+---
+
+_(Phase 2b onward appended here.)_

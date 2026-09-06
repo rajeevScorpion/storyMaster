@@ -47,3 +47,30 @@ shares an href with its overview child. It does not weaken the assertion.
 admin guard — the same thing `smoke.spec.ts` already asserts for `/admin`. The Overview page's
 toggles, the off-state card and the disabled-subordinate behaviour are **unverified in a browser**;
 they need an admin session. Worth a manual pass once migration 102 is applied to dev.
+
+### Phase 2a — persona schema, logic and catalogue UI (2026-09-06)
+
+| Gate | Result | Delta vs baseline |
+|---|---|---|
+| `npx tsc --noEmit` | pass | none |
+| `npm run lint` | pass | none — still 0 warnings |
+| `npm test` | pass | **87 files, 614 tests, 614 passed** (+1 file, +20 tests) |
+| `npm run build:verify` | pass | `/admin/agents/personas` added to the manifest as `ƒ` |
+| `npm run test:e2e` | not run | This phase adds no signed-out surface; last green run was Phase 1 |
+
+**New tests:** `lib/agentic/personas.shared.test.ts`, 20 tests. The load-bearing ones assert the image
+gate from both directions — an image-off persona resolves to `prompt_only` even when an override
+explicitly asks for `'generate'`, and an image-on persona can still reach `'generate'`.
+
+**Two review fixes, both with tests or comments pinning them:**
+
+- The rollback's `DROP TABLE` order was wrong and the file would have failed to execute — see the
+  implementation log. Not covered by any automated test; migrations are not exercised by the suite.
+  **This is a standing gap: rollback files are only ever validated by reading them.**
+- `isMissingPersonaSchemaError` was matching on message text and would have classified a duplicate-slug
+  violation as a missing migration. The pre-existing test missed it because its 23505 fixture used a
+  message without the table name. Fixture replaced with a realistic one, plus a check-constraint case.
+
+**Not covered:** everything in the catalogue UI. With migration 103 unapplied there are no rows to
+render, and Playwright cannot sign in as admin. Filters, the editor drawer, clone, and the two empty
+states are **unverified in a browser.**
