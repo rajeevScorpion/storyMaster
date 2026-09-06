@@ -8,8 +8,9 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Where we are
 
-- **Phase:** 2a complete — persona schema, logic and catalogue UI. **Phase 2b (the 15 seeds) is
-  blocked on operator sight-check of the taxonomy mapping.**
+- **Phase:** 2b complete — all 15 seed personas written (migration 104). **Phase 3 is half-done: both
+  migration 105 files exist and are correct, but its entire TypeScript half is missing** (two
+  background agents died mid-task). That is the next thing to build.
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
@@ -31,23 +32,33 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Next step
 
-**Phase 2b — seed the 15 personas (migration 104).** Blocked: the operator must sight-check the
-band→age-group mapping first (see the table in the plan file). Once approved, write migration 104 as an
-idempotent `INSERT … ON CONFLICT (slug) DO NOTHING`.
+**Finish Phase 3 — the TypeScript half of memory and novelty.** Migration 105's forward and rollback
+files already exist and are correct; do not rewrite them. Still to build:
 
-Non-negotiable when writing it: every prompt authored **natively** in its language, never a translated
-English template; every seed `allow_image_generation = false`, `allow_narration = false`,
-`status = 'draft'`, `schedule_eligible = false`; and every voice / genre / age-group / style
-identifier taken from the real code lists — fabricating one is a bug.
+- `lib/agentic/memory.shared.ts` — `scoreNovelty`, exported threshold constants,
+  `needsModelAdjudication`, `buildNoveltyAdjudicationPrompt`. **Reuse
+  `lib/ai/character-novelty.shared.ts`** (`normalizeCharacterName`, `findSimilarRecentName`,
+  `appearanceSimilarity`, `CHARACTER_NAME_HISTORY_LIMIT`) rather than writing new similarity code.
+- `lib/agentic/memory.shared.test.ts` — the critical case is **series continuity is not duplication**:
+  recurring characters and a repeated setting inside one series must score `clear`, while the same
+  reuse across unrelated stories must not.
+- `lib/agentic/memory.ts` (`server-only`) — `findSimilarStories` (one trigram query),
+  `recordStoryMemory`, `updatePersonaMemory`, `runNoveltyCheck` (always writes an
+  `agent_novelty_checks` row, even for `clear`), and a **codes-only** `isMissingMemorySchemaError`
+  latch. Degrade to `clear` when the schema is absent; never block generation on missing memory.
+- New `TaskKey` `agent_novelty_assessment` in `lib/ai/model-config.shared.ts`
+  (`gemini-2.5-flash`, temp 0.2) — registering it there gives the admin model editor the task free.
+- `backfillStoryMemoryFromStorylines` + `app/actions/agentic-memory.ts`, cursor in the
+  `agentic_memory_backfill_cursor` feature-flag value row.
 
-After 2b, Phase 3 (global story memory and novelty checks, migration 105).
+Then Phase 4 (Editorial Supervisor and task pool, migration 106).
 
 ## Blockers
 
-- **Phase 2b needs the mapping sight-check.**
-- Migrations 102 and 103 are written and waiting for the owner to apply them by hand (dev first).
-  Until then the admin pages render their fail-closed empty states, which is correct behaviour, but
-  none of the UI has been browser-verified with real rows.
+- **Migrations 102 and 103 are being applied by the owner now** (2026-09-06). 104 and 105 follow, in
+  numeric order — 103 must precede both.
+- No agentic UI has been browser-verified with real rows yet, because until these land there are no
+  rows. Worth a manual pass at `/admin/agents` and `/admin/agents/personas` once 104 is in.
 
 ## Active flags
 
@@ -70,7 +81,8 @@ guarantee stops being a guarantee.
 |---|---|---|---|---|
 | 102 | `102_agentic_creator_flags.sql` | 1 | **written, NOT applied** | **written, NOT applied** |
 | 103 | `103_agent_personas.sql` | 2a | **written, NOT applied** | **written, NOT applied** |
-| 104 | `104_seed_agent_personas.sql` | 2b | blocked on sight-check | blocked on sight-check |
+| 104 | `104_seed_agent_personas.sql` | 2b | **written, NOT applied** | **written, NOT applied** |
+| 105 | `105_agent_story_memory.sql` | 3 | **written, NOT applied** | **written, NOT applied** |
 | 105 | `105_agent_story_memory.sql` | 3 | not written | not written |
 | 106 | `106_agent_tasks.sql` | 4 | not written | not written |
 | 107 | `107_agent_runs.sql` | 5 | not written | not written |

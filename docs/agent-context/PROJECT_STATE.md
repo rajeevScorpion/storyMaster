@@ -6,6 +6,12 @@ context that does not live in the code or in git history.
 **Snapshot taken:** 2026-08-26, on `dev` at `4c34dbd`. The migration ledger and flag states below were
 **verified directly against the development database** on that date, not carried over from notes.
 
+**Partially re-verified 2026-09-06** against both dev and prod via the read-only MCP connections, while
+planning the Agentic Creator System. Three corrections landed: migration 101 is applied on both (the row said
+"not yet applied anywhere"); Runware rows exist on prod and are disabled rather than absent; and the agentic
+migrations 102–105 are recorded as written-but-unapplied. Everything not named here still carries its
+2026-08-26 verification date.
+
 Keep this file current. When you finish a pack, move it out of "pending"; when you defer something, add it to
 "deferred".
 
@@ -73,9 +79,35 @@ select exists (select 1 from public.schema_migration_ledger where migration_numb
 | 098 | `harden_function_privileges` | `search_path` pinned; EXECUTE revoked from PUBLIC/anon/authenticated on 17 functions | **Applied on both** 2026-08-26. |
 | 099 | `managed_page_versioning` | `managed_pages` versioning columns, table `managed_page_versions`, flag `legal_consent_gate_enabled` | **Applied on both** 2026-08-29, verified by query. |
 | 100 | `legal_acceptances` | table `legal_acceptances` | **Applied on both** 2026-08-29, verified by query. |
-| 101 | `schema_migration_ledger` | table `schema_migration_ledger`, self-recorded by every migration from here on | **Not yet applied anywhere** — new as of 2026-08-29, awaiting the owner's manual apply to dev and prod. |
+| 101 | `schema_migration_ledger` | table `schema_migration_ledger`, self-recorded by every migration from here on | **Applied on both**, verified by querying the ledger 2026-09-06. (This row previously said "not yet applied anywhere", contradicting the paragraph below it — the ledger is the authority and it says applied.) |
 
 Everything up to 068 is long-applied.
+
+### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
+
+Verified by querying `schema_migration_ledger` on both environments on **2026-09-06**: dev and prod are
+**identical**, both recording 001–101 and nothing beyond. None of the migrations below is applied anywhere,
+and no agentic table, column or flag exists on either environment.
+
+| # | File | Introduces | Status |
+|---|---|---|---|
+| 102 | `agentic_creator_flags` | six `agentic_*` rows in `feature_flags`, all `false` | Written. **Not applied.** |
+| 103 | `agent_personas` | tables `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger; `stories.agent_persona_id` | Written. **Not applied.** |
+| 104 | `seed_agent_personas` | the 15 seed creator personas | Written. **Not applied.** Requires 103. |
+| 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | Written. **Not applied.** Requires 103 (FKs to `agent_personas`). |
+
+**Apply in numeric order.** 103 must precede 104 (which inserts into its table) and 105 (whose `persona_id`
+foreign keys point at `agent_personas`). Applying 102 and 103 changes nothing observable: every flag is
+`false` and the persona table lands empty.
+
+All application code fails closed while these are unapplied — `lib/agentic/flags.ts` reads every flag with
+`fallback = false`, and the persona actions catch the missing-relation error and return an empty list rather
+than throwing. An un-migrated database therefore behaves exactly as it does today, which is the whole design.
+
+A caveat on the older rows worth knowing: ledger entries 001–101 all carry an identical `applied_at` per
+environment, because they were backfilled in one statement when 101 landed rather than recorded as each
+migration ran. For that historical range the ledger reflects what was *declared* applied, not independently
+observed. From 102 onward each migration records itself at execution time, so those rows are real evidence.
 
 **The legal/auth UX pack (Phases 0-7) merged into `dev` 2026-08-29** (`--no-ff`, commit `b2092ea`). On dev: the
 four legal documents (`terms`, `privacy_policy`, `ai_disclosure`, `content_usage_policy`) are published at
@@ -225,8 +257,9 @@ order by c.relname;
 
 Built and merged, but not live for users. Each is behind a flag that defaults to off or to a no-op mode.
 
-Flag state **differs between environments**, and that difference is the point — dev runs ahead. Both columns
-verified 2026-08-26.
+Flag state **differs between environments**, and that difference is the point — dev runs ahead. Most rows
+below were verified 2026-08-26; the Runware and Agentic rows were re-verified against both live databases on
+2026-09-06.
 
 | Feature | Flag | dev | production |
 |---|---|---|---|
@@ -236,8 +269,15 @@ verified 2026-08-26.
 | Image prompt compiler | `image_prompt_compiler_mode` | **`new`** — compiled prompts are sent | **`shadow`** — legacy prompt still sent |
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
-| Runware image models | rows in `image_model_registry` | seeded (unverified prices) | **absent** — 095 not applied |
+| Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
 | Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
+| Agentic Creator System | six `agentic_*` flags | **absent** — migration 102 not applied | **absent** — migration 102 not applied |
+
+The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
+the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on
+both environments, which is why nothing surfaced — dormant by row state, not by absence. The prices are still
+the unverified guesses noted against migration 095; check each model in Runware's Playground before enabling
+any row on either environment.
 
 Earlier revisions of this file described the reference feature and the compiler as dormant. That was an
 accurate description of **production** filed under a heading that read as though it covered dev. When

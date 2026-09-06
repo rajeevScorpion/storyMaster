@@ -141,8 +141,77 @@ an operator sight-check of the taxonomy mapping. An empty persona table is the c
 Gate: tsc clean, lint clean, `build:verify` passing with `/admin/agents/personas` in the manifest.
 e2e not re-run — this phase adds no signed-out surface.
 
-**Commit:** `10b314a`
+**Commit:** `9c0f620`
 
 ---
 
-_(Phase 2b onward appended here.)_
+## Phase 2b — The 15 seed personas
+
+**Date:** 2026-09-06
+
+**Work.** `supabase/migrations/104_seed_agent_personas.sql` + rollback. SQL only; no TypeScript.
+
+**Band mapping** (operator-approved before writing): `all_ages` is deliberately left unseeded, and the five
+buckets carrying a real audience get three personas each — `kids_3_5`, `kids_5_8`, `kids_8_12`, `teens`,
+`adults`. Three personas per language across english / hindi / bangla / gujarati / marathi. Urdu is supported
+for story text but has **no narration voice mapping**, so no seed persona uses it.
+
+**Language approach.** Prompts are written in English but instruct native-language output, carrying craft
+direction specific to each language — idiom, naming, cultural texture, register, ending style. Chosen over
+writing in Devanagari/Bengali/Gujarati script because every other template in `lib/ai/prompt-config.shared.ts`
+is English and a mixed-script system prompt invites mid-beat language drift. The pack's real requirement —
+that these must not be one English prompt with the names swapped — is met by the prompts differing in
+narrative philosophy, structure and pacing. Any two read side by side should not be interchangeable.
+
+**Permissions on all 15:** `allow_image_generation = false`, `allow_narration = false`, `status = 'draft'`,
+`schedule_eligible = false`, and `default_story_config.imageGenerationMode = 'prompt_only'` — the last being
+the technical gate the pipeline actually reads. Nothing runs until an admin activates it.
+
+**Validation run before commit** (scripted against the SQL text, since migrations are not exercised by the
+test suite):
+
+- 15 INSERT rows, 15 unique slugs, 15 valid JSONB blobs, 0 parse failures
+- 3 personas per age group and 3 per language, exactly
+- every `age_group`, `language`, `genre`, style preset, theme, palette, detail level and TTS voice checked
+  against `lib/types/story.ts`, `lib/story/genres.ts` and `lib/ai/narration-voices.ts` — **no fabricated
+  identifiers**
+- all 15 rows `imageGenerationMode: 'prompt_only'`; all 15 permission tails `false, false, 'draft', false, true`
+- a quote/paren tokenizer confirmed no unterminated string literal and balanced parens in both files
+- rollback slug list matches the insert slug list exactly
+
+**Rollback design.** Deletes by explicit slug list rather than `WHERE is_seed = true`, so it can never take a
+persona an admin created or cloned. `agent_persona_memory` rows cascade; `stories.agent_persona_id` is
+`ON DELETE SET NULL`, so any story a seed persona produced survives and merely loses attribution — a rollback
+of seed data must not destroy generated content.
+
+**Also corrected in this commit:** `docs/agent-context/PROJECT_STATE.md`, verified against both live databases
+via the read-only MCP connections. Migration 101 was recorded as "not yet applied anywhere" while the
+paragraph below it said the opposite; the ledger shows it applied on both. The Runware row claimed 095 was
+unapplied on production; in fact prod holds all 9 rows, disabled on both environments. Migrations 102–105 are
+now listed as written-but-unapplied.
+
+**Migrations.** 104 written; **not applied.** Requires 103.
+
+**Tests.** None — SQL only, and the suite does not exercise migrations. `npx tsc --noEmit` unaffected.
+**Standing gap:** migration files are validated only by reading them and by ad-hoc scripts like the one above.
+Two real defects have now been caught that way (103's rollback ordering, and this file's identifier checks).
+
+**Commit:** _(filled in at commit time)_
+
+---
+
+## Phase 3 — PARTIAL, not complete
+
+**Date:** 2026-09-06
+
+`supabase/migrations/105_agent_story_memory.sql` and its rollback are written and reviewed — the rollback
+even reasons explicitly about drop order, applying the lesson from 103. **The entire TypeScript half is
+missing**: two successive background agents died mid-task (one to an API error, one without reporting). See
+the working-memory doc's "Next step" for the exact list of what remains.
+
+Do not treat Phase 3 as done. Migration 105 may be applied safely regardless — the tables simply sit unused
+until the code lands.
+
+---
+
+_(Phase 4 onward appended here.)_
