@@ -19,6 +19,7 @@ const PASSWORD = process.env.E2E_ADMIN_PASSWORD;
 const AGENTIC_ROUTES = [
   { path: '/admin/agents', heading: /agent/i },
   { path: '/admin/agents/personas', heading: /persona/i },
+  { path: '/admin/agents/test-lab', heading: /test lab/i },
   { path: '/admin/agents/tasks', heading: /task|coverage/i },
   { path: '/admin/agents/runs', heading: /run/i },
   { path: '/admin/agents/routing', heading: /routing|model/i },

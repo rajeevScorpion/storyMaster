@@ -333,10 +333,11 @@ const PRICING_CHILD_GROUP: AdminNavChildGroup = {
 };
 
 // Agentic Creator System admin area. Phase 1 shipped only the Overview child,
-// which hosts the kill switch and the five subordinate flags. Phase 2 adds
-// Personas (the persona catalogue). Later phases append test-lab / tasks /
-// runs / routing children to this same group list, so the sidebar and hub
-// grow without touching this file's shape.
+// which hosts the kill switch and the five subordinate flags. Later phases
+// appended Personas (the catalogue), the Persona Test Lab (dry-running a
+// persona through the real pipeline before promotion), the Task pool, Runs,
+// and Model routing to this same group list, so the sidebar and hub grow
+// without touching this file's shape.
 const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
   {
     id: 'general',
@@ -357,6 +358,14 @@ const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
         icon: Users,
         description: 'Creative identity catalogue: language, age group, genres, permissions, and lifecycle status.',
         staticSummary: 'Persona catalogue for autonomous story creators',
+      },
+      {
+        id: 'test-lab',
+        label: 'Persona Test Lab',
+        href: '/admin/agents/test-lab',
+        icon: FlaskConical,
+        description: 'Run the real headless pipeline against one persona (agent_tasks.is_test = true) and inspect brief, source text, beats, config, and novelty before ever promoting to a draft.',
+        staticSummary: 'Dry-run a persona through the real pipeline before it goes live',
       },
       {
         id: 'tasks',
