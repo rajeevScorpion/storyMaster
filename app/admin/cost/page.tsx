@@ -70,6 +70,7 @@ function activityLabel(key: string) {
     generate_reel_thumbnail: 'Reel thumb',
     generate_story_text_overlay: 'Text overlay',
     batch_image_generation: 'Batch image',
+    agentic_creator: 'Agentic creator',
   };
   return labels[key] || key.replaceAll('_', ' ');
 }

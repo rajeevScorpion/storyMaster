@@ -406,3 +406,117 @@ runtime — nothing calls either yet. That is Phase 6's job.
 
 **Commit:** this commit (`feat(agentic): extract seed authoring and userId-explicit story saving, add
 system billing bypass`) — hash not knowable from inside itself; see `git log` on `feat/agentic-creator`.
+
+---
+
+## Phase 6b — Headless story assembly pipeline (2026-09-07)
+
+**Work.** `lib/agentic/story-assembly.ts` (`server-only`): the `StageExecutor` (matching the seam
+`lib/agentic/orchestrator.ts`'s `drainAgentRuns()` takes) that turns a commissioned `agent_task` into a
+normal, editable Kissago story draft owned by the system user, stopping at `awaiting_review`. **Not wired
+into `drainAgentRuns()` here** — it is exported (`storyAssemblyExecutor`) for a later unit to plug in, per
+scope. No migration; no admin UI.
+
+**Stage mapping.**
+
+| Stage | Work |
+|---|---|
+| `brief_ready` | `agent_story_brief` (new `callGeminiAgenticJson` task) → `{workingTitle, premise, themes, characters}`, built from `persona.personaPrompt`/`creativeNotes`/`restrictedThemes` + `task.brief`/`rationale`/`genre`/`constraints`. Parsed and validated by hand (`parseStoryBrief`) since this call carries no schema. |
+| `novelty_checked` | `runNoveltyCheck('pre_generation', ...)` against the brief. `block` fails the run with the top reason; `clear`/`warn` advance. |
+| `story_generated` | `agent_seed_story_writing` (new task) writes source prose in `persona.language`, capped at `SEED_SOURCE_WORD_CAP`; `resolvePersonaStoryConfig` + `generateSeedPlanPreview` (`sourceFidelity: 'strictly_follow'`) segments it into `N` beat outlines; then per beat, `materializeSeededBeat` → `mergeCharacterVisualReferences` → `composeStoryboardPlan` → `beat.storyboardPlan`/`storyboardPromptText`/`isStoryboard` set unconditionally (prompt-only means "produce the prompts", not "skip the plan" — mirrors `lib/store/story-store.ts`'s own sequence exactly); then `buildSeededStoryMap` validates the finished chain. |
+| `draft_created` | Rebuilds the `StoryConfig`/`StoryMap` from checkpoint, calls `saveStoryForUser` with `{agentPersonaId, agentTaskId}`, then best-effort `recordStoryMemory` + `updatePersonaMemory` + `runNoveltyCheck('post_generation', ...)` (warns only, never deletes the saved draft). |
+| `narration_pending`, `narration_complete`, `evaluated` | Advance immediately with a plain `agent_run_events` note ("not implemented yet, Phase 8/7"). **Never deferred** — deferring here would return the run to `pending` forever without consuming an attempt. |
+| `awaiting_review` | Advance immediately. `nextStage('evaluated')` is `'awaiting_review'`, and since it is not yet checkpointed the executor is called for it too — this is the pipeline's intended hand-off point to a human reviewer, not an oversight. |
+
+**No-double-charge.** `story_generated` makes ~2N+2 paid calls for N beats (source prose, seed plan, then a
+materialize + a storyboard-compose per beat). The orchestrator's own checkpoint contract
+(`isCheckpointed`/`recordCheckpoint`) only fires *between* stages, so it cannot protect a loop running
+entirely inside one `story_generated` executor call. This module keeps its own intra-stage progress
+(`SeedGenerationProgress`, from the already-tested `story-assembly.shared.ts`) under a second checkpoint key,
+`story_generated_progress`, written via a direct, targeted `UPDATE agent_runs SET checkpoint = ...` after the
+source prose, after the seed plan, and after **every completed beat** — before moving to the next paid call.
+A crash at beat 5 of 8 means a retry re-pays for **nothing already completed**: it resumes exactly at beat 5
+(via `nextBeatIndexToGenerate`), and the source-prose/seed-plan calls are skipped too since `progress.sourceText`/`progress.seedPlan` are already set. If `RUN_TIME_BUDGET_MS` is exhausted mid-loop (checked before
+each beat and after the two setup calls), the stage returns `{kind:'deferred'}` with progress already
+persisted, so the next drain resumes cleanly with no attempt consumed.
+
+**A subtlety this surfaced, not anticipated in the plan:** `advanceRun()` in `orchestrator.ts` computes its
+own end-of-stage checkpoint write as `recordCheckpoint(run.checkpoint, target, checkpointPayload)`, using
+whatever `run.checkpoint` was **before** the executor was called — it has no way to learn about a direct
+mid-call `UPDATE` like this module's. Left alone, that final write would silently drop every
+`story_generated_progress` write made during the loop. Fixed by having `persistStoryGenerationProgress`
+mutate `run.checkpoint` in place immediately after each successful write, since `run` is the same object
+reference `advanceRun` holds for the rest of that stage's execution — documented in-line as the one
+deliberate exception to "never mutate an `AgentRun`" in this codebase.
+
+**Checkpoint size.** `SeedGenerationProgress.completedBeats` holds full `StoryBeat` objects, not trimmed
+copies. This is safe because nothing in this stage ever produces image bytes: `imageGenerationMode` is
+either forced to `'prompt_only'` (image-off personas, via `resolvePersonaStoryConfig`'s D5 rule) or simply
+never rendered — `composeStoryboardPlan` only produces text prompts, and this module never calls portrait or
+image generation (that is explicitly Phase 10's job, from stored prompts). So `beat.characters[].portraitBase64`
+and `beat.imageUrl` stay `undefined` throughout, and each stored beat is bounded to prose, options,
+continuity notes and the storyboard's text prompts — a few KB, not the multi-MB a base64 portrait would add.
+If a future phase adds portrait generation to this stage, the checkpoint would need beat-trimming before that
+lands, or row size becomes a real risk.
+
+**Billing.** Every paid call is wrapped in `authorizeAgenticSpend`/`finalizeAgenticSpend`/`releaseAgenticSpend`
+around `authorizeBillableAction`/`finalizeBillableAction`/`releaseBillableAction`, always
+`actorKind: 'agentic_system'` with `userId: process.env.AGENTIC_SYSTEM_USER_ID`. Anything other than
+`bypassed`/`allowed` throws. An unset `AGENTIC_SYSTEM_USER_ID` throws that exact message before any network
+call; a `denied` result with `reason: 'sign_in_required'` (the shape a falsy/mismatched userId takes inside
+`authorizeBillableAction`) gets an explicit "unset or does not resolve to a billable account" hint appended,
+so this presents as a config problem rather than "agent runs mysteriously fail". Each call uses a stable,
+run-scoped idempotency key (`agentic_run:{runId}:...:{part}[:beat:{n}]`) as a second line of defense beyond
+the checkpoint skip. Action keys are reused from the existing catalogue rather than inventing new
+`PricingActionKey` values (out of scope — no migration, no plan to add one yet): `preview_seed_plan` for the
+brief/source-prose/seed-plan calls, `start_story_initial_beat_prompt_only` for beat 1's two calls, and
+`continue_story_new_beat_prompt_only` for every later beat's two calls — all text-only, no-image action keys,
+matching what this stage actually produces. The pre-generation novelty adjudication call inside
+`runNoveltyCheck` (economy-tier, conditional on an ambiguous score) is deliberately **not** separately
+wrapped — it is an internal, best-effort refinement of a pre-verified function this module is told to call
+as-is, and reserving coins for a call that might not happen would be authorize-then-immediately-release
+theater for every clear/obvious verdict.
+
+**Other requirements folded in, per the task brief:**
+
+- `mapRowToPersona` (plus its `PersonaRow` row type) moved from `app/actions/agentic-personas.ts` into
+  `lib/agentic/personas.shared.ts` and exported — `app/actions/agentic-personas.ts` now imports both rather
+  than keeping a second copy. This is what lets `story-assembly.ts` map an `agent_personas` row directly
+  (it has no admin session to go through `agentic-personas.ts`'s `verifyAdmin()`-gated actions).
+- `lib/ai/cost-telemetry.shared.ts`'s `CostActivityKey` union gained `'agentic_creator'`; `app/admin/cost/page.tsx`'s
+  `activityLabel` map gained a matching `'Agentic creator'` label. No migration — `ai_cost_events.activity_key`
+  carries no CHECK constraint (verified on dev in Phase 6a).
+- `app/actions/gemini-proxy.ts`'s `callGeminiAgenticJson` task union widened from
+  `'agent_novelty_assessment' | 'agent_supervisor_planning'` to also include `'agent_story_brief' |
+  'agent_seed_story_writing'` — the same widening precedent Phase 4 used when `callGeminiNoveltyAssessment`
+  became `callGeminiAgenticJson` in the first place, rather than a third copy-pasted call function.
+- `getAgentTask` (from `lib/agentic/supervisor.ts`) is reused as-is for loading the commissioned task —
+  it is `server-only` with no `verifyAdmin()` gate, unlike its sibling actions in
+  `app/actions/agentic-supervisor.ts`.
+
+**Fail-closed.** The master flag (`agentic_creator_enabled`) and both migration-missing cases (`agent_tasks`
+via `getAgentTask` returning `null`, `agent_personas` via `isMissingPersonaSchemaError`) degrade to a
+`{kind:'deferred'}` outcome — no throw, run left `pending` — never a thrown 500. A run with no persona
+assigned (`run.personaId` null) fails outright instead, since that is a real state a human must fix
+(assign a persona to the task), not a transient migration gap.
+
+**Files.** New: `lib/agentic/story-assembly.ts`. Changed: `lib/agentic/personas.shared.ts`,
+`app/actions/agentic-personas.ts`, `lib/ai/cost-telemetry.shared.ts`, `app/admin/cost/page.tsx`,
+`app/actions/gemini-proxy.ts`.
+
+**Tests.** 92 files / 729 tests, unchanged from the Phase 6a baseline — `story-assembly.ts` is `server-only`
+and every function needs a live Supabase client plus real Gemini calls, the same reason `lib/agentic/memory.ts`
+and `lib/agentic/orchestrator.ts` carry no direct unit tests; the pure logic it leans on
+(`story-assembly.shared.ts`, `orchestrator.shared.ts`, `personas.shared.ts`) was already tested in earlier
+phases and is exercised here, not re-derived. Gate: `npx tsc --noEmit` clean, `npm run lint` clean, `npm test`
+92/729 (exactly baseline), `npm run build:verify` green (same 48 routes as Phase 5b/6a, `/api/agentic/run` and
+`/admin/agents/*` included).
+
+**Not covered:** none of this has run end to end against a live database or a real Gemini call — `AGENTIC_SYSTEM_USER_ID`
+exists on dev and `agentic_creator_enabled` is still `false` everywhere, so nothing has exercised
+`storyAssemblyExecutor` at runtime yet. It is also not wired into `drainAgentRuns()`, by design — that plus a
+live smoke run against a real commissioned task is the next unit's job. The brief/seed-prose prompts and their
+JSON parsing (`parseStoryBrief`/`parseSeedSourceText`) have never seen a real model response, only been read
+for correctness.
+
+**Commit:** `feat(agentic): headless story assembly pipeline` — see `git log` on `feat/agentic-creator`.

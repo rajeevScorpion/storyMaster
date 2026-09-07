@@ -237,6 +237,77 @@ export function buildClonedPersonaInput(
  * of problem against a different migration group -- per GOTCHAS.md, latches
  * (and their error classifiers) are kept one-per-migration-group on purpose.
  */
+/**
+ * Raw shape of a public.agent_personas row (migration 103), snake_case, as
+ * returned by Supabase. Shared so both the admin CRUD action module
+ * (app/actions/agentic-personas.ts) and the headless story-assembly pipeline
+ * (lib/agentic/story-assembly.ts, which cannot go through the admin module --
+ * it has no admin session to verify) map a row the same way. Two mappers for
+ * the same table drift; see mapRowToPersona below.
+ */
+export interface PersonaRow {
+  id: string;
+  slug: string;
+  display_name: string;
+  bio: string | null;
+  avatar_url: string | null;
+  language: string;
+  age_group: string;
+  genres: string[] | null;
+  speciality: string | null;
+  persona_prompt: string;
+  creative_notes: string | null;
+  restricted_themes: string[] | null;
+  default_story_config: Record<string, unknown> | null;
+  dynamic_setting_keys: string[] | null;
+  beat_count_min: number;
+  beat_count_max: number;
+  preferred_voice: string | null;
+  approved_voice_pool: string[] | null;
+  allow_image_generation: boolean;
+  allow_narration: boolean;
+  model_overrides: Record<string, unknown> | null;
+  status: AgentPersonaStatus;
+  schedule_eligible: boolean;
+  is_seed: boolean;
+  cloned_from: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Maps a raw agent_personas row to the camelCased AgentPersona shape. The one mapper for this table -- see PersonaRow's comment. */
+export function mapRowToPersona(row: PersonaRow): AgentPersona {
+  return {
+    id: row.id,
+    slug: row.slug,
+    displayName: row.display_name,
+    bio: row.bio,
+    avatarUrl: row.avatar_url,
+    language: row.language as AgentPersona['language'],
+    ageGroup: row.age_group as AgentPersona['ageGroup'],
+    genres: row.genres ?? [],
+    speciality: row.speciality,
+    personaPrompt: row.persona_prompt,
+    creativeNotes: row.creative_notes,
+    restrictedThemes: row.restricted_themes ?? [],
+    defaultStoryConfig: (row.default_story_config ?? {}) as Partial<StoryConfig>,
+    dynamicSettingKeys: row.dynamic_setting_keys ?? [],
+    beatCountMin: row.beat_count_min,
+    beatCountMax: row.beat_count_max,
+    preferredVoice: row.preferred_voice,
+    approvedVoicePool: row.approved_voice_pool ?? [],
+    allowImageGeneration: row.allow_image_generation,
+    allowNarration: row.allow_narration,
+    modelOverrides: (row.model_overrides ?? {}) as Record<string, unknown>,
+    status: row.status,
+    scheduleEligible: row.schedule_eligible,
+    isSeed: row.is_seed,
+    clonedFrom: row.cloned_from,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 export function isMissingPersonaSchemaError(error: { code?: string; message?: string } | null | undefined): boolean {
   if (!error) return false;
 
