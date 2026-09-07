@@ -218,6 +218,25 @@ The gallery tolerates missing columns by latching "this column group is unavaila
 Relatedly: the `stories!inner` join was deliberately **not** widened with episode columns as a pre-093
 fallback. A database without migration 075 would then fail the whole gallery rather than lose one feature.
 
+**The classifiers behind those latches are usually code-identical, which is what makes the rule easy to
+violate.** `isMissingRunSchemaError` (migration 107) and `isMissingTaskSchemaError` (106) in the agentic
+modules both accept exactly `42P01`, `42703`, `PGRST200`, `PGRST204`, as do the persona and memory ones.
+They are told apart **only by which table the failing query touched** — never by the error itself. So
+"try both classifiers and latch whichever matches" is not a safe pattern: it always matches the first one
+you check. **Classify by the query, not by the error.**
+
+This shipped once and was caught in review: `enqueueCommissionedTasks` classified an `agent_tasks`-only
+read against the 107 latch first, so a missing `agent_tasks` — or a transient PostgREST `PGRST204` after
+any migration — would latch `runSchemaUnavailable`, which `drainAgentRuns` reads at its top and
+`listRuns`/`getRun` read too. One `agent_tasks` hiccup would have killed the entire run pipeline for the
+life of the process and blanked `/admin/agents/runs` behind a "migration 107 is not applied" message that
+was simply false. Fixed in `aa950db`.
+
+A query that genuinely spans two groups — `drainAgentRuns`'s `agent_runs` select with an
+`agent_tasks!inner` embed — is the one case where you cannot tell them apart, and there the right answer
+is to reason from the schema: `agent_runs.task_id` is a foreign key onto `agent_tasks`, so 107 cannot
+exist without 106 and latching 107 is correct either way. Write that reasoning down at the call site.
+
 ### PostgREST `or()` needs double-quoted values
 
 Values in an `or()` filter are double-quoted (`title.ilike."%Mr. Bean%"`) so dots and commas survive. Strip
