@@ -753,8 +753,25 @@ async function handleStageFailure(
  * executor call, no re-billed model call -- this is the idempotency contract in
  * action); the first stage NOT yet checkpointed is handed to `executor`. Stops at the
  * first 'deferred' or 'failed' outcome, or once a terminal stage is reached.
+ *
+ * `stopAfterStage`, when given, is a SECOND stopping condition on top of those:
+ * once the run has just advanced ONTO that stage, the loop stops there too and the
+ * run is returned to 'pending' (via returnRunToPending, same as a deferral -- the
+ * attempt is not consumed) instead of continuing toward the next stage. This is the
+ * entire mechanism behind the Persona Test Lab's safety property: stopping a run
+ * after 'story_generated' means `draft_created` -- the ONLY stage that calls
+ * saveStoryForUser/recordStoryMemory/updatePersonaMemory (see story-assembly.ts) --
+ * never runs until something explicitly asks for it (promoteTestLabRun, with no
+ * stopAfterStage at all). There is no separate "is this a test" flag anywhere in
+ * this function or in story-assembly.ts; the guarantee is structural, not a check
+ * that could be forgotten.
  */
-async function advanceRun(admin: AdminClient, initialRun: AgentRun, executor: StageExecutor): Promise<void> {
+async function advanceRun(
+  admin: AdminClient,
+  initialRun: AgentRun,
+  executor: StageExecutor,
+  stopAfterStage?: AgentRunStage
+): Promise<void> {
   let run = initialRun;
 
   for (;;) {
@@ -773,6 +790,17 @@ async function advanceRun(admin: AdminClient, initialRun: AgentRun, executor: St
     if (isCheckpointed(run.checkpoint, target)) {
       run = await persistStageAdvance(admin, run, target, run.checkpoint);
       if (isTerminalStage(target)) return;
+      // Checked here too, not only in the 'advanced' branch below -- a run resumed
+      // by executeRunNow (continueTestLabRun's second-and-later passes) can find
+      // its next target stage ALREADY checkpointed from a prior pass and take this
+      // free branch instead of ever calling the executor. Without this check, a
+      // resumed run would sail straight past stopAfterStage with no executor call
+      // to have stopped it at -- for the Test Lab specifically, straight into
+      // draft_created's memory writes. See this function's own doc comment.
+      if (target === stopAfterStage) {
+        await returnRunToPending(admin, run);
+        return;
+      }
       continue;
     }
 
@@ -797,6 +825,13 @@ async function advanceRun(admin: AdminClient, initialRun: AgentRun, executor: St
       run = await persistStageAdvance(admin, run, target, newCheckpoint, outcome.storyId);
       await appendRunEvent(run.id, target, 'info', `Advanced to stage '${target}'.`);
       if (isTerminalStage(target)) return;
+      // Same stop check as the checkpoint-skip branch above -- this is the branch a
+      // FIRST pass through `stopAfterStage` takes (the executor actually ran), so
+      // it is the one that fires for startTestLabRun's very first executeRunNow call.
+      if (target === stopAfterStage) {
+        await returnRunToPending(admin, run);
+        return;
+      }
       continue;
     }
 
@@ -810,6 +845,90 @@ async function advanceRun(admin: AdminClient, initialRun: AgentRun, executor: St
     await handleStageFailure(admin, run, outcome.message, outcome.metadata, outcome.error);
     return;
   }
+}
+
+// ── Single-run inline execution (Persona Test Lab) ──────────────────────
+
+export interface ExecuteRunNowOptions {
+  stopAfterStage?: AgentRunStage;
+}
+
+/**
+ * Claims and advances ONE run inline, for the Persona Test Lab's synchronous path.
+ * Unlike drainAgentRuns -- which enqueues commissioned tasks, reclaims stale runs,
+ * and then claims whatever pending run is oldest, in a loop bounded by a time
+ * budget -- this claims a SPECIFIC run by id, does none of that surrounding
+ * housekeeping, and lets the caller stop the advance early via `stopAfterStage`.
+ *
+ * Does not statically import lib/agentic/story-assembly.ts (see this module's own
+ * header comment on resolveStoryAssemblyExecutor, and commit 5e14249): the caller
+ * passes `executor` -- the Persona Test Lab passes storyAssemblyExecutor itself --
+ * so this module never needs to know that module exists.
+ */
+export async function executeRunNow(
+  runId: string,
+  executor: StageExecutor,
+  options?: ExecuteRunNowOptions
+): Promise<AgentRun | null> {
+  if (runSchemaUnavailable) throw new Error(RUN_SCHEMA_UNAVAILABLE_MESSAGE);
+
+  const admin = createAdminClient();
+
+  let existingRow: AgentRunRow | null;
+  try {
+    const { data, error } = await admin.from('agent_runs').select('*').eq('id', runId).maybeSingle();
+    if (error) {
+      if (isRunSchemaMissing(error)) {
+        latchRunSchemaUnavailable('executeRunNow');
+        throw new Error(RUN_SCHEMA_UNAVAILABLE_MESSAGE);
+      }
+      throw new Error(`Failed to read agent_run ${runId}: ${error.message}`);
+    }
+    existingRow = (data as AgentRunRow | null) ?? null;
+  } catch (error) {
+    if (error instanceof Error && error.message === RUN_SCHEMA_UNAVAILABLE_MESSAGE) throw error;
+    if (isRunSchemaMissing(error)) {
+      latchRunSchemaUnavailable('executeRunNow');
+      throw new Error(RUN_SCHEMA_UNAVAILABLE_MESSAGE);
+    }
+    throw error;
+  }
+
+  if (!existingRow) throw new Error(`No agent_run found with id ${runId}.`);
+  // A run already 'processing' is being worked by something else right now (the
+  // cron drain, or another concurrent executeRunNow call) -- claiming it out from
+  // under that worker would let two callers advance the same run at once, which is
+  // exactly the race claimRun's conditional UPDATE exists to prevent. Refuse
+  // loudly here rather than letting claimRun's `eq('status', 'pending')` silently
+  // fail to match and return null, which would look identical to "lost the race"
+  // even though nothing here raced anyone.
+  if (existingRow.status !== 'pending') {
+    throw new Error(
+      `Run ${runId} is '${existingRow.status}', not 'pending'; it is already being worked by something else.`
+    );
+  }
+
+  const claimed = await claimRun(admin, runId, existingRow.attempt_count);
+  if (!claimed) return null; // Lost the claim race between the read above and now.
+
+  const run = rowToRun({
+    ...existingRow,
+    status: 'processing',
+    attempt_count: existingRow.attempt_count + 1,
+    claimed_at: new Date().toISOString(),
+  });
+
+  await advanceRun(admin, run, executor, options?.stopAfterStage);
+
+  const { data: freshData, error: freshError } = await admin.from('agent_runs').select('*').eq('id', runId).maybeSingle();
+  if (freshError) {
+    if (isRunSchemaMissing(freshError)) {
+      latchRunSchemaUnavailable('executeRunNow (re-read)');
+      return null;
+    }
+    throw new Error(`Failed to re-read agent_run ${runId} after advancing: ${freshError.message}`);
+  }
+  return freshData ? rowToRun(freshData as AgentRunRow) : null;
 }
 
 // ── Drain loop ─────────────────────────────────────────────────────────

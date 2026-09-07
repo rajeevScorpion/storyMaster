@@ -97,8 +97,14 @@ import type {
  * an AgentRunStage -- it never appears in STAGE_SEQUENCE and the orchestrator
  * never reads or writes it; it exists purely so a crash partway through this
  * stage's paid-call loop can resume without re-paying for finished work.
+ *
+ * Exported (not just a local constant) so lib/agentic/test-lab.ts can read a
+ * parked run's in-progress sourceText/seedPlan/completedBeats for the Persona
+ * Test Lab's inspection view without retyping this string literal a second
+ * place -- see GOTCHAS.md on why a duplicated literal like this is worth
+ * avoiding even though nothing here enforces it structurally.
  */
-const STORY_PROGRESS_CHECKPOINT_KEY = 'story_generated_progress';
+export const STORY_PROGRESS_CHECKPOINT_KEY = 'story_generated_progress';
 
 // ── Story brief (brief_ready) ───────────────────────────────────────────
 
