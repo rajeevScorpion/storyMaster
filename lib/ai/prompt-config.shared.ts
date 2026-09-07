@@ -14,6 +14,15 @@ export type PromptTaskKey = Exclude<
   // Built in code by lib/agentic/supervisor.shared.ts's
   // buildSupervisorPlanningPrompt, for the same reason.
   | 'agent_supervisor_planning'
+  // Phase 5/6 agentic TaskKeys, all built in code (not yet written -- Phase 6
+  // is lib/agentic/story-assembly.ts) rather than from an admin-editable
+  // template, for the same reason as the two agentic keys above. Omitting any
+  // of these three breaks the typecheck in LOCKED_PROMPT_GUARDRAILS,
+  // PROMPT_TASK_DEFINITIONS and PlaygroundStudio.tsx, since PromptTaskKey
+  // must remain exactly the TaskKeys those Records key on.
+  | 'agent_story_brief'
+  | 'agent_seed_story_writing'
+  | 'agent_story_evaluation'
 >;
 
 export interface PromptPlaceholderDefinition {
