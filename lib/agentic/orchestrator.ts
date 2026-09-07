@@ -17,18 +17,21 @@ import 'server-only';
 // that has already exhausted max_attempts is failed terminally instead of being handed
 // back for an attempt it isn't entitled to.
 //
-// STORY GENERATION DOES NOT EXIST YET -- IT IS PHASE 6, DELIBERATELY. Every non-terminal
-// stage in agent_runs.stage past 'queued' requires content-generation logic (writing a
-// brief, running a novelty check, authoring seed prose, materializing beats) that lives
-// in lib/agentic/story-assembly.ts, which Phase 6 has not written. Rather than inventing
-// any of that here, drainAgentRuns() takes a StageExecutor function as a parameter and
-// defaults to defaultAgentRunExecutor, which defers on the very first stage it is asked
-// to produce: it records a clear, honest agent_run_events entry and returns the run to
-// 'pending' untouched (same stage, same checkpoint, attempt NOT consumed -- see
-// returnRunToPending's comment) rather than failing it. This keeps every other piece of
-// this file -- claim, reclaim, retry, the checkpoint skip -- fully exercisable today
-// against a real database, and gives Phase 6 exactly one function signature
-// (StageExecutor) to satisfy to plug real generation in.
+// STORY GENERATION IS PHASE 6, AND IT HAS SHIPPED. Every non-terminal stage in
+// agent_runs.stage past 'queued' requires content-generation logic (writing a brief,
+// running a novelty check, authoring seed prose, materializing beats), which now lives in
+// lib/agentic/story-assembly.ts's storyAssemblyExecutor. drainAgentRuns() takes a
+// StageExecutor function as an OPTIONAL parameter; when a caller omits one -- both
+// production callers, app/api/agentic/run/route.ts and app/api/batch/reconcile/route.ts,
+// do -- it resolves storyAssemblyExecutor itself via resolveStoryAssemblyExecutor's lazy
+// dynamic import. That import cannot be static: story-assembly.ts imports appendRunEvent,
+// AgentRun, StageExecutor and StageExecutionOutcome back from this module, so a top-level
+// import here would be a cycle. Laziness is worth keeping even setting the cycle aside --
+// it keeps story-assembly's heavy transitive dependency graph (the Gemini proxy,
+// save-story, beat-orchestration) out of this module's graph for as long as the feature
+// stays off. defaultAgentRunExecutor still exists, but only as the explicit "defer every
+// stage" executor, for callers and tests that want to exercise the deferral/
+// return-to-pending path without invoking real generation.
 //
 // FAILS CLOSED for its own migration group (107): while it is unapplied, listRuns/getRun
 // degrade to empty/null and every write throws a clear "not applied yet" message rather
@@ -416,12 +419,12 @@ export type StageExecutionOutcome = StageAdvancedOutcome | StageDeferredOutcome 
 export type StageExecutor = (run: AgentRun, targetStage: AgentRunStage) => Promise<StageExecutionOutcome>;
 
 /**
- * The seam Phase 6 plugs a real generator into. Every non-terminal stage past 'queued'
- * requires content-generation logic (brief writing, novelty checking, seed authoring,
- * materialization) that lives in lib/agentic/story-assembly.ts, which does not exist
- * yet. Rather than inventing any of it, this default executor defers on the very first
- * stage it is asked to produce and says so plainly, leaving the run for a future drain
- * once a real executor is supplied.
+ * No longer drainAgentRuns's default -- storyAssemblyExecutor (lib/agentic/story-assembly.ts)
+ * is, resolved lazily by resolveStoryAssemblyExecutor below. This is now the explicit
+ * "defer every stage" executor: it defers on the very first stage it is asked to produce
+ * and says so plainly, without attempting any real generation. Retained (and still
+ * exported) for callers and tests that want to exercise the deferral/return-to-pending
+ * path in isolation, without paying for or depending on real story generation.
  */
 export const defaultAgentRunExecutor: StageExecutor = async (_run, targetStage) => ({
   kind: 'deferred',
@@ -572,23 +575,57 @@ async function advanceRun(admin: AdminClient, initialRun: AgentRun, executor: St
 // ── Drain loop ─────────────────────────────────────────────────────────
 
 /**
+ * Memoised handle to storyAssemblyExecutor -- populated at most once per process by the
+ * dynamic import in resolveStoryAssemblyExecutor.
+ */
+let cachedStoryAssemblyExecutor: StageExecutor | undefined;
+
+/**
+ * Lazily resolves lib/agentic/story-assembly.ts's storyAssemblyExecutor for use as
+ * drainAgentRuns's default. This MUST be a dynamic import, not a top-level one, for two
+ * independent reasons:
+ *
+ * (a) story-assembly.ts imports appendRunEvent, AgentRun, StageExecutor and
+ *     StageExecutionOutcome from this module at its own top level. A static import of
+ *     story-assembly.ts here would close that into a cycle.
+ * (b) even setting the cycle aside, story-assembly.ts drags in a heavy transitive
+ *     dependency graph -- the Gemini proxy, save-story, beat-orchestration -- that has no
+ *     business loading into every module graph that merely imports drainAgentRuns (the
+ *     reconcile cron route, in particular) while the feature is off. A dynamic import
+ *     defers that cost to the first drain that actually needs it.
+ *
+ * Memoised on a module-level variable so the import only happens once per process.
+ */
+async function resolveStoryAssemblyExecutor(): Promise<StageExecutor> {
+  if (!cachedStoryAssemblyExecutor) {
+    const mod = await import('@/lib/agentic/story-assembly');
+    cachedStoryAssemblyExecutor = mod.storyAssemblyExecutor;
+  }
+  return cachedStoryAssemblyExecutor;
+}
+
+/**
  * Reclaims stale runs, then claims and advances pending runs one at a time until
  * `budgetMs` is spent. Returns how many runs were claimed and processed in this call
  * (regardless of whether each one succeeded, deferred, or failed) -- the same
  * "processed" semantics as runImageGenerationJobs's result.
  *
  * Returns 0 immediately, WITHOUT touching agent_runs/agent_run_events, when the master
- * kill switch (agentic_creator_enabled) is off. `executor` defaults to
- * defaultAgentRunExecutor; Phase 6 supplies a real one once story-assembly.ts exists.
+ * kill switch (agentic_creator_enabled) is off. `executor` is optional: both production
+ * callers (app/api/agentic/run/route.ts, app/api/batch/reconcile/route.ts) omit it, and
+ * get storyAssemblyExecutor via resolveStoryAssemblyExecutor's lazy dynamic import above.
+ * Pass defaultAgentRunExecutor explicitly to get the old defer-every-stage behaviour.
  */
 export async function drainAgentRuns(
   budgetMs: number = RUN_TIME_BUDGET_MS,
-  executor: StageExecutor = defaultAgentRunExecutor
+  executor?: StageExecutor
 ): Promise<number> {
   const flags = await getAgenticFlags();
   if (!flags.creatorEnabled) return 0;
 
   if (runSchemaUnavailable) return 0;
+
+  const activeExecutor = executor ?? (await resolveStoryAssemblyExecutor());
 
   const admin = createAdminClient();
   const startedAt = Date.now();
@@ -636,7 +673,7 @@ export async function drainAgentRuns(
     });
 
     try {
-      await advanceRun(admin, run, executor);
+      await advanceRun(admin, run, activeExecutor);
     } catch (error) {
       console.error(`Agent run ${run.id} threw while advancing:`, error instanceof Error ? error.stack ?? error.message : error);
       await handleStageFailure(

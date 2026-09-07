@@ -189,7 +189,6 @@ export default function AgenticOverview({ initialFlags }: { initialFlags: Agenti
           <li>Story memory and pre/post-generation novelty checks (Phase 3)</li>
           <li>Editorial supervisor and the task pool (Phase 4)</li>
           <li>Execution orchestrator — claim, retry, resume — schedules and model routing (Phase 5)</li>
-          <li>Seed authoring, canonical beat assembly, and actual story generation (Phase 6)</li>
           <li>Evaluation of generated stories (Phase 7), optional narration (Phase 8)</li>
           <li>Human review queue at /admin/authors (Phase 9)</li>
           <li>Image permission (Phase 10), provenance and editorial labels (Phase 11)</li>

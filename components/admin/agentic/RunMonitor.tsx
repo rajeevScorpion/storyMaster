@@ -258,7 +258,7 @@ export default function RunMonitor({
     }
     return {
       title: 'No runs yet.',
-      body: 'A run is created for a commissioned task (see Task pool). Story generation itself is Phase 6 -- every run that does exist currently defers on its first content stage rather than completing.',
+      body: 'A run is created for a commissioned task (see Task pool). Story generation (Phase 6) is now the default executor, so a run advances through real content-generation stages instead of deferring.',
     };
   }
 

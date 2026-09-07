@@ -6,8 +6,11 @@ import 'server-only';
 // commissioned agent_task into a normal, editable Kissago story draft owned by
 // the system user, stopping at 'awaiting_review'. V1 has no autonomous
 // publish -- this module never marks a story public and never touches
-// storylines. It is NOT wired into drainAgentRuns() here; that is a later
-// unit's job, once this executor has been reviewed on its own.
+// storylines. It IS wired into drainAgentRuns() now, as its default executor
+// -- but orchestrator.ts resolves storyAssemblyExecutor via a lazy dynamic
+// import rather than a top-level one, because this module imports
+// appendRunEvent, AgentRun, StageExecutor and StageExecutionOutcome back from
+// orchestrator.ts, and a static import in both directions would be a cycle.
 //
 // THE NO-DOUBLE-CHARGE CONTRACT: story_generated makes roughly 2N+2 paid model
 // calls for an N-beat story (one prose write, one seed plan, then a
@@ -843,7 +846,7 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
 }
 
 // ── Entry point: the StageExecutor lib/agentic/orchestrator.ts's
-// drainAgentRuns() can be given (wiring that in is a later unit's job) ─────
+// drainAgentRuns() resolves lazily and uses as its default executor ────────
 
 /**
  * The headless story-assembly executor. For each targetStage:

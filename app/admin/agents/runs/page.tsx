@@ -14,7 +14,7 @@ export default async function AgenticRunsPage() {
     <div className="mx-auto max-w-6xl space-y-6">
       <AdminPageHeader
         title="Run monitor"
-        description="Execution runs for commissioned tasks: stage progress, checkpoints, retries, and a manual worker kick. Story generation itself doesn't exist yet (Phase 6) -- every run today defers on its first content-generation stage rather than completing."
+        description="Execution runs for commissioned tasks: stage progress, checkpoints, retries, and a manual worker kick. Story generation (Phase 6) is now the default executor, so a run advances through real content-generation stages instead of deferring."
       />
       <RunMonitor initialRuns={initialRuns} schemaApplied={schemaStatus.schemaApplied} creatorEnabled={flags.creatorEnabled} />
     </div>
