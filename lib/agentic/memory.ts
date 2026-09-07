@@ -15,7 +15,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig, getFeatureFlagValue, setFeatureFlagValue } from '@/lib/ai/model-config';
-import { callGeminiNoveltyAssessment } from '@/app/actions/gemini-proxy';
+import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
 import { CHARACTER_NAME_HISTORY_LIMIT } from '@/lib/ai/character-novelty.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import {
@@ -259,7 +259,7 @@ async function adjudicate(
 ): Promise<{ verdict: NoveltyVerdict; reason: string } | null> {
   try {
     const config = await getModelConfig('agent_novelty_assessment');
-    const raw = await callGeminiNoveltyAssessment({
+    const raw = await callGeminiAgenticJson({
       task: 'agent_novelty_assessment',
       model: config.model,
       prompt: buildNoveltyAdjudicationPrompt(candidate, scored.topCandidates),

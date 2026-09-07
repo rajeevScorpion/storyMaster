@@ -257,8 +257,8 @@ export async function callGeminiReferenceAnalysis(params: ReferenceAnalysisCallP
   return text.trim();
 }
 
-export interface NoveltyAssessmentCallParams {
-  task: Extract<TaskKey, 'agent_novelty_assessment'>;
+export interface AgenticJsonCallParams {
+  task: Extract<TaskKey, 'agent_novelty_assessment' | 'agent_supervisor_planning'>;
   model: string;
   prompt: string;
   temperature?: number;
@@ -266,18 +266,22 @@ export interface NoveltyAssessmentCallParams {
 }
 
 /**
- * Text-in, JSON-out call for the agentic novelty adjudication.
+ * Text-in, JSON-out call shared by the two agentic tasks that build their own
+ * prompt in code rather than through the admin prompt registry: novelty
+ * adjudication (lib/agentic/memory.shared.ts's buildNoveltyAdjudicationPrompt)
+ * and supervisor planning (lib/agentic/supervisor.shared.ts's
+ * buildSupervisorPlanningPrompt).
  *
  * Deliberately separate from callGeminiText: that function looks the task up in
  * LOCKED_PROMPT_GUARDRAILS and schemaMap, both keyed by the admin-editable
- * prompt registry. This prompt is built in code by
- * lib/agentic/memory.shared.ts's buildNoveltyAdjudicationPrompt, not by an
- * admin template, so registering it there would put a non-editable prompt into
- * the prompt playground. Follows callGeminiReferenceAnalysis instead — the
- * existing precedent in this file for a task outside the prompt registry:
- * responseMimeType json, no schema, same timeout and cost telemetry.
+ * prompt registry, and registering either of these tasks there would put a
+ * non-editable prompt into the prompt playground (see PromptTaskKey's
+ * exclusion list in prompt-config.shared.ts). Follows
+ * callGeminiReferenceAnalysis instead — the existing precedent in this file for
+ * a task outside the prompt registry: responseMimeType json, no schema, same
+ * timeout and cost telemetry.
  */
-export async function callGeminiNoveltyAssessment(params: NoveltyAssessmentCallParams): Promise<string> {
+export async function callGeminiAgenticJson(params: AgenticJsonCallParams): Promise<string> {
   const { task, model, prompt, temperature, telemetry } = params;
   const ai = getAI();
 

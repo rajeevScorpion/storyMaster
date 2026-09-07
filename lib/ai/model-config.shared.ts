@@ -19,7 +19,8 @@ export type TaskKey =
   | 'reel_tts'
   | 'story_text_overlay_alignment'
   | 'voice_selection'
-  | 'agent_novelty_assessment';
+  | 'agent_novelty_assessment'
+  | 'agent_supervisor_planning';
 
 export interface ModelConfig {
   taskKey: TaskKey;
@@ -56,6 +57,7 @@ export const TASK_DEFINITIONS: {
   { key: 'story_text_overlay_alignment', label: 'Story Text Overlay Alignment', description: 'Aligns generated narration audio to story text for timed overlay highlighting' },
   { key: 'voice_selection', label: 'Legacy Voice Selection', description: 'Legacy AI selector used only when user-led narration voice selection is off' },
   { key: 'agent_novelty_assessment', label: 'Agent Novelty Assessment', description: 'Economy-tier second opinion on whether an agent-proposed story is genuinely derivative, called only when deterministic scoring lands in the ambiguous band' },
+  { key: 'agent_supervisor_planning', label: 'Agent Supervisor Planning', description: 'Editorial Supervisor call that turns ranked catalogue coverage gaps into proposed story commissions for active personas' },
 ];
 
 export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: number | null }> = {
@@ -80,6 +82,7 @@ export const DEFAULT_MODELS: Record<TaskKey, { modelId: string; temperature: num
   // Economy tier by design: this call only breaks ties inside a narrow
   // ambiguous band, and runs on every agent story. See decision D3.
   agent_novelty_assessment: { modelId: 'gemini-2.5-flash', temperature: 0.2 },
+  agent_supervisor_planning: { modelId: DEFAULT_TEXT_MODEL_ID, temperature: 0.4 },
 };
 
 // Known Gemini models for the playground dropdown

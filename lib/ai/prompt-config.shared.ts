@@ -11,6 +11,9 @@ export type PromptTaskKey = Exclude<
   // buildNoveltyAdjudicationPrompt, not from an admin-editable template, so it
   // has no place in the prompt playground.
   | 'agent_novelty_assessment'
+  // Built in code by lib/agentic/supervisor.shared.ts's
+  // buildSupervisorPlanningPrompt, for the same reason.
+  | 'agent_supervisor_planning'
 >;
 
 export interface PromptPlaceholderDefinition {
