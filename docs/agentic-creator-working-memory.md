@@ -27,17 +27,17 @@ Migrations 102-107 are **all applied on dev**, none on prod.
 
 ## Where we are
 
-- **Phase:** 5a complete — the recoverable run state machine, task-role model routing, and the
-  orchestrator (migration 107). Phase 5b (the worker route, the `/api/batch/reconcile`
-  integration, and the runs admin page) is still ahead — deliberately not built in 5a.
+- **Phase:** 6a complete. Phases 1-5 shipped in full; 6a laid the groundwork for headless story
+  generation. **Phase 6b — `lib/agentic/story-assembly.ts`, the headless seed-story pipeline — is
+  the next step, and it is the phase that proves the architecture.**
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
 
 ## What works right now
 
-**Migrations 102–105 are applied on the dev/staging database as of 2026-09-06; 106 is written but applied
-nowhere.** Verified by query, not assumed:
+**Migrations 102-107 are all applied on the dev/staging database** (102-105 on 2026-09-06, 106-107 on
+2026-09-07), re-verified against `schema_migration_ledger` on 2026-09-07. Verified by query, not assumed:
 
 - Six `agentic_*` flags exist, **all still `false`**. `lib/agentic/flags.ts` is the single read path,
   always with `fallback = false`.
@@ -73,6 +73,10 @@ explicitly rather than incidentally — that is why the three empty states are d
 
 ## Next step
 
+**Phase 6b — headless story assembly.** See "What Phase 6a shipped" below for the seams it plugs into.
+
+### Superseded: Phase 5b (complete, landed at `78e8aaa`)
+
 **Phase 5b — worker route, reconcile integration, runs admin page.** Migration 107 and its
 schema, the pure state machine, routing, and the orchestrator itself are done (5a, below). Still
 needed: a `CRON_SECRET`-guarded `app/api/agentic/run/route.ts` that calls `drainAgentRuns()`; an
@@ -81,6 +85,38 @@ needed: a `CRON_SECRET`-guarded `app/api/agentic/run/route.ts` that calls `drain
 already runs there**; and `/admin/agents/runs` (list + `agent_run_events` timeline, using
 `app/actions/agentic-runs.ts`, already written). `kickAgenticWorker()` (the admin "Run now"
 button's server action) belongs here too, once the worker route it calls exists.
+
+### What Phase 6a shipped (commit `e89f9ef`)
+
+Groundwork only, **zero behaviour change** — verified by re-running the gate independently
+(tsc 0, lint 0, 91 files / 715 tests, exactly baseline) and by diffing the moved bodies line by line.
+
+- `lib/ai/seed-authoring.ts` — `generateSeedPlanPreview` and `materializeSeededBeat` moved out of the
+  `'use client'` `app/actions/story-runtime.ts` into a directive-free dual-context module, mirroring
+  `lib/ai/beat-orchestration.ts`. `story-runtime.ts` re-exports them, so `story-store.ts`,
+  `LandingScreen.tsx` and `ContinueAsEpisodeDialog.tsx` are untouched — confirmed by `git show --stat`.
+- `lib/story/save-story.ts` (`server-only`) — `saveStoryForUser(supabase, userId, session, storyMap, options?)`.
+  **`saveStory` could not be called headlessly**: it resolves the user from a cookie session and throws
+  `'Not authenticated'`, which a cron worker always would. `saveStory` is now a thin cookie-bound wrapper
+  over it. The move was larger than planned (656 lines) because the row-shaping helpers are shared with
+  `saveBeat`/`loadStory` and a `'use server'` file can only export async functions; they moved too and are
+  imported back. Verified no invented logic: every added line is an import, an `export` prefix, a
+  `user.id` -> `userId` swap, or the two optional provenance keys.
+  **`saveStoryForUser` must never be exported from a `'use server'` file** — it takes a caller-supplied
+  `userId`, so as a server action it would let any browser save a story as another user.
+- `lib/pricing/enforcement.ts` — an `agentic_system` bypass branch ahead of `admin_bypass`, requiring all
+  three of `actorKind === 'agentic_system'`, the `agentic_billing_bypass_enabled` flag, and
+  `userId === AGENTIC_SYSTEM_USER_ID`. `actorKind` is checked first so the human path does no extra I/O.
+- `AGENTIC_SYSTEM_USER_ID` added to `.env.example` and `docs/onboarding-new-machine.md`. **Created on dev
+  and set in `.env.local` on 2026-09-07.**
+
+Corrections to the plan found while verifying 6a, for whoever picks up 6b:
+
+- `CostActivityKey` (`lib/ai/cost-telemetry.shared.ts:10`) is a **closed union** with no `agentic_creator`
+  member — the plan assumed the key just works. It must be added. There is **no CHECK constraint** on
+  `ai_cost_events.activity_key` (verified against dev), so this is a TypeScript change with no migration.
+- `app/admin/cost/page.tsx:59` holds a label map keyed by activity key; a new key needs a label there or
+  the dashboard renders the raw string.
 
 ### What Phase 5a actually shipped
 
@@ -121,11 +157,10 @@ Still worth doing, neither blocking:
 
 None blocking work. Two open items:
 
-- **Migration 106 is applied nowhere — not even dev.** Until it is, `/admin/agents/tasks` renders its
-  "migration not applied" notice and every task query returns empty. This is by design and safe, but it
-  also means nothing in Phase 4 has been exercised against a real table.
-- **Production has none of 102–106.** Apply in numeric order when the branch is ready to promote; 103
-  must precede 104, 105 and 106. Nothing on prod changes until then, by design.
+- **Production has none of 102-107, and needs two more things besides the migrations.** See the
+  "Promoting the agentic system to production" checklist in `docs/agent-context/PROJECT_STATE.md`:
+  prod needs its own `AGENTIC_SYSTEM_USER_ID` auth user (a *different* UUID from dev's, set as a Vercel
+  env var), while `CRON_SECRET` needs no action. Nothing on prod changes until then, by design.
 - **No agentic UI has been browser-verified yet.** Staging has real persona rows, so `/admin/agents` and
   `/admin/agents/personas` are worth a manual pass with an admin session — filters, the editor drawer,
   clone, and the toggle round-trip. `/admin/agents/tasks` needs migration 106 first to show anything but
@@ -154,8 +189,8 @@ guarantee stops being a guarantee.
 | 103 | `103_agent_personas.sql` | 2a | **APPLIED** 2026-09-06 | not applied |
 | 104 | `104_seed_agent_personas.sql` | 2b | **APPLIED** 2026-09-06 — 15 personas, 15 memory rows | not applied |
 | 105 | `105_agent_story_memory.sql` | 3 | **APPLIED** 2026-09-06 | not applied |
-| 106 | `106_agent_tasks.sql` | 4 | **written, NOT applied** | not applied |
-| 107 | `107_agent_runs.sql` | 5 | **written, NOT applied** | not applied |
+| 106 | `106_agent_tasks.sql` | 4 | **APPLIED** 2026-09-07 | not applied |
+| 107 | `107_agent_runs.sql` | 5 | **APPLIED** 2026-09-07 | not applied |
 | 108–110 | evaluation / reviewers / labels | 7, 9, 11 | not written | not written |
 
 Migrations are applied **by hand by the owner** in the Supabase dashboard, per environment.

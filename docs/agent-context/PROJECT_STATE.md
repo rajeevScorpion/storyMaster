@@ -85,7 +85,8 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**All four applied to dev on 2026-09-06**, verified by query. **Production has none of them.**
+**All six (102-107) applied to dev**, verified by query against `schema_migration_ledger` on 2026-09-07.
+**Production has none of them.**
 
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
@@ -95,6 +96,25 @@ Everything up to 068 is long-applied.
 | 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | **Applied**, both tables empty | Not applied |
 | 106 | `agent_tasks` | table `agent_tasks`; `stories.agent_task_id` | **Applied** 2026-09-07, 0 rows | Not applied |
 | 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
+
+#### Promoting the agentic system to production — checklist
+
+Migrations are only one of three things prod needs. All three, in this order:
+
+1. **Apply migrations 102-107 by hand, in numeric order.** 103 must precede 104, 105 and 106.
+2. **Create a separate `AGENTIC_SYSTEM_USER_ID` auth user in the production Supabase project**, and set
+   its UUID as a Vercel environment variable. It is a *different* UUID from dev's — copying dev's value
+   across is wrong. This user owns every agent-generated story.
+   *Failure mode if this is missed or stale:* the billing bypass in `lib/pricing/enforcement.ts` compares
+   `input.userId === process.env.AGENTIC_SYSTEM_USER_ID`. A mismatch means the bypass silently stops
+   matching and agent runs are **denied** rather than billed. That fails closed, which is the safe
+   direction, but it presents as "agent runs mysteriously fail", not as a configuration error.
+3. **`CRON_SECRET` needs no action** — it is already set on Vercel and has been since the narration and
+   image workers shipped. The agentic worker route reuses it rather than minting a second secret, and
+   piggybacks the existing daily `/api/batch/reconcile` cron rather than adding a `vercel.json` entry
+   (the Hobby plan allows only one).
+
+Flags stay `false` after promotion. Turning the system on is a deliberate, separate act.
 
 **Apply in numeric order.** 103 must precede 104 (which inserts into its table), 105 and 106 (whose
 `persona_id` foreign keys point at `agent_personas`). Applying 102 and 103 changes nothing observable: every flag is
@@ -275,7 +295,7 @@ below were verified 2026-08-26; the Runware and Agentic rows were re-verified ag
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
 | Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
-| Agentic Creator System | six `agentic_*` flags | present, **all six off** — 102–105 applied 2026-09-06, 15 personas seeded (all `draft`), nothing runs; **106 not applied**, so the task pool reads empty | **absent** — 102–107 not applied |
+| Agentic Creator System | six `agentic_*` flags | present, **all six off** — 102–107 all applied (105 on 2026-09-06, 106/107 on 2026-09-07), 15 personas seeded (all `draft`), nothing runs | **absent** — 102–107 not applied |
 
 The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
 the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on
