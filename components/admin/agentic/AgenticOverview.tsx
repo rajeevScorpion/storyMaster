@@ -181,17 +181,16 @@ export default function AgenticOverview({ initialFlags }: { initialFlags: Agenti
       <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
         <h2 className="text-sm font-semibold text-neutral-100">Not yet implemented</h2>
         <p className="mt-1 text-xs text-neutral-400">
-          This page is a shell. Flipping these flags only changes what later phases will read — nothing below exists
-          yet:
+          Phases 2–6 are built and wired together: the persona catalogue, story memory and novelty checks, the
+          editorial supervisor and task pool, the execution orchestrator, and headless story assembly. These flags
+          are what gate them. Still missing:
         </p>
         <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-neutral-400">
-          <li>Persona catalogue, creative identity, and permission resolution (Phase 2)</li>
-          <li>Story memory and pre/post-generation novelty checks (Phase 3)</li>
-          <li>Editorial supervisor and the task pool (Phase 4)</li>
-          <li>Execution orchestrator — claim, retry, resume — schedules and model routing (Phase 5)</li>
-          <li>Evaluation of generated stories (Phase 7), optional narration (Phase 8)</li>
-          <li>Human review queue at /admin/authors (Phase 9)</li>
-          <li>Image permission (Phase 10), provenance and editorial labels (Phase 11)</li>
+          <li>Automated evaluation of generated stories (Phase 7)</li>
+          <li>Optional narration for agent stories (Phase 8)</li>
+          <li>The human review queue at /admin/authors (Phase 9)</li>
+          <li>Image permission and reviewer-triggered media (Phase 10)</li>
+          <li>Provenance and editorial labels on published stories (Phase 11)</li>
         </ul>
       </section>
     </div>
