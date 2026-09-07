@@ -8,9 +8,10 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Session handoff — 2026-09-07 (end of session, 90% usage ceiling)
 
-**Phase 6 is code-complete except the Test Lab UI (6c).** Nothing has ever executed:
-no live database call, no real Gemini response, flags off everywhere. That is the
-single most important fact for whoever picks this up.
+**Phase 6 is code-complete except the Test Lab UI (6c).** The pipeline compiles, is
+typechecked and is unit-tested, and **has never executed**: no live database call, no real
+Gemini response, flags off everywhere. That is the single most important fact for whoever
+picks this up — the admin pages now have browser proof, the pipeline has none.
 
 ### Commits this session (all on `feat/agentic-creator`, all independently verified)
 
@@ -22,6 +23,7 @@ single most important fact for whoever picks this up.
 | `8198a6c` | `clampBeatCount` deduplicated and hardened (zero-beats bug) |
 | `06b23cf` | Headless story assembly pipeline (`storyAssemblyExecutor`) |
 | `253b790` | Defensive warning at the read that guards against double-charging |
+| `a68edcd` | Admin-authenticated e2e coverage of the agentic surfaces |
 
 Gate at handoff, re-run independently rather than taken on report:
 **92 files / 729 tests passing, `npx tsc --noEmit` exit 0, `npm run lint` clean.**
@@ -83,8 +85,18 @@ Two pieces remain before the vertical slice is provable:
 
 - Run `docs/snippets/107-verify-run-dedup.sql` by hand — the dedup index half of the
   no-double-charge guarantee is argued, not proven.
-- **No agentic admin surface has ever been opened in a browser.** Playwright runs
-  signed-out and cannot cover it.
+- ~~No agentic admin surface has ever been opened in a browser.~~ **Done** — see
+  `e2e/agentic-admin.spec.ts` (`a68edcd`). The plan's recorded fact that "e2e can't sign
+  in as admin" is **false**: Playwright signs in through the normal AuthDialog and reaches
+  every agentic route. Verified on dev — the off-state card, the master kill switch, all 15
+  seed personas with their real languages/age groups/Draft status, and tasks/runs/routing
+  rendering without an error boundary.
+  Set `E2E_ADMIN_EMAIL`/`E2E_ADMIN_PASSWORD` in `.env.local` to run it; without them it
+  **skips**, so machines with no admin account stay green. The account must be the one whose
+  id equals `ADMIN_USER_ID` — `verifyAdmin()` is a single id comparison, not a role lookup.
+  **This unblocks browser verification for every later admin surface too** (6c's Test Lab,
+  Phase 9's reviewer queue, Phase 10's image permissions), all of which were otherwise going
+  to ship unverified on the same false assumption.
 - Run the memory backfill on staging (`runStoryMemoryBackfillBatch()`, needs
   `agentic_creator_enabled` on) so the first agent story is checked against a real
   catalogue rather than an empty table.
