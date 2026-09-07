@@ -34,18 +34,18 @@ one failure in this phase that no test would catch and that would hurt real user
 
 ### Verification that is now possible but has not been done
 
-Migration 107 is **written and applied nowhere**. Once the owner applies it to dev, run this —
-it tests the property no unit test can reach, that the partial unique index really does allow
-only one live run per task:
+**Migration 107 was applied to dev on 2026-09-07** — ledger recorded, three tables empty, RLS on,
+and `idx_agent_runs_active_task` present with the correct partial predicate (verified by query).
 
-```sql
--- expect: exactly one row inserted, the second raising 23505
-insert into public.agent_runs (task_id, status) values ('<task-uuid>', 'pending');
-insert into public.agent_runs (task_id, status) values ('<task-uuid>', 'pending');
-```
+**Still not demonstrated: the dedup index itself.** The "a retry never pays twice" guarantee has
+two halves — the `checkpoint` contract, which is unit-tested, and this partial unique index, which
+no unit test can reach because it is a Postgres constraint rather than TypeScript. The read-only
+MCP connection cannot write, so this has to be run by hand:
 
-The no-double-charge guarantee rests on that index plus the `checkpoint` contract. The contract
-half is unit-tested; the index half is currently only argued.
+**`docs/snippets/107-verify-run-dedup.sql`** — run it in the Supabase SQL editor. It rolls itself
+back and leaves nothing behind. It checks both directions: a second *live* run for the same task
+must fail with `23505`, and a *finished* run must not block a new one (or a failed task could
+never be retried). Until someone runs it, the index half of the guarantee is argued, not proven.
 
 ### Working rules the owner set this session
 
