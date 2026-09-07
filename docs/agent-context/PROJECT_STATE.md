@@ -85,20 +85,22 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-Verified by querying `schema_migration_ledger` on both environments on **2026-09-06**: dev and prod are
-**identical**, both recording 001–101 and nothing beyond. None of the migrations below is applied anywhere,
-and no agentic table, column or flag exists on either environment.
+**All four applied to dev on 2026-09-06**, verified by query. **Production has none of them.**
 
-| # | File | Introduces | Status |
-|---|---|---|---|
-| 102 | `agentic_creator_flags` | six `agentic_*` rows in `feature_flags`, all `false` | Written. **Not applied.** |
-| 103 | `agent_personas` | tables `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger; `stories.agent_persona_id` | Written. **Not applied.** |
-| 104 | `seed_agent_personas` | the 15 seed creator personas | Written. **Not applied.** Requires 103. |
-| 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | Written. **Not applied.** Requires 103 (FKs to `agent_personas`). |
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 102 | `agentic_creator_flags` | six `agentic_*` rows in `feature_flags`, all `false` | **Applied.** All six flags present, **all off** | Not applied |
+| 103 | `agent_personas` | tables `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger; `stories.agent_persona_id` | **Applied.** | Not applied |
+| 104 | `seed_agent_personas` | the 15 seed creator personas | **Applied.** 15 personas, and 15 `agent_persona_memory` rows created by 103's trigger | Not applied |
+| 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | **Applied**, both tables empty | Not applied |
 
 **Apply in numeric order.** 103 must precede 104 (which inserts into its table) and 105 (whose `persona_id`
 foreign keys point at `agent_personas`). Applying 102 and 103 changes nothing observable: every flag is
 `false` and the persona table lands empty.
+
+Post-apply verification on dev, all passing: 15 personas / 15 memory rows; 0 with
+`allow_image_generation`; 0 with `allow_narration`; 0 with `status <> 'draft'`; 0 whose
+`default_story_config.imageGenerationMode` is anything but `prompt_only`; 6 agentic flags, 0 enabled.
 
 All application code fails closed while these are unapplied — `lib/agentic/flags.ts` reads every flag with
 `fallback = false`, and the persona actions catch the missing-relation error and return an empty list rather
@@ -271,7 +273,7 @@ below were verified 2026-08-26; the Runware and Agentic rows were re-verified ag
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
 | Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
-| Agentic Creator System | six `agentic_*` flags | **absent** — migration 102 not applied | **absent** — migration 102 not applied |
+| Agentic Creator System | six `agentic_*` flags | present, **all six off** — 102–105 applied 2026-09-06, 15 personas seeded, nothing runs | **absent** — 102–105 not applied |
 
 The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
 the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on

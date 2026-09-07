@@ -196,21 +196,71 @@ now listed as written-but-unapplied.
 **Standing gap:** migration files are validated only by reading them and by ad-hoc scripts like the one above.
 Two real defects have now been caught that way (103's rollback ordering, and this file's identifier checks).
 
-**Commit:** _(filled in at commit time)_
+**Commit:** `ca9dd63`
 
 ---
 
-## Phase 3 — PARTIAL, not complete
+## Phase 3 — Global story memory, persona memory and novelty checks
 
-**Date:** 2026-09-06
+**Date:** 2026-09-06 (migration) / 2026-09-07 (TypeScript)
 
-`supabase/migrations/105_agent_story_memory.sql` and its rollback are written and reviewed — the rollback
-even reasons explicitly about drop order, applying the lesson from 103. **The entire TypeScript half is
-missing**: two successive background agents died mid-task (one to an API error, one without reporting). See
-the working-memory doc's "Next step" for the exact list of what remains.
+The migration landed first; the TypeScript half followed a day later after three background agents died
+mid-task (two to API errors, one to a Sonnet session rate limit). It was ultimately written directly.
 
-Do not treat Phase 3 as done. Migration 105 may be applied safely regardless — the tables simply sit unused
-until the code lands.
+**Files added.**
+
+| Path | Purpose |
+|---|---|
+| `supabase/migrations/105_agent_story_memory.sql` (+ rollback) | `agent_story_memory`, `agent_novelty_checks`, `pg_trgm` GIN indexes |
+| `lib/agentic/memory.shared.ts` | Pure. Thresholds, `trigramSimilarity`, `scoreNovelty`, `needsModelAdjudication`, `buildNoveltyAdjudicationPrompt`, `isMissingMemorySchemaError` |
+| `lib/agentic/memory.shared.test.ts` | 27 tests |
+| `lib/agentic/memory.ts` | `server-only`. `findSimilarStories`, `recordStoryMemory`, `updatePersonaMemory`, `runNoveltyCheck`, the backfill |
+| `app/actions/agentic-memory.ts` | `'use server'` admin entry points |
+
+**Files modified.**
+
+- `lib/ai/model-config.shared.ts` — new `TaskKey` `agent_novelty_assessment` (`gemini-2.5-flash`, temp 0.2),
+  added to the union, `TASK_DEFINITIONS` and `DEFAULT_MODELS`. Registering it there gives the admin model
+  editor the task with no new UI.
+- `lib/ai/prompt-config.shared.ts` — `agent_novelty_assessment` added to the `PromptTaskKey` **exclusion**
+  list, beside `reference_character_analysis`. Its prompt is built in code by `buildNoveltyAdjudicationPrompt`,
+  not from an admin template, so it has no business in the prompt playground.
+- `app/actions/gemini-proxy.ts` — new `callGeminiNoveltyAssessment`, following the existing
+  `callGeminiReferenceAnalysis` precedent for a task outside the prompt registry: JSON mime type, no schema
+  or guardrail lookup, same timeout and cost telemetry.
+
+**Reuse.** Cast matching is `normalizeCharacterName` + `findSimilarRecentName` from
+`lib/ai/character-novelty.shared.ts`; premise and setting overlap use its `appearanceSimilarity`; the persona
+character cap reuses its `CHARACTER_NAME_HISTORY_LIMIT`. New code was written only where those genuinely did
+not fit — titles are 2–5 words and fall under `appearanceSimilarity`'s 5-token floor, always scoring 0.
+
+**Verified against the live database, not asserted:** `trigramSimilarity` reimplements Postgres
+`pg_trgm.similarity()` (word padding, 3-grams, Jaccard). Five string pairs were scored on staging via SQL and
+compared to the TypeScript output — **exact match to six decimal places on all five.** Those Postgres-derived
+values are now pinned as a test. This matters because `findSimilarStories` selects candidate priors with SQL
+`similarity()` over the GIN indexes and then scores them in-process: if the two notions of "similar" drift,
+the index silently stops surfacing rows the scorer would have flagged, with no error to notice.
+
+**Series continuity is not duplication** — the distinction the module exists to get right. Sibling episodes
+of the candidate's own series are excluded from cast reuse, setting repetition and theme saturation, because
+recurring characters and places are the entire point of a series. Title and premise similarity still apply to
+siblings, so episode 4 cannot retell episode 2. Six tests cover it from both directions, including the
+inverse case: the same cast reuse across *unrelated* stories must still be flagged.
+
+**Fail-closed behaviour.** A dedicated codes-only `isMissingMemorySchemaError` latch for migration 105,
+separate from the personas latch. When memory is unavailable, `runNoveltyCheck` returns `clear` with an
+explanatory reason and never throws — a missing novelty check is a lost safeguard, not a broken pipeline, and
+the human review gate still stands behind it.
+
+**Tests.** 88 files / 641 tests, all passing (was 87 / 614; this adds 1 file, 27 tests). Gate: tsc clean,
+lint clean, `build:verify` passing. e2e not re-run — no signed-out surface changed.
+
+**Not covered:** `lib/agentic/memory.ts` itself has no unit tests — it is `server-only` and every function
+takes a live Supabase client, which the suite has no harness for (consistent with the rest of the repo, where
+tests target the `.shared.ts` halves). Its SQL column names were verified by querying
+`information_schema.columns` on staging rather than by test. `runNoveltyCheck` has never executed end to end.
+
+**Commit:** _(filled in at commit time)_
 
 ---
 

@@ -4,7 +4,13 @@ import type { TaskKey } from './model-config.shared';
 // rather than through the admin prompt playground, so they are excluded here.
 export type PromptTaskKey = Exclude<
   TaskKey,
-  'story_text_overlay_alignment' | 'reference_character_analysis' | 'reference_world_analysis'
+  | 'story_text_overlay_alignment'
+  | 'reference_character_analysis'
+  | 'reference_world_analysis'
+  // Built in code by lib/agentic/memory.shared.ts's
+  // buildNoveltyAdjudicationPrompt, not from an admin-editable template, so it
+  // has no place in the prompt playground.
+  | 'agent_novelty_assessment'
 >;
 
 export interface PromptPlaceholderDefinition {

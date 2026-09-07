@@ -8,57 +8,66 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Where we are
 
-- **Phase:** 2b complete — all 15 seed personas written (migration 104). **Phase 3 is half-done: both
-  migration 105 files exist and are correct, but its entire TypeScript half is missing** (two
-  background agents died mid-task). That is the next thing to build.
+- **Phase:** 3 complete — global story memory, persona memory and two-stage novelty checks.
+  Next is Phase 4 (Editorial Supervisor and task pool, migration 106).
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
 
 ## What works right now
 
-- Six feature flags exist in `supabase/migrations/102_agentic_creator_flags.sql`, all defaulting to
-  `false`. **The migration has not been applied to any environment yet.**
-- `lib/agentic/flags.ts` is the single read path for them, always with `fallback = false`.
+**Migrations 102–105 are all applied on the dev/staging database as of 2026-09-06.** Verified by query,
+not assumed:
+
+- Six `agentic_*` flags exist, **all still `false`**. `lib/agentic/flags.ts` is the single read path,
+  always with `fallback = false`.
+- **15 seed personas, and 15 `agent_persona_memory` rows** — the memory rows were created by the
+  migration-103 AFTER INSERT trigger, so the pack's "every persona automatically receives memory"
+  requirement is verified live rather than assumed.
+- All 15 personas are image-off, narration-off, `status = 'draft'`, `schedule_eligible = false`, with
+  `default_story_config.imageGenerationMode = 'prompt_only'`. Zero exceptions on any of those.
+- `agent_story_memory` and `agent_novelty_checks` exist and are empty.
 - `/admin/agents` renders an Overview page: an off-state explainer, the master kill switch, and five
-  subordinate toggles that are disabled while the master switch is off.
-- A new **Agentic** group appears in the admin sidebar and mobile drawer.
-- `/admin/agents/personas` renders a filterable catalogue (age group / language / genre / status /
-  search) with create, edit, clone and status actions. The table is empty and correctly says so —
-  distinguishing "migration 103 not applied" from "applied, no personas yet".
+  subordinate toggles disabled while the master switch is off.
+- `/admin/agents/personas` renders a filterable catalogue with create, edit, clone and status actions.
 - `lib/agentic/personas.shared.ts` turns a persona into a real `StoryConfig`, forcing
   `imageGenerationMode: 'prompt_only'` for any image-off persona as its last, unconditional step.
-- Nothing generates anything. There are no seeded personas, no jobs, no story writing.
+- `lib/agentic/memory.shared.ts` scores novelty deterministically; `lib/agentic/memory.ts` fetches
+  priors, calls the economy-tier adjudicator only inside the ambiguous band, and records every verdict.
+  `trigramSimilarity` is **verified exactly equal** to Postgres `pg_trgm.similarity()` on five pairs
+  measured against staging, and those values are pinned as a test.
+- **Nothing generates anything yet.** No jobs, no supervisor, no story writing. `runNoveltyCheck` has
+  never been executed end to end — it typechecks and its pure half is well covered, but the server
+  half is unproven at runtime.
 
 ## Next step
 
-**Finish Phase 3 — the TypeScript half of memory and novelty.** Migration 105's forward and rollback
-files already exist and are correct; do not rewrite them. Still to build:
+**Phase 4 — Editorial Supervisor and task pool (migration 106).** Per the plan file:
+`agent_tasks` table + `stories.agent_task_id`; `lib/agentic/supervisor.ts` with
+`buildCatalogueCoverage()`, `proposeCommissions()` and `commissionTasks()`; a new `TaskKey`
+`agent_supervisor_planning`; and `/admin/agents/tasks` showing the coverage table and the pool.
 
-- `lib/agentic/memory.shared.ts` — `scoreNovelty`, exported threshold constants,
-  `needsModelAdjudication`, `buildNoveltyAdjudicationPrompt`. **Reuse
-  `lib/ai/character-novelty.shared.ts`** (`normalizeCharacterName`, `findSimilarRecentName`,
-  `appearanceSimilarity`, `CHARACTER_NAME_HISTORY_LIMIT`) rather than writing new similarity code.
-- `lib/agentic/memory.shared.test.ts` — the critical case is **series continuity is not duplication**:
-  recurring characters and a repeated setting inside one series must score `clear`, while the same
-  reuse across unrelated stories must not.
-- `lib/agentic/memory.ts` (`server-only`) — `findSimilarStories` (one trigram query),
-  `recordStoryMemory`, `updatePersonaMemory`, `runNoveltyCheck` (always writes an
-  `agent_novelty_checks` row, even for `clear`), and a **codes-only** `isMissingMemorySchemaError`
-  latch. Degrade to `clear` when the schema is absent; never block generation on missing memory.
-- New `TaskKey` `agent_novelty_assessment` in `lib/ai/model-config.shared.ts`
-  (`gemini-2.5-flash`, temp 0.2) — registering it there gives the admin model editor the task free.
-- `backfillStoryMemoryFromStorylines` + `app/actions/agentic-memory.ts`, cursor in the
-  `agentic_memory_backfill_cursor` feature-flag value row.
+Store a **concise editorial rationale** on each commission, never chain-of-thought. No engagement
+analytics in V1 — no views, likes or completion-driven commissioning.
 
-Then Phase 4 (Editorial Supervisor and task pool, migration 106).
+Two things worth doing before or alongside Phase 4, neither blocking:
+
+- **Run the memory backfill on staging.** `runStoryMemoryBackfillBatch()` seeds
+  `agent_story_memory` from published storylines so the first agent story is checked against the real
+  catalogue instead of an empty table. Requires `agentic_creator_enabled` on. Call repeatedly until
+  `done`; it is resumable and idempotent.
+- **Browser-verify the admin surfaces** — see Blockers.
 
 ## Blockers
 
-- **Migrations 102 and 103 are being applied by the owner now** (2026-09-06). 104 and 105 follow, in
-  numeric order — 103 must precede both.
-- No agentic UI has been browser-verified with real rows yet, because until these land there are no
-  rows. Worth a manual pass at `/admin/agents` and `/admin/agents/personas` once 104 is in.
+None blocking work. Two open items:
+
+- **Production has none of 102–105.** Apply in numeric order when the branch is ready to promote; 103
+  must precede 104 and 105. Nothing on prod changes until then, by design.
+- **No agentic UI has been browser-verified yet.** Staging now has real persona rows, so
+  `/admin/agents` and `/admin/agents/personas` are finally worth a manual pass with an admin session —
+  filters, the editor drawer, clone, and the toggle round-trip. Playwright cannot cover this; it runs
+  signed-out.
 
 ## Active flags
 
@@ -79,11 +88,10 @@ guarantee stops being a guarantee.
 
 | # | File | Phase | dev | prod |
 |---|---|---|---|---|
-| 102 | `102_agentic_creator_flags.sql` | 1 | **written, NOT applied** | **written, NOT applied** |
-| 103 | `103_agent_personas.sql` | 2a | **written, NOT applied** | **written, NOT applied** |
-| 104 | `104_seed_agent_personas.sql` | 2b | **written, NOT applied** | **written, NOT applied** |
-| 105 | `105_agent_story_memory.sql` | 3 | **written, NOT applied** | **written, NOT applied** |
-| 105 | `105_agent_story_memory.sql` | 3 | not written | not written |
+| 102 | `102_agentic_creator_flags.sql` | 1 | **APPLIED** 2026-09-06 | not applied |
+| 103 | `103_agent_personas.sql` | 2a | **APPLIED** 2026-09-06 | not applied |
+| 104 | `104_seed_agent_personas.sql` | 2b | **APPLIED** 2026-09-06 — 15 personas, 15 memory rows | not applied |
+| 105 | `105_agent_story_memory.sql` | 3 | **APPLIED** 2026-09-06 | not applied |
 | 106 | `106_agent_tasks.sql` | 4 | not written | not written |
 | 107 | `107_agent_runs.sql` | 5 | not written | not written |
 | 108–110 | evaluation / reviewers / labels | 7, 9, 11 | not written | not written |

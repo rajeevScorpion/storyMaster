@@ -4,11 +4,11 @@
 must be corrected to reality as each phase lands. The forward-looking design lives in the plan file;
 this one is the map of the territory.
 
-Status: **Phase 2a complete.** Implemented: `lib/agentic/flags.ts`, `lib/agentic/personas.shared.ts`,
+Status: **Phase 3 complete.** Implemented: `lib/agentic/flags.ts`, `lib/agentic/personas.shared.ts`,
+`lib/agentic/memory.shared.ts` + `memory.ts`, `app/actions/agentic-memory.ts`,
 `app/actions/agentic-admin.ts`, `app/actions/agentic-personas.ts`,
-the `/admin/agents` shell with its Overview and Personas pages, and migrations 102 and 103 (both
-written, neither applied). The 15 seed personas (migration 104) are blocked on operator sight-check.
-Everything else below is still _(planned)_.
+the `/admin/agents` shell with its Overview and Personas pages, and migrations 102-105 (all four
+**applied on dev 2026-09-06, none on prod**). Phases 4-12 below are still _(planned)_.
 
 ---
 

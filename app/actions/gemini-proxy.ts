@@ -257,6 +257,69 @@ export async function callGeminiReferenceAnalysis(params: ReferenceAnalysisCallP
   return text.trim();
 }
 
+export interface NoveltyAssessmentCallParams {
+  task: Extract<TaskKey, 'agent_novelty_assessment'>;
+  model: string;
+  prompt: string;
+  temperature?: number;
+  telemetry?: CostTelemetryContext;
+}
+
+/**
+ * Text-in, JSON-out call for the agentic novelty adjudication.
+ *
+ * Deliberately separate from callGeminiText: that function looks the task up in
+ * LOCKED_PROMPT_GUARDRAILS and schemaMap, both keyed by the admin-editable
+ * prompt registry. This prompt is built in code by
+ * lib/agentic/memory.shared.ts's buildNoveltyAdjudicationPrompt, not by an
+ * admin template, so registering it there would put a non-editable prompt into
+ * the prompt playground. Follows callGeminiReferenceAnalysis instead — the
+ * existing precedent in this file for a task outside the prompt registry:
+ * responseMimeType json, no schema, same timeout and cost telemetry.
+ */
+export async function callGeminiNoveltyAssessment(params: NoveltyAssessmentCallParams): Promise<string> {
+  const { task, model, prompt, temperature, telemetry } = params;
+  const ai = getAI();
+
+  const flagVal = await getFeatureFlagValue('gemini_text_timeout_ms');
+  const timeoutMs = (flagVal ? parseInt(flagVal, 10) : 0) || GEMINI_TEXT_TIMEOUT_MS;
+
+  const startedAt = geminiNowMs();
+  const response = await timeGeminiStep(
+    `gemini_proxy.${task}`,
+    { model, timeoutMs, promptChars: prompt.length },
+    () =>
+      withTimeout(
+        ai.models.generateContent({
+          model,
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+            temperature: temperature ?? 0.2,
+          },
+        }),
+        timeoutMs,
+        task
+      )
+  );
+
+  if (telemetry) {
+    await recordModelCostEvent({
+      context: telemetry,
+      taskKey: task,
+      modelId: model,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      latencyMs: geminiNowMs() - startedAt,
+      metadata: { promptChars: prompt.length, temperature: temperature ?? 0.2 },
+    });
+  }
+
+  const text = response.text;
+  if (!text) throw new Error(`Empty response from Gemini for task: ${task}`);
+  return text.trim();
+}
+
 export interface ImageCallParams {
   task: Extract<TaskKey, 'image_generation' | 'reel_image_generation' | 'portrait_generation'>;
   model: string;
