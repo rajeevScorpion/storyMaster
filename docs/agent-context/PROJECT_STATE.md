@@ -373,18 +373,17 @@ Work that is built and merged but has **not** been QA'd in a browser. The owner 
   actually arrives over Realtime and not by polling fallback.
 - **`@google/genai` 2.x live smoke** — confirm the legacy Interactions 400 warning is gone and stateful
   continuity actually carries via `previous_interaction_id`.
-- **The Agentic Creator pipeline has never executed** (branch `feat/agentic-creator`). As of Phase 6c it is
-  wired end to end — a commissioned `agent_task` becomes an `agent_run`, `drainAgentRuns` advances it with
-  the real `storyAssemblyExecutor`, and `/admin/agents/test-lab` drives it on demand — but
-  `agentic_creator_enabled` is `false` on every environment, so no server function in Phases 5-6 has run
-  against a live row or a real Gemini call. Turning that flag on (plus `agentic_billing_bypass_enabled`, or
-  a top-up: each paid call costs 0.50 beats, a run costs `1.5 + N`, and the system user holds 5.00) is the
-  whole remaining gap. Verification SQL is in the handoff at the top of
-  [docs/agentic-creator-working-memory.md](../agentic-creator-working-memory.md).
-- **No agentic admin surface has been browser-verified since `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` went
-  missing from `.env.local`.** `e2e/agentic-admin.spec.ts` covers all six routes including
-  `/admin/agents/test-lab`, but it **skips** without those two variables and the suite still reports green.
-  Setting them restores the proof with no code change.
+- **The Agentic Creator pipeline has now executed end to end on dev** (branch `feat/agentic-creator`).
+  Two complete five-beat drafts exist, owned by the system user at `awaiting_review`. Verified by query:
+  `agent_story_memory` stayed at 0 before promotion, 0 storylines were published, 0 image jobs were
+  created (`prompt_only` holds), `ai_cost_events` carries real `agentic_creator` rows, and the system
+  user's beat balance was unchanged (the billing bypass works). `agentic_creator_enabled` and
+  `agentic_billing_bypass_enabled` are **on** on dev; the other four agentic flags remain off.
+  Running it found three defects review had missed — see `fe9406f`.
+- **Agentic admin surfaces are browser-verified.** `e2e/agentic-admin.spec.ts` now runs (15 passed, 0
+  skipped) and covers all six agentic routes including `/admin/agents/test-lab`. It had never run from
+  its documented setup: `playwright.config.ts` did not load `.env.local` and `dotenv` is not a
+  dependency, so the spec read `process.env`, found nothing and skipped silently. Fixed in `fe9406f`.
 
 That build backlog is cleared: `npm run build:verify` builds into its own directory, so the dev server can no
 longer block it, and a full production build now runs as part of the standard gate. Browser QA above is
@@ -411,6 +410,16 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   drains whatever is commissioned. Wiring schedules into enqueue is unclaimed work, not an oversight.
 - **Agent spend is indistinguishable from human spend by action key.** It reuses `preview_seed_plan` and the
   `*_prompt_only` beat keys; only `activity_key = 'agentic_creator'` separates it. Revisit in Phase 12.
+- **A novelty `block` is advisory, not a hard stop.** Observed live: a pre-generation check returned
+  `block`, the stage failed, the run retried, and the economy-tier adjudicator returned `warn` on the
+  second call, so the run proceeded. The adjudicator is a model call and non-deterministic in the
+  ambiguous band, so with `MAX_RUN_ATTEMPTS = 3` a block is effectively "retry until it passes". The
+  human gate at `awaiting_review` makes this tolerable for V1. Decide before Phase 9 whether a block
+  should be latched on the run rather than re-adjudicated on each retry.
+- **`findSimilarStories` has no self-exclusion.** `runDraftCreatedStage` now runs its post-generation
+  check before writing to `agent_story_memory`, which avoids the problem at the only current call site.
+  The general fix — an `excludeStoryId` threaded through `runNoveltyCheck` — is deferred; any future
+  caller comparing an already-recorded story will hit the same self-match.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.

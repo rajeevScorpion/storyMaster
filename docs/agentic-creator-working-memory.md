@@ -6,17 +6,53 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
-## Session handoff — 2026-09-07 (Phase 6c complete; owner usage 63%)
+## Session handoff — 2026-09-07 (Phase 6c complete; THE PIPELINE HAS RUN)
+
+**The Agentic Creator has generated stories.** Two complete five-beat drafts exist on dev, owned by
+the system user, sitting at `awaiting_review`. Every claim below was measured, not argued.
+
+| Proof | Result |
+|---|---|
+| Full pipeline, brief → 5 beats → draft | `awaiting_review` / `succeeded`, stories `6e627a39`, `be0080f7` |
+| Canonical chain | beat 1 root; 2-4 linked by `parentId` + a real `selectedOptionId`; beat 5 ending with 0 options |
+| Normal Kissago story | 5 normalized `beats` rows, 5 `story_map` nodes, root node present, provenance stamped |
+| `agent_story_memory` before promotion | **0 rows** — the Test Lab safety property holds |
+| Gallery | **0 storylines** — no autonomous publish |
+| `image_generation_jobs` | **0** — `prompt_only` genuinely prevents image spend |
+| `ai_cost_events` @ `activity_key='agentic_creator'` | 26+ real rows |
+| System user beat balance | **5.00, unchanged** — the billing bypass works |
+| Deferral/resume | 5 passes, `attempts 0/3` — every attempt returned, as designed |
+| Novelty vs a real catalogue | story 2 flagged for reusing the character "Kabir" from story 1 |
+| `e2e/agentic-admin.spec.ts` | **15 passed, 0 skipped** — all six agentic routes render for an admin |
+
+**Running it immediately found three defects that review had not** (all fixed in `fe9406f`): the
+headless session never set `currentBeat`, so no story could exceed one beat; the post-generation
+novelty check ran *after* `recordStoryMemory`, comparing every story against itself and returning
+`block` always; and deferral events were filed under the previous stage. A fourth was in the test
+harness — `playwright.config.ts` never loaded `.env.local`, so the admin e2e spec had never run from
+its own documented setup.
+
+### Open question for the owner, found live, deliberately not fixed
+
+**A `block` verdict is not a hard stop.** On story 2 the pre-generation check returned `block`, the
+stage failed, the run retried, the economy-tier adjudicator returned `warn` on the second call, and
+the run proceeded to generate and save. The adjudicator is a model call and is non-deterministic in
+the ambiguous band, so with `MAX_RUN_ATTEMPTS = 3` a block is effectively "retry until it passes".
+The plan says block should fail the run. Tolerable in V1 because a human gate sits downstream at
+`awaiting_review`, but it means the block verdict is advisory in practice. Decide before Phase 9
+whether a block should be latched on the run rather than re-adjudicated on retry.
+
+---
+
+## Earlier in this session (code delivery)
 
 **Phase 6 is code-complete, including the Test Lab (6c).** The pipeline is wired end to end:
 a commissioned `agent_task` becomes an `agent_run`, `drainAgentRuns` advances it with the real
 `storyAssemblyExecutor`, and `/admin/agents/test-lab` drives the whole thing on demand against a
 persona of your choosing.
 
-**It still has never executed.** No live database write beyond schema, no real Gemini response,
-`agentic_creator_enabled` is `false` on every environment. That remains the single most important
-fact for whoever picks this up. What changed this session is that the gap is now *only* a flag —
-there is no missing code between a persona and a saved draft.
+**It has now executed end to end** — see the proof table at the top. `agentic_creator_enabled` and
+`agentic_billing_bypass_enabled` are **on** on dev as of this session.
 
 ### Commits this session (all on `feat/agentic-creator`, all reviewed by diff, not by report)
 
