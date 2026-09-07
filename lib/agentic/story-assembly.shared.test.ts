@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { StoryBeat, SeedPlan } from '@/lib/types/story';
+import type { StoryBeat, StoryNode, SeedPlan } from '@/lib/types/story';
 import {
   SeededStoryMapError,
   buildSeededStoryMap,
-  clampBeatCount,
   getSeedBeatByIndex,
   nextBeatIndexToGenerate,
 } from './story-assembly.shared';
@@ -67,7 +66,7 @@ describe('buildSeededStoryMap', () => {
     const walked: number[] = [];
     let cursor: string | null = map.rootNodeId;
     while (cursor) {
-      const node = map.nodes[cursor];
+      const node: StoryNode = map.nodes[cursor];
       walked.push(node.beatNumber);
       cursor = node.children[0] ?? null;
     }
@@ -96,38 +95,6 @@ describe('buildSeededStoryMap', () => {
 
   it('rejects an empty beat list', () => {
     expect(() => buildSeededStoryMap([])).toThrow(SeededStoryMapError);
-  });
-});
-
-describe('clampBeatCount', () => {
-  const bounds = { beatCountMin: 5, beatCountMax: 8 };
-
-  it('passes an in-range request through', () => {
-    expect(clampBeatCount(6, bounds)).toBe(6);
-  });
-
-  it('raises a request below the minimum', () => {
-    expect(clampBeatCount(2, bounds)).toBe(5);
-  });
-
-  it('lowers a request above the maximum', () => {
-    expect(clampBeatCount(40, bounds)).toBe(8);
-  });
-
-  it('falls back to the minimum for a missing or nonsense request', () => {
-    expect(clampBeatCount(undefined, bounds)).toBe(5);
-    expect(clampBeatCount(null, bounds)).toBe(5);
-    expect(clampBeatCount(0, bounds)).toBe(5);
-    expect(clampBeatCount(-3, bounds)).toBe(5);
-    expect(clampBeatCount(Number.NaN, bounds)).toBe(5);
-  });
-
-  it('never returns zero beats, even for a persona row configured with zeros', () => {
-    expect(clampBeatCount(4, { beatCountMin: 0, beatCountMax: 0 })).toBe(1);
-  });
-
-  it('collapses an inverted range to its low bound instead of throwing', () => {
-    expect(clampBeatCount(7, { beatCountMin: 9, beatCountMax: 3 })).toBe(9);
   });
 });
 

@@ -72,31 +72,6 @@ export function getSeedBeatByIndex(seedPlan: SeedPlan | undefined, beatIndex: nu
   return seedPlan?.beats.find((beat) => beat.beatIndex === beatIndex);
 }
 
-export interface PersonaBeatBounds {
-  beatCountMin: number;
-  beatCountMax: number;
-}
-
-/**
- * Clamp a requested beat count into the persona's configured range.
- *
- * Bounds come from admin-editable persona rows, so they can be nonsense (min above
- * max, zero, negative). Rather than trusting them, the low bound is floored at 1 and
- * an inverted range collapses to its low bound -- a persona row can misconfigure how
- * long its stories are, but it can never make the pipeline ask for zero beats.
- */
-export function clampBeatCount(requested: number | null | undefined, bounds: PersonaBeatBounds): number {
-  const min = Math.max(1, Math.floor(bounds.beatCountMin) || 1);
-  const max = Math.max(min, Math.floor(bounds.beatCountMax) || min);
-  const target = Math.floor(requested ?? 0);
-
-  if (!Number.isFinite(target) || target <= 0) {
-    return min;
-  }
-
-  return Math.min(Math.max(target, min), max);
-}
-
 /**
  * Intra-stage progress for the story_generated stage, persisted into
  * agent_runs.checkpoint after every completed beat.

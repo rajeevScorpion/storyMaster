@@ -126,6 +126,14 @@ describe('clampBeatCount', () => {
   it('falls back to the minimum for non-finite input', () => {
     expect(clampBeatCount(bounds, Number.NaN)).toBe(6);
   });
+
+  it('never returns zero beats, even for a persona row configured with zeros', () => {
+    expect(clampBeatCount({ beatCountMin: 0, beatCountMax: 0 }, 4)).toBe(1);
+  });
+
+  it('collapses an inverted range to its low bound instead of returning the smaller max', () => {
+    expect(clampBeatCount({ beatCountMin: 9, beatCountMax: 3 }, 7)).toBe(9);
+  });
 });
 
 describe('buildClonedPersonaInput', () => {

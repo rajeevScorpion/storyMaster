@@ -174,9 +174,20 @@ export function resolvePersonaStoryConfig(
 }
 
 /** Clamps a requested beat count into [beatCountMin, beatCountMax]. Non-finite input falls back to the minimum. */
+/**
+ * Clamp a requested beat count into the persona's configured range.
+ *
+ * Bounds come from admin-editable persona rows, so they can be nonsense: zero,
+ * negative, or a minimum above the maximum. The low bound is floored at 1 and an
+ * inverted range collapses to its low bound, so a misconfigured row can change how
+ * long a persona's stories are but can never ask the pipeline for zero beats --
+ * which would otherwise reach story assembly as an empty beat list.
+ */
 export function clampBeatCount(persona: Pick<AgentPersona, 'beatCountMin' | 'beatCountMax'>, requested: number): number {
-  if (!Number.isFinite(requested)) return persona.beatCountMin;
-  return Math.min(persona.beatCountMax, Math.max(persona.beatCountMin, Math.round(requested)));
+  const min = Math.max(1, Math.floor(persona.beatCountMin) || 1);
+  const max = Math.max(min, Math.floor(persona.beatCountMax) || min);
+  if (!Number.isFinite(requested)) return min;
+  return Math.min(max, Math.max(min, Math.round(requested)));
 }
 
 /**
