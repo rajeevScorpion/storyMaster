@@ -14,9 +14,11 @@ import {
   nextAttemptDelayMs,
   nextStage,
   recordCheckpoint,
+  selectTasksToEnqueue,
   shouldRetry,
   type AgentRunCheckpoint,
   type AgentRunStage,
+  type EnqueueCandidateTask,
 } from './orchestrator.shared';
 
 describe('checkpoint contract — the load-bearing idempotency guarantee', () => {
@@ -232,5 +234,78 @@ describe('isMissingRunSchemaError', () => {
   it('returns false for null/undefined', () => {
     expect(isMissingRunSchemaError(null)).toBe(false);
     expect(isMissingRunSchemaError(undefined)).toBe(false);
+  });
+});
+
+describe('selectTasksToEnqueue — commissioned-task eligibility policy', () => {
+  const activePersonas = new Set(['persona-a', 'persona-b']);
+
+  function task(id: string, personaId: string | null, createdAt: string): EnqueueCandidateTask {
+    return { id, personaId, createdAt };
+  }
+
+  it('an empty input yields an empty array', () => {
+    expect(selectTasksToEnqueue([], activePersonas, 10)).toEqual([]);
+  });
+
+  it('a task with personaId === null is never eligible', () => {
+    const tasks = [task('t1', null, '2026-09-01T00:00:00.000Z')];
+    expect(selectTasksToEnqueue(tasks, activePersonas, 10)).toEqual([]);
+  });
+
+  it('a task whose personaId is not in activePersonaIds is never eligible', () => {
+    const tasks = [task('t1', 'persona-inactive', '2026-09-01T00:00:00.000Z')];
+    expect(selectTasksToEnqueue(tasks, activePersonas, 10)).toEqual([]);
+  });
+
+  it('orders eligible tasks oldest createdAt first', () => {
+    const newest = task('t-newest', 'persona-a', '2026-09-03T00:00:00.000Z');
+    const oldest = task('t-oldest', 'persona-a', '2026-09-01T00:00:00.000Z');
+    const middle = task('t-middle', 'persona-b', '2026-09-02T00:00:00.000Z');
+
+    const result = selectTasksToEnqueue([newest, oldest, middle], activePersonas, 10);
+    expect(result.map((t) => t.id)).toEqual(['t-oldest', 't-middle', 't-newest']);
+  });
+
+  it('breaks ties on equal createdAt by id, deterministically regardless of input order', () => {
+    const sameTime = '2026-09-01T00:00:00.000Z';
+    const b = task('b-task', 'persona-a', sameTime);
+    const a = task('a-task', 'persona-b', sameTime);
+    const c = task('c-task', 'persona-a', sameTime);
+
+    const forward = selectTasksToEnqueue([b, a, c], activePersonas, 10).map((t) => t.id);
+    const reversed = selectTasksToEnqueue([c, a, b], activePersonas, 10).map((t) => t.id);
+
+    expect(forward).toEqual(['a-task', 'b-task', 'c-task']);
+    expect(reversed).toEqual(['a-task', 'b-task', 'c-task']);
+  });
+
+  it('caps results at `limit`, keeping the oldest', () => {
+    const tasks = [
+      task('t1', 'persona-a', '2026-09-01T00:00:00.000Z'),
+      task('t2', 'persona-a', '2026-09-02T00:00:00.000Z'),
+      task('t3', 'persona-a', '2026-09-03T00:00:00.000Z'),
+    ];
+    expect(selectTasksToEnqueue(tasks, activePersonas, 2).map((t) => t.id)).toEqual(['t1', 't2']);
+  });
+
+  it('limit of 0 yields an empty array, even with eligible tasks present', () => {
+    const tasks = [task('t1', 'persona-a', '2026-09-01T00:00:00.000Z')];
+    expect(selectTasksToEnqueue(tasks, activePersonas, 0)).toEqual([]);
+  });
+
+  it('a negative limit yields an empty array', () => {
+    const tasks = [task('t1', 'persona-a', '2026-09-01T00:00:00.000Z')];
+    expect(selectTasksToEnqueue(tasks, activePersonas, -5)).toEqual([]);
+  });
+
+  it('does not mutate the input array', () => {
+    const tasks = [
+      task('t2', 'persona-a', '2026-09-02T00:00:00.000Z'),
+      task('t1', 'persona-a', '2026-09-01T00:00:00.000Z'),
+    ];
+    const original = [...tasks];
+    selectTasksToEnqueue(tasks, activePersonas, 10);
+    expect(tasks).toEqual(original);
   });
 });

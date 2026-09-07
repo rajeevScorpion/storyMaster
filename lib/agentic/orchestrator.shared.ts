@@ -231,6 +231,55 @@ export function classifyRunError(error: unknown): AgentRunErrorCategory {
   return 'unknown';
 }
 
+// ── Enqueue selection (commissioned tasks -> runs) ─────────────────────
+
+/**
+ * A commissioned/assigned agent_tasks row (written by the Editorial Supervisor, an admin,
+ * a schedule, or the Persona Test Lab) sits idle until something decides it is time to
+ * spawn a run for it -- see enqueueCommissionedTasks in orchestrator.ts. WHICH tasks are
+ * eligible right now, and in what order, is pure policy with no database dependency (it
+ * needs only a task's id, persona, and creation time, plus the caller's set of currently
+ * active personas), so it lives here rather than inside the query that fetches candidates
+ * -- exactly the reason this file is split from orchestrator.ts at all: the eligibility
+ * policy is the thing worth testing on its own, and it must not be buried in a round trip
+ * to Postgres where exercising it would require a live database.
+ */
+export const MAX_RUNS_ENQUEUED_PER_DRAIN = 3;
+
+export interface EnqueueCandidateTask {
+  id: string;
+  personaId: string | null;
+  createdAt: string;
+}
+
+/**
+ * Decides which commissioned/assigned tasks are eligible to become runs, oldest first,
+ * capped at `limit`. A task with `personaId: null` has nothing to generate it as and is
+ * never eligible; a task whose persona is not in `activePersonaIds` (paused, archived, or
+ * simply not yet activated) is never eligible either. Ordering is ascending `createdAt`,
+ * with `id` as an explicit tiebreaker for equal timestamps -- fairness (oldest work goes
+ * first) plus a deterministic total order that does not depend on `Array.prototype.sort`
+ * happening to be stable or on whatever order the caller's query returned rows in, so the
+ * same input always enqueues the same tasks in the same order, run to run. `limit <= 0`
+ * (and an empty `tasks` input) both yield `[]`.
+ */
+export function selectTasksToEnqueue(
+  tasks: readonly EnqueueCandidateTask[],
+  activePersonaIds: ReadonlySet<string>,
+  limit: number
+): EnqueueCandidateTask[] {
+  if (limit <= 0) return [];
+
+  return tasks
+    .filter((task): task is EnqueueCandidateTask & { personaId: string } => task.personaId !== null && activePersonaIds.has(task.personaId))
+    .slice()
+    .sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    })
+    .slice(0, limit);
+}
+
 // ── Time budget ─────────────────────────────────────────────────────────
 
 /**

@@ -49,6 +49,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import {
   MAX_RUN_ATTEMPTS,
+  MAX_RUNS_ENQUEUED_PER_DRAIN,
   RUN_STALE_AFTER_MS,
   RUN_TIME_BUDGET_MS,
   classifyRunError,
@@ -58,11 +59,23 @@ import {
   isTerminalStage,
   nextStage,
   recordCheckpoint,
+  selectTasksToEnqueue,
   shouldRetry,
   type AgentRunCheckpoint,
   type AgentRunStage,
   type AgentRunStatus,
+  type EnqueueCandidateTask,
 } from '@/lib/agentic/orchestrator.shared';
+// Type-only: isMissingTaskSchemaError below comes from the pure, isomorphic
+// supervisor.shared.ts (safe to import at runtime too), but AgentTaskStatus is declared
+// in supervisor.ts itself, which is `server-only` and drags in the Gemini proxy and the
+// rest of the Editorial Supervisor's heavy dependency graph. `import type` is erased at
+// compile time -- it never becomes a `require`/`import` in the emitted JS -- so pulling
+// only the TYPE from supervisor.ts costs nothing at runtime and does not widen this
+// module's graph. Never change this to a value import.
+import type { AgentTaskStatus } from '@/lib/agentic/supervisor';
+import { isMissingTaskSchemaError } from '@/lib/agentic/supervisor.shared';
+import { isMissingPersonaSchemaError } from '@/lib/agentic/personas.shared';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -84,6 +97,32 @@ function latchRunSchemaUnavailable(context: string): void {
 
 function isRunSchemaMissing(error: unknown): boolean {
   return isMissingRunSchemaError(error as { code?: string; message?: string } | null | undefined);
+}
+
+// A SECOND, independent latch for migration 106 (agent_tasks), deliberately not the same
+// variable as runSchemaUnavailable above. GOTCHAS.md's rule is "never reuse ONE migration
+// group's latch for a DIFFERENT group" -- it says nothing against a module having its own
+// latch per group it touches. supervisor.ts already has its own 106 latch
+// (taskSchemaUnavailable / latchTaskSchemaUnavailable) for ITS reads and writes; this
+// module reads/writes agent_tasks too (enqueueCommissionedTasks, setTaskStatus below), so
+// it needs the same protection independently. Do not "simplify" this into a shared/
+// imported latch -- the two modules' migration-107 and migration-106 concerns are
+// deliberately decoupled, and importing supervisor.ts's latch would mean importing
+// supervisor.ts itself, which is exactly the heavy, server-only dependency graph this
+// module goes out of its way to avoid (see the header comment on resolveStoryAssemblyExecutor).
+let taskSchemaUnavailable = false;
+function latchTaskSchemaUnavailable(context: string): void {
+  if (!taskSchemaUnavailable) {
+    taskSchemaUnavailable = true;
+    console.warn(
+      `[agentic-orchestrator] agent_tasks unavailable (${context}); migration 106 is not applied on this database. ` +
+        'Task-lifecycle writes will be skipped until it is.'
+    );
+  }
+}
+
+function isTaskSchemaMissing(error: unknown): boolean {
+  return isMissingTaskSchemaError(error as { code?: string; message?: string } | null | undefined);
 }
 
 // ── Row shapes ─────────────────────────────────────────────────────────
@@ -384,6 +423,187 @@ export async function createRunForTask(taskId: string): Promise<CreateRunResult>
   }
 }
 
+// ── Task lifecycle ─────────────────────────────────────────────────────
+
+/**
+ * Best-effort task-lifecycle write: moves agent_tasks.status alongside a run's own
+ * progress. NEVER throws -- swallows and logs every failure instead, mirroring
+ * appendRunEvent's contract above -- because a task-status write failing must never
+ * corrupt the run's own state or abort a drain that is otherwise progressing fine.
+ * Latches migration 106 through latchTaskSchemaUnavailable on a schema-missing error,
+ * same classifier and latch every other agent_tasks access in this module uses.
+ */
+async function setTaskStatus(admin: AdminClient, taskId: string, status: AgentTaskStatus, context: string): Promise<void> {
+  if (taskSchemaUnavailable) return;
+
+  try {
+    const { error } = await admin.from('agent_tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId);
+
+    if (error) {
+      if (isTaskSchemaMissing(error)) {
+        latchTaskSchemaUnavailable(context);
+        return;
+      }
+      console.error(`Failed to set agent_task ${taskId} status to '${status}' (${context}):`, error.message);
+    }
+  } catch (error) {
+    if (isTaskSchemaMissing(error)) {
+      latchTaskSchemaUnavailable(context);
+      return;
+    }
+    console.error(`Failed to set agent_task ${taskId} status to '${status}' (${context}):`, error);
+  }
+}
+
+/**
+ * Turns commissioned/assigned agent_tasks rows into agent_runs rows. This is the ONLY
+ * path that puts anything into the pipeline drainAgentRuns then advances -- before this
+ * function existed, createRunForTask above had no caller at all, so a commissioned task
+ * sat forever and nothing was ever generated.
+ *
+ * The task-status writes at the bottom of this function are not polish, they are what
+ * stops an unbounded loop of paid story generation: the partial unique index
+ * idx_agent_runs_active_task only blocks a SECOND live run (status IN
+ * ('pending','processing')) for a given task_id -- it says nothing about
+ * agent_tasks.status. The moment a run's status leaves that live window (succeeds,
+ * fails, or is cancelled) while its task is still sitting in 'commissioned' or
+ * 'assigned', the very next drain reads that same task back out of the query below and
+ * commissions ANOTHER run for it -- forever, each pass a real, paid model call. Flipping
+ * the task to 'running' as soon as a run exists for it is what removes it from that
+ * `status IN ('commissioned','assigned')` filter and makes this a one-shot enqueue
+ * instead of a loop.
+ */
+export async function enqueueCommissionedTasks(limit: number = MAX_RUNS_ENQUEUED_PER_DRAIN): Promise<number> {
+  if (runSchemaUnavailable) return 0;
+  if (taskSchemaUnavailable) return 0;
+  if (limit <= 0) return 0;
+
+  const admin = createAdminClient();
+
+  type CandidateTaskRow = { id: string; persona_id: string | null; created_at: string };
+  let candidateRows: CandidateTaskRow[];
+
+  try {
+    const { data, error } = await admin
+      .from('agent_tasks')
+      .select('id, persona_id, created_at')
+      .in('status', ['commissioned', 'assigned'])
+      .eq('is_test', false)
+      .not('persona_id', 'is', null)
+      .order('created_at', { ascending: true })
+      // Over-fetch 4x `limit`: the persona-active filter happens AFTER this query (it
+      // needs a second, separate query against agent_personas -- see below), so some of
+      // the oldest `limit` rows fetched here may turn out to belong to an inactive
+      // persona and get filtered out by selectTasksToEnqueue. Fetching more up front
+      // means there are still enough genuinely-eligible candidates left to fill `limit`
+      // slots, rather than under-filling every pass a persona happens to be paused.
+      .limit(limit * 4);
+
+    if (error) {
+      if (isRunSchemaMissing(error)) {
+        latchRunSchemaUnavailable('enqueueCommissionedTasks');
+        return 0;
+      }
+      if (isTaskSchemaMissing(error)) {
+        latchTaskSchemaUnavailable('enqueueCommissionedTasks');
+        return 0;
+      }
+      throw new Error(`Failed to read commissioned agent_tasks: ${error.message}`);
+    }
+
+    candidateRows = (data ?? []) as CandidateTaskRow[];
+  } catch (error) {
+    if (isRunSchemaMissing(error)) {
+      latchRunSchemaUnavailable('enqueueCommissionedTasks');
+      return 0;
+    }
+    if (isTaskSchemaMissing(error)) {
+      latchTaskSchemaUnavailable('enqueueCommissionedTasks');
+      return 0;
+    }
+    throw error;
+  }
+
+  if (candidateRows.length === 0) return 0;
+
+  const personaIds = [...new Set(candidateRows.map((row) => row.persona_id).filter((id): id is string => id !== null))];
+
+  let activePersonaIds: Set<string>;
+  try {
+    const { data, error } = await admin.from('agent_personas').select('id').eq('status', 'active').in('id', personaIds);
+
+    if (error) {
+      // Migration 103 missing. No dedicated latch here -- unlike 106/107 above, this is
+      // a purely defensive branch, not a steady state worth remembering across calls:
+      // agent_tasks.persona_id and agent_runs.persona_id both carry a foreign key onto
+      // agent_personas, so in practice 106/107 cannot even be applied, let alone have
+      // rows in them, without 103 already being applied too. If this ever fires it means
+      // something stranger than "the migrations haven't run yet in order".
+      if (isMissingPersonaSchemaError(error)) {
+        console.warn(
+          '[agentic-orchestrator] agent_personas unavailable (enqueueCommissionedTasks); migration 103 is not applied on this database.'
+        );
+        return 0;
+      }
+      throw new Error(`Failed to read active agent_personas for enqueue: ${error.message}`);
+    }
+
+    activePersonaIds = new Set(((data ?? []) as { id: string }[]).map((row) => row.id));
+  } catch (error) {
+    if (isMissingPersonaSchemaError(error as { code?: string; message?: string } | null | undefined)) {
+      console.warn(
+        '[agentic-orchestrator] agent_personas unavailable (enqueueCommissionedTasks); migration 103 is not applied on this database.'
+      );
+      return 0;
+    }
+    throw error;
+  }
+
+  const candidates: EnqueueCandidateTask[] = candidateRows.map((row) => ({
+    id: row.id,
+    personaId: row.persona_id,
+    createdAt: row.created_at,
+  }));
+
+  const selected = selectTasksToEnqueue(candidates, activePersonaIds, limit);
+
+  let created = 0;
+  for (const task of selected) {
+    if (runSchemaUnavailable) break;
+
+    let result: CreateRunResult;
+    try {
+      result = await createRunForTask(task.id);
+    } catch (error) {
+      console.error(
+        `Failed to create agent_run for commissioned task ${task.id}:`,
+        error instanceof Error ? error.message : error
+      );
+      continue;
+    }
+
+    if (result.alreadyRunning) {
+      // idx_agent_runs_active_task refused a second live run for this task -- another
+      // worker (or an earlier, crashed pass of this very function) already created one.
+      // That is the index doing exactly its job: a benign race, NEVER an error worth
+      // logging as one. The task is still flipped to 'running' below regardless of which
+      // branch got here -- a crash between a PRIOR createRunForTask call succeeding and
+      // ITS task-status write would otherwise leave this task stuck 'assigned' forever
+      // even though a live run already exists for it; re-flipping it here on this pass
+      // is what heals that.
+      await setTaskStatus(admin, task.id, 'running', 'enqueueCommissionedTasks (already running)');
+      continue;
+    }
+
+    if (result.run) {
+      created += 1;
+      await setTaskStatus(admin, task.id, 'running', 'enqueueCommissionedTasks');
+    }
+  }
+
+  return created;
+}
+
 // ── Stage execution seam ───────────────────────────────────────────────
 
 export interface StageAdvancedOutcome {
@@ -449,7 +669,21 @@ async function persistStageAdvance(
 
   const { data, error } = await admin.from('agent_runs').update(patch).eq('id', run.id).select('*').single();
   if (error) throw new Error(`Failed to persist stage advance for run ${run.id}: ${error.message}`);
-  return rowToRun(data as AgentRunRow);
+  const updated = rowToRun(data as AgentRunRow);
+
+  // Both of advanceRun's branches land here: the checkpoint-skip branch (a stage
+  // already recorded, applied "for free" with no executor call) and the
+  // executor-advanced branch (a stage the executor just produced). Writing the
+  // task-lifecycle transition in this ONE shared spot, rather than duplicating it in
+  // both callers, is what guarantees a checkpoint-skipped run reaching awaiting_review
+  // flips its task just as reliably as one that got there by actually running the
+  // stage. No other stage maps to a task status: 'complete' and 'media_pending' belong
+  // to the Phase 9/10 human-reviewer workflow and are deliberately left untouched here.
+  if (target === 'awaiting_review') {
+    await setTaskStatus(admin, updated.taskId, 'awaiting_review', 'persistStageAdvance');
+  }
+
+  return updated;
 }
 
 /**
@@ -505,6 +739,10 @@ async function handleStageFailure(
     .eq('id', run.id)
     .eq('status', 'processing');
   await appendRunEvent(run.id, 'failed', 'error', `Run failed permanently after ${run.attemptCount} attempt(s): ${truncatedDetail}`, metadata);
+  // Only the PERMANENT-failure branch flips the task -- the will-retry branch above
+  // returns early and leaves the task exactly as it was, since the run itself hasn't
+  // given up yet and may still succeed on the next attempt.
+  await setTaskStatus(admin, run.taskId, 'failed', 'handleStageFailure');
 }
 
 /**
@@ -605,10 +843,13 @@ async function resolveStoryAssemblyExecutor(): Promise<StageExecutor> {
 }
 
 /**
- * Reclaims stale runs, then claims and advances pending runs one at a time until
- * `budgetMs` is spent. Returns how many runs were claimed and processed in this call
- * (regardless of whether each one succeeded, deferred, or failed) -- the same
- * "processed" semantics as runImageGenerationJobs's result.
+ * Enqueues commissioned tasks into fresh runs (enqueueCommissionedTasks), reclaims stale
+ * runs, then claims and advances pending runs one at a time until `budgetMs` is spent.
+ * Returns how many runs were claimed and processed in this call (regardless of whether
+ * each one succeeded, deferred, or failed) -- the same "processed" semantics as
+ * runImageGenerationJobs's result. Enqueueing does not add to this count; it is a
+ * separate, best-effort step ahead of the claim loop, not something this return value
+ * reports on.
  *
  * Returns 0 immediately, WITHOUT touching agent_runs/agent_run_events, when the master
  * kill switch (agentic_creator_enabled) is off. `executor` is optional: both production
@@ -633,13 +874,35 @@ export async function drainAgentRuns(
 
   await reclaimStaleAgentRuns().catch(() => 0);
 
+  // Same defensive posture as reclaimStaleAgentRuns just above: an enqueue failure must
+  // never stop this call from advancing runs that already exist. See
+  // enqueueCommissionedTasks's own doc comment for why skipping this step for too long
+  // is fine (a task just waits one more drain) but silently swallowing every attempt at
+  // it forever is not (a task would sit 'commissioned' with nothing ever generated).
+  await enqueueCommissionedTasks().catch((error) => {
+    console.error('enqueueCommissionedTasks failed during drainAgentRuns:', error instanceof Error ? error.message : error);
+    return 0;
+  });
+
   while (Date.now() - startedAt < budgetMs) {
     let candidate: AgentRunRow | null;
     try {
       const { data, error } = await admin
         .from('agent_runs')
-        .select('*')
+        // Inner-join filter, not a plain select('*'): makes a run belonging to a TEST
+        // task invisible to this cron path. The Persona Test Lab creates a run against a
+        // task with is_test = true and deliberately parks it mid-pipeline for a human to
+        // inspect -- if the cron claimed it, it would execute draft_created and save a
+        // story nobody approved. agent_runs.task_id carries a foreign key to agent_tasks
+        // (migration 107), so this embed is valid; if PostgREST cannot resolve it, the
+        // error code is PGRST200, which isMissingRunSchemaError already classifies, so
+        // the existing 107 latch below handles that failure mode with no change needed.
+        // The extra embedded `agent_tasks` key this puts on the row object is harmless
+        // where `candidate` is spread into rowToRun a few lines down -- rowToRun reads
+        // only its own named fields and ignores anything else present on the object.
+        .select('*, agent_tasks!inner(is_test)')
         .eq('status', 'pending')
+        .eq('agent_tasks.is_test', false)
         .order('created_at', { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -802,6 +1065,7 @@ export async function cancelRun(id: string): Promise<AgentRun> {
 
     const run = rowToRun(data as AgentRunRow);
     await appendRunEvent(run.id, 'cancelled', 'warn', 'Run cancelled by an admin.');
+    await setTaskStatus(admin, run.taskId, 'cancelled', 'cancelRun');
     return run;
   } catch (error) {
     if (error instanceof Error && error.message === RUN_SCHEMA_UNAVAILABLE_MESSAGE) throw error;
@@ -867,6 +1131,7 @@ export async function retryRun(id: string): Promise<AgentRun> {
 
     const run = rowToRun(data as AgentRunRow);
     await appendRunEvent(run.id, run.stage, 'info', 'Run manually retried by an admin; resuming from its last checkpoint.');
+    await setTaskStatus(admin, run.taskId, 'running', 'retryRun');
     return run;
   } catch (error) {
     if (error instanceof Error && (error.message === RUN_SCHEMA_UNAVAILABLE_MESSAGE || error.message.includes('cannot be retried'))) {
