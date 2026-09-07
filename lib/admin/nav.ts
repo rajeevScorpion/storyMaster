@@ -356,6 +356,14 @@ const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
         description: 'Creative identity catalogue: language, age group, genres, permissions, and lifecycle status.',
         staticSummary: 'Persona catalogue for autonomous story creators',
       },
+      {
+        id: 'tasks',
+        label: 'Task pool',
+        href: '/admin/agents/tasks',
+        icon: Layers,
+        description: 'Catalogue coverage gaps and the commissioning queue: propose, review, and manage tasks for autonomous story creators.',
+        staticSummary: 'Coverage gaps and the task commissioning queue',
+      },
     ],
   },
 ];

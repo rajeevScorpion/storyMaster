@@ -114,6 +114,14 @@ describe('admin nav config', () => {
     expect(studio?.items.find((item) => item.href === '/admin/settings/story-visuals')).toBeDefined();
   });
 
+  it('includes the task pool as an Agents child, after Personas', () => {
+    const agentic = ADMIN_NAV.find((group) => group.id === 'agentic');
+    const agents = agentic?.items.find((item) => item.href === '/admin/agents');
+    const ids = agents?.childGroups?.flatMap((group) => group.items.map((item) => item.id)) ?? [];
+    expect(ids.indexOf('tasks')).toBeGreaterThan(-1);
+    expect(ids.indexOf('tasks')).toBeGreaterThan(ids.indexOf('personas'));
+  });
+
   it('resolves items by id', () => {
     expect(findSettingsNavItem('storyboard')?.href).toBe('/admin/settings/storyboard');
     expect(findSettingsNavItem('nonexistent')).toBeUndefined();
