@@ -8,16 +8,16 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Where we are
 
-- **Phase:** 3 complete — global story memory, persona memory and two-stage novelty checks.
-  Next is Phase 4 (Editorial Supervisor and task pool, migration 106).
+- **Phase:** 4 complete — Editorial Supervisor, task pool and the coverage/commissioning admin surface.
+  Next is Phase 5 (orchestrator, scheduler and task-role model routing, migration 107).
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
 
 ## What works right now
 
-**Migrations 102–105 are all applied on the dev/staging database as of 2026-09-06.** Verified by query,
-not assumed:
+**Migrations 102–105 are applied on the dev/staging database as of 2026-09-06; 106 is written but applied
+nowhere.** Verified by query, not assumed:
 
 - Six `agentic_*` flags exist, **all still `false`**. `lib/agentic/flags.ts` is the single read path,
   always with `fallback = false`.
@@ -36,38 +36,59 @@ not assumed:
   priors, calls the economy-tier adjudicator only inside the ambiguous band, and records every verdict.
   `trigramSimilarity` is **verified exactly equal** to Postgres `pg_trgm.similarity()` on five pairs
   measured against staging, and those values are pinned as a test.
-- **Nothing generates anything yet.** No jobs, no supervisor, no story writing. `runNoveltyCheck` has
-  never been executed end to end — it typechecks and its pure half is well covered, but the server
-  half is unproven at runtime.
+- `lib/agentic/supervisor.shared.ts` computes catalogue coverage and ranks gaps **deterministically**
+  (stable ordering is a tested property — an unauditable supervisor is worse than none), and validates
+  model-written commission proposals as hostile input. `supervisor.ts` skips the model call entirely when
+  there are no gaps or no active personas.
+- `/admin/agents/tasks` renders the coverage report, the task pool, and a two-step commissioning flow
+  where proposals are shown for human sight-check before any row is written. Rejected proposals and their
+  reasons are shown too, never hidden.
+- **Nothing generates anything yet.** No jobs, no runs, no story writing. `runNoveltyCheck` has never
+  executed end to end, `proposeCommissions` has never made a model call, and `commissionTasks` has never
+  written a row. The pure halves are well covered; every server half is unproven at runtime.
+
+**Today's real state is the one to design against:** all 15 personas are `status = 'draft'` (so zero are
+commissionable) and migration 106 is unapplied (so every task query returns empty). Both are handled
+explicitly rather than incidentally — that is why the three empty states are distinguished in the UI.
 
 ## Next step
 
-**Phase 4 — Editorial Supervisor and task pool (migration 106).** Per the plan file:
-`agent_tasks` table + `stories.agent_task_id`; `lib/agentic/supervisor.ts` with
-`buildCatalogueCoverage()`, `proposeCommissions()` and `commissionTasks()`; a new `TaskKey`
-`agent_supervisor_planning`; and `/admin/agents/tasks` showing the coverage table and the pool.
+**Phase 5 — Orchestrator, scheduler and model routing (migration 107).** Per the plan file:
+`agent_runs` + `agent_run_events` + `agent_schedules`; `lib/agentic/routing.shared.ts` mapping
+role -> TaskKey with persona-override precedence; `lib/agentic/orchestrator.ts` copying the proven
+claim / reclaim / re-kick shape from `lib/media/image-job-runner.ts`; a `CRON_SECRET`-guarded
+`app/api/agentic/run/route.ts`; and an `agentic_scheduler_enabled`-guarded call from the existing daily
+`/api/batch/reconcile` tick — **wrapped so an agentic failure can never break the narration and image
+reconcile work that already runs there.**
 
-Store a **concise editorial rationale** on each commission, never chain-of-thought. No engagement
-analytics in V1 — no views, likes or completion-driven commissioning.
+The load-bearing property is idempotency: **every expensive step writes its result into
+`agent_runs.checkpoint` before advancing, and is skipped on retry if already present.** That is the whole
+contract that stops a retry from paying twice.
 
-Two things worth doing before or alongside Phase 4, neither blocking:
+Four more TaskKeys land here (`agent_story_brief`, `agent_seed_story_writing`, `agent_story_evaluation`,
+plus routing for the existing two). Remember the `PromptTaskKey` exclusion list in
+`lib/ai/prompt-config.shared.ts` — a TaskKey added without it breaks the typecheck in three unrelated files.
 
-- **Run the memory backfill on staging.** `runStoryMemoryBackfillBatch()` seeds
-  `agent_story_memory` from published storylines so the first agent story is checked against the real
-  catalogue instead of an empty table. Requires `agentic_creator_enabled` on. Call repeatedly until
-  `done`; it is resumable and idempotent.
+Still worth doing, neither blocking:
+
+- **Run the memory backfill on staging.** `runStoryMemoryBackfillBatch()` seeds `agent_story_memory` from
+  published storylines so the first agent story is checked against the real catalogue instead of an empty
+  table. Requires `agentic_creator_enabled` on. Call repeatedly until `done`; resumable and idempotent.
 - **Browser-verify the admin surfaces** — see Blockers.
 
 ## Blockers
 
 None blocking work. Two open items:
 
-- **Production has none of 102–105.** Apply in numeric order when the branch is ready to promote; 103
-  must precede 104 and 105. Nothing on prod changes until then, by design.
-- **No agentic UI has been browser-verified yet.** Staging now has real persona rows, so
-  `/admin/agents` and `/admin/agents/personas` are finally worth a manual pass with an admin session —
-  filters, the editor drawer, clone, and the toggle round-trip. Playwright cannot cover this; it runs
-  signed-out.
+- **Migration 106 is applied nowhere — not even dev.** Until it is, `/admin/agents/tasks` renders its
+  "migration not applied" notice and every task query returns empty. This is by design and safe, but it
+  also means nothing in Phase 4 has been exercised against a real table.
+- **Production has none of 102–106.** Apply in numeric order when the branch is ready to promote; 103
+  must precede 104, 105 and 106. Nothing on prod changes until then, by design.
+- **No agentic UI has been browser-verified yet.** Staging has real persona rows, so `/admin/agents` and
+  `/admin/agents/personas` are worth a manual pass with an admin session — filters, the editor drawer,
+  clone, and the toggle round-trip. `/admin/agents/tasks` needs migration 106 first to show anything but
+  its empty state. Playwright cannot cover any of this; it runs signed-out.
 
 ## Active flags
 
@@ -92,7 +113,7 @@ guarantee stops being a guarantee.
 | 103 | `103_agent_personas.sql` | 2a | **APPLIED** 2026-09-06 | not applied |
 | 104 | `104_seed_agent_personas.sql` | 2b | **APPLIED** 2026-09-06 — 15 personas, 15 memory rows | not applied |
 | 105 | `105_agent_story_memory.sql` | 3 | **APPLIED** 2026-09-06 | not applied |
-| 106 | `106_agent_tasks.sql` | 4 | not written | not written |
+| 106 | `106_agent_tasks.sql` | 4 | **written, NOT applied** | not applied |
 | 107 | `107_agent_runs.sql` | 5 | not written | not written |
 | 108–110 | evaluation / reviewers / labels | 7, 9, 11 | not written | not written |
 

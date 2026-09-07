@@ -260,8 +260,69 @@ takes a live Supabase client, which the suite has no harness for (consistent wit
 tests target the `.shared.ts` halves). Its SQL column names were verified by querying
 `information_schema.columns` on staging rather than by test. `runNoveltyCheck` has never executed end to end.
 
-**Commit:** _(filled in at commit time)_
+**Commit:** `dcdcadd`
 
 ---
 
-_(Phase 4 onward appended here.)_
+## Phase 4 — Editorial Supervisor and task pool (2026-09-07)
+
+Delivered in two scoped delegations rather than one, so a failed agent could never take more than half the
+phase down with it: 4a (migration, logic, actions) landed before 4b (admin surface) began.
+
+**Migration 106** — `agent_tasks` plus `stories.agent_task_id`. RLS enabled, revoked from `anon` and
+`authenticated`, self-recording into the ledger. The rollback drops `stories.agent_task_id` **before**
+`agent_tasks`, because the column carries a `REFERENCES` constraint into the table and Postgres would
+otherwise refuse the `DROP TABLE`. This is the identical mistake found in 103's rollback during Phase 2a
+review; the header reasons it out explicitly so the next person does not have to rediscover it.
+**Applied nowhere yet — dev and prod both still need it.**
+
+**Three live-data findings corrected the plan before any code was written.** Each would have produced code
+that ran without error and returned silently wrong results:
+
+- `storylines` has `age_group` and `genre` but **no `language` column**. The plan's
+  `(language, age_group, genre)` grouping requires joining `stories.story_config->>'language'`.
+- Every published row carries `moderation_status = 'none'`, not `'approved'`. Filtering on `'approved'`
+  alone — the obvious reading — returns **zero rows** and would have reported a catalogue with no coverage
+  anywhere. The correct filter is `is_public = true AND moderation_status IN ('none','approved')`, matching
+  `app/actions/gallery.ts`.
+- Real `genre` values include `'reel'`, which is not in `STORY_GENRES`. Coverage must tolerate values
+  outside the taxonomy while proposals must never emit one.
+
+**Deterministic where it can be, model-driven only where it must be.** Coverage and gap ranking are pure
+computation — `rankCoverageGaps` is stably ordered and tested for it, because a supervisor that proposes a
+different thing each time it is asked the same question is not auditable. The model's only job is turning a
+ranked gap into a creative brief. `validateCommissionProposals` then treats that output as hostile: it
+rejects unknown or inactive persona slugs, off-taxonomy genres, age groups and languages, and any proposal
+whose language and age group disagree with its own persona.
+
+**The current real state is the primary test case.** All 15 seed personas are `status = 'draft'`, so zero
+are commissionable, and migration 106 is unapplied. `proposeCommissions` therefore returns empty with an
+explanatory reason **above** the `getModelConfig` call — paying for a model call that can only return
+nothing is a bug, not a no-op. The admin page distinguishes all three empty states (migration missing / no
+active personas / genuinely covered) rather than rendering one bare table for all of them.
+
+**Files.** `lib/agentic/supervisor.shared.ts` (pure, 33 tests) and `supervisor.ts` (server-only, one
+codes-only latch for migration 106); `app/actions/agentic-supervisor.ts`; `app/admin/agents/tasks/page.tsx`
+and `components/admin/agentic/TaskPool.tsx`; a `tasks` child in `lib/admin/nav.ts`. New TaskKey
+`agent_supervisor_planning`, added to the `PromptTaskKey` exclusion list so it stays out of the prompt
+playground. `callGeminiNoveltyAssessment` was **widened** into `callGeminiAgenticJson` across both agentic
+tasks rather than copy-pasted a third time.
+
+**Tests.** 89 files / 675 tests, all passing (was 88 / 641; +1 file, +34 tests). Gate: tsc clean, lint
+clean, `build:verify` passing with `/admin/agents/tasks` in the route manifest. Both delegations' gate
+numbers were re-run independently rather than taken on report.
+
+**Known limit, recorded now rather than discovered later:** `listAgentTasks` issues `select('*')` with **no
+limit**. The admin page's language and age-group filters are therefore client-side, which is correct only
+while the pool is small enough to return whole. Pagination or server-side filters are needed before the pool
+grows — `AgentTaskListFilters` supports `status`, `personaId`, `origin` and `isTest` only.
+
+**Not covered:** no browser verification — the page has never been rendered with an admin session, and with
+migration 106 unapplied every task query returns empty regardless. `proposeCommissions` has never made a
+model call. `commissionTasks` has never written a row.
+
+**Commits:** `c62b0b2` (4a), `b5e8dbf` (4b)
+
+---
+
+_(Phase 5 onward appended here.)_

@@ -9,7 +9,7 @@ context that does not live in the code or in git history.
 **Partially re-verified 2026-09-06** against both dev and prod via the read-only MCP connections, while
 planning the Agentic Creator System. Three corrections landed: migration 101 is applied on both (the row said
 "not yet applied anywhere"); Runware rows exist on prod and are disabled rather than absent; and the agentic
-migrations 102–105 are recorded as written-but-unapplied. Everything not named here still carries its
+migrations 102–106 are recorded as written-but-unapplied. Everything not named here still carries its
 2026-08-26 verification date.
 
 Keep this file current. When you finish a pack, move it out of "pending"; when you defer something, add it to
@@ -93,9 +93,10 @@ Everything up to 068 is long-applied.
 | 103 | `agent_personas` | tables `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger; `stories.agent_persona_id` | **Applied.** | Not applied |
 | 104 | `seed_agent_personas` | the 15 seed creator personas | **Applied.** 15 personas, and 15 `agent_persona_memory` rows created by 103's trigger | Not applied |
 | 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | **Applied**, both tables empty | Not applied |
+| 106 | `agent_tasks` | table `agent_tasks`; `stories.agent_task_id` | **Not applied** | Not applied |
 
-**Apply in numeric order.** 103 must precede 104 (which inserts into its table) and 105 (whose `persona_id`
-foreign keys point at `agent_personas`). Applying 102 and 103 changes nothing observable: every flag is
+**Apply in numeric order.** 103 must precede 104 (which inserts into its table), 105 and 106 (whose
+`persona_id` foreign keys point at `agent_personas`). Applying 102 and 103 changes nothing observable: every flag is
 `false` and the persona table lands empty.
 
 Post-apply verification on dev, all passing: 15 personas / 15 memory rows; 0 with
@@ -273,7 +274,7 @@ below were verified 2026-08-26; the Runware and Agentic rows were re-verified ag
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
 | Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
-| Agentic Creator System | six `agentic_*` flags | present, **all six off** — 102–105 applied 2026-09-06, 15 personas seeded, nothing runs | **absent** — 102–105 not applied |
+| Agentic Creator System | six `agentic_*` flags | present, **all six off** — 102–105 applied 2026-09-06, 15 personas seeded (all `draft`), nothing runs; **106 not applied**, so the task pool reads empty | **absent** — 102–106 not applied |
 
 The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
 the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on

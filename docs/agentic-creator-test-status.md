@@ -112,3 +112,40 @@ silently stops surfacing rows the scorer would have flagged, with no error anywh
 - **`runNoveltyCheck` has never executed end to end.** No novelty check has run against real data, the
   adjudication model call has never been made, and no `agent_novelty_checks` row has ever been written.
 - The backfill has never been run.
+
+### Phase 4 — Editorial Supervisor, task pool and admin surface (2026-09-07)
+
+| Gate | Result | Delta vs baseline |
+|---|---|---|
+| `npx tsc --noEmit` | pass | none |
+| `npm run lint` | pass | none — still 0 warnings |
+| `npm test` | pass | **89 files, 675 tests, 675 passed** (+1 file, +34 tests) |
+| `npm run build:verify` | pass | `/admin/agents/tasks` added to the manifest as `f` (dynamic) |
+| `npm run test:e2e` | not run | no signed-out surface changed; last green run was Phase 1 |
+
+Both delegations reported their own gate numbers; **the typecheck, suite and lint were re-run
+independently afterwards and matched.** Agent-reported results are not accepted as verification here.
+
+**New tests:** `lib/agentic/supervisor.shared.test.ts`, 33 tests, plus one additive assertion in
+`lib/admin/nav.test.ts` (reviewed: purely additive, no existing assertion weakened or removed).
+
+The tests that matter most pin the state the system is **actually in today**, not a hypothetical one:
+with zero active personas the coverage matrix yields no servable cells and gap ranking returns empty.
+That is the first thing that will really happen, and it must be provably calm rather than a crash or a
+garbage proposal. `rankCoverageGaps` is also pinned as deterministic — same input, identical order —
+because a supervisor that answers the same question differently each time cannot be audited.
+`validateCommissionProposals` has one test per rejection reason, treating model output as hostile.
+
+**Not covered — be honest about this:**
+
+- **Nothing in Phase 4 has touched a real `agent_tasks` table.** Migration 106 is applied nowhere, so
+  every query in `lib/agentic/supervisor.ts` currently returns via its fail-closed path. The happy path
+  of every read and write in that file is unexercised.
+- **`proposeCommissions` has never made a model call**, and `commissionTasks` has never written a row.
+  The prompt builder and the response validator are tested; the round trip between them is not.
+- **No browser verification.** `/admin/agents/tasks` has never been rendered with an admin session.
+  Playwright runs signed-out and cannot reach it.
+- `lib/agentic/supervisor.ts` has no unit tests, for the same reason as `memory.ts`: it is `server-only`
+  and needs a live Supabase client, which this repo has no harness for.
+- **A standing gap, unchanged:** rollback files are validated only by reading them. 106's drop order was
+  reviewed by hand against the bug found in 103, not by execution.

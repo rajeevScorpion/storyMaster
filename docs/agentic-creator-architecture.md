@@ -4,11 +4,13 @@
 must be corrected to reality as each phase lands. The forward-looking design lives in the plan file;
 this one is the map of the territory.
 
-Status: **Phase 3 complete.** Implemented: `lib/agentic/flags.ts`, `lib/agentic/personas.shared.ts`,
-`lib/agentic/memory.shared.ts` + `memory.ts`, `app/actions/agentic-memory.ts`,
-`app/actions/agentic-admin.ts`, `app/actions/agentic-personas.ts`,
-the `/admin/agents` shell with its Overview and Personas pages, and migrations 102-105 (all four
-**applied on dev 2026-09-06, none on prod**). Phases 4-12 below are still _(planned)_.
+Status: **Phase 4 complete.** Implemented: `lib/agentic/flags.ts`, `lib/agentic/personas.shared.ts`,
+`lib/agentic/memory.shared.ts` + `memory.ts`, `lib/agentic/supervisor.shared.ts` + `supervisor.ts`,
+`app/actions/agentic-memory.ts`, `app/actions/agentic-admin.ts`, `app/actions/agentic-personas.ts`,
+`app/actions/agentic-supervisor.ts`, and the `/admin/agents` shell with its Overview, Personas and Tasks
+pages. Migrations 102-105 are **applied on dev 2026-09-06, none on prod**; **106 is written and applied
+nowhere**, so every Phase 4 query currently runs its fail-closed path. Phases 5-12 below are still
+_(planned)_.
 
 ---
 
@@ -43,8 +45,9 @@ lib/agentic/
   personas.shared.ts     pure         — persona types, StoryConfig derivation, permission resolution
   memory.shared.ts       pure         — novelty scoring and thresholds
   memory.ts              server-only  — agent_story_memory reads/writes, trigram candidate query
-  routing.shared.ts      pure         — role -> TaskKey map, persona override precedence
-  supervisor.ts          server-only  — catalogue coverage, commission proposals
+  supervisor.shared.ts   pure         — coverage matrix, deterministic gap ranking, proposal validation
+  supervisor.ts          server-only  — catalogue coverage, commission proposals, task pool CRUD
+  routing.shared.ts      pure         — role -> TaskKey map, persona override precedence  (Phase 5)
   orchestrator.ts        server-only  — claim / execute / retry / resume state machine
   story-assembly.ts      server-only  — headless seed-plan -> canonical StoryMap -> saveStory
   evaluation.ts          server-only  — deterministic + model evaluation          (Phase 7)
@@ -138,6 +141,13 @@ already present. That is the whole idempotency contract for paid calls.
 - **Autonomous cadence is roughly daily.** Vercel Hobby allows one cron; the agent queue drains from
   the existing `/api/batch/reconcile` tick, plus an admin "Run now" kick.
 - **Similarity is trigram + LLM adjudication, not embeddings.** See D3 in the decisions doc.
+- **Coverage cannot be grouped by language in SQL alone.** `storylines` has `age_group` and `genre` but no
+  `language` column, so `buildCatalogueCoverage()` joins `stories.story_config->>'language'`. Published
+  rows also carry `moderation_status = 'none'` rather than `'approved'`, and real `genre` values include
+  `'reel'`, which is outside `STORY_GENRES` — coverage tolerates off-taxonomy values, proposals never emit
+  them.
+- **The task pool is unpaginated.** `listAgentTasks` selects every matching row; the admin page's language
+  and age-group filters are client-side and correct only while the pool returns whole.
 - **Urdu has no narration voice.** Story text supports it; TTS does not. Seed personas avoid it.
 - **The multi-beat loop is duplicated in spirit.** `lib/store/story-store.ts` keeps its own client-side
   orchestration; `lib/agentic/story-assembly.ts` is a separate, simpler, canonical-path-only server
