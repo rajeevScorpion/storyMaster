@@ -499,11 +499,17 @@ export async function enqueueCommissionedTasks(limit: number = MAX_RUNS_ENQUEUED
       // slots, rather than under-filling every pass a persona happens to be paused.
       .limit(limit * 4);
 
+    // ONLY the 106 latch is consulted here, deliberately. isMissingRunSchemaError and
+    // isMissingTaskSchemaError accept an IDENTICAL set of codes (42P01, 42703, PGRST200,
+    // PGRST204) -- they are told apart solely by WHICH TABLE the failing query touched,
+    // never by the error itself. This query touches agent_tasks and nothing else, so a
+    // schema-missing error here is always migration 106. Classifying it as 107 as well
+    // would latch runSchemaUnavailable, and that latch is read at the top of
+    // drainAgentRuns and by listRuns/getRun -- so an agent_tasks problem would kill the
+    // whole run pipeline and blank /admin/agents/runs behind a "migration 107 is not
+    // applied" message that is simply false. That is the exact defect GOTCHAS.md's
+    // "Column-availability latches are per migration group" section describes.
     if (error) {
-      if (isRunSchemaMissing(error)) {
-        latchRunSchemaUnavailable('enqueueCommissionedTasks');
-        return 0;
-      }
       if (isTaskSchemaMissing(error)) {
         latchTaskSchemaUnavailable('enqueueCommissionedTasks');
         return 0;
@@ -513,10 +519,6 @@ export async function enqueueCommissionedTasks(limit: number = MAX_RUNS_ENQUEUED
 
     candidateRows = (data ?? []) as CandidateTaskRow[];
   } catch (error) {
-    if (isRunSchemaMissing(error)) {
-      latchRunSchemaUnavailable('enqueueCommissionedTasks');
-      return 0;
-    }
     if (isTaskSchemaMissing(error)) {
       latchTaskSchemaUnavailable('enqueueCommissionedTasks');
       return 0;
@@ -897,6 +899,13 @@ export async function drainAgentRuns(
         // (migration 107), so this embed is valid; if PostgREST cannot resolve it, the
         // error code is PGRST200, which isMissingRunSchemaError already classifies, so
         // the existing 107 latch below handles that failure mode with no change needed.
+        // A PGRST200 here could equally mean agent_tasks (106) is absent rather than
+        // agent_runs (107) -- the two classifiers share a code set and cannot tell them
+        // apart -- but latching 107 is the right outcome either way: agent_runs.task_id
+        // is a FOREIGN KEY onto agent_tasks, so 107 cannot be applied without 106, and a
+        // database missing 106 is necessarily missing 107 too. Contrast
+        // enqueueCommissionedTasks above, where the query touches agent_tasks ALONE and
+        // consulting the 107 latch would therefore be a genuine cross-wire.
         // The extra embedded `agent_tasks` key this puts on the row object is harmless
         // where `candidate` is spread into rowToRun a few lines down -- rowToRun reads
         // only its own named fields and ignores anything else present on the object.
