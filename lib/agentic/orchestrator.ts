@@ -542,6 +542,14 @@ async function advanceRun(admin: AdminClient, initialRun: AgentRun, executor: St
     }
 
     if (outcome.kind === 'advanced') {
+      // `run.checkpoint` MUST be read here, after the executor returned -- never
+      // hoisted to a local above the executor call. A long stage (story_generated)
+      // writes intra-stage progress straight to the row and mutates run.checkpoint
+      // in place so this line sees it; see persistStoryGenerationProgress in
+      // lib/agentic/story-assembly.ts. Reading a pre-executor copy would overwrite
+      // that progress with a stale value, and a retry would re-pay for every model
+      // call the stage had already completed. The bug would be silent -- correct
+      // stories, duplicated spend.
       const newCheckpoint = recordCheckpoint(run.checkpoint, target, outcome.checkpointPayload ?? null);
       run = await persistStageAdvance(admin, run, target, newCheckpoint, outcome.storyId);
       await appendRunEvent(run.id, target, 'info', `Advanced to stage '${target}'.`);
