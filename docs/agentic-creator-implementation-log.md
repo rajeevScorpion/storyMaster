@@ -326,3 +326,83 @@ model call. `commissionTasks` has never written a row.
 ---
 
 _(Phase 5 onward appended here.)_
+
+---
+
+## Phase 6a — Groundwork: seed-authoring extraction, userId-explicit save, system billing bypass (2026-09-07)
+
+Pure groundwork, zero new behaviour. Three mechanical, independently-verifiable changes that Phase 6 (the
+agent story pipeline) builds on. No migration.
+
+**1. Moved `generateSeedPlanPreview` and `materializeSeededBeat`** (plus `appendExtraVisualGuidanceContract`
+and the private helpers `mergeSeededBeatWithGeneratedFields`, `normalizeSeedPlanResult`,
+`reorderCanonicalOptions` they call) out of `app/actions/story-runtime.ts` (`'use client'`) into the new
+`lib/ai/seed-authoring.ts`, byte-identical apart from import paths. The new module carries no directive, on
+the same reasoning as `lib/ai/beat-orchestration.ts`'s header: the server actions it imports
+(`callGeminiText`) resolve to POST references in the browser and direct calls on the server, so both
+contexts can use it. `story-runtime.ts` re-exports the two functions and the `SeedPlanPreviewInput` type so
+every existing consumer (`lib/store/story-store.ts`, `components/story/LandingScreen.tsx`,
+`components/story/ContinueAsEpisodeDialog.tsx`) keeps importing from `@/app/actions/story-runtime` unchanged.
+`git diff --stat` confirms the change is scoped to `app/actions/story-runtime.ts` and the new file only —
+none of the three consumers changed.
+
+**2. `saveStory` now has a userId-explicit twin.** `saveStoryForUser(supabase, userId, session,
+storyMapWithUrls, options?)` lives in the new `lib/story/save-story.ts`, a `server-only` module (not
+`'use server'`) so it is never callable from a browser with a caller-supplied `userId` — the whole reason it
+can't be a server action. `app/actions/persistence.ts`'s `saveStory` is now a five-line cookie-bound wrapper
+that resolves `user.id` and delegates.
+
+This uncovered a real constraint the plan hadn't accounted for: Next.js requires every export from a `'use
+server'` file to be an async function, and most of `saveStory`'s row-shaping helpers (`stripBase64`,
+`getStoryOrientation`, `nodeToBeatRow`, the additive-column fallbacks, etc.) are synchronous and are also
+called by other functions still living in `persistence.ts` (`saveBeat`, `loadStory`, the storyline publish
+paths). Exporting them from `persistence.ts` for `save-story.ts` to import back was a non-starter, and so was
+the reverse (a `'use server'` file can't export sync functions either way). The fix: the whole cluster of
+row-shaping helpers moved to `lib/story/save-story.ts` alongside `saveStoryForUser`, and `persistence.ts`
+imports them back for its own cookie-bound callers. This is a wider diff than the three-line body change
+alone, but it is a pure relocation — no function's logic changed — and it removes the only path to a
+circular import between the two files (persistence.ts → save-story.ts is now the only direction).
+
+Diffing the moved `saveStoryForUser` body against the original `saveStory` body (git HEAD) confirms the
+*only* differences are: the six `user.id` → `userId` replacements, the removed three-line
+`createClient()`/`getUser()`/auth-check block, and the two new spread keys at the end of `storyData` —
+`agent_persona_id` / `agent_task_id` — added only when `options.agentPersonaId` / `options.agentTaskId` are
+passed, so the human save path (`saveStory`, still calling with no `options`) writes exactly the columns it
+always has, unapplied-migration-safe by construction. `saveStoryForUser` is imported and called inside
+`saveStory`; it is never re-exported from `persistence.ts`.
+
+**3. Billing bypass for the system actor.** `PricingBillableActionBypassedResult.reason` widened to
+`'admin_bypass' | 'agentic_system'` (its only consumer was the literal at the point of assignment — nothing
+switches on it). `authorizeBillableAction`'s inline input type gained `actorKind?: 'user' | 'agentic_system'`,
+and a bypass branch was added immediately before the existing `admin_bypass` check, ordered so `actorKind` is
+checked first and the human path pays no extra flag-read cost:
+
+```ts
+if (input.actorKind === 'agentic_system') {
+  const systemUserId = process.env.AGENTIC_SYSTEM_USER_ID;
+  const { billingBypassEnabled } = await getAgenticFlags();
+  if (billingBypassEnabled && systemUserId && input.userId === systemUserId) {
+    return { status: 'bypassed', reason: 'agentic_system', beatCost, coinCost };
+  }
+}
+```
+
+`getAgenticFlags()`'s real property for `agentic_billing_bypass_enabled` is `billingBypassEnabled` (verified
+in `lib/agentic/flags.ts`, not assumed). If the flag is off, or `AGENTIC_SYSTEM_USER_ID` is unset, or the
+caller's `userId` doesn't match it, the call falls through to normal enforcement and gets denied — a safe
+failure. `AGENTIC_SYSTEM_USER_ID` added to `.env.example` and to a new "Agentic Creator" table in
+`docs/onboarding-new-machine.md`, both noting the feature stays inert while it's unset.
+
+**Files.** New: `lib/ai/seed-authoring.ts`, `lib/story/save-story.ts`. Changed: `app/actions/story-runtime.ts`,
+`app/actions/persistence.ts`, `lib/types/pricing.ts`, `lib/pricing/enforcement.ts`, `.env.example`,
+`docs/onboarding-new-machine.md`.
+
+**Tests.** 91 files / 715 tests, unchanged from baseline (no new tests added — pure relocation and additive
+typing, nothing new to unit-test yet). Gate: `npx tsc --noEmit` clean, `npm run lint` clean, `npm run
+build:verify` green (48 routes generated, including `/api/agentic/run` and `/admin/agents/*` from Phase 5b).
+
+**Not covered:** `saveStoryForUser` and the `agentic_system` bypass branch have not been exercised at
+runtime — nothing calls either yet. That is Phase 6's job.
+
+**Commit:** this commit (`feat(agentic): extract seed authoring and userId-explicit story saving, add
+system billing bypass`) — hash not knowable from inside itself; see `git log` on `feat/agentic-creator`.

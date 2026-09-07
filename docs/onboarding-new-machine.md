@@ -85,6 +85,12 @@ Bucket setup scripts and CORS policies live in [cloudflare/r2/](../cloudflare/r2
 A model row stays unavailable until every var in its `required_env_vars` is set, so missing keys degrade
 gracefully rather than crashing.
 
+**Agentic Creator** (optional — the feature stays inert while unset; see `docs/agentic-creator-*.md`)
+
+| Key | Notes |
+|---|---|
+| `AGENTIC_SYSTEM_USER_ID` | The Supabase auth user id that owns every agent-generated story. Also the only account `agentic_billing_bypass_enabled` can ever exempt from the coin reservation. No default — there is deliberately no fallback user. |
+
 **Payments — Razorpay (India checkout)**
 
 `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` — from the Razorpay dashboard. Rollout

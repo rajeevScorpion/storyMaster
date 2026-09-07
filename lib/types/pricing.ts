@@ -501,7 +501,7 @@ export interface PricingBillableActionDeniedResult {
 
 export interface PricingBillableActionBypassedResult {
   status: 'bypassed';
-  reason: 'admin_bypass';
+  reason: 'admin_bypass' | 'agentic_system';
   beatCost: number;
   coinCost: number;
 }

@@ -9,6 +9,7 @@ import {
   invalidatePricingRuntimeCacheForUser,
 } from '@/lib/pricing/runtime-context-cache';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAgenticFlags } from '@/lib/agentic/flags';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -220,6 +221,7 @@ export async function authorizeBillableAction(input: {
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
   requestedBeatCostOverride?: number | null;
+  actorKind?: 'user' | 'agentic_system';
 }): Promise<PricingBillableActionAuthorization> {
   return timeEnforcementStep(
     'pricing.authorize_billable_action',
@@ -273,6 +275,21 @@ export async function authorizeBillableAction(input: {
             pricingMarketKey: input.pricingMarketKey,
             countryCode: input.countryCode,
           });
+        }
+      }
+
+      // Ordered so the flag read only happens for an actual agent call: actorKind is
+      // checked first, so the human path does no extra I/O whatsoever.
+      if (input.actorKind === 'agentic_system') {
+        const systemUserId = process.env.AGENTIC_SYSTEM_USER_ID;
+        const { billingBypassEnabled } = await getAgenticFlags();
+        if (billingBypassEnabled && systemUserId && input.userId === systemUserId) {
+          return {
+            status: 'bypassed',
+            reason: 'agentic_system',
+            beatCost,
+            coinCost,
+          };
         }
       }
 
