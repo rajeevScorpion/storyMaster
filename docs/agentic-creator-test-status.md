@@ -149,3 +149,53 @@ because a supervisor that answers the same question differently each time cannot
   and needs a live Supabase client, which this repo has no harness for.
 - **A standing gap, unchanged:** rollback files are validated only by reading them. 106's drop order was
   reviewed by hand against the bug found in 103, not by execution.
+
+### Phase 6c — wiring, enqueue, and the Persona Test Lab (2026-09-07)
+
+| Gate | Result | Delta vs Phase 6b |
+|---|---|---|
+| `npx tsc --noEmit` | pass | none |
+| `npm run lint` | pass | none — still 0 warnings |
+| `npm test` | pass | **93 files, 747 tests** (from 92/729): +9 `selectTasksToEnqueue`, +9 `buildTestLabBrief`, +1 file |
+| `npm run build:verify` | pass | `/admin/agents/test-lab` added to the route manifest as `ƒ` (dynamic); 48 → 48 static pages |
+| `npm run test:e2e` | pass | 14 passed, **1 skipped**. Agent dev server started on 3100 and stopped afterwards |
+
+Every gate above was re-run independently after the delegated work landed, not taken on report.
+
+**New tests, and why these and not others.**
+
+- `selectTasksToEnqueue` (9 tests) pins the enqueue *eligibility policy*, which is the part worth
+  testing: a null persona is never eligible, a non-`active` persona is never eligible, ordering is
+  oldest-first with `id` as a tiebreaker so the same input always enqueues the same tasks in the same
+  order regardless of the order Postgres returned rows in, `limit <= 0` yields nothing, and the input
+  array is never mutated. The determinism test runs the same set forwards and reversed and asserts an
+  identical result — an enqueue that answers differently run to run cannot be reasoned about.
+- `buildTestLabBrief` (9 tests) covers theme present / absent / whitespace-only, a persona with no
+  speciality, a persona with no genres, and the length cap.
+
+**The skipped e2e test is the one that matters most, and it is skipped silently.**
+`e2e/agentic-admin.spec.ts` gained `/admin/agents/test-lab` this phase, but the whole spec is guarded by
+`test.skip(!EMAIL || !PASSWORD)` and **`E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` are not present in
+`.env.local` on this machine**. The suite therefore reports green while proving nothing about any
+agentic admin route. The previous session's handoff recorded this spec as passing, so the credentials
+must have been supplied transiently and are gone. Setting them restores real browser proof with no code
+change; until then, **no agentic admin surface — including the Test Lab — has been rendered in a
+browser this session**.
+
+**Not covered — be honest about this:**
+
+- **Nothing in Phase 6c has executed.** `agentic_creator_enabled` is `false` on every environment, so
+  `enqueueCommissionedTasks` has never created a run, `executeRunNow` has never claimed one, the
+  `stopAfterStage` park has never happened against a real row, and the Test Lab has never generated a
+  story. Every server function added this phase is unexercised at runtime.
+- `lib/agentic/test-lab.ts` and the new code in `lib/agentic/orchestrator.ts` carry no direct unit tests,
+  for the standing reason: both are `server-only` and need a live Supabase client, which this repo has no
+  harness for. The pure halves (`test-lab.shared.ts`, `orchestrator.shared.ts`) are where the testable
+  policy was deliberately placed.
+- **Two defects this phase were found by diff review, not by tests, and no test would have caught either.**
+  A migration-latch cross-wire that would have killed the run pipeline on a transient PostgREST error
+  (`aa950db`), and a blind read-modify-write of `agent_runs.checkpoint` that could have erased completed
+  beats or caused a second story to be saved (`3455430`). Both were silent-corruption class: correct-looking
+  output, wrong state. This is the second phase running in which review, not the suite, caught the real bugs.
+- **A standing gap, unchanged:** rollback files are validated only by reading them. No migration was added
+  this phase, so nothing new was introduced here.

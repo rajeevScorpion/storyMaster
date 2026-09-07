@@ -520,3 +520,115 @@ JSON parsing (`parseStoryBrief`/`parseSeedSourceText`) have never seen a real mo
 for correctness.
 
 **Commit:** `feat(agentic): headless story assembly pipeline` — see `git log` on `feat/agentic-creator`.
+
+---
+
+## Phase 6c — wiring, enqueue, and the Persona Test Lab (2026-09-07)
+
+Three parts, seven commits. The phase closes the last code gap between a persona and a saved draft;
+what it does not close is execution, which needs a feature flag only the owner can turn on.
+
+### Part 1 — `storyAssemblyExecutor` becomes the default executor (`5e14249`)
+
+`drainAgentRuns(budgetMs, executor?)` no longer defaults to `defaultAgentRunExecutor`. Both production
+callers (`app/api/agentic/run/route.ts`, `app/api/batch/reconcile/route.ts`) call it with no arguments,
+so this one change is what makes a drain actually generate a story instead of deferring forever.
+
+The resolution is a **lazy dynamic import** (`resolveStoryAssemblyExecutor`, memoised per process), not a
+top-level one, for two independent reasons. `story-assembly.ts` imports `appendRunEvent`, `AgentRun`,
+`StageExecutor` and `StageExecutionOutcome` back from `orchestrator.ts`, so a static import would close a
+cycle. And even without the cycle, deferring the import keeps story-assembly's heavy transitive graph — the
+Gemini proxy, `save-story`, `beat-orchestration` — out of the reconcile cron's module graph while the
+feature is off. `defaultAgentRunExecutor` stays exported as the explicit defer-every-stage executor.
+
+### Part 2 — commissioned tasks become runs (`52b46e8`, corrected by `aa950db`)
+
+`createRunForTask` had **no caller**. `enqueueCommissionedTasks()` gives it one, called from
+`drainAgentRuns` right after `reclaimStaleAgentRuns` with the same catch-and-continue posture. Eligibility
+is a pure, tested policy (`selectTasksToEnqueue` in `orchestrator.shared.ts`, 9 new tests): a persona must
+be assigned and `active`, ordering is oldest-`createdAt` first with `id` as a deterministic tiebreaker,
+capped at `MAX_RUNS_ENQUEUED_PER_DRAIN`.
+
+**The task-status writes are the load-bearing part, and were nearly missed.** `idx_agent_runs_active_task`
+only blocks a *second live* run per task. The moment a run's status leaves `('pending','processing')` while
+its task still reads `commissioned`/`assigned`, the next drain reads that task back and commissions another
+run — forever, each pass a real paid model call. A new best-effort `setTaskStatus` helper (never throws)
+flips the task to `running` when a run exists, `awaiting_review` in `persistStageAdvance` (placed there so
+both the executor-advanced and checkpoint-skip paths are covered by one line), `failed` in the permanent
+branch of `handleStageFailure`, `cancelled` in `cancelRun`, `running` in `retryRun`.
+
+`drainAgentRuns`'s claim query also gained an inner-join filter — `.select('*, agent_tasks!inner(is_test)')`
+with `.eq('agent_tasks.is_test', false)` — so the cron can never claim a Test Lab run parked for inspection.
+
+**A latch cross-wire was found in review and fixed in `aa950db`.** The enqueue read classified its
+`agent_tasks` query against **both** `isMissingRunSchemaError` (107) and `isMissingTaskSchemaError` (106),
+checking 107 first. Those two classifiers accept an **identical** code set — `42P01`, `42703`, `PGRST200`,
+`PGRST204` — and are distinguishable only by which table the failing query touched. So any schema-missing
+error on that agent_tasks-only read latched `runSchemaUnavailable`, which `drainAgentRuns` reads at its top
+and `listRuns`/`getRun` read too: an `agent_tasks` problem would have killed the whole run pipeline for the
+life of the process and blanked `/admin/agents/runs` behind a false "migration 107 is not applied" message.
+A transient PostgREST `PGRST204` after any migration is enough to trigger it. This is exactly the failure
+GOTCHAS' "latches are per migration group" section describes.
+
+### Part 3 — the Persona Test Lab (`9d96cd5`, `f1ce8e9`, corrected by `3455430`)
+
+**The safety property is structural, not a flag.** `recordStoryMemory`, `updatePersonaMemory` and
+`saveStoryForUser` are all called inside `runDraftCreatedStage` and nowhere earlier. A test run therefore
+stops **one stage short**, at `story_generated`, and touches none of them. No "test mode" boolean was
+threaded through `story-assembly.ts`, deliberately: a boolean an executor could ignore is a worse guarantee
+than a stage boundary the state machine enforces.
+
+`advanceRun` gained an optional `stopAfterStage`, checked in **both** the executor-advanced branch and the
+checkpoint-skip branch — a resumed run can find its next stage already checkpointed and would otherwise sail
+straight past the stop into `draft_created`. `executeRunNow(runId, executor, options?)` claims and advances
+one specific run inline, for the Test Lab's synchronous path; it takes the executor as a parameter so
+`orchestrator.ts` still never imports `story-assembly.ts` statically.
+
+`lib/agentic/test-lab.ts` (`server-only`) creates the `is_test` task, drives it, and assembles an inspectable
+view; `lib/agentic/test-lab.shared.ts` holds the pure brief builder (9 tests);
+`app/actions/agentic-test-lab.ts` is the admin-gated `'use server'` surface, with types re-exported rather
+than declared. `/admin/agents/test-lab` renders it: `FilterDropdown` persona picker, optional theme, an
+auto-continue loop (capped at 25 passes) because `RUN_TIME_BUDGET_MS` is 20 s against roughly 2N+2 paid
+calls, collapsible panels for every artifact, and an explicit "Create draft" promotion that flips `is_test`
+off and runs `draft_created` onward.
+
+**A second checkpoint hazard was found in review and fixed in `3455430`.** The novelty-preview cache did a
+blind read-modify-write of the entire `agent_runs.checkpoint` object from a code path that does not own the
+run's claim, merging onto a copy loaded at the top of the view build. A promotion landing between the two
+would have its work erased — `story_generated_progress` losing completed beats (so a retry re-pays for every
+one), or `draft_created` losing its `storyId` (so a **second** story is saved with a second
+`agent_story_memory` row). It now re-reads the checkpoint immediately before merging and writes only under
+`.eq('status','pending').eq('stage','story_generated')`, mutually exclusive with the
+`.eq('status','processing')` every executor writes under. The preview is also computed only while the run is
+parked, which removes the promotion race entirely. The same commit wrapped `executeRunNow`'s `advanceRun`
+call in the try/catch + `handleStageFailure` net `drainAgentRuns` already had, so a persistence failure can
+no longer strand a run as `processing` for a full `RUN_STALE_AFTER_MS`.
+
+### Files
+
+New: `lib/agentic/test-lab.ts`, `lib/agentic/test-lab.shared.ts`, `lib/agentic/test-lab.shared.test.ts`,
+`app/actions/agentic-test-lab.ts`, `app/admin/agents/test-lab/page.tsx`,
+`components/admin/agentic/TestLab.tsx`. Changed: `lib/agentic/orchestrator.ts`,
+`lib/agentic/orchestrator.shared.ts`, `lib/agentic/orchestrator.shared.test.ts`,
+`lib/agentic/story-assembly.ts`, `lib/admin/nav.ts`, `e2e/agentic-admin.spec.ts`,
+`app/admin/agents/runs/page.tsx`, `components/admin/agentic/RunMonitor.tsx`,
+`components/admin/agentic/AgenticOverview.tsx`.
+
+### Tests
+
+93 files / 747 tests (from 92/729): +9 for `selectTasksToEnqueue`, +9 for `buildTestLabBrief`. Gate:
+`npx tsc --noEmit` exit 0, `npm run lint` clean, `npm run build:verify` green with
+`/admin/agents/test-lab` in the route manifest, `npm run test:e2e` 14 passed / 1 skipped.
+
+### Not covered — be honest about this
+
+- **Nothing here has executed.** `agentic_creator_enabled` is `false` everywhere. `enqueueCommissionedTasks`
+  has never created a run, `executeRunNow` has never claimed one, and the Test Lab has never generated a
+  story. Every server function in this phase is unexercised at runtime.
+- **The Test Lab has never been opened in a browser.** `e2e/agentic-admin.spec.ts` gained its route, but the
+  spec skips: `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` are absent from `.env.local`.
+- **The billing path will fail on first contact without the bypass flag.** Each paid call costs 0.50 beats;
+  a run costs `1.5 + N` beats (5.5–9.5 for the seeded personas); the system user holds 5.00. Verified against
+  `pricing_action_costs` and `beat_grants` on dev, not assumed.
+- The two review fixes (`aa950db`, `3455430`) were found by reading diffs against the schema and the
+  checkpoint contract. **No test would have caught either**, and both were silent-corruption class.

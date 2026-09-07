@@ -6,111 +6,146 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
-## Session handoff — 2026-09-07 (end of session, 90% usage ceiling)
+## Session handoff — 2026-09-07 (Phase 6c complete; owner usage 63%)
 
-**Phase 6 is code-complete except the Test Lab UI (6c).** The pipeline compiles, is
-typechecked and is unit-tested, and **has never executed**: no live database call, no real
-Gemini response, flags off everywhere. That is the single most important fact for whoever
-picks this up — the admin pages now have browser proof, the pipeline has none.
+**Phase 6 is code-complete, including the Test Lab (6c).** The pipeline is wired end to end:
+a commissioned `agent_task` becomes an `agent_run`, `drainAgentRuns` advances it with the real
+`storyAssemblyExecutor`, and `/admin/agents/test-lab` drives the whole thing on demand against a
+persona of your choosing.
 
-### Commits this session (all on `feat/agentic-creator`, all independently verified)
+**It still has never executed.** No live database write beyond schema, no real Gemini response,
+`agentic_creator_enabled` is `false` on every environment. That remains the single most important
+fact for whoever picks this up. What changed this session is that the gap is now *only* a flag —
+there is no missing code between a persona and a saved draft.
+
+### Commits this session (all on `feat/agentic-creator`, all reviewed by diff, not by report)
 
 | SHA | What |
 |---|---|
-| `e89f9ef` | 6a — seed authoring extracted; `saveStoryForUser`; agentic billing bypass |
-| `95fe875` | Docs corrected; production promotion checklist |
-| `ce0d61a` | Pure story assembly — canonical map linking, 18 tests |
-| `8198a6c` | `clampBeatCount` deduplicated and hardened (zero-beats bug) |
-| `06b23cf` | Headless story assembly pipeline (`storyAssemblyExecutor`) |
-| `253b790` | Defensive warning at the read that guards against double-charging |
-| `a68edcd` | Admin-authenticated e2e coverage of the agentic surfaces |
+| `5e14249` | `storyAssemblyExecutor` is `drainAgentRuns`'s default, via a lazy dynamic import |
+| `52b46e8` | Commissioned tasks become runs; task lifecycle follows; test runs excluded from the cron |
+| `aa950db` | **Review fix** — the enqueue read must never latch migration 107 |
+| `1b3f424` | **Review fix** — the Agents overview stopped listing shipped phases as missing |
+| `9d96cd5` | Persona Test Lab server half, parked one stage before draft creation |
+| `3455430` | **Review fix** — guarded the test lab's checkpoint write; netted `executeRunNow` |
+| `f1ce8e9` | Persona Test Lab admin surface |
 
 Gate at handoff, re-run independently rather than taken on report:
-**92 files / 729 tests passing, `npx tsc --noEmit` exit 0, `npm run lint` clean.**
+**93 files / 747 tests passing, `npx tsc --noEmit` exit 0, `npm run lint` clean,
+`npm run build:verify` green (`/admin/agents/test-lab` present as a dynamic route), and
+`npm run test:e2e` 14 passed / 1 skipped.** The skip is `e2e/agentic-admin.spec.ts` — see below.
 
-### THE NEXT STEP — Phase 6c
+### THE NEXT STEP — run it
 
-Two pieces remain before the vertical slice is provable:
+Everything below is blocked on flags only. In order:
 
-1. **Wire `storyAssemblyExecutor` into `drainAgentRuns`.** It is exported from
-   `lib/agentic/story-assembly.ts` but deliberately not yet the default executor.
-   Keep `defaultAgentRunExecutor` exported (the deferral path and tests want it).
-2. **`createRunForTask()` still has no caller** — nothing turns a commissioned
-   `agent_task` into an `agent_run`, so the pipeline has no input. At drain time,
-   create runs for tasks in status `commissioned`/`assigned` with no live run.
-   A duplicate insert raising `23505` is the partial unique index
-   (`idx_agent_runs_active_task`) doing its job — swallow it as a benign race, never
-   surface it as an error. Skip `is_test = true`; only `status = 'active'` personas.
-3. **`/admin/agents/test-lab`** — pick a persona, run the pipeline with
-   `agent_tasks.is_test = true`, show brief / source text / seed plan / resolved
-   config / model routing / both novelty verdicts. Test runs must **never** reach
-   `agent_story_memory` or the gallery. A separate explicit button promotes to a draft.
+1. **Turn on `agentic_creator_enabled`** on dev, from `/admin/agents`.
+2. **Turn on `agentic_billing_bypass_enabled` too — this is not optional in practice.**
+   Every paid call in this pipeline costs **0.50 beats** (`preview_seed_plan`,
+   `start_story_initial_beat_prompt_only`, `continue_story_new_beat_prompt_only` — verified
+   against `pricing_action_costs` on dev). A run costs `1.5 + N` beats for an N-beat story;
+   persona `beat_count_min` ranges 4-8, so **5.5 to 9.5 beats per run**. The system user has
+   **one grant with 5.00 beats remaining**. Without the bypass (or a top-up to ~20 beats)
+   every run dies on `insufficient_balance` near the end, after real Gemini spend on the calls
+   that already succeeded. Recoverable — the completed beats are checkpointed, so a top-up and
+   retry resumes rather than re-paying — but it presents as a pipeline bug and is not one.
+3. **Run `/admin/agents/test-lab`** against a persona. Then verify against the database:
+
+```sql
+select id, stage, status, attempt_count, jsonb_object_keys(checkpoint) from public.agent_runs;
+select stage, level, message, created_at from public.agent_run_events order by created_at;
+select action_key, activity_key, phase from public.ai_cost_events where activity_key = 'agentic_creator';
+select count(*) from public.agent_story_memory;   -- MUST still be 0 before promotion
+select count(*) from public.image_generation_jobs where created_at > now() - interval '1 hour';  -- expect 0
+```
+
+4. **Then press "Create draft"** and re-check: `agent_story_memory` gains exactly one row,
+   `agent_runs.story_id` is stamped, and the task moves to `awaiting_review`.
 
 ### Things that will bite you if you do not know them
 
-- **`saveStory` cannot be called headlessly.** It resolves the user from a cookie
-  session and throws `'Not authenticated'` in a worker. Use `saveStoryForUser` from
-  `lib/story/save-story.ts` with `createAdminClient()`. **Never export
-  `saveStoryForUser` from a `'use server'` file** — it takes a caller-supplied
-  `userId`, so as a server action any browser could save a story as another user.
-- **The double-charging guard is load-bearing and fragile.** `story_generated` makes
-  ~2N+2 paid calls for N beats. It persists progress to `agent_runs.checkpoint` after
-  every beat AND mutates `run.checkpoint` in place, because `advanceRun` reads that
-  field after the executor returns and would otherwise overwrite the progress with a
-  stale value. Hoisting that read above the executor call silently restores
-  double-charging — correct stories, duplicated spend, no error. See the comment at
-  `lib/agentic/orchestrator.ts` in the `outcome.kind === 'advanced'` branch.
-  Verified: `returnRunToPending` and `handleStageFailure` never write `checkpoint`, so
-  progress survives both the time-budget deferral and a failed-then-retried run.
-- **Never return `deferred` for the narration/evaluation stages.** Deferring returns
-  the run to `pending` without consuming an attempt, so it would loop forever and
-  never reach `awaiting_review`.
-- **`AGENTIC_SYSTEM_USER_ID` is set on dev only.** Unset or mismatched, the billing
-  bypass stops matching and runs are *denied* — fail-closed, but it presents as
-  "agent runs mysteriously fail", not as a config error.
+- **An admin can read an agent draft but cannot edit or continue it.** `stories` RLS on dev:
+  SELECT is permissive (`is_archived = false AND auth.uid() IS NOT NULL`), UPDATE is owner-only
+  (`auth.uid() = user_id`). Agent drafts are owned by `AGENTIC_SYSTEM_USER_ID`, so `/story/[id]`
+  renders for an admin and then refuses every write. **The plan's Phase 6 acceptance criterion —
+  "it renders, is editable, continues normally" — is therefore only half reachable.**
+  This lands squarely on **Phase 9**, which plans to "reuse the existing story editor at
+  `/story/[id]`" for reviewers: reviewers will not own agent stories either, so Phase 9 needs a
+  reviewer RLS policy or an admin-client server-action path. `persistence.ts`'s existing
+  `serverAuth` escape hatch does **not** solve this — it is scoped to worker media-state patches.
+- **The two schema-missing classifiers are code-identical.** `isMissingRunSchemaError` (107) and
+  `isMissingTaskSchemaError` (106) both accept `42P01`, `42703`, `PGRST200`, `PGRST204`. They are
+  told apart **only by which table the failing query touched** — never by the error itself.
+  Classify by the query, not by trying both. `aa950db` fixed exactly this: an `agent_tasks`-only
+  read was latching the 107 latch, which would have killed the whole run pipeline and blanked
+  `/admin/agents/runs` behind a false "migration 107 is not applied" message.
+- **The task-status writes are load-bearing, not bookkeeping.** `idx_agent_runs_active_task` only
+  blocks a *second live* run per task. Leave a task `commissioned`/`assigned` after its run stops
+  being live and the next drain commissions another one — forever, each pass a paid model call.
+  Flipping the task to `running` the moment a run exists is what makes enqueue one-shot.
+- **The double-charging guard is still load-bearing and fragile.** Unchanged from the last
+  session: `story_generated` persists progress after every beat AND mutates `run.checkpoint` in
+  place, because `advanceRun` reads that field after the executor returns. Hoisting that read
+  above the executor call silently restores double-charging. See `lib/agentic/orchestrator.ts`.
+  A new instance of the same hazard was found and fixed this session in `3455430`: the Test Lab's
+  novelty-preview cache did a blind read-modify-write of the whole `checkpoint` object from a path
+  that does not own the run's claim. It now re-reads immediately before merging and writes only
+  under `.eq('status','pending').eq('stage','story_generated')`.
+- **`saveStory` cannot be called headlessly** and `saveStoryForUser` must never be exported from a
+  `'use server'` file. Unchanged; see `lib/story/save-story.ts`.
+- **`AGENTIC_SYSTEM_USER_ID` is dev-only.** Verified this session: it resolves to a real
+  `auth.users` row owning zero stories.
+
+### Verified by query this session, so nobody re-derives it
+
+- `idx_agent_runs_active_task` on dev is
+  `UNIQUE (task_id) WHERE status = ANY (ARRAY['pending','processing'])` — unique *and* partial,
+  so both halves of the no-double-run guarantee hold. **This closes the old open item asking for
+  `docs/snippets/107-verify-run-dedup.sql` to be run by hand**; the index definition proves what
+  that script would demonstrate. `idx_agent_tasks_queue` is `(status, created_at) WHERE
+  is_test = false`, which is exactly the shape `enqueueCommissionedTasks` queries on.
+- All five agentic `TaskKey`s have real `DEFAULT_MODELS` entries, so model resolution will not be
+  the first thing to fail.
+- `agent_personas.status` allows `draft/testing/active/paused/archived`. The Test Lab accepts
+  everything but `archived` (so it is usable today, when all 15 seeds are `draft`); the cron
+  enqueue requires `active`. A paused persona can be tested but never auto-scheduled — deliberate.
+- Dev state at handoff: 15 personas (all `draft`), 0 tasks, 0 runs, 0 story-memory rows,
+  0 novelty checks, all six agentic flags `false`.
 
 ### Known limits accepted this session, not defects
 
-- Agent spend reuses existing `PricingActionKey`s (`preview_seed_plan`,
-  `start_story_initial_beat_prompt_only`), so it is indistinguishable from human spend
-  *by action key*. `activity_key = 'agentic_creator'` does separate it, so `/admin/cost`
-  stays accurate. Revisit in Phase 12.
-- Checkpoints store full `StoryBeat` objects. Safe now — this stage emits only text
-  prompts, never image bytes. **If a future phase moves portrait generation into this
-  stage, beats must be trimmed first** or the row size becomes a real problem.
-- The five agentic TaskKeys are absent from every admin model editor (they are excluded
-  from `PromptTaskKey`). Persona `model_overrides` is the only working lever.
+- **`e2e/agentic-admin.spec.ts` skips on this machine.** `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD`
+  are **not** in `.env.local`, so the admin-authenticated spec never runs — including the
+  `/admin/agents/test-lab` route just added to it. The previous session's handoff reported this
+  spec green; it must have supplied the credentials transiently. The spec is designed to skip
+  rather than fail, so this is silent. **The Test Lab has never been opened in a browser.**
+- The Test Lab's post-generation novelty check is a *preview*. Promotion runs the check again
+  inside `draft_created`, so the economy-tier adjudicator can be paid for twice in the ambiguous
+  band. Deliberate: cheap, and showing both verdicts before promotion is the point of the tool.
+- Agent spend still reuses existing `PricingActionKey`s, so it is indistinguishable from human
+  spend *by action key*; `activity_key = 'agentic_creator'` is what separates it. Revisit in
+  Phase 12.
+- Checkpoints store full `StoryBeat` objects. Safe while this stage emits only text prompts.
+  **If a future phase moves portrait generation here, beats must be trimmed first.**
+- `agent_schedules` (migration 107) is still unused. Enqueue ignores cadence entirely and simply
+  drains whatever is commissioned. Wiring schedules to enqueue is unclaimed work.
 
 ### Still open, none blocking
 
-- Run `docs/snippets/107-verify-run-dedup.sql` by hand — the dedup index half of the
-  no-double-charge guarantee is argued, not proven.
-- ~~No agentic admin surface has ever been opened in a browser.~~ **Done** — see
-  `e2e/agentic-admin.spec.ts` (`a68edcd`). The plan's recorded fact that "e2e can't sign
-  in as admin" is **false**: Playwright signs in through the normal AuthDialog and reaches
-  every agentic route. Verified on dev — the off-state card, the master kill switch, all 15
-  seed personas with their real languages/age groups/Draft status, and tasks/runs/routing
-  rendering without an error boundary.
-  Set `E2E_ADMIN_EMAIL`/`E2E_ADMIN_PASSWORD` in `.env.local` to run it; without them it
-  **skips**, so machines with no admin account stay green. The account must be the one whose
-  id equals `ADMIN_USER_ID` — `verifyAdmin()` is a single id comparison, not a role lookup.
-  **This unblocks browser verification for every later admin surface too** (6c's Test Lab,
-  Phase 9's reviewer queue, Phase 10's image permissions), all of which were otherwise going
-  to ship unverified on the same false assumption.
 - Run the memory backfill on staging (`runStoryMemoryBackfillBatch()`, needs
-  `agentic_creator_enabled` on) so the first agent story is checked against a real
-  catalogue rather than an empty table.
-- Production: see the promotion checklist in `docs/agent-context/PROJECT_STATE.md`.
-  It needs its **own** `AGENTIC_SYSTEM_USER_ID` (a different UUID from dev's), not just
-  the migrations. `CRON_SECRET` needs no action.
+  `agentic_creator_enabled` on) so the first agent story is checked against a real catalogue
+  rather than an empty table.
+- Production: see the promotion checklist in `docs/agent-context/PROJECT_STATE.md`. It needs its
+  **own** `AGENTIC_SYSTEM_USER_ID` (a different UUID from dev's). `CRON_SECRET` needs no action.
 
 ---
 
 ## Where we are
 
-- **Phase:** 6a and 6b complete. Phases 1-5 shipped in full. The headless pipeline exists and
-  compiles; **it has never run.** Phase 6c (wiring + Test Lab) is next and is what makes the
-  vertical slice provable.
+- **Phase:** Phase 6 complete (6a, 6b and 6c). Phases 1-5 shipped in full. The headless pipeline
+  exists, is wired into the drain, has an enqueue path feeding it, and has a Test Lab to drive it
+  on demand; **it has still never run.** Only a feature flag stands between here and the first
+  real story. Phase 7 (independent evaluation) is next, but running the slice comes first.
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
@@ -154,7 +189,9 @@ explicitly rather than incidentally — that is why the three empty states are d
 
 ## Next step
 
-**Phase 6b — headless story assembly.** See "What Phase 6a shipped" below for the seams it plugs into.
+**Run the vertical slice, then re-plan Phase 7.** The full instructions, the flags to turn on, the
+reason the billing bypass is not optional, and the SQL to verify each claim are all in the session
+handoff at the top of this file. Nothing here needs more code first.
 
 ### Superseded: Phase 5b (complete, landed at `78e8aaa`)
 
@@ -236,16 +273,19 @@ Still worth doing, neither blocking:
 
 ## Blockers
 
-None blocking work. Two open items:
+None blocking work. Three open items:
 
 - **Production has none of 102-107, and needs two more things besides the migrations.** See the
   "Promoting the agentic system to production" checklist in `docs/agent-context/PROJECT_STATE.md`:
   prod needs its own `AGENTIC_SYSTEM_USER_ID` auth user (a *different* UUID from dev's, set as a Vercel
   env var), while `CRON_SECRET` needs no action. Nothing on prod changes until then, by design.
-- **No agentic UI has been browser-verified yet.** Staging has real persona rows, so `/admin/agents` and
-  `/admin/agents/personas` are worth a manual pass with an admin session — filters, the editor drawer,
-  clone, and the toggle round-trip. `/admin/agents/tasks` needs migration 106 first to show anything but
-  its empty state. Playwright cannot cover any of this; it runs signed-out.
+- **`e2e/agentic-admin.spec.ts` currently skips**, because `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD`
+  are not set in `.env.local`. It is the vehicle for browser proof of every agentic admin surface,
+  including the newly added `/admin/agents/test-lab`, so until those are set the Test Lab has never
+  been opened in a browser. Setting them turns the proof back on with no code change.
+- **The pipeline has never executed.** `agentic_creator_enabled` is `false` everywhere, which is the
+  fail-closed design working as intended, not a defect. See the handoff at the top for exactly what
+  to turn on and what to check afterwards.
 
 ## Active flags
 

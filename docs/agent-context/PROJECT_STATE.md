@@ -373,6 +373,18 @@ Work that is built and merged but has **not** been QA'd in a browser. The owner 
   actually arrives over Realtime and not by polling fallback.
 - **`@google/genai` 2.x live smoke** — confirm the legacy Interactions 400 warning is gone and stateful
   continuity actually carries via `previous_interaction_id`.
+- **The Agentic Creator pipeline has never executed** (branch `feat/agentic-creator`). As of Phase 6c it is
+  wired end to end — a commissioned `agent_task` becomes an `agent_run`, `drainAgentRuns` advances it with
+  the real `storyAssemblyExecutor`, and `/admin/agents/test-lab` drives it on demand — but
+  `agentic_creator_enabled` is `false` on every environment, so no server function in Phases 5-6 has run
+  against a live row or a real Gemini call. Turning that flag on (plus `agentic_billing_bypass_enabled`, or
+  a top-up: each paid call costs 0.50 beats, a run costs `1.5 + N`, and the system user holds 5.00) is the
+  whole remaining gap. Verification SQL is in the handoff at the top of
+  [docs/agentic-creator-working-memory.md](../agentic-creator-working-memory.md).
+- **No agentic admin surface has been browser-verified since `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD` went
+  missing from `.env.local`.** `e2e/agentic-admin.spec.ts` covers all six routes including
+  `/admin/agents/test-lab`, but it **skips** without those two variables and the suite still reports green.
+  Setting them restores the proof with no code change.
 
 That build backlog is cleared: `npm run build:verify` builds into its own directory, so the dev server can no
 longer block it, and a full production build now runs as part of the standard gate. Browser QA above is
@@ -387,6 +399,18 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 ## Deferred / known gaps
 
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
+
+**Agentic Creator (branch `feat/agentic-creator`)**
+- **A reviewer cannot edit an agent-generated draft, and Phase 9 assumes they can.** `stories` RLS allows
+  any signed-in user to SELECT a non-archived story but restricts UPDATE to `auth.uid() = user_id`. Agent
+  drafts are owned by `AGENTIC_SYSTEM_USER_ID`, so `/story/[id]` renders for an admin and then refuses every
+  write. Phase 9 plans to "reuse the existing story editor at `/story/[id]`" for reviewers — it needs either
+  a reviewer RLS policy or an admin-client server-action path first. `persistence.ts`'s `serverAuth` escape
+  hatch does not cover this; it is scoped to worker media-state patches.
+- **`agent_schedules` (migration 107) is unused.** `enqueueCommissionedTasks` ignores cadence entirely and
+  drains whatever is commissioned. Wiring schedules into enqueue is unclaimed work, not an oversight.
+- **Agent spend is indistinguishable from human spend by action key.** It reuses `preview_seed_plan` and the
+  `*_prompt_only` beat keys; only `activity_key = 'agentic_creator'` separates it. Revisit in Phase 12.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
