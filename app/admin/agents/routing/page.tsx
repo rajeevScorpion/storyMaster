@@ -94,15 +94,25 @@ export default async function AgenticRoutingPage() {
         </div>
       </section>
 
-      <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-        <p className="text-sm text-neutral-300">
-          To change a task&apos;s model or temperature, use the model editor rather than editing anything here.
+      <section className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.04] p-5">
+        <p className="text-sm font-medium text-amber-200">
+          These five tasks are not editable in the Story Playground.
+        </p>
+        <p className="mt-2 text-sm text-neutral-300">
+          The playground&apos;s task list is filtered to tasks whose prompt comes from an admin-editable
+          template. All five agentic tasks build their prompts in code instead, so they are deliberately
+          excluded from that registry &mdash; and excluded from its model editor along with it.
+        </p>
+        <p className="mt-2 text-sm text-neutral-300">
+          Until a dedicated editor exists, the only way to change the model for one of these tasks is a
+          persona&apos;s own <code className="text-neutral-100">model_overrides</code>, set per persona in
+          the Personas catalogue. Everything else falls back to the compiled defaults shown above.
         </p>
         <Link
-          href="/admin/story-playground"
+          href="/admin/agents/personas"
           className="mt-3 inline-flex items-center gap-2 rounded-xl border border-white/10 bg-neutral-800 px-4 py-2 text-sm font-medium text-neutral-200 transition-colors hover:bg-neutral-700"
         >
-          Open the model editor
+          Open the persona catalogue
         </Link>
       </section>
     </div>

@@ -6,56 +6,22 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
-## Session handoff — 2026-09-07, read before anything else
+## Session handoff — 2026-09-07
 
-**Phase 5b was delegated to a subagent and was still running when the session hit its usage
-ceiling (85%).** It had written nothing to disk at that point. Before doing anything else:
-
-```
-git log --oneline -5
-git status --short
-```
-
-- If you see a commit `feat(agentic): agent worker route, scheduler integration and run monitor`,
-  5b landed. **Verify it independently** — re-run `npx tsc --noEmit`, `npm test` and `npm run lint`
-  yourself rather than trusting any report, and check the reconcile isolation described below.
-- If you do NOT see it, **5b was lost and must be rebuilt from scratch.** Nothing is half-done;
-  the branch is clean at `cac488a` and everything below it is verified. Its full brief is in
-  "Next step".
-
-### The one edit in 5b that carries real risk
-
-`app/api/batch/reconcile/route.ts` is live, runs on Vercel's single daily cron, and reconciles
-narration and image batch work that real users depend on. The agentic `drainAgentRuns()` call
-added there **must be wrapped so any throw, rejection or timeout is caught and swallowed** — the
-existing reconcile work has to complete whether the agentic call succeeds, fails, or its tables
-do not exist. If 5b landed, read that call site and confirm this before trusting it. It is the
-one failure in this phase that no test would catch and that would hurt real users.
-
-### Verification that is now possible but has not been done
-
-**Migration 107 was applied to dev on 2026-09-07** — ledger recorded, three tables empty, RLS on,
-and `idx_agent_runs_active_task` present with the correct partial predicate (verified by query).
-
-**Still not demonstrated: the dedup index itself.** The "a retry never pays twice" guarantee has
-two halves — the `checkpoint` contract, which is unit-tested, and this partial unique index, which
-no unit test can reach because it is a Postgres constraint rather than TypeScript. The read-only
-MCP connection cannot write, so this has to be run by hand:
-
-**`docs/snippets/107-verify-run-dedup.sql`** — run it in the Supabase SQL editor. It rolls itself
-back and leaves nothing behind. It checks both directions: a second *live* run for the same task
-must fail with `23505`, and a *finished* run must not block a new one (or a failed task could
-never be retried). Until someone runs it, the index half of the guarantee is argued, not proven.
+**Phase 5b landed** at `78e8aaa`, after the session had already hit its 85% delegation ceiling.
+Verified independently (not taken on report): 91 files / 715 tests, tsc clean, lint clean.
+Migrations 102-107 are **all applied on dev**, none on prod.
 
 ### Working rules the owner set this session
 
 - **Stop delegating at 90% of the 5-hour session usage.** Between 75% and 90%: finish what is in
   flight, start nothing new, write the handoff. Ask the owner for a reading at phase boundaries —
   no tool can read that meter.
-- **Every delegation must commit before reporting.** Work held only in an agent's context is lost
-  when it dies, which has now happened twice.
-- Scope each delegation to one committable unit. Phases 4 and 5 were each split in two for this
-  reason, and it worked — 4a, 4b and 5a all landed intact.
+- **Every delegation must commit before reporting.** Work held only in an agent's context dies
+  with it. Phases 4 and 5 were each split into two committable units for this reason; all four
+  landed intact.
+- Verify every delegated phase by re-running the gate yourself. Agent-reported numbers have been
+  accurate so far, but three real defects were caught by reading the code afterwards.
 
 ---
 

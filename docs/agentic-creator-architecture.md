@@ -146,6 +146,14 @@ already present. That is the whole idempotency contract for paid calls.
   rows also carry `moderation_status = 'none'` rather than `'approved'`, and real `genre` values include
   `'reel'`, which is outside `STORY_GENRES` — coverage tolerates off-taxonomy values, proposals never emit
   them.
+- **The five agentic TaskKeys have no admin model editor.** The plan recorded "adding a TaskKey
+  gives you the admin editor for free" as a verified fact. It is false for these tasks:
+  `PlaygroundStudio.tsx` is the only component that renders `TASK_DEFINITIONS`, and it filters its
+  task list through `isPromptTaskKey`. All five agentic keys are deliberately excluded from
+  `PromptTaskKey` because they build prompts in code rather than from an admin template — which
+  excludes them from the model editor at the same time. Today the only lever is a persona's
+  `model_overrides`; everything else uses the compiled `DEFAULT_MODELS`. `/admin/agents/routing`
+  states this plainly rather than linking to a page that does not list them.
 - **The task pool is unpaginated.** `listAgentTasks` selects every matching row; the admin page's language
   and age-group filters are client-side and correct only while the pool returns whole.
 - **Urdu has no narration voice.** Story text supports it; TTS does not. Seed personas avoid it.
