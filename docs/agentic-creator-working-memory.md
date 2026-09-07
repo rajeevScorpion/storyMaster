@@ -6,30 +6,99 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
-## Session handoff — 2026-09-07
+## Session handoff — 2026-09-07 (end of session, 90% usage ceiling)
 
-**Phase 5b landed** at `78e8aaa`, after the session had already hit its 85% delegation ceiling.
-Verified independently (not taken on report): 91 files / 715 tests, tsc clean, lint clean.
-Migrations 102-107 are **all applied on dev**, none on prod.
+**Phase 6 is code-complete except the Test Lab UI (6c).** Nothing has ever executed:
+no live database call, no real Gemini response, flags off everywhere. That is the
+single most important fact for whoever picks this up.
 
-### Working rules the owner set this session
+### Commits this session (all on `feat/agentic-creator`, all independently verified)
 
-- **Stop delegating at 90% of the 5-hour session usage.** Between 75% and 90%: finish what is in
-  flight, start nothing new, write the handoff. Ask the owner for a reading at phase boundaries —
-  no tool can read that meter.
-- **Every delegation must commit before reporting.** Work held only in an agent's context dies
-  with it. Phases 4 and 5 were each split into two committable units for this reason; all four
-  landed intact.
-- Verify every delegated phase by re-running the gate yourself. Agent-reported numbers have been
-  accurate so far, but three real defects were caught by reading the code afterwards.
+| SHA | What |
+|---|---|
+| `e89f9ef` | 6a — seed authoring extracted; `saveStoryForUser`; agentic billing bypass |
+| `95fe875` | Docs corrected; production promotion checklist |
+| `ce0d61a` | Pure story assembly — canonical map linking, 18 tests |
+| `8198a6c` | `clampBeatCount` deduplicated and hardened (zero-beats bug) |
+| `06b23cf` | Headless story assembly pipeline (`storyAssemblyExecutor`) |
+| `253b790` | Defensive warning at the read that guards against double-charging |
+
+Gate at handoff, re-run independently rather than taken on report:
+**92 files / 729 tests passing, `npx tsc --noEmit` exit 0, `npm run lint` clean.**
+
+### THE NEXT STEP — Phase 6c
+
+Two pieces remain before the vertical slice is provable:
+
+1. **Wire `storyAssemblyExecutor` into `drainAgentRuns`.** It is exported from
+   `lib/agentic/story-assembly.ts` but deliberately not yet the default executor.
+   Keep `defaultAgentRunExecutor` exported (the deferral path and tests want it).
+2. **`createRunForTask()` still has no caller** — nothing turns a commissioned
+   `agent_task` into an `agent_run`, so the pipeline has no input. At drain time,
+   create runs for tasks in status `commissioned`/`assigned` with no live run.
+   A duplicate insert raising `23505` is the partial unique index
+   (`idx_agent_runs_active_task`) doing its job — swallow it as a benign race, never
+   surface it as an error. Skip `is_test = true`; only `status = 'active'` personas.
+3. **`/admin/agents/test-lab`** — pick a persona, run the pipeline with
+   `agent_tasks.is_test = true`, show brief / source text / seed plan / resolved
+   config / model routing / both novelty verdicts. Test runs must **never** reach
+   `agent_story_memory` or the gallery. A separate explicit button promotes to a draft.
+
+### Things that will bite you if you do not know them
+
+- **`saveStory` cannot be called headlessly.** It resolves the user from a cookie
+  session and throws `'Not authenticated'` in a worker. Use `saveStoryForUser` from
+  `lib/story/save-story.ts` with `createAdminClient()`. **Never export
+  `saveStoryForUser` from a `'use server'` file** — it takes a caller-supplied
+  `userId`, so as a server action any browser could save a story as another user.
+- **The double-charging guard is load-bearing and fragile.** `story_generated` makes
+  ~2N+2 paid calls for N beats. It persists progress to `agent_runs.checkpoint` after
+  every beat AND mutates `run.checkpoint` in place, because `advanceRun` reads that
+  field after the executor returns and would otherwise overwrite the progress with a
+  stale value. Hoisting that read above the executor call silently restores
+  double-charging — correct stories, duplicated spend, no error. See the comment at
+  `lib/agentic/orchestrator.ts` in the `outcome.kind === 'advanced'` branch.
+  Verified: `returnRunToPending` and `handleStageFailure` never write `checkpoint`, so
+  progress survives both the time-budget deferral and a failed-then-retried run.
+- **Never return `deferred` for the narration/evaluation stages.** Deferring returns
+  the run to `pending` without consuming an attempt, so it would loop forever and
+  never reach `awaiting_review`.
+- **`AGENTIC_SYSTEM_USER_ID` is set on dev only.** Unset or mismatched, the billing
+  bypass stops matching and runs are *denied* — fail-closed, but it presents as
+  "agent runs mysteriously fail", not as a config error.
+
+### Known limits accepted this session, not defects
+
+- Agent spend reuses existing `PricingActionKey`s (`preview_seed_plan`,
+  `start_story_initial_beat_prompt_only`), so it is indistinguishable from human spend
+  *by action key*. `activity_key = 'agentic_creator'` does separate it, so `/admin/cost`
+  stays accurate. Revisit in Phase 12.
+- Checkpoints store full `StoryBeat` objects. Safe now — this stage emits only text
+  prompts, never image bytes. **If a future phase moves portrait generation into this
+  stage, beats must be trimmed first** or the row size becomes a real problem.
+- The five agentic TaskKeys are absent from every admin model editor (they are excluded
+  from `PromptTaskKey`). Persona `model_overrides` is the only working lever.
+
+### Still open, none blocking
+
+- Run `docs/snippets/107-verify-run-dedup.sql` by hand — the dedup index half of the
+  no-double-charge guarantee is argued, not proven.
+- **No agentic admin surface has ever been opened in a browser.** Playwright runs
+  signed-out and cannot cover it.
+- Run the memory backfill on staging (`runStoryMemoryBackfillBatch()`, needs
+  `agentic_creator_enabled` on) so the first agent story is checked against a real
+  catalogue rather than an empty table.
+- Production: see the promotion checklist in `docs/agent-context/PROJECT_STATE.md`.
+  It needs its **own** `AGENTIC_SYSTEM_USER_ID` (a different UUID from dev's), not just
+  the migrations. `CRON_SECRET` needs no action.
 
 ---
 
 ## Where we are
 
-- **Phase:** 6a complete. Phases 1-5 shipped in full; 6a laid the groundwork for headless story
-  generation. **Phase 6b — `lib/agentic/story-assembly.ts`, the headless seed-story pipeline — is
-  the next step, and it is the phase that proves the architecture.**
+- **Phase:** 6a and 6b complete. Phases 1-5 shipped in full. The headless pipeline exists and
+  compiles; **it has never run.** Phase 6c (wiring + Test Lab) is next and is what makes the
+  vertical slice provable.
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
