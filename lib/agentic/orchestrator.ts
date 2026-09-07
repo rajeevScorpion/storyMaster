@@ -918,7 +918,28 @@ export async function executeRunNow(
     claimed_at: new Date().toISOString(),
   });
 
-  await advanceRun(admin, run, executor, options?.stopAfterStage);
+  // Same safety net drainAgentRuns wraps its own advanceRun call in, and for the same
+  // reason. advanceRun already converts an executor THROW into handleStageFailure
+  // internally, but a failure of its own persistence (persistStageAdvance's update)
+  // still propagates. Without this, that throw would escape while the run is still
+  // 'processing', leaving it stuck and unclaimable for a full RUN_STALE_AFTER_MS
+  // (10 minutes) until reclaimStaleAgentRuns hands it back -- a bad failure mode
+  // anywhere, and a particularly bad one for the Persona Test Lab, whose entire job
+  // is to make a run's failures legible immediately. Routing it through
+  // handleStageFailure instead records the error on the run and in its event
+  // timeline, where the admin can actually see it.
+  try {
+    await advanceRun(admin, run, executor, options?.stopAfterStage);
+  } catch (error) {
+    console.error(`Agent run ${run.id} threw while advancing (executeRunNow):`, error instanceof Error ? error.stack ?? error.message : error);
+    await handleStageFailure(
+      admin,
+      run,
+      error instanceof Error ? error.message : 'Unknown orchestrator error.',
+      undefined,
+      error
+    ).catch(() => {});
+  }
 
   const { data: freshData, error: freshError } = await admin.from('agent_runs').select('*').eq('id', runId).maybeSingle();
   if (freshError) {

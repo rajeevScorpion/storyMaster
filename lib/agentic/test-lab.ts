@@ -43,7 +43,7 @@ import {
   type AgentRun,
   type AgentRunEvent,
 } from '@/lib/agentic/orchestrator';
-import type { AgentRunStage, AgentRunStatus } from '@/lib/agentic/orchestrator.shared';
+import type { AgentRunCheckpoint, AgentRunStage, AgentRunStatus } from '@/lib/agentic/orchestrator.shared';
 import { getAgentTask, type AgentTask } from '@/lib/agentic/supervisor';
 import { isMissingTaskSchemaError } from '@/lib/agentic/supervisor.shared';
 import {
@@ -191,11 +191,44 @@ async function computeAndCachePostNoveltyPreview(
 
     const preview: TestLabNoveltyPreview = { verdict: result.verdict, score: result.score, adjudicated: result.adjudicated };
 
-    // Best-effort cache write -- a failure here must not fail the view build,
-    // it just means the next read tries again (and pays for another call).
-    const nextCheckpoint = { ...run.checkpoint, [TEST_LAB_POST_NOVELTY_CHECKPOINT_KEY]: preview };
-    const { error } = await admin.from('agent_runs').update({ checkpoint: nextCheckpoint }).eq('id', run.id);
-    if (!error) run.checkpoint = nextCheckpoint;
+    // Best-effort cache write -- a failure here must not fail the view build, it
+    // just means the next read tries again (and pays for another call).
+    //
+    // BOTH guards below are load-bearing, and neither is paranoia. This is a
+    // read-modify-write of the WHOLE agent_runs.checkpoint object from a code path
+    // that does not own the run's claim, so it is exactly the shape of write that
+    // can silently erase another writer's progress -- the failure the orchestrator
+    // comments call out as "correct stories, duplicated spend, no error".
+    //
+    //  1. The checkpoint is re-read HERE, immediately before the merge, rather than
+    //     spread from the `run` object this function was handed. That object was
+    //     loaded at the top of the view build, and a promotion (or any executeRunNow
+    //     pass) between then and now writes new keys into the same column --
+    //     story_generated_progress's completed beats, or draft_created's storyId.
+    //     Merging onto the stale copy would drop them, and a retry would re-pay for
+    //     every beat already generated, or save a SECOND story.
+    //  2. The update is conditional on the run still being parked exactly where the
+    //     preview is meaningful (stage 'story_generated', status 'pending'). An
+    //     executor writes its own progress with .eq('status', 'processing'), so the
+    //     two conditions are mutually exclusive: once anything has claimed this run,
+    //     this write matches zero rows and does nothing at all, rather than racing.
+    const { data: freshRow, error: rereadError } = await admin
+      .from('agent_runs')
+      .select('checkpoint')
+      .eq('id', run.id)
+      .maybeSingle();
+    if (rereadError || !freshRow) return preview;
+
+    const freshCheckpoint = (freshRow.checkpoint ?? {}) as AgentRunCheckpoint;
+    const nextCheckpoint = { ...freshCheckpoint, [TEST_LAB_POST_NOVELTY_CHECKPOINT_KEY]: preview };
+    const { data: written, error } = await admin
+      .from('agent_runs')
+      .update({ checkpoint: nextCheckpoint })
+      .eq('id', run.id)
+      .eq('status', 'pending')
+      .eq('stage', 'story_generated')
+      .select('id');
+    if (!error && written && written.length > 0) run.checkpoint = nextCheckpoint;
 
     return preview;
   } catch (error) {
@@ -233,8 +266,14 @@ async function buildTestLabRunView(
   const readyToPromote = run.stage === 'story_generated' && run.status === 'pending';
   const needsContinue = run.status === 'pending' && !readyToPromote;
 
+  // Computed ONLY while the run is parked awaiting promotion, never merely because
+  // the beats happen to be complete. After promotion the run is moving again, and
+  // both the model call and the cache write below would be racing draft_created's
+  // own writes to this same row for a verdict draft_created independently computes
+  // anyway (see runDraftCreatedStage). A preview already cached while parked stays
+  // readable here afterwards, which is the case that matters for the UI.
   let postNoveltyPreview = (run.checkpoint[TEST_LAB_POST_NOVELTY_CHECKPOINT_KEY] as TestLabNoveltyPreview | undefined) ?? null;
-  if (!postNoveltyPreview && brief && beats.length > 0 && beats.length >= targetBeatCount) {
+  if (!postNoveltyPreview && readyToPromote && brief && beats.length > 0 && beats.length >= targetBeatCount) {
     postNoveltyPreview = await computeAndCachePostNoveltyPreview(admin, run, task, persona, brief, beats);
   }
 
