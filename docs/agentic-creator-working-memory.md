@@ -8,8 +8,9 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Where we are
 
-- **Phase:** 4 complete — Editorial Supervisor, task pool and the coverage/commissioning admin surface.
-  Next is Phase 5 (orchestrator, scheduler and task-role model routing, migration 107).
+- **Phase:** 5a complete — the recoverable run state machine, task-role model routing, and the
+  orchestrator (migration 107). Phase 5b (the worker route, the `/api/batch/reconcile`
+  integration, and the runs admin page) is still ahead — deliberately not built in 5a.
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
@@ -53,21 +54,42 @@ explicitly rather than incidentally — that is why the three empty states are d
 
 ## Next step
 
-**Phase 5 — Orchestrator, scheduler and model routing (migration 107).** Per the plan file:
-`agent_runs` + `agent_run_events` + `agent_schedules`; `lib/agentic/routing.shared.ts` mapping
-role -> TaskKey with persona-override precedence; `lib/agentic/orchestrator.ts` copying the proven
-claim / reclaim / re-kick shape from `lib/media/image-job-runner.ts`; a `CRON_SECRET`-guarded
-`app/api/agentic/run/route.ts`; and an `agentic_scheduler_enabled`-guarded call from the existing daily
-`/api/batch/reconcile` tick — **wrapped so an agentic failure can never break the narration and image
-reconcile work that already runs there.**
+**Phase 5b — worker route, reconcile integration, runs admin page.** Migration 107 and its
+schema, the pure state machine, routing, and the orchestrator itself are done (5a, below). Still
+needed: a `CRON_SECRET`-guarded `app/api/agentic/run/route.ts` that calls `drainAgentRuns()`; an
+`agentic_scheduler_enabled`-guarded call from the existing daily `/api/batch/reconcile` tick —
+**wrapped so an agentic failure can never break the narration and image reconcile work that
+already runs there**; and `/admin/agents/runs` (list + `agent_run_events` timeline, using
+`app/actions/agentic-runs.ts`, already written). `kickAgenticWorker()` (the admin "Run now"
+button's server action) belongs here too, once the worker route it calls exists.
 
-The load-bearing property is idempotency: **every expensive step writes its result into
-`agent_runs.checkpoint` before advancing, and is skipped on retry if already present.** That is the whole
-contract that stops a retry from paying twice.
+### What Phase 5a actually shipped
 
-Four more TaskKeys land here (`agent_story_brief`, `agent_seed_story_writing`, `agent_story_evaluation`,
-plus routing for the existing two). Remember the `PromptTaskKey` exclusion list in
-`lib/ai/prompt-config.shared.ts` — a TaskKey added without it breaks the typecheck in three unrelated files.
+- `supabase/migrations/107_agent_runs.sql` + rollback — `agent_runs`, `agent_run_events`,
+  `agent_schedules`. Written, **not applied anywhere yet**.
+- `lib/agentic/orchestrator.shared.ts` (pure, tested): the stage machine (`STAGE_SEQUENCE`,
+  `nextStage`), the checkpoint contract (`isCheckpointed`/`recordCheckpoint` — the idempotency
+  guarantee that stops a retry from paying twice), retry/backoff, stale-run detection, and
+  `classifyRunError`/`isMissingRunSchemaError` (its own dedicated latch classifier for 107).
+- `lib/agentic/routing.shared.ts` (pure, tested): `AGENT_TASK_ROLES` and `resolveAgentModel()`,
+  precedence persona override → model_config row → `DEFAULT_MODELS`.
+- `lib/agentic/orchestrator.ts` (`server-only`): `reclaimStaleAgentRuns`, `createRunForTask`,
+  `appendRunEvent`, `drainAgentRuns(budgetMs, executor?)`, plus `listRuns`/`getRun`/`cancelRun`/
+  `retryRun` for the admin surface. Fails closed on migration 107 (its own latch, never reused)
+  and on the master flag (`drainAgentRuns` returns 0 without touching `agent_runs` when
+  `agentic_creator_enabled` is off).
+- **Story generation does not exist yet — that's Phase 6, deliberately.** `drainAgentRuns` takes a
+  `StageExecutor` and defaults to `defaultAgentRunExecutor`, which defers on the very first
+  content-generation stage (records an `agent_run_events` entry, returns the run to `pending`
+  without consuming an attempt) rather than inventing generation or failing the run. This is the
+  one seam Phase 6 plugs a real executor into.
+- `app/actions/agentic-runs.ts` (`'use server'`): `listRunsAction`, `getRunAction`,
+  `cancelRunAction`, `retryRunAction`. No `kickAgenticWorker` — see Phase 5b above.
+- Three new TaskKeys (`agent_story_brief`, `agent_seed_story_writing`, `agent_story_evaluation`) in
+  `lib/ai/model-config.shared.ts`, all added to the `PromptTaskKey` exclusion list in
+  `lib/ai/prompt-config.shared.ts` alongside the existing two agentic keys.
+- Gate: `npx tsc --noEmit` clean, `npm run lint` warning-free, `npm test` 91 files / 714 tests
+  passing (baseline 89/675 + 39 new), `npm run build:verify` green.
 
 Still worth doing, neither blocking:
 
@@ -114,7 +136,7 @@ guarantee stops being a guarantee.
 | 104 | `104_seed_agent_personas.sql` | 2b | **APPLIED** 2026-09-06 — 15 personas, 15 memory rows | not applied |
 | 105 | `105_agent_story_memory.sql` | 3 | **APPLIED** 2026-09-06 | not applied |
 | 106 | `106_agent_tasks.sql` | 4 | **written, NOT applied** | not applied |
-| 107 | `107_agent_runs.sql` | 5 | not written | not written |
+| 107 | `107_agent_runs.sql` | 5 | **written, NOT applied** | not applied |
 | 108–110 | evaluation / reviewers / labels | 7, 9, 11 | not written | not written |
 
 Migrations are applied **by hand by the owner** in the Supabase dashboard, per environment.
@@ -128,7 +150,9 @@ Never run the Supabase CLI. Verify with
 | `lib/ai/seed-authoring.ts` | Phase 6 creates it by **moving** two functions out of `app/actions/story-runtime.ts` |
 | `app/actions/story-runtime.ts` | `'use client'`; keeps re-exporting the moved functions so no consumer changes |
 | `lib/ai/beat-orchestration.ts` | The precedent for a directive-free dual-context module — copy its header rationale |
-| `lib/media/image-job-runner.ts` | The claim / reclaim / re-kick pattern the orchestrator copies |
+| `lib/media/image-job-runner.ts` | The claim / reclaim / re-kick pattern `lib/agentic/orchestrator.ts` copies (re-kick itself is Phase 5b, in the worker route) |
+| `lib/agentic/orchestrator.shared.ts` | The stage machine + checkpoint contract Phase 6 must respect: `isCheckpointed`/`recordCheckpoint` is what stops a retry from double-billing a model call |
+| `lib/agentic/orchestrator.ts` | `drainAgentRuns`'s `StageExecutor` parameter is Phase 6's plug-in point — see `defaultAgentRunExecutor` |
 | `lib/ai/character-novelty.shared.ts` | Existing similarity helpers the novelty check reuses instead of rewriting |
 | `lib/ai/model-config.shared.ts` | Add agentic `TaskKey`s here and the admin model editor picks them up free |
 | `lib/pricing/enforcement.ts` | `authorizeBillableAction` L212; the `admin_bypass` branch at L279 is the model for the agentic bypass |
