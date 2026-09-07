@@ -6,24 +6,26 @@
 // AgentRunStatus) live in lib/agentic/orchestrator.ts and lib/agentic/orchestrator.shared.ts,
 // not here.
 //
-// Reads (listRunsAction, getRunAction) are allowed even while the master flag is off --
-// an admin browsing an empty (or migration-107-absent) run list is harmless, mirroring
-// listPersonas/getPersona in agentic-personas.ts and getCatalogueCoverage/
-// listAgentTasksAction in agentic-supervisor.ts. cancelRunAction and retryRunAction
-// mutate a run's lifecycle, so they additionally require agentic_creator_enabled, the
-// same requireCreatorEnabled() gate agentic-personas.ts and agentic-supervisor.ts use
-// for their own writes.
+// Reads (listRunsAction, getRunAction, getRunSchemaStatusAction) are allowed even while
+// the master flag is off -- an admin browsing an empty (or migration-107-absent) run
+// list is harmless, mirroring listPersonas/getPersona in agentic-personas.ts and
+// getCatalogueCoverage/listAgentTasksAction in agentic-supervisor.ts. cancelRunAction,
+// retryRunAction and kickAgenticWorker mutate or drive a run's lifecycle, so they
+// additionally require agentic_creator_enabled, the same requireCreatorEnabled() gate
+// agentic-personas.ts and agentic-supervisor.ts use for their own writes.
 //
-// kickAgenticWorker() is DELIBERATELY NOT HERE -- it belongs to Phase 5b together with
-// the CRON_SECRET-guarded worker route (app/api/agentic/run/route.ts) it would call.
-// Adding it now would give the admin UI a "Run now" button with nothing behind it.
+// Phase 5b: kickAgenticWorker() (the admin "Run now" button) and
+// getRunSchemaStatusAction() (the run monitor's migration-107-applied probe, mirroring
+// getTaskPoolStatus in agentic-supervisor.ts -- needed to tell "not applied" apart from
+// "applied but empty" apart from "no rows match the filters") are both new here; every
+// other export is unchanged from Phase 5a.
 //
 // Migration 107 will not be applied when this code first ships (see
 // docs/agentic-creator-working-memory.md). Every call here fails closed through
 // lib/agentic/orchestrator.ts's own latch: reads return [] / null, writes throw a clear
 // "not applied yet" message instead of a raw Postgres error.
 
-import { verifyAdmin } from '@/lib/supabase/admin';
+import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import {
   cancelRun,
@@ -34,6 +36,7 @@ import {
   type AgentRunListFilters,
   type AgentRunWithTimeline,
 } from '@/lib/agentic/orchestrator';
+import { isMissingRunSchemaError } from '@/lib/agentic/orchestrator.shared';
 
 export type { AgentRun, AgentRunEvent, AgentRunEventLevel, AgentRunListFilters, AgentRunWithTimeline } from '@/lib/agentic/orchestrator';
 export type { AgentRunStage, AgentRunStatus } from '@/lib/agentic/orchestrator.shared';
@@ -45,6 +48,59 @@ async function requireCreatorEnabled(): Promise<void> {
       'The Agentic Creator System is currently disabled. Turn on the master switch on the Agents Overview page before managing runs.'
     );
   }
+}
+
+/**
+ * Distinguishes the run monitor's "migration not applied" empty state from "applied,
+ * genuinely no runs" and "applied, none match the filters" -- both of which look
+ * identical from listRunsAction() alone, since it returns [] for either. Mirrors
+ * getTaskPoolStatus in agentic-supervisor.ts exactly: a cheap existence probe against
+ * the table, classified only through this migration's own dedicated latch
+ * (isMissingRunSchemaError) -- never a borrowed one (GOTCHAS.md).
+ */
+export async function getRunSchemaStatusAction(): Promise<{ schemaApplied: boolean }> {
+  await verifyAdmin();
+
+  const supabase = createAdminClient();
+  const { error } = await supabase.from('agent_runs').select('id').limit(1);
+
+  if (error) {
+    if (isMissingRunSchemaError(error)) return { schemaApplied: false };
+    throw new Error(`Failed to check run schema status: ${error.message}`);
+  }
+
+  return { schemaApplied: true };
+}
+
+function agenticWorkerBaseUrl(): string {
+  const raw = process.env.APP_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000');
+  return raw.replace(/\/$/, '');
+}
+
+/**
+ * Admin "Run now" button: kicks /api/agentic/run directly instead of waiting for the
+ * next scheduled drain. Mirrors rekickWorker in lib/media/image-job-runner.ts:45 --
+ * same URL construction, same CRON_SECRET bearer header, same short abort timeout with
+ * a swallowed catch. A slow or failed kick must not fail this action; the worker route
+ * records its own outcome via agent_run_events, which the run monitor already shows.
+ */
+export async function kickAgenticWorker(): Promise<void> {
+  await verifyAdmin();
+  await requireCreatorEnabled();
+
+  const secret = process.env.CRON_SECRET;
+  await fetch(`${agenticWorkerBaseUrl()}/api/agentic/run`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(secret ? { authorization: `Bearer ${secret}` } : {}),
+    },
+    body: JSON.stringify({}),
+    signal: AbortSignal.timeout(15_000),
+    keepalive: true,
+  }).catch((error) => console.error('Failed to kick agentic worker:', error));
 }
 
 /** Read-only: lists runs, most recent first. Allowed while the system is off. */

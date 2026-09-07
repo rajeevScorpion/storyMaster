@@ -122,6 +122,21 @@ describe('admin nav config', () => {
     expect(ids.indexOf('tasks')).toBeGreaterThan(ids.indexOf('personas'));
   });
 
+  it('includes the run monitor and routing reference as Agents children, after the task pool', () => {
+    const agentic = ADMIN_NAV.find((group) => group.id === 'agentic');
+    const agents = agentic?.items.find((item) => item.href === '/admin/agents');
+    const childItems = agents?.childGroups?.flatMap((group) => group.items) ?? [];
+    const ids = childItems.map((item) => item.id);
+
+    expect(ids.indexOf('runs')).toBeGreaterThan(-1);
+    expect(ids.indexOf('routing')).toBeGreaterThan(-1);
+    expect(ids.indexOf('runs')).toBeGreaterThan(ids.indexOf('tasks'));
+    expect(ids.indexOf('routing')).toBeGreaterThan(ids.indexOf('tasks'));
+
+    expect(childItems.find((item) => item.id === 'runs')?.href).toBe('/admin/agents/runs');
+    expect(childItems.find((item) => item.id === 'routing')?.href).toBe('/admin/agents/routing');
+  });
+
   it('resolves items by id', () => {
     expect(findSettingsNavItem('storyboard')?.href).toBe('/admin/settings/storyboard');
     expect(findSettingsNavItem('nonexistent')).toBeUndefined();
