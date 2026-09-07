@@ -628,6 +628,18 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
       characters: runningCharacters,
       beats: completedBeats,
       visualStyle,
+      // REQUIRED, and its absence is not cosmetic. validateGeneratedBeat
+      // (lib/ai/story-bible.ts) derives the beat number it expects as
+      // `Math.max(1, (sessionState?.currentBeat || 0) + 1)`. Leave currentBeat
+      // undefined and that pins the expectation at 1 for EVERY beat: beat 1
+      // validates, beat 2 comes back correctly numbered 2, fails validation,
+      // retries, fails again, and burns the whole run at
+      // 'beatNumber should be 1 but was 2'. The browser path never hit this
+      // because lib/store/story-store.ts always passes a real StorySession
+      // that maintains currentBeat; this headless path builds its own.
+      // Same derivation the store uses (story-store.ts): the last completed
+      // beat's number, or 0 before any exist.
+      currentBeat: completedBeats.length > 0 ? completedBeats[completedBeats.length - 1].beatNumber : 0,
     };
 
     const beatActionKey: PricingActionKey =
@@ -797,6 +809,45 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
       agentTaskId: task.id,
     });
 
+    // ORDER IS LOAD-BEARING: this check runs BEFORE the story is written into
+    // agent_story_memory, never after. findSimilarStories (lib/agentic/memory.ts)
+    // selects from agent_story_memory filtered only by language and age group and
+    // has NO self-exclusion, so recording first makes the story its own nearest
+    // neighbour -- a perfect match -- and the verdict comes back 'block' for every
+    // agent story ever generated. That was measured, not theorised: the same story
+    // scored 'clear' from the Test Lab's pre-save preview and 'block' from here,
+    // with recordStoryMemory the only difference between the two calls. A check
+    // that flags everything is worse than no check: Phase 9's reviewer queue would
+    // show a block warning on every story and reviewers would learn to ignore the
+    // one signal meant to catch real duplication.
+    //
+    // Post-generation never deletes a saved draft -- it only warns. The human
+    // review gate downstream (awaiting_review) is the real safeguard.
+    //
+    // The more general hardening -- an excludeStoryId option threaded through
+    // runNoveltyCheck into findSimilarStories -- would protect any FUTURE caller
+    // that compares an already-recorded story. Deliberately not done here: it
+    // changes a shared signature during a verification pass. Recorded in
+    // PROJECT_STATE's deferred list instead.
+    const postCheck = await runNoveltyCheck(
+      'post_generation',
+      {
+        title: brief.workingTitle,
+        premise: brief.premise,
+        themes: brief.themes,
+        characterNames: finalRoster.map((character) => character.name),
+        language: persona.language,
+        ageGroup: persona.ageGroup,
+        genre: task.genre ?? null,
+        seriesId: task.seriesId ?? null,
+      },
+      { taskId: task.id, runId: run.id, personaId: persona.id }
+    ).catch(() => null);
+
+    if (postCheck && postCheck.verdict !== 'clear') {
+      await appendRunEvent(run.id, 'draft_created', 'warn', `Post-generation novelty check: ${postCheck.verdict}.`);
+    }
+
     await recordStoryMemory({
       storyId,
       personaId: persona.id,
@@ -821,27 +872,6 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
     }).catch((error) => {
       console.error('[agentic-story-assembly] failed to update persona memory:', error instanceof Error ? error.message : error);
     });
-
-    // Post-generation never deletes a saved draft -- it only warns. The human
-    // review gate downstream (awaiting_review) is the real safeguard.
-    const postCheck = await runNoveltyCheck(
-      'post_generation',
-      {
-        title: brief.workingTitle,
-        premise: brief.premise,
-        themes: brief.themes,
-        characterNames: finalRoster.map((character) => character.name),
-        language: persona.language,
-        ageGroup: persona.ageGroup,
-        genre: task.genre ?? null,
-        seriesId: task.seriesId ?? null,
-      },
-      { taskId: task.id, runId: run.id, personaId: persona.id }
-    ).catch(() => null);
-
-    if (postCheck && postCheck.verdict !== 'clear') {
-      await appendRunEvent(run.id, 'draft_created', 'warn', `Post-generation novelty check: ${postCheck.verdict}.`);
-    }
 
     await appendRunEvent(run.id, 'draft_created', 'info', `Draft story saved (${progress.completedBeats.length} beats).`);
 

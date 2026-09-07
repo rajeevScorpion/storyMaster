@@ -836,7 +836,13 @@ async function advanceRun(
     }
 
     if (outcome.kind === 'deferred') {
-      await appendRunEvent(run.id, run.stage, 'info', outcome.message, outcome.metadata);
+      // Logged against `target`, not `run.stage`. The run stays on run.stage after a
+      // deferral, but the EVENT describes an attempt at the stage that deferred, and
+      // using run.stage attributes it to the previous one. Observed live: every
+      // 'Time budget exhausted before beat N/5' line -- unmistakably story_generated
+      // work -- was filed under novelty_checked in the run timeline, which is the
+      // admin's only window into where a long run actually is.
+      await appendRunEvent(run.id, target, 'info', outcome.message, outcome.metadata);
       await returnRunToPending(admin, run);
       return;
     }
