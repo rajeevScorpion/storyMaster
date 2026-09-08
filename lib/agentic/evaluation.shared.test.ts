@@ -9,12 +9,14 @@ import {
   isMissingEvaluationSchemaError,
   parseEvaluationModelResult,
   runDeterministicEvaluation,
+  toEvaluatedBeats,
   type DeterministicEvaluationInput,
   type DeterministicEvaluationResult,
   type EvaluatedBeat,
   type EvaluationModelResult,
   type EvaluationVerdict,
 } from './evaluation.shared';
+import type { StoryBeat } from '@/lib/types/story';
 
 // ── Fixture text ───────────────────────────────────────────────────────
 // Word counts were verified against countStoryWords (Intl.Segmenter) before
@@ -84,6 +86,73 @@ function cleanInput(overrides: Partial<DeterministicEvaluationInput> = {}): Dete
 function codesOf(result: DeterministicEvaluationResult): string[] {
   return result.warnings.map((warning) => warning.code);
 }
+
+function storyBeat(overrides: Partial<StoryBeat> = {}): StoryBeat {
+  return {
+    title: 'Beat title',
+    beatNumber: 1,
+    isEnding: false,
+    storyText: CLEAN_BEAT_TEXT,
+    sceneSummary: 'A scene summary.',
+    options: [
+      { id: 'a', label: 'Go left', intent: 'explore' },
+      { id: 'b', label: 'Go right', intent: 'explore' },
+      { id: 'c', label: 'Wait', intent: 'caution' },
+    ],
+    characters: [],
+    continuityNotes: [],
+    imagePrompt: 'A quiet harbour at dusk.',
+    clues: [],
+    nextBeatGoal: 'Reach the customs house.',
+    endingForecast: [],
+    ...overrides,
+  };
+}
+
+// ── toEvaluatedBeats ─────────────────────────────────────────────────────
+//
+// The single mapping shared with story-assembly.ts's runEvaluatedStage (see
+// that call site and this function's own comment in evaluation.shared.ts) --
+// tested here as its own unit so a field this drops or renames is caught
+// independent of runDeterministicEvaluation's own behaviour.
+
+describe('toEvaluatedBeats', () => {
+  it('maps beatNumber, storyText and isEnding straight across', () => {
+    const beats: StoryBeat[] = [
+      storyBeat({ beatNumber: 1, storyText: CLEAN_BEAT_TEXT, isEnding: false }),
+      storyBeat({ beatNumber: 2, storyText: ENDING_BEAT_TEXT, isEnding: true, options: [] }),
+    ];
+    const result = toEvaluatedBeats(beats);
+    expect(result).toEqual([
+      { beatNumber: 1, storyText: CLEAN_BEAT_TEXT, optionCount: 3, isEnding: false },
+      { beatNumber: 2, storyText: ENDING_BEAT_TEXT, optionCount: 0, isEnding: true },
+    ]);
+  });
+
+  it('derives optionCount from options.length, not from any field on the beat itself', () => {
+    const beat = storyBeat({
+      options: [
+        { id: 'a', label: 'One', intent: 'x' },
+        { id: 'b', label: 'Two', intent: 'x' },
+        { id: 'c', label: 'Three', intent: 'x' },
+        { id: 'd', label: 'Four', intent: 'x' },
+      ],
+    });
+    expect(toEvaluatedBeats([beat])[0].optionCount).toBe(4);
+  });
+
+  it('returns an empty array for an empty input, and preserves beat order', () => {
+    expect(toEvaluatedBeats([])).toEqual([]);
+    const beats = [storyBeat({ beatNumber: 3 }), storyBeat({ beatNumber: 1 }), storyBeat({ beatNumber: 2 })];
+    expect(toEvaluatedBeats(beats).map((b) => b.beatNumber)).toEqual([3, 1, 2]);
+  });
+
+  it('ignores fields on StoryBeat that EvaluatedBeat does not carry', () => {
+    const beat = storyBeat({ imagePrompt: 'secret prompt text', clues: ['a clue'], continuityNotes: ['note'] });
+    const [mapped] = toEvaluatedBeats([beat]);
+    expect(Object.keys(mapped).sort()).toEqual(['beatNumber', 'isEnding', 'optionCount', 'storyText']);
+  });
+});
 
 // ── runDeterministicEvaluation ──────────────────────────────────────────
 

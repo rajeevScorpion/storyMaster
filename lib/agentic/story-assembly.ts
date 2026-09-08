@@ -72,7 +72,7 @@ import { getAgentTask, type AgentTask } from '@/lib/agentic/supervisor';
 import { runNoveltyCheck, recordStoryMemory, updatePersonaMemory } from '@/lib/agentic/memory';
 import type { NoveltyCandidate, NoveltyVerdict } from '@/lib/agentic/memory.shared';
 import { evaluateAndRecord, getPipelineEvaluationForRun } from '@/lib/agentic/evaluation';
-import type { DeterministicEvaluationInput } from '@/lib/agentic/evaluation.shared';
+import { toEvaluatedBeats, type DeterministicEvaluationInput } from '@/lib/agentic/evaluation.shared';
 import { generateSeedPlanPreview, materializeSeededBeat } from '@/lib/ai/seed-authoring';
 import { composeStoryboardPlan, renderStoryboardPlan, mergeCharacterVisualReferences } from '@/lib/ai/beat-orchestration';
 import { saveStoryForUser } from '@/lib/story/save-story';
@@ -1140,12 +1140,7 @@ async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> 
   const targetBeatCount = clampBeatCount(persona, task.targetBeatCount ?? Number.NaN);
 
   const deterministic: DeterministicEvaluationInput = {
-    beats: progress.completedBeats.map((beat) => ({
-      beatNumber: beat.beatNumber,
-      storyText: beat.storyText,
-      optionCount: beat.options.length,
-      isEnding: beat.isEnding,
-    })),
+    beats: toEvaluatedBeats(progress.completedBeats),
     targetBeatCount,
     ageGroup: persona.ageGroup,
     beatLengthLevel: resolvePersonaStoryConfig(persona).beatLength?.level,

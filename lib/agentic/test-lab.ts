@@ -64,6 +64,11 @@ import { getModelConfig } from '@/lib/ai/model-config';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { runNoveltyCheck } from '@/lib/agentic/memory';
 import {
+  runDeterministicEvaluation,
+  toEvaluatedBeats,
+  type DeterministicEvaluationResult,
+} from '@/lib/agentic/evaluation.shared';
+import {
   storyAssemblyExecutor,
   STORY_PROGRESS_CHECKPOINT_KEY,
   type StoryBrief,
@@ -153,6 +158,8 @@ export interface TestLabRunView {
    * showing both verdicts before an admin commits to promoting.
    */
   postNoveltyPreview: TestLabNoveltyPreview | null;
+  /** Deterministic-only evaluation of the parked beats. Null until the run parks awaiting promotion. */
+  evaluationPreview: DeterministicEvaluationResult | null;
 }
 
 /** Cache key for the post-generation preview, inside the same agent_runs.checkpoint object. Never an AgentRunStage. */
@@ -277,6 +284,53 @@ async function buildTestLabRunView(
     postNoveltyPreview = await computeAndCachePostNoveltyPreview(admin, run, task, persona, brief, beats);
   }
 
+  // Deterministic-only evaluation preview of the parked beats (Unit 7d). This
+  // deliberately does NOT cache the way postNoveltyPreview above does.
+  // postNoveltyPreview caches because it is a PAID model call that must never
+  // repeat and whose read-modify-write of the checkpoint could otherwise race
+  // draft_created's own writes (see computeAndCachePostNoveltyPreview's
+  // comment). runDeterministicEvaluation makes no model call, writes nothing,
+  // and costs nothing to redo -- so it is simply recomputed inline on every
+  // view build. No checkpoint key, no cache, no write. Do not "fix" this by
+  // adding one; there is nothing here worth paying a race for.
+  //
+  // Built from the run's OWN storyConfig (computed above), not re-derived
+  // from the persona. That is deliberate and correct, not a shortcut:
+  // storyConfig is the config that actually generated these beats, and it
+  // agrees with the real pipeline's construction by definition --
+  // story-assembly.ts's buildSeededStoryConfig builds its StoryConfig from
+  // resolvePersonaStoryConfig(persona) too (the same function storyConfig
+  // above is built from), so both land on the same ageGroup, language,
+  // beatLength and authoring.sourceFidelity (normalizeStoryConfig's default
+  // 'strictly_follow', the same value buildSeededStoryConfig pins explicitly
+  // to AGENTIC_SOURCE_FIDELITY).
+  //
+  // noveltyVerdict/noveltyReason are ALWAYS null here -- never preNovelty.
+  // DeterministicEvaluationInput.noveltyVerdict specifically wants the
+  // POST-generation verdict carried in draft_created's checkpoint (see that
+  // field's own doc comment in evaluation.shared.ts), and draft_created has
+  // not run yet: readyToPromote means stage is still 'story_generated'.
+  // preNovelty is a different check at a different time (pre_generation,
+  // before any beat existed); substituting it here would mislabel it.
+  // runDeterministicEvaluation already turns a null verdict into its own
+  // 'novelty_unavailable' info warning, never a failure, so nothing here
+  // needs to work around the gap -- it is exactly the honest answer.
+  const evaluationPreview: DeterministicEvaluationResult | null =
+    readyToPromote && brief && beats.length > 0 && beats.length >= targetBeatCount
+      ? runDeterministicEvaluation({
+          beats: toEvaluatedBeats(beats),
+          targetBeatCount,
+          ageGroup: storyConfig.ageGroup,
+          beatLengthLevel: storyConfig.beatLength?.level,
+          sourceFidelity: storyConfig.authoring.sourceFidelity ?? null,
+          language: storyConfig.language,
+          restrictedThemes: persona.restrictedThemes,
+          briefThemes: brief.themes,
+          noveltyVerdict: null,
+          noveltyReason: null,
+        })
+      : null;
+
   return {
     taskId: task.id,
     runId: run.id,
@@ -300,6 +354,7 @@ async function buildTestLabRunView(
     readyToPromote,
     needsContinue,
     postNoveltyPreview,
+    evaluationPreview,
   };
 }
 

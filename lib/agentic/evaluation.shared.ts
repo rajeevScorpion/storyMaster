@@ -37,7 +37,7 @@
 // what `model` contains or whether it was even called. No branch in this
 // file may make either of those two lines conditional on `model`.
 
-import type { AgeGroup, SourceFidelity, StoryLanguage } from '@/lib/types/story';
+import type { AgeGroup, SourceFidelity, StoryBeat, StoryLanguage } from '@/lib/types/story';
 import { countStoryWords, getStoryAudienceProfile, resolveStoryBeatLength } from '@/lib/ai/story-audience';
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -68,6 +68,25 @@ export interface EvaluatedBeat {
   storyText: string;
   optionCount: number;
   isEnding: boolean;
+}
+
+/**
+ * The one place StoryBeat[] becomes EvaluatedBeat[]. Extracted from
+ * story-assembly.ts's runEvaluatedStage (the pipeline's real evaluation call)
+ * so the Test Lab's evaluation preview (Unit 7d, test-lab.ts) can build the
+ * identical shape from the same parked beats it already holds. If the two
+ * ever drifted -- one dropping a field the other keeps, say -- the preview
+ * would silently disagree with the real grade, which is the one outcome this
+ * whole feature exists to prevent. `StoryBeat` is imported type-only, so this
+ * module stays pure and isomorphic.
+ */
+export function toEvaluatedBeats(beats: StoryBeat[]): EvaluatedBeat[] {
+  return beats.map((beat) => ({
+    beatNumber: beat.beatNumber,
+    storyText: beat.storyText,
+    optionCount: beat.options.length,
+    isEnding: beat.isEnding,
+  }));
 }
 
 export interface DeterministicEvaluationInput {

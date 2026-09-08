@@ -8,6 +8,7 @@ import {
   BookOpenText,
   ChevronDown,
   ChevronRight,
+  ClipboardCheck,
   ClipboardList,
   FileText,
   Gauge,
@@ -35,6 +36,7 @@ import type { AgentRunEventLevel } from '@/app/actions/agentic-runs';
 import type { AgentRunStage, AgentRunStatus } from '@/lib/agentic/orchestrator.shared';
 import type { AgentTaskKey, AgentTaskRole } from '@/lib/agentic/routing.shared';
 import { TASK_DEFINITIONS } from '@/lib/ai/model-config.shared';
+import type { DeterministicEvaluationResult, EvaluationVerdict, EvaluationWarning } from '@/lib/agentic/evaluation.shared';
 
 export interface TestLabPersonaOption {
   id: string;
@@ -114,6 +116,88 @@ const NOVELTY_VERDICT_STYLES: Record<string, string> = {
 
 function noveltyStyle(verdict: string): string {
   return NOVELTY_VERDICT_STYLES[verdict] ?? 'border-neutral-500/25 bg-neutral-500/10 text-neutral-300';
+}
+
+// ── Evaluation preview tables (Unit 7d) ─────────────────────────────────
+//
+// Same border/bg/text triple RunMonitor.tsx's Evaluation panel uses for its
+// own verdict pill (EVALUATION_VERDICT_STYLES there), kept consistent across
+// the two admin surfaces on purpose so a "pass"/"concerns"/"fail" pill reads
+// the same colour wherever an operator sees one.
+const EVALUATION_VERDICT_LABELS: Record<EvaluationVerdict, string> = {
+  pass: 'Pass',
+  concerns: 'Concerns',
+  fail: 'Fail',
+};
+
+const EVALUATION_VERDICT_STYLES: Record<EvaluationVerdict, string> = {
+  pass: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
+  concerns: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
+  fail: 'border-rose-500/25 bg-rose-500/10 text-rose-300',
+};
+
+// Mirrors RunMonitor.tsx's WARNING_SOURCE_LABELS/STYLES exactly. Every
+// warning this preview can produce has source 'deterministic' -- this
+// evaluation never calls the grading model -- but the badge is still shown
+// for every warning, not just non-deterministic ones: it is the one visible
+// fact that tells an operator this panel is the Test Lab's own preview and
+// not RunMonitor's post-promotion Evaluation panel, where a 'model' badge can
+// also appear.
+const WARNING_SOURCE_LABELS: Record<EvaluationWarning['source'], string> = {
+  deterministic: 'Deterministic',
+  model: 'Model',
+};
+
+const WARNING_SOURCE_STYLES: Record<EvaluationWarning['source'], string> = {
+  deterministic: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-300',
+  model: 'border-purple-500/25 bg-purple-500/10 text-purple-300',
+};
+
+function EvaluationPreviewCard({
+  preview,
+  pendingMessage,
+}: {
+  preview: DeterministicEvaluationResult | null;
+  pendingMessage: string;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-neutral-500">Verdict</p>
+      {preview ? (
+        <>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${EVALUATION_VERDICT_STYLES[preview.verdict]}`}
+            >
+              {EVALUATION_VERDICT_LABELS[preview.verdict]}
+            </span>
+          </div>
+          <div className="mt-3">
+            {preview.warnings.length === 0 ? (
+              <p className="text-xs text-neutral-600">No warnings.</p>
+            ) : (
+              <ul className="space-y-1.5 text-xs">
+                {preview.warnings.map((warning, index) => (
+                  <li key={`${warning.code}-${index}`} className="flex flex-wrap items-center gap-1.5">
+                    <span className={`font-medium ${EVENT_LEVEL_STYLES[warning.severity]}`}>{warning.severity}</span>
+                    <span
+                      className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${WARNING_SOURCE_STYLES[warning.source]}`}
+                    >
+                      {WARNING_SOURCE_LABELS[warning.source]}
+                    </span>
+                    <span className="text-neutral-500">{warning.code}</span>
+                    <span className="text-neutral-300">{warning.message}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      ) : (
+        <p className="mt-2 text-sm text-neutral-500">{pendingMessage}</p>
+      )}
+    </div>
+  );
 }
 
 function taskLabel(taskKey: AgentTaskKey): string {
@@ -835,6 +919,23 @@ export default function TestLab({
                 label="Post-generation (preview)"
                 preview={view.postNoveltyPreview}
                 pendingMessage="Not yet computed. This preview runs once all beats are complete and the run parks awaiting promotion -- Create draft re-runs the real check independently inside draft_created."
+              />
+            </div>
+          </Section>
+
+          <Section title="Evaluation (preview)" icon={ClipboardCheck} defaultOpen={false}>
+            <div className="space-y-3">
+              <p className="text-xs text-neutral-500">
+                Deterministic-only grade of these beats, computed live on every view of this parked run -- no model
+                call, no database write. Because the deterministic layer alone decides the verdict (the model never
+                gets a vote), this preview&apos;s verdict is the verdict the real Evaluated stage will record, with
+                one exception: the post-generation novelty check has not run yet at this point, so a novelty-driven
+                warning can still appear later and change it. The six model scores are not computed here -- that half
+                only runs once this draft is promoted.
+              </p>
+              <EvaluationPreviewCard
+                preview={view.evaluationPreview}
+                pendingMessage="Not available yet -- this preview runs once all beats are complete and the run parks awaiting promotion."
               />
             </div>
           </Section>
