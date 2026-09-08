@@ -28,9 +28,12 @@ import type { NarrationGenderBucket } from '@/lib/ai/narration-voices';
 // to satisfy for at least 3 of them, which would make those personas
 // unsavable in the admin editor. So `approved_voice_pool` -- the older
 // per-persona shortlist concept -- is being retired unread rather than
-// replaced with a stricter rule; the column stays in the schema (other rows
-// still populate it, and dropping a column is a separate, unrelated
-// migration) but nothing here consults it.
+// replaced with a stricter rule. The column stays in the schema and keeps its
+// seeded values: the 104 seed populated it for all 15 personas and
+// buildClonedPersonaInput (personas.shared.ts) still copies it onto a clone.
+// Dropping it would buy nothing and cost a migration, so it simply becomes
+// vestigial -- nothing in this module, and nothing downstream of it, consults
+// it. Treat a value in that column as history, not as configuration.
 //
 // THE ONE CASE WORTH FLAGGING: SAME-LANGUAGE SHARING. Two personas sharing a
 // voice is normal and expected given 15-into-12. It only actually matters
@@ -183,7 +186,7 @@ function buildVoiceHint(
   const segments = [bucketLabel];
   if (sameLanguage.length > 0) {
     segments.push(
-      `Same language as ${sameLanguage.map(describeSharer).join(', ')} -- narration will sound identical`
+      `Same language as ${sameLanguage.map(describeSharer).join(', ')} — narration will sound identical`
     );
   }
   if (crossLanguage.length > 0) {
@@ -249,7 +252,7 @@ export function buildPersonaVoiceOptions({
     options.push({
       value: resolvedStored.voiceId,
       label: resolvedStored.voiceId,
-      hint: 'Not in the current voice list -- kept from an earlier configuration.',
+      hint: 'Not in the current voice list — kept from an earlier configuration.',
     });
   }
 

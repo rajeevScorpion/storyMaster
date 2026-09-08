@@ -39,14 +39,22 @@
 -- SAFE TO RE-RUN. The UPDATE's WHERE clause guards on the CURRENT value
 -- (`preferred_voice = 'Leda'`), not just the slug, so running this twice is a
 -- no-op the second time, and it will not clobber a later manual change made
--- through the (not-yet-built) admin persona editor -- if an operator has since
--- set riya-sen to some other voice on purpose, this migration quietly does
+-- through the admin persona editor (components/admin/agentic/
+-- PersonaEditorDrawer.tsx, which has always exposed this field and gains a
+-- constrained dropdown for it in Unit 8b) -- if an operator has since set
+-- riya-sen to some other voice on purpose, this migration quietly does
 -- nothing rather than stomping that choice.
 --
--- Apply to DEVELOPMENT ONLY for now. Production has none of migrations 102-110
--- (see docs/agent-context/PROJECT_STATE.md) -- there is no agent_personas table
--- to update there yet, so this migration is meaningless on prod until 102-109
--- land first, in numeric order.
+-- Apply to DEVELOPMENT ONLY for now. Production has none of migrations 102-108
+-- (see docs/agent-context/PROJECT_STATE.md), so there is no agent_personas
+-- table to update there and no riya-sen row to match. What this file actually
+-- depends on is 103 (creates the table) and 104 (seeds riya-sen with 'Leda') --
+-- not on a contiguous run of everything numbered below it, and NOT on a
+-- migration 109: Phase 8 deliberately ships no 109, because the narration
+-- feature flag that would have been one was dropped when narration became a
+-- reviewer action rather than a pipeline stage. Numeric order is convention
+-- here, never enforced; public.schema_migration_ledger is the only source of
+-- truth for what has actually run on a given environment.
 --
 -- Apply to development, then confirm:
 --   select * from public.schema_migration_ledger where migration_number = 110;
