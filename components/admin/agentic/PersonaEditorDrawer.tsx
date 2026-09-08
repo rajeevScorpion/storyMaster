@@ -8,7 +8,7 @@ import FilterDropdown from '@/components/ui/FilterDropdown';
 import AdminToggle from '@/components/admin/AdminToggle';
 import { createPersona, updatePersona, type AgentPersona, type AgentPersonaInput } from '@/app/actions/agentic-personas';
 import { STORY_CONFIG_KEYS } from '@/lib/agentic/personas.shared';
-import { buildPersonaVoiceOptions, buildPersonaVoiceUsage, type PersonaVoiceLists } from '@/lib/agentic/persona-voice.shared';
+import { buildPersonaVoiceOptions, buildPersonaVoiceUsage, resolvePersonaVoice, type PersonaVoiceLists } from '@/lib/agentic/persona-voice.shared';
 import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import { STORY_AUDIENCE_OPTIONS } from '@/lib/ai/story-audience';
 import { STORY_GENRES } from '@/lib/story/genres';
@@ -170,6 +170,19 @@ export default function PersonaEditorDrawer({
 
   const voiceUsage = useMemo(() => buildPersonaVoiceUsage(allPersonas), [allPersonas]);
 
+  // The dropdown's selected value, resolved to the CANONICAL casing from the
+  // voice lists. resolvePersonaVoice deliberately accepts a case-drifted value
+  // (a hand-edited row reading "leda") and hands back "Leda"; without running
+  // the form's value through it too, that row produces no matching option --
+  // buildPersonaVoiceOptions emits no out-of-list entry for it, because it
+  // resolved fine -- and the dropdown renders as though nothing were selected
+  // on a persona that has a perfectly good voice. Saving goes through the same
+  // value, so what the admin sees selected is exactly what gets written.
+  const selectedVoice = useMemo(
+    () => resolvePersonaVoice({ preferredVoice: form.preferredVoice }, voiceLists)?.voiceId ?? '',
+    [form.preferredVoice, voiceLists]
+  );
+
   const voiceOptions = useMemo(
     () =>
       buildPersonaVoiceOptions({
@@ -247,7 +260,7 @@ export default function PersonaEditorDrawer({
           dynamicSettingKeys: form.dynamicSettingKeys,
           beatCountMin,
           beatCountMax,
-          preferredVoice: form.preferredVoice.trim() || null,
+          preferredVoice: selectedVoice || null,
           // approvedVoicePool intentionally omitted (Phase 8, Unit 8b): the
           // field is retired from this editor, not deleted from the schema.
           // mapInputToRow (agentic-personas.ts) only writes a column when its
@@ -279,7 +292,7 @@ export default function PersonaEditorDrawer({
           dynamicSettingKeys: form.dynamicSettingKeys,
           beatCountMin,
           beatCountMax,
-          preferredVoice: form.preferredVoice.trim() || null,
+          preferredVoice: selectedVoice || null,
           // approvedVoicePool intentionally omitted here too -- see the
           // matching comment in the update-patch branch above. A brand-new
           // persona simply starts with no approved_voice_pool value (the DB
@@ -495,7 +508,7 @@ export default function PersonaEditorDrawer({
               <FieldGroup title="Voice">
                 <Field label="Narration voice">
                   <FilterDropdown
-                    value={form.preferredVoice}
+                    value={selectedVoice}
                     options={voiceOptions}
                     onChange={(value) => update('preferredVoice', value)}
                     ariaLabel="Persona narration voice"
