@@ -14,6 +14,7 @@ import {
   nextAttemptDelayMs,
   nextStage,
   recordCheckpoint,
+  resumeStageFromCheckpoint,
   selectTasksToEnqueue,
   shouldRetry,
   type AgentRunCheckpoint,
@@ -61,6 +62,53 @@ describe('checkpoint contract — the load-bearing idempotency guarantee', () =>
     const original: AgentRunCheckpoint = { brief_ready: { version: 1 } };
     const result = recordCheckpoint(original, 'brief_ready', { version: 2 });
     expect(result.brief_ready).toEqual({ version: 2 });
+  });
+});
+
+describe('resumeStageFromCheckpoint — where retryRun resumes a run parked on a terminal stage', () => {
+  it('an empty checkpoint resumes at the very start of the pipeline: queued', () => {
+    expect(resumeStageFromCheckpoint({})).toBe('queued');
+  });
+
+  it('an unrecognized key alone resumes at queued -- it proves nothing about real progress', () => {
+    expect(resumeStageFromCheckpoint({ some_random_key: { anything: true } })).toBe('queued');
+  });
+
+  // This is the exact shape that killed run b7ac6093: story_generated_progress is
+  // story-assembly.ts's intra-stage progress side-channel (STORY_PROGRESS_CHECKPOINT_KEY),
+  // written into this same checkpoint object but NOT a stage name and NOT a member of
+  // STAGE_SEQUENCE. A naive "last key in the object" would pick it up as if it were the
+  // furthest-reached stage and resume in the wrong place (or not resolve to a real stage
+  // at all). The correct answer here is novelty_checked -- the last REAL stage present.
+  it('a checkpoint holding brief_ready, novelty_checked and story_generated_progress resumes at novelty_checked', () => {
+    const checkpoint: AgentRunCheckpoint = {
+      brief_ready: { workingTitle: 'Test' },
+      novelty_checked: { verdict: 'clear' },
+      story_generated_progress: { completedBeats: [{ beatNumber: 1 }] },
+    };
+    expect(resumeStageFromCheckpoint(checkpoint)).toBe('novelty_checked');
+  });
+
+  it('a checkpoint carrying every stage through the automatic pipeline resumes at the last one', () => {
+    const checkpoint: AgentRunCheckpoint = {
+      queued: {},
+      brief_ready: {},
+      novelty_checked: {},
+      story_generated: {},
+      draft_created: {},
+      narration_pending: {},
+      narration_complete: {},
+      evaluated: {},
+    };
+    expect(resumeStageFromCheckpoint(checkpoint)).toBe('evaluated');
+  });
+
+  it('is not fooled by insertion order -- STAGE_SEQUENCE order decides the "last" stage, not object key order', () => {
+    const checkpoint: AgentRunCheckpoint = {
+      novelty_checked: {},
+      brief_ready: {}, // inserted after novelty_checked, but earlier in STAGE_SEQUENCE
+    };
+    expect(resumeStageFromCheckpoint(checkpoint)).toBe('novelty_checked');
   });
 });
 

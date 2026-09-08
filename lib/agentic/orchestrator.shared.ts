@@ -108,6 +108,38 @@ export function recordCheckpoint(checkpoint: AgentRunCheckpoint, stage: AgentRun
   return { ...checkpoint, [stage]: payload };
 }
 
+/**
+ * Resumes a run parked on a terminal stage (retryRun's use case: a run whose
+ * stage was set to 'failed' by handleStageFailure) from the furthest point
+ * its own checkpoint actually proves it reached, instead of leaving `stage`
+ * on a terminal value nextStage() has no successor for -- which is exactly
+ * what sent a retried run straight into advanceRun's "already terminal"
+ * defensive branch and closed it out as 'succeeded' having done no work.
+ *
+ * Returns the LAST member of STAGE_SEQUENCE present as a key in `checkpoint`,
+ * or 'queued' when none is. 'queued' is itself STAGE_SEQUENCE's first entry
+ * and is never itself checkpointed (recordCheckpoint is only ever called
+ * with `nextStage(run.stage)`, and nextStage('queued') is 'brief_ready'), so
+ * an empty checkpoint correctly resumes at the very start of the pipeline.
+ *
+ * MUST iterate STAGE_SEQUENCE and test membership with isCheckpointed, never
+ * iterate the checkpoint object's own keys. The checkpoint also carries
+ * story_generated_progress (story-assembly.ts's
+ * STORY_PROGRESS_CHECKPOINT_KEY) -- an intra-stage progress side-channel for
+ * story_generated's per-beat loop, written into this same object but never a
+ * stage name and never a member of this array. A naive "last key in the
+ * object" (or "last key inserted") would treat that key as if it were a
+ * stage and misresolve the resume point; this is not hypothetical; it is
+ * exactly the shape of the checkpoint that hid this bug on run b7ac6093.
+ */
+export function resumeStageFromCheckpoint(checkpoint: AgentRunCheckpoint): AgentRunStage {
+  let resumeStage: AgentRunStage = 'queued';
+  for (const stage of STAGE_SEQUENCE) {
+    if (isCheckpointed(checkpoint, stage)) resumeStage = stage;
+  }
+  return resumeStage;
+}
+
 // ── Retry and backoff ──────────────────────────────────────────────────
 
 export const MAX_RUN_ATTEMPTS = 3;

@@ -59,6 +59,7 @@ import {
   isTerminalStage,
   nextStage,
   recordCheckpoint,
+  resumeStageFromCheckpoint,
   selectTasksToEnqueue,
   shouldRetry,
   type AgentRunCheckpoint,
@@ -777,8 +778,14 @@ async function advanceRun(
   for (;;) {
     const target = nextStage(run.stage);
     if (!target) {
-      // Defensive: a claimed 'pending' run should never already sit on a terminal
-      // stage, but if it does, there is nothing left to do but close it out cleanly.
+      // Defensive, not unreachable: retryRun is a first-party path that can hand this
+      // loop a claimed 'pending' run whose stage is legitimately terminal (a permanent
+      // failure leaves stage: 'failed', and 'failed' has no successor). retryRun
+      // guards against that by recomputing stage via resumeStageFromCheckpoint before
+      // the run ever gets here, so in the normal case this branch is not reached for a
+      // run resuming from failure -- but if some other caller ever lands a run here
+      // sitting on a terminal stage regardless, there is nothing left to do but close
+      // it out cleanly rather than loop forever.
       await admin
         .from('agent_runs')
         .update({ status: 'succeeded', finished_at: new Date().toISOString() })
@@ -1233,13 +1240,26 @@ export async function cancelRun(id: string): Promise<AgentRun> {
 }
 
 /**
- * Manually resumes a failed or cancelled run. Stage and checkpoint are left exactly as
- * they are -- resuming from where it stopped, never restarting from 'queued', is the
- * entire point of the checkpoint contract. attempt_count IS reset to 0 here, unlike the
- * automatic retry-on-failure path in handleStageFailure: an admin choosing to retry has
- * looked at the failure and decided it deserves a fresh budget of attempts, which is a
+ * Manually resumes a failed or cancelled run. checkpoint is left exactly as it is --
+ * resuming from where it stopped, never restarting from 'queued', is the entire point
+ * of the checkpoint contract. attempt_count IS reset to 0 here, unlike the automatic
+ * retry-on-failure path in handleStageFailure: an admin choosing to retry has looked at
+ * the failure and decided it deserves a fresh budget of attempts, which is a
  * deliberately different decision from the automatic path silently reusing the same
  * counter toward the same cap.
+ *
+ * `stage` is a different story. handleStageFailure sets stage: 'failed' on permanent
+ * failure, and 'failed' is a TERMINAL_STAGES member -- nextStage('failed') has no
+ * successor. Left alone, this run would come back as 'pending' sitting on a terminal
+ * stage, and advanceRun's very next loop iteration would read that as "nothing left to
+ * do" and close it out as 'succeeded' without calling the executor even once: no work
+ * done, the failure reason erased, and the run painted green. So a run parked on a
+ * terminal stage has its stage recomputed via resumeStageFromCheckpoint, which walks
+ * STAGE_SEQUENCE and returns the last stage this run's own checkpoint actually proves
+ * it reached -- still never re-executing a checkpointed stage (isCheckpointed is
+ * unaffected by this), just putting `stage` somewhere nextStage() can move it forward
+ * from. A run whose stage was already non-terminal (there is no first-party path that
+ * produces one today, but a future caller might) is left untouched.
  */
 export async function retryRun(id: string): Promise<AgentRun> {
   if (runSchemaUnavailable) throw new Error(RUN_SCHEMA_UNAVAILABLE_MESSAGE);
@@ -1262,6 +1282,14 @@ export async function retryRun(id: string): Promise<AgentRun> {
       throw new Error(`Run ${id} is already ${current.status}; it cannot be retried.`);
     }
 
+    // See this function's doc comment: a run parked on a terminal stage (the
+    // permanent-failure path always leaves one on 'failed') must have its
+    // stage moved off that terminal value or advanceRun will treat it as
+    // already finished and mark it 'succeeded' without doing any work.
+    const stageUpdate: Partial<Record<'stage', AgentRunStage>> = isTerminalStage(current.stage)
+      ? { stage: resumeStageFromCheckpoint(current.checkpoint) }
+      : {};
+
     const { data, error } = await admin
       .from('agent_runs')
       .update({
@@ -1271,6 +1299,7 @@ export async function retryRun(id: string): Promise<AgentRun> {
         error_category: null,
         error_detail: null,
         finished_at: null,
+        ...stageUpdate,
       })
       .eq('id', id)
       .select('*')
