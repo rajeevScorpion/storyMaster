@@ -69,7 +69,9 @@ import {
 } from '@/lib/agentic/personas.shared';
 import { getAgentTask, type AgentTask } from '@/lib/agentic/supervisor';
 import { runNoveltyCheck, recordStoryMemory, updatePersonaMemory } from '@/lib/agentic/memory';
-import type { NoveltyCandidate } from '@/lib/agentic/memory.shared';
+import type { NoveltyCandidate, NoveltyVerdict } from '@/lib/agentic/memory.shared';
+import { evaluateAndRecord, getPipelineEvaluationForRun } from '@/lib/agentic/evaluation';
+import type { DeterministicEvaluationInput } from '@/lib/agentic/evaluation.shared';
 import { generateSeedPlanPreview, materializeSeededBeat } from '@/lib/ai/seed-authoring';
 import { composeStoryboardPlan, renderStoryboardPlan, mergeCharacterVisualReferences } from '@/lib/ai/beat-orchestration';
 import { saveStoryForUser } from '@/lib/story/save-story';
@@ -951,10 +953,224 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
 
     await appendRunEvent(run.id, 'draft_created', 'info', `Draft story saved (${progress.completedBeats.length} beats).`);
 
-    return { kind: 'advanced', checkpointPayload: { storyId }, storyId };
+    // Carries the post-generation novelty verdict forward for the 'evaluated'
+    // stage (lib/agentic/evaluation.shared.ts's DeterministicEvaluationInput),
+    // so it does not need to re-run or re-derive a check draft_created already
+    // paid for. Two runs already at awaiting_review on dev were checkpointed
+    // before this field existed and carry only { storyId } here -- the
+    // evaluator treats an absent postNovelty exactly like postCheck === null
+    // below (noveltyVerdict: null), which its deterministic layer already
+    // turns into a 'novelty_unavailable' info warning, never a failure.
+    return {
+      kind: 'advanced',
+      checkpointPayload: {
+        storyId,
+        postNovelty: postCheck ? { verdict: postCheck.verdict, reason: (postCheck.reasons[0] ?? '').slice(0, 240) } : null,
+      },
+      storyId,
+    };
   } catch (error) {
     return toFailure(error, { stage: 'draft_created' });
   }
+}
+
+// ── Stage: evaluated ─────────────────────────────────────────────────────
+
+/**
+ * THE 'evaluated' STAGE HAS NO FAILURE PATH. NONE -- not a missing persona,
+ * not a missing checkpoint, not a model timeout, not an unapplied migration
+ * 108. It never returns {kind: 'failed'}. See evaluation.ts's module header
+ * for the full reasoning: draft_created has already saved a real story to
+ * `stories` by the time this stage runs, so failing here would strand that
+ * story outside every reviewer surface (they read runs at 'awaiting_review')
+ * while it still sits in the database, after all the paid generation. Every
+ * problem below becomes an appendRunEvent(..., 'warn', ...) line plus an
+ * advance. The single exception, which is NOT a failure, is {kind:
+ * 'deferred'} for the master flag or an exhausted time budget -- both lose no
+ * work and the run simply resumes.
+ *
+ * Called directly from storyAssemblyExecutor, BEFORE the shared task/persona
+ * preamble further down in this file -- that preamble can itself return
+ * {kind: 'failed'} for a missing task or a deleted persona, which this stage
+ * may never produce. So this function does its own loading, with its own
+ * tolerant handling, instead of reusing that preamble.
+ */
+async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> {
+  const startedAt = Date.now();
+
+  const flags = await getAgenticFlags();
+  if (!flags.creatorEnabled) {
+    return { kind: 'deferred', message: 'Agentic Creator System master flag is off; leaving run pending.' };
+  }
+
+  // DECIDED ONCE PER RUN, NOT ONCE PER ATTEMPT -- and here that is genuinely
+  // load-bearing, not merely defensive the way runNoveltyStage's cache is
+  // (that one guards against a non-deterministic adjudicator; the
+  // deterministic evaluation layer is deterministic by construction).
+  // idx_agent_evaluations_pipeline_run is a PARTIAL UNIQUE INDEX on (run_id)
+  // WHERE trigger_source = 'pipeline', so a second pipeline insert for the
+  // same run is a constraint violation, not a benign overwrite. Without this
+  // read-first check, a crash between evaluateAndRecord's insert landing and
+  // the orchestrator's own end-of-stage checkpoint write would leave the run
+  // still short of 'evaluated' -- and every subsequent retry would pay for a
+  // fresh model call, only to have its own insert fail the unique constraint
+  // and the verdict never get recorded at all.
+  const existing = await getPipelineEvaluationForRun(run.id);
+  if (existing) {
+    await appendRunEvent(
+      run.id,
+      'evaluated',
+      existing.verdict === 'fail' ? 'warn' : 'info',
+      `Evaluation verdict decided on an earlier attempt: ${existing.verdict} (${existing.reviewReadiness}), model ${existing.modelStatus}, ${existing.warnings.length} warning(s).`
+    );
+    return {
+      kind: 'advanced',
+      checkpointPayload: {
+        verdict: existing.verdict,
+        reviewReadiness: existing.reviewReadiness,
+        modelStatus: existing.modelStatus,
+        warningCount: existing.warnings.length,
+      },
+    };
+  }
+
+  // From here on, EVERY problem is a warn event plus an advance -- never
+  // {kind: 'failed'}.
+  let task: AgentTask | null = null;
+  try {
+    task = await getAgentTask(run.taskId);
+  } catch (error) {
+    await appendRunEvent(
+      run.id,
+      'evaluated',
+      'warn',
+      `Evaluation could not load the commissioned task: ${error instanceof Error ? error.message : 'unknown error'}.`
+    );
+  }
+
+  let persona: AgentPersona | null = null;
+  if (run.personaId) {
+    try {
+      persona = await loadPersonaById(run.personaId);
+    } catch (error) {
+      await appendRunEvent(
+        run.id,
+        'evaluated',
+        'warn',
+        `Evaluation could not load the persona: ${error instanceof Error ? error.message : 'unknown error'}.`
+      );
+    }
+  }
+
+  const skippedOutcome: StageExecutionOutcome = {
+    kind: 'advanced',
+    checkpointPayload: { verdict: null, reviewReadiness: null, modelStatus: 'skipped', warningCount: 0 },
+  };
+
+  if (!task || !persona) {
+    // Without a persona there is no language, age group or restricted-theme
+    // list to grade against -- evaluate nothing and say so plainly, rather
+    // than guessing at defaults that would silently misjudge the draft.
+    await appendRunEvent(
+      run.id,
+      'evaluated',
+      'warn',
+      `Evaluation skipped: ${!task ? 'commissioned task' : 'persona'} unavailable.`
+    );
+    return skippedOutcome;
+  }
+
+  const brief = run.checkpoint.brief_ready as StoryBrief | undefined;
+  const progress = run.checkpoint[STORY_PROGRESS_CHECKPOINT_KEY] as SeedGenerationProgress | undefined;
+  if (!brief || !progress?.completedBeats?.length) {
+    await appendRunEvent(
+      run.id,
+      'evaluated',
+      'warn',
+      'Evaluation skipped: this run has no completed beats recorded in its checkpoint.'
+    );
+    return skippedOutcome;
+  }
+
+  // draft_created's checkpoint carries { storyId, postNovelty } as of this
+  // unit; two runs already at awaiting_review on dev were checkpointed before
+  // postNovelty existed and carry only { storyId } here. Treated identically:
+  // absent postNovelty becomes noveltyVerdict: null below, which the
+  // deterministic layer already turns into a 'novelty_unavailable' info
+  // warning, never a failure.
+  const draftCreated = run.checkpoint.draft_created as
+    | { storyId?: string; postNovelty?: { verdict: NoveltyVerdict; reason: string } | null }
+    | undefined;
+  const postNovelty = draftCreated?.postNovelty ?? null;
+
+  const targetBeatCount = clampBeatCount(persona, task.targetBeatCount ?? Number.NaN);
+
+  const deterministic: DeterministicEvaluationInput = {
+    beats: progress.completedBeats.map((beat) => ({
+      beatNumber: beat.beatNumber,
+      storyText: beat.storyText,
+      optionCount: beat.options.length,
+      isEnding: beat.isEnding,
+    })),
+    targetBeatCount,
+    ageGroup: persona.ageGroup,
+    beatLengthLevel: resolvePersonaStoryConfig(persona).beatLength?.level,
+    language: persona.language,
+    restrictedThemes: persona.restrictedThemes,
+    briefThemes: brief.themes,
+    noveltyVerdict: postNovelty?.verdict ?? null,
+    noveltyReason: postNovelty?.reason ?? null,
+  };
+
+  // Deferring on a blown time budget would be equally correct here (see
+  // runStoryGeneratedStage's own deferrals for the same tradeoff elsewhere in
+  // this file), but chosen differently: this stage has no paid work left
+  // except the one optional model call below, a deterministic-only grade
+  // costs nothing, and it is strictly more useful to a reviewer than no grade
+  // at all. So this stage always evaluates and only drops the model call when
+  // the budget is already gone.
+  const promptInput = timeBudgetExceeded(startedAt)
+    ? null
+    : {
+        personaDisplayName: persona.displayName,
+        personaPrompt: persona.personaPrompt,
+        language: persona.language,
+        ageGroup: persona.ageGroup,
+        genre: task.genre ?? persona.genres[0] ?? null,
+        workingTitle: brief.workingTitle,
+        premise: brief.premise,
+        beats: deterministic.beats,
+      };
+
+  const { evaluation } = await evaluateAndRecord({
+    runId: run.id,
+    storyId: run.storyId ?? draftCreated?.storyId ?? null,
+    personaId: persona.id,
+    triggerSource: 'pipeline',
+    deterministic,
+    promptInput,
+    telemetry: buildTelemetry(run, task, persona, 'evaluated'),
+  });
+
+  // Short and factual, per this module's own no-prose rule -- verdict,
+  // readiness, model status, warning count. Never story text, never a model
+  // concern verbatim.
+  await appendRunEvent(
+    run.id,
+    'evaluated',
+    evaluation.verdict === 'fail' ? 'warn' : 'info',
+    `Evaluation verdict: ${evaluation.verdict} (${evaluation.reviewReadiness}), model ${evaluation.modelStatus}, ${evaluation.warnings.length} warning(s).`
+  );
+
+  return {
+    kind: 'advanced',
+    checkpointPayload: {
+      verdict: evaluation.verdict,
+      reviewReadiness: evaluation.reviewReadiness,
+      modelStatus: evaluation.modelStatus,
+      warningCount: evaluation.warnings.length,
+    },
+  };
 }
 
 // ── Entry point: the StageExecutor lib/agentic/orchestrator.ts's
@@ -962,10 +1178,15 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
 
 /**
  * The headless story-assembly executor. For each targetStage:
- *  - narration_pending / narration_complete / evaluated: advance immediately
- *    (Phase 8 / Phase 7 ship these; deferring here would return the run to
- *    'pending' forever without consuming an attempt -- an infinite loop, not
- *    a safe wait).
+ *  - evaluated: delegates to runEvaluatedStage, which has NO FAILURE PATH --
+ *    see that function's own header comment. Handled FIRST, before the
+ *    shared task/persona preamble below, precisely because that preamble can
+ *    itself return {kind: 'failed'} for a missing task or a deleted persona,
+ *    an outcome this stage may never produce; runEvaluatedStage does its own
+ *    tolerant loading instead of reusing it.
+ *  - narration_pending / narration_complete: advance immediately (Phase 8
+ *    ships these; deferring here would return the run to 'pending' forever
+ *    without consuming an attempt -- an infinite loop, not a safe wait).
  *  - awaiting_review: advance immediately. This is the automatic pipeline's
  *    hand-off point to a human reviewer, not a failure -- V1 has no
  *    autonomous publish past this point.
@@ -974,17 +1195,18 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
  *    first.
  */
 export const storyAssemblyExecutor: StageExecutor = async (run, targetStage) => {
+  if (targetStage === 'evaluated') {
+    return runEvaluatedStage(run);
+  }
+
   if (
     targetStage === 'narration_pending'
     || targetStage === 'narration_complete'
-    || targetStage === 'evaluated'
     || targetStage === 'awaiting_review'
   ) {
     const note = targetStage === 'awaiting_review'
       ? 'Draft is ready for human review.'
-      : targetStage === 'evaluated'
-        ? 'Automated evaluation is not implemented yet (Phase 7); advancing without it.'
-        : 'Narration is not implemented yet (Phase 8); advancing without it.';
+      : 'Narration is not implemented yet (Phase 8); advancing without it.';
     await appendRunEvent(run.id, targetStage, 'info', note);
     return { kind: 'advanced' };
   }

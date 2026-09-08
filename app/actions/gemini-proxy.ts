@@ -258,7 +258,7 @@ export async function callGeminiReferenceAnalysis(params: ReferenceAnalysisCallP
 }
 
 export interface AgenticJsonCallParams {
-  task: Extract<TaskKey, 'agent_novelty_assessment' | 'agent_supervisor_planning' | 'agent_story_brief' | 'agent_seed_story_writing'>;
+  task: Extract<TaskKey, 'agent_novelty_assessment' | 'agent_supervisor_planning' | 'agent_story_brief' | 'agent_seed_story_writing' | 'agent_story_evaluation'>;
   model: string;
   prompt: string;
   temperature?: number;
@@ -270,8 +270,10 @@ export interface AgenticJsonCallParams {
  * prompt in code rather than through the admin prompt registry: novelty
  * adjudication (lib/agentic/memory.shared.ts's buildNoveltyAdjudicationPrompt),
  * supervisor planning (lib/agentic/supervisor.shared.ts's
- * buildSupervisorPlanningPrompt), and the two Phase 6 story-assembly calls
- * (lib/agentic/story-assembly.ts's brief and seed-prose prompts).
+ * buildSupervisorPlanningPrompt), the two Phase 6 story-assembly calls
+ * (lib/agentic/story-assembly.ts's brief and seed-prose prompts), and the
+ * Phase 7 draft grading call (lib/agentic/evaluation.ts's evaluateAndRecord,
+ * prompt built by evaluation.shared.ts's buildStoryEvaluationPrompt).
  *
  * Deliberately separate from callGeminiText: that function looks the task up in
  * LOCKED_PROMPT_GUARDRAILS and schemaMap, both keyed by the admin-editable
