@@ -980,14 +980,6 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
   // through to the legacy Gemini selector at first narration -- the bug D11
   // exists to close. So this never reads allowNarration.
   const narrationVoiceLock = await resolveAgentNarrationVoiceLock(persona);
-  await appendRunEvent(
-    run.id,
-    'draft_created',
-    'info',
-    narrationVoiceLock
-      ? `Narration voice locked from persona: ${narrationVoiceLock.voiceId}.`
-      : 'No fixed narration voice on this persona; narration will fall back to automatic selection.'
-  );
 
   const session = buildAgentStorySession({
     run, task, persona, brief, storyConfig, storyMap, characters: finalRoster, narrationVoiceLock,
@@ -1065,6 +1057,20 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
     });
 
     await appendRunEvent(run.id, 'draft_created', 'info', `Draft story saved (${progress.completedBeats.length} beats).`);
+
+    // Reported AFTER the save, not before it. The voice is only actually
+    // locked once saveStoryForUser has written stories.narrator_voice -- a
+    // line saying "locked" in a timeline whose save then threw would assert
+    // something that never happened, and the run timeline is the only window
+    // an operator has into which voice a story ended up with.
+    await appendRunEvent(
+      run.id,
+      'draft_created',
+      'info',
+      narrationVoiceLock
+        ? `Narration voice locked from persona: ${narrationVoiceLock.voiceId}.`
+        : 'No fixed narration voice on this persona; narration will fall back to automatic selection.'
+    );
 
     // Carries the post-generation novelty verdict forward for the 'evaluated'
     // stage (lib/agentic/evaluation.shared.ts's DeterministicEvaluationInput),
