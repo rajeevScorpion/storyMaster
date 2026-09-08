@@ -15,7 +15,6 @@ import {
   type EvaluationModelResult,
   type EvaluationVerdict,
 } from './evaluation.shared';
-import { AGENTIC_SOURCE_FIDELITY } from './story-assembly.shared';
 
 // ── Fixture text ───────────────────────────────────────────────────────
 // Word counts were verified against countStoryWords (Intl.Segmenter) before
@@ -184,13 +183,20 @@ describe('runDeterministicEvaluation — one test per deterministic check code',
     expect(result.verdict).toBe('concerns');
   });
 
-  // The agentic pipeline always generates under AGENTIC_SOURCE_FIDELITY
-  // ('strictly_follow'), where beat storyText is source prose copied
-  // verbatim (see lib/ai/seed-authoring.ts) and the generation layer
-  // deliberately does not enforce a word band on it. On the first real run
-  // this beat-length check fired on all 8 beats and pushed the verdict from
-  // pass to concerns -- these two tests are the fix: the exemption must
-  // apply when fidelity is strict, and must NOT apply otherwise.
+  // The agentic pipeline always generates at 'strictly_follow', where beat
+  // storyText is source prose copied verbatim (see lib/ai/seed-authoring.ts)
+  // and the generation layer deliberately does not enforce a word band on it.
+  // On the first real run this beat-length check fired on all 8 beats and
+  // pushed the verdict from pass to concerns -- these tests are the fix: the
+  // exemption must apply when fidelity is strict, and must NOT apply otherwise.
+  //
+  // These deliberately use the 'strictly_follow' LITERAL rather than
+  // story-assembly.shared.ts's AGENTIC_SOURCE_FIDELITY. Pinning them to that
+  // constant would make them follow the generator wherever it went: point it
+  // at 'creative_expansion' and the first test would still pass while
+  // asserting something false, because it would be checking "the pipeline's
+  // own mode is exempt" instead of "verbatim source prose is exempt". The
+  // third case below is exactly that scenario.
   describe('beat_length_out_of_bounds is exempted under strict source fidelity', () => {
     const beatsFarUnderBand: EvaluatedBeat[] = [
       beat({ beatNumber: 1, storyText: SHORT_BEAT_TEXT, optionCount: 3, isEnding: false }),
@@ -200,7 +206,7 @@ describe('runDeterministicEvaluation — one test per deterministic check code',
 
     it("sourceFidelity 'strictly_follow': no beat_length_out_of_bounds, an info beat_length_unenforced instead, and the verdict stays pass", () => {
       const result = runDeterministicEvaluation(
-        cleanInput({ beats: beatsFarUnderBand, sourceFidelity: AGENTIC_SOURCE_FIDELITY })
+        cleanInput({ beats: beatsFarUnderBand, sourceFidelity: 'strictly_follow' })
       );
       expect(codesOf(result)).not.toContain('beat_length_out_of_bounds');
       expect(codesOf(result)).toContain('beat_length_unenforced');
@@ -213,6 +219,21 @@ describe('runDeterministicEvaluation — one test per deterministic check code',
       expect(codesOf(result)).toContain('beat_length_out_of_bounds');
       expect(codesOf(result)).not.toContain('beat_length_unenforced');
       expect(result.warnings.find((w) => w.code === 'beat_length_out_of_bounds')?.severity).toBe('warn');
+      expect(result.verdict).toBe('concerns');
+    });
+
+    // The regression that matters if the agentic pipeline ever stops following
+    // its source strictly. Under any non-strict fidelity the beats ARE
+    // model-authored and CAN be written to the band, so the check must still
+    // run. An exemption keyed to the pipeline's own constant instead of to
+    // this literal would switch the check off here -- failing open at exactly
+    // the moment it started being meaningful.
+    it("sourceFidelity 'creative_expansion': model-authored beats are still bounds-checked", () => {
+      const result = runDeterministicEvaluation(
+        cleanInput({ beats: beatsFarUnderBand, sourceFidelity: 'creative_expansion' })
+      );
+      expect(codesOf(result)).toContain('beat_length_out_of_bounds');
+      expect(codesOf(result)).not.toContain('beat_length_unenforced');
       expect(result.verdict).toBe('concerns');
     });
   });

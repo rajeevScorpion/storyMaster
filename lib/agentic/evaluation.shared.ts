@@ -37,9 +37,8 @@
 // what `model` contains or whether it was even called. No branch in this
 // file may make either of those two lines conditional on `model`.
 
-import type { AgeGroup, StoryLanguage } from '@/lib/types/story';
+import type { AgeGroup, SourceFidelity, StoryLanguage } from '@/lib/types/story';
 import { countStoryWords, getStoryAudienceProfile, resolveStoryBeatLength } from '@/lib/ai/story-audience';
-import { AGENTIC_SOURCE_FIDELITY } from '@/lib/agentic/story-assembly.shared';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -78,14 +77,13 @@ export interface DeterministicEvaluationInput {
   /** Raw storyConfig.beatLength?.level; resolveStoryBeatLength normalizes it. */
   beatLengthLevel: unknown;
   /**
-   * storyConfig.authoring.sourceFidelity. AGENTIC_SOURCE_FIDELITY
-   * ('strictly_follow') means beat text is source prose copied verbatim, so
-   * the beat-length bounds check below does not apply to it -- see that
-   * check for why. null means fidelity is unknown (e.g. a caller outside the
-   * agentic pipeline that has no such concept), in which case the check runs
-   * as normal.
+   * storyConfig.authoring.sourceFidelity. 'strictly_follow' means beat text is
+   * source prose copied verbatim, so the beat-length bounds check below does
+   * not apply to it -- see that check for why. null means fidelity is unknown
+   * (e.g. a caller outside the agentic pipeline that has no such concept), in
+   * which case the check runs as normal.
    */
-  sourceFidelity: string | null;
+  sourceFidelity: SourceFidelity | null;
   language: StoryLanguage;
   restrictedThemes: string[];
   briefThemes: string[];
@@ -233,20 +231,31 @@ export function runDeterministicEvaluation(input: DeterministicEvaluationInput):
     push('option_count_off', 'warn', `Beat(s) ${offOptionCountBeats.join(', ')} do not have ${expected} options.`);
   }
 
-  // Under AGENTIC_SOURCE_FIDELITY ('strictly_follow'), beat storyText is the
-  // author's source prose copied verbatim -- lib/ai/seed-authoring.ts splices
-  // strictSourceSegments straight into the plan's storyText and its own
-  // validatePlan deliberately skips this same word-count check in that mode,
-  // because there is nothing to validate: the words are the author's, not a
-  // model's, to fit a band. Re-litigating that decision here would grade
-  // every strictly-followed source against a target it was never asked to
-  // hit -- on the first real run this fired on all 8 beats and pushed the
-  // verdict from pass to concerns, which would make 'concerns' the permanent
-  // verdict for essentially every agentic story. So this check is skipped in
-  // that mode, and an 'info' warning is emitted instead of going silent, so
-  // the panel still records why the check did not run -- the same shape as
+  // Under 'strictly_follow', beat storyText is the author's source prose
+  // copied verbatim -- lib/ai/seed-authoring.ts splices strictSourceSegments
+  // straight into the plan's storyText and its own validatePlan deliberately
+  // skips this same word-count check in that mode, because there is nothing
+  // to validate: the words are the author's, not a model's, to fit a band.
+  // Re-litigating that decision here would grade every strictly-followed
+  // source against a target it was never asked to hit -- on the first real
+  // run this fired on all 8 beats and pushed the verdict from pass to
+  // concerns, which would make 'concerns' the permanent verdict for
+  // essentially every agentic story. So this check is skipped in that mode,
+  // and an 'info' warning is emitted instead of going silent, so the panel
+  // still records why the check did not run -- the same shape as
   // language_script_unverified below: 'info' does not move the verdict.
-  if (sourceFidelity === AGENTIC_SOURCE_FIDELITY) {
+  //
+  // This compares against the LITERAL 'strictly_follow', deliberately, and
+  // NOT against story-assembly.shared.ts's AGENTIC_SOURCE_FIDELITY. The
+  // exemption belongs to the fidelity mode, not to whichever mode the agentic
+  // pipeline currently picks: it is justified only because seed-authoring.ts
+  // keys its verbatim splice and its own skipped validation to this same
+  // literal (:95). Were this pinned to the pipeline's constant instead, then
+  // changing that constant to, say, 'creative_expansion' -- where beats ARE
+  // model-authored and the band DOES apply -- would silently switch this
+  // check off at exactly the moment it became meaningful. The generator
+  // moving must never disable a grader's check by side effect.
+  if (sourceFidelity === 'strictly_follow') {
     push(
       'beat_length_unenforced',
       'info',

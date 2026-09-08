@@ -31,12 +31,18 @@ import { addChildNode, createStoryMap } from '@/lib/utils/story-map';
  * because there is nothing to validate: the text is the author's, not the
  * model's, to fit a band.
  *
- * This must be a SHARED constant, not two independently-typed literals, for
- * exactly one reason: evaluation.shared.ts's beat-length bounds check is
- * keyed to this same value to decide whether that check applies at all. If
- * the generator's literal ever drifted from the evaluator's, the evaluator
- * would silently start grading verbatim source prose against a word band
- * again -- the false positive this constant exists to prevent.
+ * It is one constant rather than two literals so that the story config and
+ * the seed-plan call cannot drift from each other: they must describe the
+ * same generation, and seed-authoring.ts branches on this value twice (the
+ * strictSourceSegments split, and validatePlan's skip).
+ *
+ * evaluation.shared.ts also exempts strictly-followed prose from its
+ * beat-length band, but it deliberately does NOT read this constant -- it
+ * compares against the 'strictly_follow' literal directly. That exemption is
+ * a property of the fidelity mode, not of whatever mode this pipeline
+ * happens to use, so changing THIS value must not reach in and switch a
+ * grader's check off. See the comment on that check for the failure it
+ * avoids.
  */
 export const AGENTIC_SOURCE_FIDELITY: SourceFidelity = 'strictly_follow';
 
