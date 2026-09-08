@@ -152,20 +152,28 @@ because a supervisor that answers the same question differently each time cannot
 
 ### Phase 6c — wiring, enqueue, and the Persona Test Lab (2026-09-07)
 
-## Phase 7 (core: units 7a + 7b) — 2026-09-08
+## Phase 7 (units 7a + 7b + 7c) — 2026-09-08
 
 | Gate | Result | Delta vs Phase 6c |
 |---|---|---|
 | `npx tsc --noEmit` | pass | none |
 | `npm run lint` | pass | none — still 0 warnings |
 | `npm test` | pass | **94 files, 821 tests** (from 93/752): +69 in `evaluation.shared.test.ts`, +1 file |
-| `npm run build:verify` | pass | no route change — Phase 7's core adds no page |
+| `npm run build:verify` | pass | no route change — Phase 7 adds no page, 7c included |
 | `npm run test:e2e` | pass | **15 passed, 0 skipped** |
 
 Every gate above was re-run independently after each delegated unit landed, not taken on report.
-Reading the diff caught five defects the 821 tests could not — two of them unreachable without a
+Reading the diff caught six defects the 821 tests could not — two of them unreachable without a
 live database (a thrown read that could still fail the "cannot fail" stage; a time-budget guard
-that could never fire). Both are recorded in the working-memory handoff and fixed in `09be807`.
+that could never fire), fixed in `09be807`; the rest were comments, docs or rendered copy that
+asserted something untrue, the last of them in 7c's own panel (`1cff69f`). All are recorded in the
+working-memory handoff.
+
+**Unit 7c adds no test.** It is a client component reading a server action, and this repo has no
+component-render harness — the `/admin/agents/runs` e2e assertion covers that the page still
+renders, and the three-state panel logic is a ternary over data the run row already carries. Worth
+naming rather than leaving implicit: the panel's correctness currently rests on the diff review
+above and on the fresh run that has **not yet happened**, not on the suite.
 
 `lib/agentic/evaluation.ts` has **no unit tests, deliberately** — it is `server-only`, so vitest
 cannot import it, exactly like `memory.ts` and `story-assembly.ts`. Everything decidable without a

@@ -8,10 +8,12 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Session handoff — 2026-09-08 (Phase 7 core landed; the evaluator has NOT yet run)
 
-**Phase 7's two code units are done and independently verified.** The `evaluated` stage is no
-longer a free advance: it computes a real grade, records it, and hands the run to a human. What is
-**not** done: the admin surface (Unit 7c) and the Test Lab preview (Unit 7d). Both were designed
-and agreed with the owner, neither is written.
+**Phase 7's three code units are done and independently verified.** The `evaluated` stage is no
+longer a free advance: it computes a real grade, records it, surfaces it to an admin, and hands the
+run to a human. Migration 108 is applied on dev. What is **not** done: the Test Lab preview
+(Unit 7d), and — the important one — **nothing has actually been evaluated yet.** The panel built
+in 7c has never displayed a real row, because no run has reached `evaluated` since the stage
+started doing work. Until a fresh run proves it end to end, treat Phase 7 as written, not working.
 
 ### The decision this phase turned on — read before touching the evaluator
 
@@ -41,14 +43,18 @@ never be the sole cause of an automatic consequence.** Full reasoning in decisio
 | `464dbac` | **Review fix** — three corrections to the pure evaluator (below) |
 | `59bf800` | `evaluation.ts` (server half) + the two `story-assembly.ts` wiring changes |
 | `09be807` | **Review fix** — two holes in the stage that cannot fail (below) |
+| `ddf6047` | Unit 7c — `AgentRunDetail`, and the run monitor's Evaluation panel |
+| `1cff69f` | **Review fix** — a verdict footnote that rendered where no verdict was |
 
 Gate, re-run independently rather than taken on report: **tsc 0, lint clean, 94 files / 821 tests
 (+1 file, +69 from the 752 baseline), `build:verify` green, `test:e2e` 15 passed / 0 skipped.**
 
 ### What reading the diff caught that the tests did not
 
-Five real defects, none of which the 821-test suite could have found — two are unreachable without
-a live database, three are accuracy of the record.
+Six real defects, none of which the 821-test suite could have found — two are unreachable without
+a live database, four are accuracy of the record. Note how few of these are logic errors: most are
+a comment, a doc, or a piece of rendered copy asserting something that is not true. Tests do not
+check those, and they are exactly what a later reader will trust.
 
 1. **A thrown read could still fail the stage.** `runEvaluatedStage` awaited
    `getPipelineEvaluationForRun` bare. That function only swallows the schema-missing cases it
@@ -66,6 +72,11 @@ a live database, three are accuracy of the record.
 4. `detectDominantScript` counted **U+FEFF as an Arabic character** — it is the last code point of
    Arabic Presentation Forms-B but is the BOM, not a letter. The range now stops at U+FEFC.
 5. The restricted-theme check's real coverage was overstated — see the known limit below.
+6. **Unit 7c's Evaluation panel told the reader something untrue.** Its footnote — "the verdict
+   above is decided by the deterministic layer alone" — sat outside the three-state ternary, so it
+   rendered under "Not evaluated yet" too, pointing at a verdict that was not on screen. The panel
+   exists to make the deterministic/model split legible; a note that appears where nothing was
+   decided undermines exactly that.
 
 ### Things that will bite you if you do not know them
 
@@ -121,12 +132,19 @@ select action_key, activity_key, phase from public.ai_cost_events
 
    Expect exactly one `agent_evaluations` row per run, one `evaluated` event, and one cost row with
    `phase = 'evaluated'` — and **no** coin movement on the system user (D9: telemetry, no reserve).
-3. **Then Unit 7c** — surface the evaluation in `RunMonitor.tsx`'s expandable detail, beside the
-   stage timeline and checkpoint JSON. `getRunAction` returns `AgentRunWithTimeline`; extend it
-   using `listEvaluationsForRun`. No new route, no nav change — the existing `/admin/agents/runs`
-   e2e assertion then covers it. Show `verdict`, `review_readiness`, `model_status`, the six scores,
-   and every warning **with its `source` and `severity` visible**, so "the deterministic layer
-   decided this" and "the model was uneasy" are never conflated.
+3. ~~Then Unit 7c.~~ **Done 2026-09-08** (`ddf6047` + review fix `1cff69f`). `getRunAction` now
+   returns `AgentRunDetail` — the run, its timeline, and every `agent_evaluations` row — and the
+   detail row grew a third panel spanning both columns. Two things in it are load-bearing:
+   - **The evaluation fetch fails open, separately from the run fetch.** `listEvaluationsForRun`
+     rethrows anything it does not recognize as "108 missing", and the panel is supplementary to
+     the timeline. One transient Postgres error must not blank the detail row. Same defect class
+     as the Unit 7b `getPipelineEvaluationForRun` hole — this is now the second time this exact
+     shape has appeared in Phase 7, so assume the third is coming.
+   - **The panel has three states, not two.** Evaluations present; empty and `evaluated` not in
+     `run.checkpoint`; empty and `evaluated` *is* in it. The third is not hypothetical —
+     `e9cd7325` and `ca2bb41b` bank `evaluated` for free from the Phase 6 placeholder and will
+     sit there permanently. Collapsing it into "not evaluated yet" would state a falsehood about
+     a run that was, in fact, evaluated.
 4. **Then Unit 7d** — the Test Lab's free deterministic preview. The Test Lab parks at
    `story_generated`, before any draft exists, so `runDeterministicEvaluation` runs on the parked
    beats with no model call and no cost. Agreed as worth doing: you see the structural verdict
