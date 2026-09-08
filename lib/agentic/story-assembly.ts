@@ -81,6 +81,14 @@ import { getModelConfig } from '@/lib/ai/model-config';
 import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import type { PricingActionKey } from '@/lib/types/pricing';
 import { normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
+import { resolvePersonaVoice } from '@/lib/agentic/persona-voice.shared';
+import {
+  resolveStoryNarrationLanguage,
+  type NarrationGenderBucket,
+  type NarrationLanguageCode,
+  type StoryNarrationVoiceSelection,
+} from '@/lib/ai/narration-voices';
 import { SEED_SOURCE_WORD_CAP, countAuthoringWords } from '@/lib/story/authoring-limits';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type {
@@ -802,6 +810,59 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
 
 // ── Stage: draft_created ─────────────────────────────────────────────────
 
+/**
+ * What runDraftCreatedStage found for this persona's fixed narration voice
+ * (D11), ready to write into both the session's narrator_voice-shaped fields
+ * and storyConfig.narrationVoice so the two agree.
+ */
+interface AgentNarrationVoiceLock {
+  voiceId: string;
+  genderBucket: NarrationGenderBucket | null;
+  languageCode: NarrationLanguageCode;
+}
+
+/**
+ * Resolves the persona's fixed narration voice against the live voice lists,
+ * or returns null when the persona has none configured.
+ *
+ * FAILS SOFT, NEVER FAILS THE DRAFT. This runs inside draft_created BEFORE
+ * saveStoryForUser writes the story row -- there is no draft yet for D10's
+ * "invisible to review" rule to apply to, but the same spirit does: a voice
+ * problem here must not cost the draft its save. Any throw out of
+ * getNarrationVoiceSettings() (a missing flag row, a transient read error)
+ * degrades to "no voice locked" rather than propagating.
+ *
+ * Deliberately does NOT fall back to a default voice, either on this failure
+ * path or when the persona simply has no preferredVoice set:
+ * resolvePersonaVoice (persona-voice.shared.ts) is written so an unset voice
+ * STAYS unset, and inventing one here would reintroduce exactly the bug D11
+ * exists to close -- a model-chosen voice locking onto the story (and every
+ * episode extended from it) forever. Leaving it null just reproduces today's
+ * known-recoverable behavior: the legacy Gemini selector runs at first
+ * narration, and a reviewer can set a voice and re-narrate.
+ */
+async function resolveAgentNarrationVoiceLock(persona: AgentPersona): Promise<AgentNarrationVoiceLock | null> {
+  let maleVoiceList: string[];
+  let femaleVoiceList: string[];
+  try {
+    const settings = await getNarrationVoiceSettings();
+    maleVoiceList = settings.maleVoiceList;
+    femaleVoiceList = settings.femaleVoiceList;
+  } catch (error) {
+    console.error(
+      '[agentic-story-assembly] failed to load narration voice settings; leaving this draft with no locked voice:',
+      error instanceof Error ? error.message : error
+    );
+    return null;
+  }
+
+  const resolved = resolvePersonaVoice(persona, { maleVoiceList, femaleVoiceList });
+  if (!resolved) return null;
+
+  const { languageCode } = resolveStoryNarrationLanguage(persona.language);
+  return { voiceId: resolved.voiceId, genderBucket: resolved.genderBucket, languageCode };
+}
+
 function buildAgentStorySession(params: {
   run: AgentRun;
   task: AgentTask;
@@ -810,8 +871,26 @@ function buildAgentStorySession(params: {
   storyConfig: StoryConfig;
   storyMap: StoryMap;
   characters: Character[];
+  narrationVoiceLock: AgentNarrationVoiceLock | null;
 }): StorySession {
-  const { run, task, persona, brief, storyConfig, storyMap, characters } = params;
+  const { run, task, persona, brief, storyConfig, storyMap, characters, narrationVoiceLock } = params;
+
+  // D11: a persona choosing its own fixed voice IS a deliberate selection, so
+  // it locks in as 'user_selected' -- never 'legacy_auto'. That is what makes
+  // the lock survive narration_user_led_voice_selection_enabled being
+  // switched off later: resolveNarrationVoiceDecision
+  // (lib/ai/narration-voice-resolver.ts) takes its user-selected branch
+  // whenever the PERSISTED mode already reads 'user_selected', unconditionally
+  // -- it never re-checks that global flag once a story's mode says so.
+  const narrationVoiceSelection: StoryNarrationVoiceSelection | undefined = narrationVoiceLock
+    ? {
+        mode: 'user_selected',
+        voiceId: narrationVoiceLock.voiceId,
+        languageCode: narrationVoiceLock.languageCode,
+        ...(narrationVoiceLock.genderBucket ? { genderBucket: narrationVoiceLock.genderBucket } : {}),
+      }
+    : undefined;
+
   return {
     storySessionId: `agentic-run-${run.id}`,
     userPrompt: task.brief,
@@ -829,13 +908,25 @@ function buildAgentStorySession(params: {
       timeOfDay: 'unknown',
       mood: 'unknown',
     },
-    storyConfig,
+    // Keep storyConfig.narrationVoice and the four session fields below in
+    // agreement -- one is the config a reader-facing picker would show back,
+    // the other four are exactly what saveStoryForUser (lib/story/save-story.ts)
+    // writes onto the stories row.
+    storyConfig: narrationVoiceSelection ? { ...storyConfig, narrationVoice: narrationVoiceSelection } : storyConfig,
     storyMap,
     beats: Object.values(storyMap.nodes).map((node) => node.data),
     choiceHistory: [],
     openThreads: [],
     allowedEndings: [],
     safetyProfile: persona.ageGroup.startsWith('kids') ? 'children' : 'all_ages',
+    // saveStoryForUser writes narrator_voice ONLY from session.narratorVoice --
+    // unlike the other three narration columns, it deliberately does NOT fall
+    // back to storyConfig.narrationVoice?.voiceId. Both must be set here or
+    // the lock would silently not take.
+    narratorVoice: narrationVoiceLock?.voiceId,
+    narrationVoiceMode: narrationVoiceLock ? 'user_selected' : undefined,
+    narrationVoiceGenderBucket: narrationVoiceLock?.genderBucket ?? undefined,
+    narrationLanguageCode: narrationVoiceLock?.languageCode,
   };
 }
 
@@ -879,7 +970,28 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
     briefCharactersToRoster(brief.characters),
     progress.completedBeats.flatMap((beat) => beat.characters)
   );
-  const session = buildAgentStorySession({ run, task, persona, brief, storyConfig, storyMap, characters: finalRoster });
+
+  // Locked regardless of persona.allowNarration. That flag gates PRODUCING
+  // audio -- the reviewer's narrate button, per D10 -- not DECLARING which
+  // voice a narration would use. A locked voice on a persona with
+  // allowNarration === false generates nothing and costs nothing; leaving it
+  // unlocked instead is what actually costs something, because a null
+  // narrator_voice is exactly what makes resolveNarrationVoiceServer fall
+  // through to the legacy Gemini selector at first narration -- the bug D11
+  // exists to close. So this never reads allowNarration.
+  const narrationVoiceLock = await resolveAgentNarrationVoiceLock(persona);
+  await appendRunEvent(
+    run.id,
+    'draft_created',
+    'info',
+    narrationVoiceLock
+      ? `Narration voice locked from persona: ${narrationVoiceLock.voiceId}.`
+      : 'No fixed narration voice on this persona; narration will fall back to automatic selection.'
+  );
+
+  const session = buildAgentStorySession({
+    run, task, persona, brief, storyConfig, storyMap, characters: finalRoster, narrationVoiceLock,
+  });
 
   try {
     const admin = createAdminClient();
@@ -1220,9 +1332,12 @@ async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> 
  *    itself return {kind: 'failed'} for a missing task or a deleted persona,
  *    an outcome this stage may never produce; runEvaluatedStage does its own
  *    tolerant loading instead of reusing it.
- *  - narration_pending / narration_complete: advance immediately (Phase 8
- *    ships these; deferring here would return the run to 'pending' forever
- *    without consuming an attempt -- an infinite loop, not a safe wait).
+ *  - narration_pending / narration_complete: advance immediately. D10 made
+ *    narration a reviewer action on the finished draft, not a pipeline stage
+ *    -- these two stage names stay in STAGE_SEQUENCE but do no work here.
+ *    Deferring here instead would return the run to 'pending' forever without
+ *    consuming an attempt -- an infinite loop, not a safe wait -- which is
+ *    still the reason to advance rather than defer, independent of D10.
  *  - awaiting_review: advance immediately. This is the automatic pipeline's
  *    hand-off point to a human reviewer, not a failure -- V1 has no
  *    autonomous publish past this point.
@@ -1242,7 +1357,7 @@ export const storyAssemblyExecutor: StageExecutor = async (run, targetStage) => 
   ) {
     const note = targetStage === 'awaiting_review'
       ? 'Draft is ready for human review.'
-      : 'Narration is not implemented yet (Phase 8); advancing without it.';
+      : 'Narration is a reviewer action on the finished draft, not a pipeline step; advancing without it.';
     await appendRunEvent(run.id, targetStage, 'info', note);
     return { kind: 'advanced' };
   }
