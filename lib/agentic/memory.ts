@@ -22,6 +22,7 @@ import {
   NOVELTY_PRIOR_FETCH_LIMIT,
   buildNoveltyAdjudicationPrompt,
   isMissingMemorySchemaError,
+  applyAdjudication,
   needsModelAdjudication,
   scoreNovelty,
   type NoveltyCandidate,
@@ -318,8 +319,18 @@ export async function runNoveltyCheck(
     const judgement = await adjudicate(candidate, scored, context.telemetry);
     if (judgement) {
       adjudicated = true;
-      verdict = judgement.verdict;
+      // applyAdjudication lets the model DOWNGRADE the deterministic verdict but
+      // never escalate it -- see its doc comment for the measured behaviour that
+      // forced this. When it tries to escalate we keep the deterministic verdict
+      // and say so in `reasons`, so the record shows both what the model claimed
+      // and that it did not decide the outcome.
+      verdict = applyAdjudication(scored.verdict, judgement.verdict);
       reasons.push(`Model adjudication (${judgement.verdict}): ${judgement.reason}`);
+      if (verdict !== judgement.verdict) {
+        reasons.push(
+          `Adjudication not applied: a model may soften the deterministic verdict ('${scored.verdict}'), never harden it.`
+        );
+      }
     }
   }
 

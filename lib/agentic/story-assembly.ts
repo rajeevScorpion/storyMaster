@@ -470,40 +470,116 @@ async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPerso
 
 // ── Stage: novelty_checked ───────────────────────────────────────────────
 
+/**
+ * Key the pre-generation verdict is cached under, inside the SAME
+ * agent_runs.checkpoint object the orchestrator's stage-name keys live in --
+ * and deliberately NOT under the 'novelty_checked' stage key itself.
+ *
+ * Using the stage key would make isCheckpointed() true, and advanceRun applies
+ * a checkpointed stage "for free" without calling the executor: a blocked run
+ * would sail straight past the block on its next attempt. The verdict is cached
+ * so it is DECIDED once, not so the stage is SKIPPED.
+ */
+const NOVELTY_VERDICT_CHECKPOINT_KEY = 'novelty_checked_verdict';
+
+interface CachedNoveltyVerdict {
+  verdict: string;
+  score: number;
+  adjudicated: boolean;
+  reason: string;
+}
+
+/**
+ * Persists the pre-generation verdict, guarded on this run still being the one
+ * holding the claim. Mirrors persistStoryGenerationProgress: a targeted UPDATE
+ * plus an in-place mutation of run.checkpoint, because advanceRun reads that
+ * field after the executor returns and would otherwise spread a stale copy.
+ *
+ * Best-effort by design -- failing to cache a verdict must not fail a run that
+ * is otherwise fine. The cost of a miss is one extra adjudication, not a wrong
+ * answer.
+ */
+async function persistNoveltyVerdict(run: AgentRun, cached: CachedNoveltyVerdict): Promise<void> {
+  const nextCheckpoint: AgentRunCheckpoint = { ...run.checkpoint, [NOVELTY_VERDICT_CHECKPOINT_KEY]: cached };
+  try {
+    const admin = createAdminClient();
+    const { error } = await admin
+      .from('agent_runs')
+      .update({ checkpoint: nextCheckpoint })
+      .eq('id', run.id)
+      .eq('status', 'processing');
+    if (error) {
+      console.error('[agentic-story-assembly] failed to cache novelty verdict:', error.message);
+      return;
+    }
+    run.checkpoint = nextCheckpoint;
+  } catch (error) {
+    console.error('[agentic-story-assembly] failed to cache novelty verdict:', error instanceof Error ? error.message : error);
+  }
+}
+
 async function runNoveltyStage(run: AgentRun, task: AgentTask, persona: AgentPersona): Promise<StageExecutionOutcome> {
   const brief = run.checkpoint.brief_ready as StoryBrief | undefined;
   if (!brief) {
     return { kind: 'failed', message: 'novelty_checked reached with no brief_ready checkpoint present.' };
   }
 
-  const candidate: NoveltyCandidate = {
-    title: brief.workingTitle,
-    premise: brief.premise,
-    themes: brief.themes,
-    characterNames: brief.characters.map((character) => character.name),
-    language: persona.language,
-    ageGroup: persona.ageGroup,
-    genre: task.genre ?? persona.genres[0] ?? null,
-    seriesId: task.seriesId ?? null,
-  };
+  // ADJUDICATE ONCE PER RUN, NOT ONCE PER ATTEMPT. A 'block' fails this stage,
+  // and handleStageFailure returns the run to 'pending' for another attempt --
+  // at which point brief_ready is checkpointed and skipped, but this stage is
+  // not, so without the cache the whole check re-ran, adjudicator included.
+  // The adjudicator is a model call and is non-deterministic inside the
+  // ambiguous band: four adjudications of identical input returned block,
+  // block, warn, block. That made a block mean "blocked unless one of up to
+  // MAX_RUN_ATTEMPTS coin flips disagrees" -- a lottery, not a gate. Caching
+  // the verdict makes the run's answer the same on every attempt, so a block
+  // stays blocked and a clear stays clear.
+  const cached = run.checkpoint[NOVELTY_VERDICT_CHECKPOINT_KEY] as CachedNoveltyVerdict | undefined;
 
-  const result = await runNoveltyCheck('pre_generation', candidate, {
-    taskId: task.id,
-    runId: run.id,
-    personaId: persona.id,
-  });
+  let verdict: string;
+  let score: number;
+  let adjudicated: boolean;
+  let reason: string;
 
-  if (result.verdict === 'block') {
-    const reason = (result.reasons[0] ?? 'Flagged as derivative of existing catalogue content.').slice(0, 240);
-    await appendRunEvent(run.id, 'novelty_checked', 'warn', `Novelty check blocked generation: ${reason}`);
+  if (cached) {
+    ({ verdict, score, adjudicated, reason } = cached);
+  } else {
+    const candidate: NoveltyCandidate = {
+      title: brief.workingTitle,
+      premise: brief.premise,
+      themes: brief.themes,
+      characterNames: brief.characters.map((character) => character.name),
+      language: persona.language,
+      ageGroup: persona.ageGroup,
+      genre: task.genre ?? persona.genres[0] ?? null,
+      seriesId: task.seriesId ?? null,
+    };
+
+    const result = await runNoveltyCheck('pre_generation', candidate, {
+      taskId: task.id,
+      runId: run.id,
+      personaId: persona.id,
+    });
+
+    verdict = result.verdict;
+    score = result.score;
+    adjudicated = result.adjudicated;
+    reason = (result.reasons[0] ?? 'Flagged as derivative of existing catalogue content.').slice(0, 240);
+    await persistNoveltyVerdict(run, { verdict, score, adjudicated, reason });
+  }
+
+  if (verdict === 'block') {
+    await appendRunEvent(
+      run.id,
+      'novelty_checked',
+      'warn',
+      `Novelty check blocked generation${cached ? ' (verdict decided on the first attempt)' : ''}: ${reason}`
+    );
     return { kind: 'failed', message: `Novelty check blocked this story: ${reason}` };
   }
 
-  await appendRunEvent(run.id, 'novelty_checked', 'info', `Novelty check verdict: ${result.verdict}.`);
-  return {
-    kind: 'advanced',
-    checkpointPayload: { verdict: result.verdict, score: result.score, adjudicated: result.adjudicated },
-  };
+  await appendRunEvent(run.id, 'novelty_checked', 'info', `Novelty check verdict: ${verdict}.`);
+  return { kind: 'advanced', checkpointPayload: { verdict, score, adjudicated } };
 }
 
 // ── Stage: story_generated ───────────────────────────────────────────────

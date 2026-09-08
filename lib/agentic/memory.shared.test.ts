@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyAdjudication,
+  NOVELTY_VERDICT_SEVERITY,
   AMBIGUOUS_BAND_HIGH,
   AMBIGUOUS_BAND_LOW,
   CHARACTER_REUSE_BLOCK_COUNT,
@@ -294,5 +296,39 @@ describe('isMissingMemorySchemaError', () => {
   it('returns false for null/undefined', () => {
     expect(isMissingMemorySchemaError(null)).toBe(false);
     expect(isMissingMemorySchemaError(undefined)).toBe(false);
+  });
+});
+
+describe('applyAdjudication — the model may soften a verdict, never harden it', () => {
+  it('severity is ordered clear < warn < block', () => {
+    expect(NOVELTY_VERDICT_SEVERITY.clear).toBeLessThan(NOVELTY_VERDICT_SEVERITY.warn);
+    expect(NOVELTY_VERDICT_SEVERITY.warn).toBeLessThan(NOVELTY_VERDICT_SEVERITY.block);
+  });
+
+  it('a model block NEVER escalates a deterministic warn — the measured regression', () => {
+    // Four adjudications of identical input (top_score 0.5000, two reused
+    // character names, deterministic verdict 'warn') returned block, block,
+    // warn, block. Before this rule that made a terminal run failure a coin
+    // flip decided entirely by an unauditable model call.
+    expect(applyAdjudication('warn', 'block')).toBe('warn');
+  });
+
+  it('a model block never escalates a deterministic clear either', () => {
+    expect(applyAdjudication('clear', 'block')).toBe('clear');
+    expect(applyAdjudication('clear', 'warn')).toBe('clear');
+  });
+
+  it('the model CAN downgrade, which is the job it exists for', () => {
+    // Reachable in the ambiguous band: a premise scoring 0.55-0.62 crosses
+    // PREMISE_BLOCK_THRESHOLD while staying below AMBIGUOUS_BAND_HIGH.
+    expect(applyAdjudication('block', 'warn')).toBe('warn');
+    expect(applyAdjudication('block', 'clear')).toBe('clear');
+    expect(applyAdjudication('warn', 'clear')).toBe('clear');
+  });
+
+  it('agreement is a no-op at every level', () => {
+    expect(applyAdjudication('clear', 'clear')).toBe('clear');
+    expect(applyAdjudication('warn', 'warn')).toBe('warn');
+    expect(applyAdjudication('block', 'block')).toBe('block');
   });
 });

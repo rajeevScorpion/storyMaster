@@ -338,6 +338,37 @@ export function needsModelAdjudication(score: number): boolean {
   return score >= AMBIGUOUS_BAND_LOW && score < AMBIGUOUS_BAND_HIGH;
 }
 
+/** Severity order for a novelty verdict. Higher blocks harder. */
+export const NOVELTY_VERDICT_SEVERITY: Record<NoveltyVerdict, number> = { clear: 0, warn: 1, block: 2 };
+
+/**
+ * Combines the deterministic verdict with the model adjudicator's opinion.
+ *
+ * THE ADJUDICATOR MAY DOWNGRADE, NEVER ESCALATE. It can rescue a candidate the
+ * thresholds were too harsh on; it can never invent a severity the tested,
+ * deterministic layer did not already reach. The result is therefore always the
+ * LESS severe of the two.
+ *
+ * This is a response to measured behaviour, not a hypothetical. On four
+ * adjudications of identical input (top_score 0.5000, two reused character
+ * names) the model returned block, block, warn, block. Because a block failed
+ * the run and a retry re-adjudicated, that made a 'block' mean 'blocked unless
+ * one of up to three coin flips disagrees'. Worse, the deterministic layer had
+ * never said block at all: CHARACTER_REUSE_BLOCK_COUNT is 4 and only 2 names
+ * were reused, so 0.5 is literally 2/4 -- a warn. An unauditable model call was
+ * the sole cause of a terminal run failure, which is exactly the property this
+ * codebase refuses elsewhere (see rankCoverageGaps' determinism test: an
+ * unauditable supervisor is worse than none).
+ *
+ * A deterministic block inside the ambiguous band is still reachable and still
+ * downgradable -- a premise scoring 0.55-0.62 crosses PREMISE_BLOCK_THRESHOLD
+ * while staying inside the band -- so the adjudicator keeps the job it was
+ * actually introduced to do.
+ */
+export function applyAdjudication(deterministic: NoveltyVerdict, adjudicated: NoveltyVerdict): NoveltyVerdict {
+  return NOVELTY_VERDICT_SEVERITY[adjudicated] < NOVELTY_VERDICT_SEVERITY[deterministic] ? adjudicated : deterministic;
+}
+
 /** Prompt for the economy-tier adjudication call (TaskKey agent_novelty_assessment). */
 export function buildNoveltyAdjudicationPrompt(
   candidate: NoveltyCandidate,
