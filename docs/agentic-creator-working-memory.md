@@ -30,8 +30,14 @@ checks pass:
 `{coherence 5, ageFit 5, pacing 5, personaFidelity 5, safety 5, learningValue 4}` — near-perfect,
 and certainly not a story it wanted flagged. The deterministic layer found every beat under the
 word floor and returned `concerns`. **The final verdict was `concerns`.** The model's optimism did
-not soften it, which is the entire point of the decision. Had the model held a vote, this run would
-have been graded `pass` and a real defect would have gone to review unmarked.
+not soften it, which is the entire point of the decision.
+
+Be precise about what that does and does not prove, though. The **mechanism** is demonstrated: a
+deterministic finding survived a model that disagreed with it, exactly as designed. But the finding
+itself turned out to be a false positive (defect 2 below), so after `799bcad` this same run grades
+`pass`. D9 holds as a design — the model never got to overrule the layer that decides — while the
+concrete verdict produced that day was wrong for an unrelated reason. Both are true, and conflating
+them would misread the evidence in either direction.
 
 ### The decision this phase turned on — read before touching the evaluator
 
@@ -96,9 +102,11 @@ check those, and they are exactly what a later reader will trust.
    exists to make the deterministic/model split legible; a note that appears where nothing was
    decided undermines exactly that.
 
-### TWO OPEN DEFECTS the proof run exposed — neither is in Phase 7
+### TWO DEFECTS the proof run exposed — both now FIXED
 
-**1. `retryRun` silently marks a permanently-failed run as SUCCEEDED. Do not press Retry.**
+**1. `retryRun` silently marked a permanently-failed run as SUCCEEDED.** Fixed in `045eea4`;
+`b7ac6093` is now safe to retry and will resume at `novelty_checked`. The mechanism, worth
+remembering because the shape recurs:
 `handleStageFailure` sets `stage = 'failed'`. `retryRun` (orchestrator.ts:1265) then resets
 `status`, `attempt_count` and `error_detail` — **but not `stage`**. The next drain claims the run,
 `nextStage('failed')` returns `undefined` because `'failed'` is in `TERMINAL_STAGES`, and
@@ -106,21 +114,33 @@ check those, and they are exactly what a later reader will trust.
 `status = 'succeeded'`. Net effect: no work is done, the failure reason is erased, and the run
 shows a green Succeeded pill. That branch's own comment says "a claimed 'pending' run should never
 already sit on a terminal stage" — but `retryRun` is a first-party path that produces exactly that
-state, so the assumption is false. Still latent: `b7ac6093` is the only failed run and nobody has
-pressed Retry on it. **Fix**: derive the resume stage from the checkpoint — the last
-`STAGE_SEQUENCE` member present in it, `queued` if none. It must filter to real stage names;
-`story_generated_progress` is a progress side-channel key, not a stage, so "last checkpoint key"
-would pick the wrong thing.
+state, so the assumption was false and is corrected in the same commit. It never fired in
+production: `b7ac6093` was the only failed run and nobody pressed Retry on it.
 
-**2. Agentic beats come out about a third of their configured length.** Story `57f01e35` is
-`ageGroup: adults`, `beatLength.level: 4` → target **150 words/beat**, absolute floor 72
-(`beatWordTargets: [72, 98, 124, 150, 176]`, lib/ai/story-audience.ts:101). The eight generated
-beats were **41, 61, 54, 45, 41, 53, 49, 44** — every one under the floor, none close to target.
-This is a generation defect in the seeded-beat path, not an evaluator miscalibration: the band is
-correct and the evaluator reported it accurately. `buildStoryAudienceGuidance` does emit the length
-instruction, so the question is whether the agentic materialization prompt carries it. Worth noting
-what this means about the whole exercise: **the evaluator found a real content defect on its first
-live run, one that two earlier "successful" runs had already shipped to review unnoticed.**
+**The fix** is `resumeStageFromCheckpoint(checkpoint)` in `orchestrator.shared.ts` — the last
+`STAGE_SEQUENCE` member present in the checkpoint, `queued` if none. It walks `STAGE_SEQUENCE` and
+tests membership; it must **never** iterate the checkpoint's own keys, because
+`story_generated_progress` (`STORY_PROGRESS_CHECKPOINT_KEY`) is an intra-stage progress
+side-channel written into that same object and is not a stage. A "last key in the object" approach
+would pick it. `retryRun` applies this only when the current stage is terminal.
+
+**2. ~~Agentic beats come out short.~~ WRONG — it was the evaluator's own false positive.** Both
+defects here are now **FIXED** (`799bcad`, `045eea4`, `fcd55cd`); this entry is kept because the
+first reading of the evidence was wrong in an instructive way.
+
+The first diagnosis here said the beats were a generation defect: story `57f01e35` is
+`ageGroup: adults`, `beatLength.level: 4` → target **150 words/beat**, floor 72, and the eight
+beats were **41, 61, 54, 45, 41, 53, 49, 44**. All true, and all irrelevant. The agentic pipeline
+always generates at `sourceFidelity: 'strictly_follow'`, and in that mode `seed-authoring.ts`
+splices the source prose into `storyText` **verbatim** (`:176`) and its own `validatePlan`
+**deliberately skips this exact word-count check** (`:146`) — because the words are the author's,
+not a model's, to fit a band. The evaluator was re-litigating a decision another layer had already
+made, and would have done so on essentially every agentic story, making `concerns` the permanent
+verdict and draining the grade of meaning.
+
+The lesson worth keeping: **a deterministic check that fires on 100% of real cases is evidence
+about the check, not about the content.** The instinct to trust it because it is deterministic is
+exactly backwards — deterministic only means it will be consistently right or consistently wrong.
 
 ### Things that will bite you if you do not know them
 
