@@ -6,6 +6,132 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-08 (Phase 7 core landed; the evaluator has NOT yet run)
+
+**Phase 7's two code units are done and independently verified.** The `evaluated` stage is no
+longer a free advance: it computes a real grade, records it, and hands the run to a human. What is
+**not** done: the admin surface (Unit 7c) and the Test Lab preview (Unit 7d). Both were designed
+and agreed with the owner, neither is written.
+
+### The decision this phase turned on — read before touching the evaluator
+
+**An evaluation never stops a run.** The `evaluated` stage has no failure path at all. Not a
+missing persona, not a missing checkpoint, not a model timeout, not an unapplied migration 108 —
+every one becomes an `agent_run_events` warn line plus an advance. The only non-advance exit is
+`deferred` (master flag off, or the run's budget already gone), which loses no work.
+
+Why: by the time `evaluated` runs, `draft_created` has already saved a real row to `stories`.
+`advanceRun` routes a thrown or `failed` executor outcome into `handleStageFailure`, and every
+reviewer surface keys on runs at `awaiting_review`. Failing here strands a finished story —
+invisible to review, still in the database, all the generation already paid for.
+
+**And the model gets no vote on `verdict` or `review_readiness`, in either direction.** This
+extends `32f2c65` rather than contradicting it. There, a model could *soften* a deterministic
+verdict because a `block` was terminal and a too-harsh threshold would kill a good story — a rescue
+valve with a real cost if absent. Here nothing is terminal, so there is nothing to rescue from, and
+a softening vote would let an unauditable call talk a story past objective facts (wrong script,
+restricted theme present, beats missing). Same principle, different stakes: **a model call may
+never be the sole cause of an automatic consequence.** Full reasoning in decision **D9**.
+
+### Commits this session, all reviewed by diff rather than by report
+
+| SHA | What |
+|---|---|
+| `c0d33dc` | `evaluation.shared.ts` + tests, and migration 108 with its rollback twin |
+| `464dbac` | **Review fix** — three corrections to the pure evaluator (below) |
+| `59bf800` | `evaluation.ts` (server half) + the two `story-assembly.ts` wiring changes |
+| `09be807` | **Review fix** — two holes in the stage that cannot fail (below) |
+
+Gate, re-run independently rather than taken on report: **tsc 0, lint clean, 94 files / 821 tests
+(+1 file, +69 from the 752 baseline), `build:verify` green, `test:e2e` 15 passed / 0 skipped.**
+
+### What reading the diff caught that the tests did not
+
+Five real defects, none of which the 821-test suite could have found — two are unreachable without
+a live database, three are accuracy of the record.
+
+1. **A thrown read could still fail the stage.** `runEvaluatedStage` awaited
+   `getPipelineEvaluationForRun` bare. That function only swallows the schema-missing cases it
+   latches on and rethrows everything else, and a thrown executor goes straight to
+   `handleStageFailure`. One transient Postgres error would have stranded a saved draft — the exact
+   outcome the whole stage exists to prevent. The "no failure path" rule was true of every branch
+   that returned and false of the one line that threw.
+2. **The time-budget guard was dead code.** It measured from `Date.now()` at the top of
+   `runEvaluatedStage` and then checked after a flag read and three short queries — ~200ms against a
+   20s budget, so it could never fire. Now measured from `run.claimed_at`, the meaningful origin: if
+   `draft_created` already burned the pass's budget, this stage starts over it.
+3. A comment claimed every JSON parser in the codebase strips markdown fences. It is false, and the
+   subagent that wrote it had already verified it was false. Fence-stripping here is a deliberate
+   *departure* from `parseStoryBrief`, and the comment now says why.
+4. `detectDominantScript` counted **U+FEFF as an Arabic character** — it is the last code point of
+   Arabic Presentation Forms-B but is the BOM, not a letter. The range now stops at U+FEFC.
+5. The restricted-theme check's real coverage was overstated — see the known limit below.
+
+### Things that will bite you if you do not know them
+
+- **THE EVALUATOR HAS NEVER RUN, and the two existing drafts can never run it.** Both
+  `awaiting_review` runs on dev (`e9cd7325`, `ca2bb41b`) already have `evaluated` in their
+  `checkpoint`, banked by the Phase 6 placeholder that advanced the stage for free. `isCheckpointed`
+  is therefore true and `advanceRun` applies the stage without calling the executor — forever.
+  **Proving Phase 7 needs a brand-new run**, not a retry of either of those; `retryRun` does not
+  clear the checkpoint.
+- **Migration 108 is applied NOWHERE** — not dev, not prod. The code fails closed without it: the
+  evaluation is still computed and still written into `agent_run_events`, only the persist is
+  skipped. So a run today produces a grade in the timeline and no `agent_evaluations` row.
+- **The restricted-theme check is effectively English-only against beat text.** Verified by query,
+  not assumed: all 15 seeded personas store `restricted_themes` as English phrases, including the 12
+  writing in Hindi, Bangla, Gujarati or Marathi. JS `\b` is defined over `[A-Za-z0-9_]` and never
+  holds beside a Devanagari/Bengali/Gujarati/Arabic character. The `briefThemes` half works for
+  every persona, because `buildStoryBriefPrompt` asks for themes *in English* while the prose goes
+  in the target language. It fails **open** — a missed restriction, never a false one — and the
+  model's `safety` dimension covers the same ground advisorily.
+- **`evaluation.ts` has no unit tests, deliberately.** It is `server-only`, like `memory.ts` and
+  `story-assembly.ts`, so vitest cannot import it. Everything decidable without a database lives in
+  `evaluation.shared.ts` and is tested there. Do not add a mock-Supabase harness for it; that is not
+  how this codebase is organised.
+- **`getPipelineEvaluationForRun` is load-bearing, not defensive.**
+  `idx_agent_evaluations_pipeline_run` is a *partial* unique index on `(run_id) WHERE
+  trigger_source = 'pipeline'`, so a second pipeline insert is a constraint violation. Without the
+  read-first check, a crash between the insert landing and the orchestrator's checkpoint write would
+  make every retry pay for a fresh model call and then fail to record it at all.
+- **`app/actions/gemini-proxy.ts` needed widening.** `AgenticJsonCallParams.task` never listed
+  `agent_story_evaluation`, even though that TaskKey was pre-registered in `model-config.shared.ts`.
+  Additive one-literal fix in `59bf800`. If Phase 8 adds a narration-side agentic call, expect the
+  same gap.
+
+### THE NEXT STEP
+
+1. **Apply `108_agent_evaluations.sql` on dev** by hand in the Supabase dashboard. Then confirm:
+   `select * from public.schema_migration_ledger where migration_number = 108;`
+   `select count(*) from public.agent_evaluations;   -- expect 0`
+2. **Start a fresh run** — Test Lab against a persona, then promote — and watch it reach
+   `evaluated`. Verify:
+
+```sql
+select verdict, review_readiness, model_status, model_id,
+       jsonb_array_length(warnings) as warning_count, scores
+  from public.agent_evaluations;
+select stage, level, message from public.agent_run_events
+ where stage = 'evaluated' order by created_at;
+select action_key, activity_key, phase from public.ai_cost_events
+ where activity_key = 'agentic_creator' and phase = 'evaluated';
+```
+
+   Expect exactly one `agent_evaluations` row per run, one `evaluated` event, and one cost row with
+   `phase = 'evaluated'` — and **no** coin movement on the system user (D9: telemetry, no reserve).
+3. **Then Unit 7c** — surface the evaluation in `RunMonitor.tsx`'s expandable detail, beside the
+   stage timeline and checkpoint JSON. `getRunAction` returns `AgentRunWithTimeline`; extend it
+   using `listEvaluationsForRun`. No new route, no nav change — the existing `/admin/agents/runs`
+   e2e assertion then covers it. Show `verdict`, `review_readiness`, `model_status`, the six scores,
+   and every warning **with its `source` and `severity` visible**, so "the deterministic layer
+   decided this" and "the model was uneasy" are never conflated.
+4. **Then Unit 7d** — the Test Lab's free deterministic preview. The Test Lab parks at
+   `story_generated`, before any draft exists, so `runDeterministicEvaluation` runs on the parked
+   beats with no model call and no cost. Agreed as worth doing: you see the structural verdict
+   before pressing "Create draft".
+
+---
+
 ## Session handoff — 2026-09-07 (Phase 6c complete; THE PIPELINE HAS RUN)
 
 **The Agentic Creator has generated stories.** Two complete five-beat drafts exist on dev, owned by
@@ -181,10 +307,12 @@ select count(*) from public.image_generation_jobs where created_at > now() - int
 
 ## Where we are
 
-- **Phase:** Phase 6 complete (6a, 6b and 6c). Phases 1-5 shipped in full. The headless pipeline
-  exists, is wired into the drain, has an enqueue path feeding it, and has a Test Lab to drive it
-  on demand; **it has still never run.** Only a feature flag stands between here and the first
-  real story. Phase 7 (independent evaluation) is next, but running the slice comes first.
+- **Phase:** Phases 1-6 shipped in full, and the pipeline has produced two real drafts.
+  **Phase 7 is core-complete but unproven:** the pure evaluator (7a) and its server half wired into
+  a no-failure `evaluated` stage (7b) are landed and gated; the Run monitor surface (7c) and the
+  Test Lab deterministic preview (7d) are designed and agreed but not written. **The evaluator has
+  never executed** — migration 108 is applied nowhere, and both existing `awaiting_review` runs
+  already banked `evaluated` from the Phase 6 placeholder, so proving it needs a brand-new run.
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
 - **Source pack:** `prompt-packs/Kisago_Agentic_Creator_Prompt_Pack/` (17 files, read in full during planning)
@@ -228,9 +356,9 @@ explicitly rather than incidentally — that is why the three empty states are d
 
 ## Next step
 
-**Run the vertical slice, then re-plan Phase 7.** The full instructions, the flags to turn on, the
-reason the billing bypass is not optional, and the SQL to verify each claim are all in the session
-handoff at the top of this file. Nothing here needs more code first.
+**Apply migration 108 on dev, start one fresh run to prove the evaluator, then build units 7c and
+7d.** The exact SQL to verify each claim, and the specs for both remaining units, are in the
+session handoff at the top of this file. 7c and 7d need code; the proof run does not.
 
 ### Superseded: Phase 5b (complete, landed at `78e8aaa`)
 
@@ -314,7 +442,10 @@ Still worth doing, neither blocking:
 
 None blocking work. Three open items:
 
-- **Production has none of 102-107, and needs two more things besides the migrations.** See the
+- **Migration 108 is applied nowhere, so the evaluator cannot persist a grade.** Not a defect: the
+  code fails closed, computing the evaluation and writing it into `agent_run_events` while skipping
+  the `agent_evaluations` insert. Apply `108_agent_evaluations.sql` on dev to turn the record on.
+- **Production has none of 102-108, and needs two more things besides the migrations.** See the
   "Promoting the agentic system to production" checklist in `docs/agent-context/PROJECT_STATE.md`:
   prod needs its own `AGENTIC_SYSTEM_USER_ID` auth user (a *different* UUID from dev's, set as a Vercel
   env var), while `CRON_SECRET` needs no action. Nothing on prod changes until then, by design.
@@ -322,9 +453,9 @@ None blocking work. Three open items:
   are not set in `.env.local`. It is the vehicle for browser proof of every agentic admin surface,
   including the newly added `/admin/agents/test-lab`, so until those are set the Test Lab has never
   been opened in a browser. Setting them turns the proof back on with no code change.
-- **The pipeline has never executed.** `agentic_creator_enabled` is `false` everywhere, which is the
-  fail-closed design working as intended, not a defect. See the handoff at the top for exactly what
-  to turn on and what to check afterwards.
+- **The evaluator has never executed.** The pipeline itself has — two drafts exist on dev — but the
+  `evaluated` stage was still a free advance when those ran, and both banked it in their checkpoint.
+  A brand-new run is the only way to exercise Phase 7. See the handoff at the top.
 
 ## Active flags
 
@@ -351,7 +482,8 @@ guarantee stops being a guarantee.
 | 105 | `105_agent_story_memory.sql` | 3 | **APPLIED** 2026-09-06 | not applied |
 | 106 | `106_agent_tasks.sql` | 4 | **APPLIED** 2026-09-07 | not applied |
 | 107 | `107_agent_runs.sql` | 5 | **APPLIED** 2026-09-07 | not applied |
-| 108–110 | evaluation / reviewers / labels | 7, 9, 11 | not written | not written |
+| 108 | `108_agent_evaluations.sql` | 7 | **WRITTEN, NOT APPLIED** | not applied |
+| 109–110 | reviewers / labels | 9, 11 | not written | not written |
 
 Migrations are applied **by hand by the owner** in the Supabase dashboard, per environment.
 Never run the Supabase CLI. Verify with

@@ -9,7 +9,7 @@ context that does not live in the code or in git history.
 **Partially re-verified 2026-09-06** against both dev and prod via the read-only MCP connections, while
 planning the Agentic Creator System. Three corrections landed: migration 101 is applied on both (the row said
 "not yet applied anywhere"); Runware rows exist on prod and are disabled rather than absent; and the agentic
-migrations 102–107 are recorded, with 102–107 applied on dev and none on prod. Everything not named here still carries its
+migrations 102–108 are recorded, with 102–107 applied on dev and none on prod. **108 is written but applied nowhere.** Everything not named here still carries its
 2026-08-26 verification date.
 
 Keep this file current. When you finish a pack, move it out of "pending"; when you defer something, add it to
@@ -86,6 +86,7 @@ Everything up to 068 is long-applied.
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
 **All six (102-107) applied to dev**, verified by query against `schema_migration_ledger` on 2026-09-07.
+**108 is written and committed but applied NOWHERE — not dev, not prod.**
 **Production has none of them.**
 
 | # | File | Introduces | dev | production |
@@ -96,6 +97,7 @@ Everything up to 068 is long-applied.
 | 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | **Applied**, both tables empty | Not applied |
 | 106 | `agent_tasks` | table `agent_tasks`; `stories.agent_task_id` | **Applied** 2026-09-07, 0 rows | Not applied |
 | 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
+| 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **NOT APPLIED.** Code fails closed without it: the evaluation is still computed and still written to `agent_run_events`, only the persist is skipped | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
@@ -406,6 +408,22 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   write. Phase 9 plans to "reuse the existing story editor at `/story/[id]`" for reviewers — it needs either
   a reviewer RLS policy or an admin-client server-action path first. `persistence.ts`'s `serverAuth` escape
   hatch does not cover this; it is scoped to worker media-state patches.
+- **The evaluator's restricted-theme check is effectively English-only against beat text.** All 15 seeded
+  personas store `restricted_themes` as ENGLISH phrases ("graphic violence", "self-harm"), including the 12
+  that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `` is defined over
+  `[A-Za-z0-9_]` and never holds beside a Devanagari/Bengali/Gujarati/Arabic character, and the English
+  phrase would not appear in that prose anyway. The `briefThemes` half works for every persona, because
+  `buildStoryBriefPrompt` asks for themes "in English" while the prose goes in the target language. It fails
+  OPEN — a missed restriction, never a false one — and the model's `safety` dimension covers the same ground
+  advisorily. Closing it properly needs script-aware boundaries plus translated restriction vocabularies.
+- **A standalone `/admin/agents/evaluations` page was deliberately not built.** The pack lists it as a
+  possible section; Phase 7 surfaces evaluations inside the Run monitor detail instead, because Phase 9's
+  reviewer queue is about to build that surface properly and two of them would diverge.
+- **Evaluation model calls are not billed through the coin economy.** Like the novelty adjudicator, the
+  `agent_story_evaluation` call writes a real `ai_cost_events` row (`activity_key = 'agentic_creator'`) but
+  takes no coin reservation. `PRICING_ACTION_KEYS` has no key that fits a platform-internal quality check no
+  user ever triggers, and inventing one would need a migration and an admin pricing entry for a cost nobody
+  chose to spend. `/admin/cost` still shows the true spend.
 - **`agent_schedules` (migration 107) is unused.** `enqueueCommissionedTasks` ignores cadence entirely and
   drains whatever is commissioned. Wiring schedules into enqueue is unclaimed work, not an oversight.
 - **Agent spend is indistinguishable from human spend by action key.** It reuses `preview_seed_plan` and the

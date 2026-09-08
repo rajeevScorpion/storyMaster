@@ -161,3 +161,44 @@ production outage (`069_narration_accent.sql`, batch narration 500).
 the guarantee that a production database missing migration 102 behaves exactly as it does today.
 
 **Cost.** None. This is the property the entire pack is built around.
+
+---
+
+## D9 — Evaluation never stops a run, and the model gets no vote on its verdict
+
+**Decision.** The `evaluated` stage has **no failure path**. It always advances to
+`awaiting_review`. `verdict` and `review_readiness` are decided by the deterministic layer alone;
+the grading model contributes only `scores` (six subjective dimensions) and advisory `warnings`,
+and its own recommendation is recorded as a warning when it disagrees. The model call takes cost
+telemetry but no coin reservation.
+
+**Evidence.** By the time `evaluated` runs, `runDraftCreatedStage` has already written a real row
+to `stories`. `advanceRun` (`lib/agentic/orchestrator.ts:807-813`) routes a thrown or `failed`
+executor outcome into `handleStageFailure`, and every reviewer surface — including Phase 9's
+planned queue — keys on runs at `awaiting_review`. So a failure here strands a finished story:
+invisible to review, still in the database, with all the paid generation already spent.
+
+On who decides the verdict, this extends `32f2c65` rather than contradicting it. That commit's
+rule — a model may soften a deterministic verdict, never harden one — exists because a novelty
+`block` was **terminal**, and a too-harsh threshold would otherwise kill a good story. The softening
+vote is a rescue valve with a real cost if absent. Here nothing is terminal, so there is nothing to
+rescue from, and an over-cautious verdict costs a reviewer one closer look. Granting the model a
+softening vote would instead let an unauditable call talk a story past objective facts — wrong
+script, restricted theme present, beats missing. **Where the model's opinion has no cost to be
+rescued from, the model gets no vote.** The underlying principle is unchanged: a model call may
+never be the sole cause of an automatic consequence.
+
+**Rejected.** (a) Failing the run on a deterministic `fail` — the literal reading of the novelty
+precedent, and the reason it was rejected is above: an orphan draft no surface will show.
+(b) Letting the model move `review_readiness` in the restrictive direction only — it reads
+appealing for safety, but `review_readiness` is the field Phase 9's queue will key on, so it is a
+machine decision, and the whole point of the rule is that a model does not make those. Its safety
+concern still reaches the reviewer, as a warning. (c) Billing the call through
+`authorizeAgenticSpend` — there is no fitting `PricingActionKey`, and adding one means a migration
+plus an admin pricing entry for a platform-internal check no user triggers.
+
+**Cost.** A reviewer can be handed a draft the deterministic layer called `pass` while the model
+flagged a safety concern. Mitigated by showing both in the same panel, with `source` on every
+warning, so "the deterministic layer passed it" and "the model was uneasy" are never conflated.
+`model_status` separately distinguishes "the model said nothing bad" from "the model was never
+asked".

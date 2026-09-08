@@ -152,6 +152,29 @@ because a supervisor that answers the same question differently each time cannot
 
 ### Phase 6c — wiring, enqueue, and the Persona Test Lab (2026-09-07)
 
+## Phase 7 (core: units 7a + 7b) — 2026-09-08
+
+| Gate | Result | Delta vs Phase 6c |
+|---|---|---|
+| `npx tsc --noEmit` | pass | none |
+| `npm run lint` | pass | none — still 0 warnings |
+| `npm test` | pass | **94 files, 821 tests** (from 93/752): +69 in `evaluation.shared.test.ts`, +1 file |
+| `npm run build:verify` | pass | no route change — Phase 7's core adds no page |
+| `npm run test:e2e` | pass | **15 passed, 0 skipped** |
+
+Every gate above was re-run independently after each delegated unit landed, not taken on report.
+Reading the diff caught five defects the 821 tests could not — two of them unreachable without a
+live database (a thrown read that could still fail the "cannot fail" stage; a time-budget guard
+that could never fire). Both are recorded in the working-memory handoff and fixed in `09be807`.
+
+`lib/agentic/evaluation.ts` has **no unit tests, deliberately** — it is `server-only`, so vitest
+cannot import it, exactly like `memory.ts` and `story-assembly.ts`. Everything decidable without a
+database lives in `evaluation.shared.ts` and is tested there.
+
+---
+
+## Phase 6c — 2026-09-07
+
 | Gate | Result | Delta vs Phase 6b |
 |---|---|---|
 | `npx tsc --noEmit` | pass | none |
