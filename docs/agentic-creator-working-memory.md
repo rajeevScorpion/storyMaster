@@ -80,12 +80,13 @@ both; there is no delete path, so the parallel state cannot drift.
   `agentic_narration_enabled` flag was planned to mirror `agentic_image_generation_enabled`, and was
   dropped when narration became a reviewer action: with a human pressing the button, the human is the
   kill switch. Do not go looking for the file, and do not treat 110 as blocked on it.
-- **Migration 110 is written and applied NOWHERE.** It is data-only: it moves `riya-sen` from `Leda`
-  to `Callirrhoe`. That is the one *real* voice collision among the seeds — 15 personas share 12
+- **Migration 110 is applied on dev (2026-09-08), and nowhere else.** It is data-only: it moves
+  `riya-sen` from `Leda` to `Callirrhoe`. That is the one *real* voice collision among the seeds — 15 personas share 12
   voices and four voices are doubled, but three of those pairs write in different languages and never
   reach a listener side by side. `madhurima-bose` and `riya-sen` are both Bangla. Callirrhoe was
-  already inside riya-sen's own seeded `approved_voice_pool`. **Dev needs it. Production has none of
-  102-110.**
+  already inside riya-sen's own seeded `approved_voice_pool`. Verified on dev against the data rather
+  than the ledger alone: zero personas now share a voice within a language, and all 15 voices sit
+  inside the exposed 12. **Production has none of 102-110.**
 - **Uniqueness is deliberately not enforced, and must not be added.** 15 personas into 12 voices is
   arithmetically impossible; enforcing it would make three personas unsavable. The dropdown *informs*
   — it names every other persona on a voice and distinguishes the same-language case — and never
@@ -107,12 +108,14 @@ both; there is no delete path, so the parallel state cannot drift.
 
 ### THE NEXT STEP
 
-1. **Apply `110_riya_sen_narration_voice.sql` on dev.** Then confirm:
+1. ~~Apply `110_riya_sen_narration_voice.sql` on dev.~~ **Done 2026-09-08**, verified against the
+   data: ledger row present, `riya-sen` on `Callirrhoe`, and this returning no rows, which is the
+   property that actually matters rather than the single value changing:
 
 ```sql
-select * from public.schema_migration_ledger where migration_number = 110;
-select slug, language, preferred_voice from public.agent_personas
- where slug in ('riya-sen','madhurima-bose');   -- expect Callirrhoe / Leda
+select preferred_voice, language, array_agg(slug order by slug), count(*)
+  from public.agent_personas where preferred_voice is not null
+ group by preferred_voice, language having count(*) > 1;   -- expect zero rows
 ```
 
 2. **Run a fresh Test Lab run, promote it, and verify the lock actually took.** Nothing in this phase
