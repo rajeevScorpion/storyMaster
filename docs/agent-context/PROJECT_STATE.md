@@ -410,12 +410,13 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   drains whatever is commissioned. Wiring schedules into enqueue is unclaimed work, not an oversight.
 - **Agent spend is indistinguishable from human spend by action key.** It reuses `preview_seed_plan` and the
   `*_prompt_only` beat keys; only `activity_key = 'agentic_creator'` separates it. Revisit in Phase 12.
-- **A novelty `block` is advisory, not a hard stop.** Observed live: a pre-generation check returned
-  `block`, the stage failed, the run retried, and the economy-tier adjudicator returned `warn` on the
-  second call, so the run proceeded. The adjudicator is a model call and non-deterministic in the
-  ambiguous band, so with `MAX_RUN_ATTEMPTS = 3` a block is effectively "retry until it passes". The
-  human gate at `awaiting_review` makes this tolerable for V1. Decide before Phase 9 whether a block
-  should be latched on the run rather than re-adjudicated on each retry.
+- **A novelty `block` is now decided once, and only by the deterministic layer.** RESOLVED
+  2026-09-08 (`32f2c65`). The adjudicator may downgrade a verdict but never escalate one
+  (`applyAdjudication`, pure and tested), and the verdict is cached per run so a retry inherits it
+  rather than re-adjudicating. Kept here because the reasoning matters: four adjudications of
+  identical input returned block, block, warn, block, and the deterministic layer had never said
+  block at all -- 2 reused names against a threshold of 4. An unauditable model call was the sole
+  cause of a terminal run failure.
 - **`findSimilarStories` has no self-exclusion.** `runDraftCreatedStage` now runs its post-generation
   check before writing to `agent_story_memory`, which avoids the problem at the only current call site.
   The general fix — an `excludeStoryId` threaded through `runNoveltyCheck` — is deferred; any future

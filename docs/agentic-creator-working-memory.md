@@ -32,15 +32,18 @@ novelty check ran *after* `recordStoryMemory`, comparing every story against its
 harness — `playwright.config.ts` never loaded `.env.local`, so the admin e2e spec had never run from
 its own documented setup.
 
-### Open question for the owner, found live, deliberately not fixed
+### Resolved 2026-09-08 — a `block` is decided once, by the tested layer (`32f2c65`)
 
-**A `block` verdict is not a hard stop.** On story 2 the pre-generation check returned `block`, the
-stage failed, the run retried, the economy-tier adjudicator returned `warn` on the second call, and
-the run proceeded to generate and save. The adjudicator is a model call and is non-deterministic in
-the ambiguous band, so with `MAX_RUN_ATTEMPTS = 3` a block is effectively "retry until it passes".
-The plan says block should fail the run. Tolerable in V1 because a human gate sits downstream at
-`awaiting_review`, but it means the block verdict is advisory in practice. Decide before Phase 9
-whether a block should be latched on the run rather than re-adjudicated on retry.
+The first live runs showed a `block` was neither stable nor auditable: it failed the stage, the
+retry re-ran the whole check, and the adjudicator returned block, block, warn, block on identical
+input -- so a block meant "blocked unless one of up to three coin flips disagrees". Worse, the
+deterministic layer had never said block (2 reused names against `CHARACTER_REUSE_BLOCK_COUNT` 4);
+the model alone escalated a warn into a terminal failure.
+
+Both halves are fixed. `applyAdjudication` (pure, tested) lets the model soften a verdict but never
+harden one, and an attempted escalation is still recorded in `reasons`. The verdict is cached under
+its own checkpoint key -- **not** the `novelty_checked` stage key, which would make `isCheckpointed`
+true and let advanceRun skip the stage entirely, sailing a blocked run straight past its block.
 
 ---
 
