@@ -15,8 +15,30 @@
 // story is assembled by the same code the browser store uses. If the shape of a
 // node ever changes, this module inherits the change instead of drifting from it.
 
-import type { SeedBeatOutline, SeedPlan, StoryBeat, StoryMap } from '@/lib/types/story';
+import type { SeedBeatOutline, SeedPlan, SourceFidelity, StoryBeat, StoryMap } from '@/lib/types/story';
 import { addChildNode, createStoryMap } from '@/lib/utils/story-map';
+
+// ── Source fidelity ──────────────────────────────────────────────────────
+
+/**
+ * The agentic pipeline always generates at strict fidelity: every seeded run
+ * is built with sourceFidelity 'strictly_follow' (buildSeededStoryConfig and
+ * the generateSeedPlanPreview call, both in story-assembly.ts), which makes
+ * beat storyText verbatim source prose copied segment-for-segment rather than
+ * model-authored text -- see lib/ai/seed-authoring.ts, where
+ * strictSourceSegments is spliced straight into the plan's storyText and
+ * validatePlan deliberately skips its own word-count check in this mode,
+ * because there is nothing to validate: the text is the author's, not the
+ * model's, to fit a band.
+ *
+ * This must be a SHARED constant, not two independently-typed literals, for
+ * exactly one reason: evaluation.shared.ts's beat-length bounds check is
+ * keyed to this same value to decide whether that check applies at all. If
+ * the generator's literal ever drifted from the evaluator's, the evaluator
+ * would silently start grading verbatim source prose against a word band
+ * again -- the false positive this constant exists to prevent.
+ */
+export const AGENTIC_SOURCE_FIDELITY: SourceFidelity = 'strictly_follow';
 
 /** Raised when the materialized beats cannot form a valid canonical chain. */
 export class SeededStoryMapError extends Error {

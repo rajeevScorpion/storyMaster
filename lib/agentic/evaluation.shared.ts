@@ -39,6 +39,7 @@
 
 import type { AgeGroup, StoryLanguage } from '@/lib/types/story';
 import { countStoryWords, getStoryAudienceProfile, resolveStoryBeatLength } from '@/lib/ai/story-audience';
+import { AGENTIC_SOURCE_FIDELITY } from '@/lib/agentic/story-assembly.shared';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,15 @@ export interface DeterministicEvaluationInput {
   ageGroup: AgeGroup;
   /** Raw storyConfig.beatLength?.level; resolveStoryBeatLength normalizes it. */
   beatLengthLevel: unknown;
+  /**
+   * storyConfig.authoring.sourceFidelity. AGENTIC_SOURCE_FIDELITY
+   * ('strictly_follow') means beat text is source prose copied verbatim, so
+   * the beat-length bounds check below does not apply to it -- see that
+   * check for why. null means fidelity is unknown (e.g. a caller outside the
+   * agentic pipeline that has no such concept), in which case the check runs
+   * as normal.
+   */
+  sourceFidelity: string | null;
   language: StoryLanguage;
   restrictedThemes: string[];
   briefThemes: string[];
@@ -184,7 +194,7 @@ function escapeRegExp(value: string): string {
  * script name, a threshold), never story text or generated prose.
  */
 export function runDeterministicEvaluation(input: DeterministicEvaluationInput): DeterministicEvaluationResult {
-  const { beats, targetBeatCount, ageGroup, beatLengthLevel, language, restrictedThemes, briefThemes, noveltyVerdict, noveltyReason } = input;
+  const { beats, targetBeatCount, ageGroup, beatLengthLevel, sourceFidelity, language, restrictedThemes, briefThemes, noveltyVerdict, noveltyReason } = input;
   const warnings: EvaluationWarning[] = [];
   const push = (code: string, severity: EvaluationWarningSeverity, message: string) =>
     warnings.push({ code, severity, message, source: 'deterministic' });
@@ -223,19 +233,40 @@ export function runDeterministicEvaluation(input: DeterministicEvaluationInput):
     push('option_count_off', 'warn', `Beat(s) ${offOptionCountBeats.join(', ')} do not have ${expected} options.`);
   }
 
-  const beatLength = resolveStoryBeatLength(ageGroup, beatLengthLevel);
-  const outOfBoundsBeats = beats
-    .filter((beat) => {
-      const words = countStoryWords(beat.storyText);
-      return words < beatLength.hardMinWords || words > beatLength.hardMaxWords;
-    })
-    .map((beat) => beat.beatNumber);
-  if (outOfBoundsBeats.length > 0) {
+  // Under AGENTIC_SOURCE_FIDELITY ('strictly_follow'), beat storyText is the
+  // author's source prose copied verbatim -- lib/ai/seed-authoring.ts splices
+  // strictSourceSegments straight into the plan's storyText and its own
+  // validatePlan deliberately skips this same word-count check in that mode,
+  // because there is nothing to validate: the words are the author's, not a
+  // model's, to fit a band. Re-litigating that decision here would grade
+  // every strictly-followed source against a target it was never asked to
+  // hit -- on the first real run this fired on all 8 beats and pushed the
+  // verdict from pass to concerns, which would make 'concerns' the permanent
+  // verdict for essentially every agentic story. So this check is skipped in
+  // that mode, and an 'info' warning is emitted instead of going silent, so
+  // the panel still records why the check did not run -- the same shape as
+  // language_script_unverified below: 'info' does not move the verdict.
+  if (sourceFidelity === AGENTIC_SOURCE_FIDELITY) {
     push(
-      'beat_length_out_of_bounds',
-      'warn',
-      `Beat(s) ${outOfBoundsBeats.join(', ')} fall outside ${beatLength.hardMinWords}-${beatLength.hardMaxWords} words.`
+      'beat_length_unenforced',
+      'info',
+      'Beat length was not checked: beat text is verbatim source prose under strict source fidelity, so the word band does not apply.'
     );
+  } else {
+    const beatLength = resolveStoryBeatLength(ageGroup, beatLengthLevel);
+    const outOfBoundsBeats = beats
+      .filter((beat) => {
+        const words = countStoryWords(beat.storyText);
+        return words < beatLength.hardMinWords || words > beatLength.hardMaxWords;
+      })
+      .map((beat) => beat.beatNumber);
+    if (outOfBoundsBeats.length > 0) {
+      push(
+        'beat_length_out_of_bounds',
+        'warn',
+        `Beat(s) ${outOfBoundsBeats.join(', ')} fall outside ${beatLength.hardMinWords}-${beatLength.hardMaxWords} words.`
+      );
+    }
   }
 
   const joinedStoryText = beats.map((beat) => beat.storyText).join(' ');

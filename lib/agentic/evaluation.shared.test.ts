@@ -15,6 +15,7 @@ import {
   type EvaluationModelResult,
   type EvaluationVerdict,
 } from './evaluation.shared';
+import { AGENTIC_SOURCE_FIDELITY } from './story-assembly.shared';
 
 // ── Fixture text ───────────────────────────────────────────────────────
 // Word counts were verified against countStoryWords (Intl.Segmenter) before
@@ -71,6 +72,7 @@ function cleanInput(overrides: Partial<DeterministicEvaluationInput> = {}): Dete
     targetBeatCount: 3,
     ageGroup: 'kids_8_12',
     beatLengthLevel: 3,
+    sourceFidelity: null,
     language: 'english',
     restrictedThemes: [],
     briefThemes: [],
@@ -180,6 +182,39 @@ describe('runDeterministicEvaluation — one test per deterministic check code',
     expect(codesOf(result)).toContain('beat_length_out_of_bounds');
     expect(result.warnings.find((w) => w.code === 'beat_length_out_of_bounds')?.message).toContain('56');
     expect(result.verdict).toBe('concerns');
+  });
+
+  // The agentic pipeline always generates under AGENTIC_SOURCE_FIDELITY
+  // ('strictly_follow'), where beat storyText is source prose copied
+  // verbatim (see lib/ai/seed-authoring.ts) and the generation layer
+  // deliberately does not enforce a word band on it. On the first real run
+  // this beat-length check fired on all 8 beats and pushed the verdict from
+  // pass to concerns -- these two tests are the fix: the exemption must
+  // apply when fidelity is strict, and must NOT apply otherwise.
+  describe('beat_length_out_of_bounds is exempted under strict source fidelity', () => {
+    const beatsFarUnderBand: EvaluatedBeat[] = [
+      beat({ beatNumber: 1, storyText: SHORT_BEAT_TEXT, optionCount: 3, isEnding: false }),
+      beat({ beatNumber: 2, storyText: SHORT_BEAT_TEXT, optionCount: 3, isEnding: false }),
+      beat({ beatNumber: 3, storyText: SHORT_BEAT_TEXT, optionCount: 0, isEnding: true }),
+    ];
+
+    it("sourceFidelity 'strictly_follow': no beat_length_out_of_bounds, an info beat_length_unenforced instead, and the verdict stays pass", () => {
+      const result = runDeterministicEvaluation(
+        cleanInput({ beats: beatsFarUnderBand, sourceFidelity: AGENTIC_SOURCE_FIDELITY })
+      );
+      expect(codesOf(result)).not.toContain('beat_length_out_of_bounds');
+      expect(codesOf(result)).toContain('beat_length_unenforced');
+      expect(result.warnings.find((w) => w.code === 'beat_length_unenforced')?.severity).toBe('info');
+      expect(result.verdict).toBe('pass');
+    });
+
+    it('sourceFidelity null: the same beats still fail the bounds check -> warn, concerns', () => {
+      const result = runDeterministicEvaluation(cleanInput({ beats: beatsFarUnderBand, sourceFidelity: null }));
+      expect(codesOf(result)).toContain('beat_length_out_of_bounds');
+      expect(codesOf(result)).not.toContain('beat_length_unenforced');
+      expect(result.warnings.find((w) => w.code === 'beat_length_out_of_bounds')?.severity).toBe('warn');
+      expect(result.verdict).toBe('concerns');
+    });
   });
 
   it('language_script_mismatch: English prose under language "hindi" -> error, fail', () => {

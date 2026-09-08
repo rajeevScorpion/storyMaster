@@ -53,6 +53,7 @@ import {
   type AgentRunCheckpoint,
 } from '@/lib/agentic/orchestrator.shared';
 import {
+  AGENTIC_SOURCE_FIDELITY,
   buildSeededStoryMap,
   getSeedBeatByIndex,
   nextBeatIndexToGenerate,
@@ -271,7 +272,7 @@ function buildSeededStoryConfig(
       mode: 'seeded',
       workingTitle: brief.workingTitle,
       sourceText,
-      sourceFidelity: 'strictly_follow',
+      sourceFidelity: AGENTIC_SOURCE_FIDELITY,
       seedPlan,
     },
   });
@@ -653,7 +654,7 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
         sourceText: progress.sourceText!,
         beatCount: targetBeatCount,
         workingTitle: brief.workingTitle,
-        sourceFidelity: 'strictly_follow',
+        sourceFidelity: AGENTIC_SOURCE_FIDELITY,
         costTelemetry: buildTelemetry(run, task, persona, 'story_generated:seed_plan'),
       });
       await finalizeAgenticSpend(authorization.reservationId);
@@ -1148,6 +1149,13 @@ async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> 
     targetBeatCount,
     ageGroup: persona.ageGroup,
     beatLengthLevel: resolvePersonaStoryConfig(persona).beatLength?.level,
+    // The pipeline has no other fidelity mode -- every seeded run is built
+    // with AGENTIC_SOURCE_FIDELITY (see buildSeededStoryConfig and the
+    // generateSeedPlanPreview call above). Passing the shared constant here,
+    // rather than re-deriving it from a storyConfig this stage does not
+    // reconstruct, is what lets the evaluator's beat-length exemption stay
+    // keyed to the generator's actual behavior instead of an assumption.
+    sourceFidelity: AGENTIC_SOURCE_FIDELITY,
     language: persona.language,
     restrictedThemes: persona.restrictedThemes,
     briefThemes: brief.themes,
