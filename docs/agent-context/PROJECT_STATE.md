@@ -413,6 +413,17 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Agentic Creator (branch `feat/agentic-creator`)**
+- **Phase 8's Unit 8d is written up but not built: agent-owned narration cannot bill the agent.**
+  `authorizeCoinOperationForUser` (`lib/pricing/coin-economy.ts`) never forwards `actorKind`, so the
+  agentic bypass in `authorizeBillableAction` is unreachable from every narration path. Narrating an
+  agent story today would charge the system user's 5.00-beat wallet at 0.80 beats/beat and run out
+  partway. Deferred deliberately, not forgotten: it is unobservable until Phase 9 fixes the
+  `Forbidden.` throw that stops a reviewer pressing the narrate button at all, so the two are worth
+  doing together. Full implementation shape in the 2026-09-09 handoff in
+  `docs/agentic-creator-working-memory.md`.
+- **Nothing in Phase 8 has been exercised against a live database.** The gate is entirely static
+  (tsc, lint, 854 unit tests, build:verify, e2e). Every prior agentic phase found real defects only
+  once a run touched Postgres. The verification queries are in the same handoff.
 - **A reviewer cannot edit an agent-generated draft, and Phase 9 assumes they can.** `stories` RLS allows
   any signed-in user to SELECT a non-archived story but restricts UPDATE to `auth.uid() = user_id`. Agent
   drafts are owned by `AGENTIC_SYSTEM_USER_ID`, so `/story/[id]` renders for an admin and then refuses every

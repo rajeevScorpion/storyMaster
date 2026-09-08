@@ -6,6 +6,156 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-09 (Phase 8 landed, but it is NOT the phase that was planned)
+
+**Read this before anything else: Phase 8 did not build narration into the pipeline, and never will.**
+The previous handoff's "PHASE 8 — narration — starts here" section below is superseded. Its billing
+note was right and survives as the one unbuilt unit; its premise — that narration needs a paid,
+long-running run stage — was wrong and was abandoned before any code was written. Decisions **D10**
+and **D11** in `docs/agentic-creator-decisions.md` are the authority now.
+
+### What Phase 8 actually turned out to be
+
+The owner pushed back on the original plan as over-engineering, and was right. Batch narration
+already exists, a reviewer is already in the loop at `awaiting_review`, and the persona already
+carries a voice. So the question stopped being "how does the pipeline narrate" and became "why
+doesn't the persona's voice work" — and the answer was that it never had.
+
+**The defect this phase actually fixed.** `agent_personas.preferred_voice` has held a real value for
+all 15 seed personas since migration 104, and **nothing in the codebase read it**. Traced end to end:
+`stories.narrator_voice` was NULL on every agent story, so `resolveNarrationVoiceServer` resolved the
+mode to `legacy_auto`, `resolveNarrationVoiceDecision` (`lib/ai/narration-voice-resolver.ts:37-54`)
+returned `shouldUseLegacySelector: true`, and `selectLegacyNarratorVoiceServer` fired **a Gemini
+call** picking from all 30 provider voices by genre and tone. The persona's voice was decorative.
+Worse, `narrator_voice` locks on first use, so that model-chosen voice would have become permanent
+for the story *and every episode extended from it*.
+
+### Commits this session, all reviewed by diff rather than by report
+
+| SHA | What |
+|---|---|
+| `e561049` | Unit 8a — `lib/agentic/persona-voice.shared.ts` + 21 tests, migration 110 + rollback |
+| `4ef4553` | **Review fix** — two false claims in migration 110's header |
+| `e199666` | D10 + D11, and the doc conflicts they resolve |
+| `250d493` | Unit 8b — the persona editor's voice dropdown; `approved_voice_pool` retired from the UI |
+| `57074dd` | **Review fix** — the dropdown ignored 8a's case-insensitive resolve |
+| `c3ee223` | Unit 8c — the voice locks into the draft at `draft_created` |
+| `5668c2f` | **Review fix** — the timeline reported the lock before the save that performs it |
+
+Gate, re-run independently rather than taken on report: **tsc 0, lint clean, 95 files / 854 tests
+(+1 file, +21 from the 94 / 833 baseline), `build:verify` green, `test:e2e` 15 passed / 0 skipped.**
+
+### What reading the diff caught that the tests did not
+
+Four defects across three delegations, none reachable by the 854-test suite. Note the pattern — as in
+Phase 7, most are *the record asserting something untrue*, which is exactly what a later reader
+trusts:
+
+1. **Migration 110's header pointed at a file that will never exist.** It said the migration was
+   meaningless on prod "until 102-109 land first, in numeric order". There is no 109 — see below —
+   and "numeric order" contradicts the ledger being the only source of truth for what has run.
+2. **The same header called the persona editor "not-yet-built".** It has always existed and has
+   always exposed this field, which undercut the very paragraph it sat in: that paragraph's point was
+   that the migration's re-run guard will not stomp an operator's edit *made from that editor*.
+3. **The voice dropdown ignored 8a's case-insensitive resolve.** For a row storing `"leda"`,
+   `buildPersonaVoiceOptions` emits no out-of-list option (the value resolved fine, so there is
+   nothing unrecognised to append) while the dropdown's value stayed the raw `"leda"`, matching no
+   option's `"Leda"`. The control rendered as though nothing were selected **on a persona with a
+   perfectly good voice** — and an admin "fixing" the apparently-empty field would have silently
+   changed a voice that was never wrong. Both halves now go through `resolvePersonaVoice`.
+4. **The run timeline claimed the voice was locked before the save that locks it.** Reported
+   immediately after resolving, ahead of `saveStoryForUser`; a save that threw would leave a timeline
+   asserting a lock that never happened, on a draft that does not exist. Moved beside the existing
+   "Draft story saved" event.
+
+A fifth was caught by a subagent and is worth keeping: `PersonaCatalogue`'s `personas` state is
+**replaced by a filtered subset** on every filter change, so building the voice-usage map from it
+would have hidden a filtered-out persona from the sharer hints. It now tracks an unfiltered roster
+alongside. Archive is the only other mutation path and goes through `upsertPersona`, which syncs
+both; there is no delete path, so the parallel state cannot drift.
+
+### Things that will bite you if you do not know them
+
+- **There is no migration 109, and there will not be one.** The gap is deliberate. An
+  `agentic_narration_enabled` flag was planned to mirror `agentic_image_generation_enabled`, and was
+  dropped when narration became a reviewer action: with a human pressing the button, the human is the
+  kill switch. Do not go looking for the file, and do not treat 110 as blocked on it.
+- **Migration 110 is written and applied NOWHERE.** It is data-only: it moves `riya-sen` from `Leda`
+  to `Callirrhoe`. That is the one *real* voice collision among the seeds — 15 personas share 12
+  voices and four voices are doubled, but three of those pairs write in different languages and never
+  reach a listener side by side. `madhurima-bose` and `riya-sen` are both Bangla. Callirrhoe was
+  already inside riya-sen's own seeded `approved_voice_pool`. **Dev needs it. Production has none of
+  102-110.**
+- **Uniqueness is deliberately not enforced, and must not be added.** 15 personas into 12 voices is
+  arithmetically impossible; enforcing it would make three personas unsavable. The dropdown *informs*
+  — it names every other persona on a voice and distinguishes the same-language case — and never
+  blocks.
+- **`approved_voice_pool` is vestigial, not removed.** The column and its seeded data stay; the
+  editor no longer shows it and nothing reads it. `mapInputToRow` only writes a column when its key
+  is present on the patch, so the editor *omitting* the key is what preserves existing values —
+  sending an empty array would erase them. Treat a value in that column as history, not configuration.
+- **The voice locks regardless of `persona.allow_narration`.** That flag gates producing audio, not
+  declaring which voice audio would use. A locked voice generates nothing; a null one is exactly what
+  triggers the legacy Gemini selector. This will look like a missing permission check — it is not,
+  and there is a comment at the site saying so.
+- **`narration_voice_mode: 'user_selected'` is load-bearing, not cosmetic.**
+  `resolveNarrationVoiceDecision` takes its user-selected branch whenever the *persisted* mode reads
+  `user_selected`, without re-checking the global `narration_user_led_voice_selection_enabled` flag.
+  Writing that mode is what makes the lock survive an operator turning that flag off later. Writing
+  the gender bucket matters too: without it the resolver measures a male voice against the female
+  list and warns.
+
+### THE NEXT STEP
+
+1. **Apply `110_riya_sen_narration_voice.sql` on dev.** Then confirm:
+
+```sql
+select * from public.schema_migration_ledger where migration_number = 110;
+select slug, language, preferred_voice from public.agent_personas
+ where slug in ('riya-sen','madhurima-bose');   -- expect Callirrhoe / Leda
+```
+
+2. **Run a fresh Test Lab run, promote it, and verify the lock actually took.** Nothing in this phase
+   has been exercised against a live database — the whole gate is static. This is the step that found
+   Phase 6's three defects and Phase 7's two, and it has not been done here:
+
+```sql
+select id, narrator_voice, narration_voice_mode, narration_voice_gender_bucket, narration_language_code
+  from public.stories where agent_persona_id is not null order by created_at desc limit 3;
+select stage, level, message from public.agent_run_events
+ where message ilike '%narration voice%' order by created_at desc;
+```
+
+   Expect the persona's own voice, `user_selected`, a real bucket, and a language code matching the
+   persona's language. The three existing agent stories on dev were saved before this change and will
+   still read NULL — correct, not a regression.
+
+3. **Unit 8d is the one unbuilt unit, and it is not optional before anyone narrates an agent story.**
+   `authorizeCoinOperationForUser` (`lib/pricing/coin-economy.ts:69`) never accepts or forwards
+   `actorKind`, so the agentic bypass in `authorizeBillableAction` (`lib/pricing/enforcement.ts:283`)
+   is unreachable from every narration path. Cost is 0.50 beats per beat for
+   `generate_story_narration` plus 0.30 for `align_story_text_overlay` riding inside the same call
+   (both verified against `pricing_action_costs` on dev) — 0.80/beat against a system user holding
+   **5.00 beats**, so an 8-beat story runs out partway, after real Gemini spend on the beats that
+   succeeded. The shape: thread `serverAuth: { userId, actorKind? }` — the existing parameter, one
+   new optional field, no new argument at any hop — from `processNarrationJob` down through
+   `generateAndPersistStoryNarrationWithOverlay` → `generateAndPersistNarration` →
+   `runMeteredNarrationOperation` → `authorizeCoinOperationForUser`, plus
+   `buildMeteredStoryOverlayTiming` for the alignment meter. **Derive `actorKind` inside
+   `processNarrationJob`** from `job.user_id === process.env.AGENTIC_SYSTEM_USER_ID`, not at submit
+   time: `reconcileStoryNarration` and `reconcileActiveNarrationJobs` both re-enter there with no
+   agentic context, so submit-time stamping loses the bypass on every recovery path. The claim is not
+   trusted — `authorizeBillableAction` independently re-checks the id and the flag before bypassing.
+
+4. **8d and Phase 9's reviewer-authorization fix are two halves of one thing.** Neither is observable
+   alone: `submitStoryNarrationBatch` (`app/actions/narration-batch.ts:132`) throws `Forbidden.` on a
+   story the caller does not own, and agent drafts are owned by `AGENTIC_SYSTEM_USER_ID`, so a
+   reviewer cannot press the button 8d makes billable. Strongly consider doing them together in Phase
+   9 rather than shipping 8d into a surface nobody can reach. **The same is true of images** — the
+   architecture doc's known limits record the two things images need that narration did not.
+
+---
+
 ## Session handoff — 2026-09-08 (Phase 7 core landed; the evaluator has NOT yet run)
 
 **PHASE 7 IS COMPLETE AND PROVEN LIVE.** All four units (7a-7d) are written, gated and reviewed by
