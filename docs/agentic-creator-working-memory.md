@@ -8,12 +8,30 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Session handoff — 2026-09-08 (Phase 7 core landed; the evaluator has NOT yet run)
 
-**Phase 7's three code units are done and independently verified.** The `evaluated` stage is no
-longer a free advance: it computes a real grade, records it, surfaces it to an admin, and hands the
-run to a human. Migration 108 is applied on dev. What is **not** done: the Test Lab preview
-(Unit 7d), and — the important one — **nothing has actually been evaluated yet.** The panel built
-in 7c has never displayed a real row, because no run has reached `evaluated` since the stage
-started doing work. Until a fresh run proves it end to end, treat Phase 7 as written, not working.
+**Phase 7 is done and PROVEN LIVE.** The `evaluated` stage is no longer a free advance: it computes
+a real grade, records it, surfaces it to an admin, and hands the run to a human. Migration 108 is
+applied on dev. Unit 7d (the Test Lab preview) is the only piece not written.
+
+### The proof run — 2026-09-08, run `73283a43`, story `57f01e35`, persona Arjun Rao
+
+A Test Lab run of 8 beats, promoted to a draft, drained through to `awaiting_review`. All four
+checks pass:
+
+| Check | Result |
+|---|---|
+| `agent_evaluations` row | exactly one, `trigger_source = 'pipeline'` |
+| verdict / readiness | `concerns` / `ready_for_review` |
+| model | `applied`, `gemini-3.5-flash`, all six scores present |
+| `evaluated` run event | `Evaluation verdict: concerns (ready_for_review), model applied, 1 warning(s).` |
+| `ai_cost_events` | one row, `task_key = agent_story_evaluation`, phase `evaluated`, $0.0025 |
+| coin movement | **zero** — 0 `beat_usage_events`, 0 `beat_spend_reservations` (D9 holds) |
+
+**D9 was proven by this run, not merely asserted.** The model returned
+`{coherence 5, ageFit 5, pacing 5, personaFidelity 5, safety 5, learningValue 4}` — near-perfect,
+and certainly not a story it wanted flagged. The deterministic layer found every beat under the
+word floor and returned `concerns`. **The final verdict was `concerns`.** The model's optimism did
+not soften it, which is the entire point of the decision. Had the model held a vote, this run would
+have been graded `pass` and a real defect would have gone to review unmarked.
 
 ### The decision this phase turned on — read before touching the evaluator
 
@@ -78,14 +96,39 @@ check those, and they are exactly what a later reader will trust.
    exists to make the deterministic/model split legible; a note that appears where nothing was
    decided undermines exactly that.
 
+### TWO OPEN DEFECTS the proof run exposed — neither is in Phase 7
+
+**1. `retryRun` silently marks a permanently-failed run as SUCCEEDED. Do not press Retry.**
+`handleStageFailure` sets `stage = 'failed'`. `retryRun` (orchestrator.ts:1265) then resets
+`status`, `attempt_count` and `error_detail` — **but not `stage`**. The next drain claims the run,
+`nextStage('failed')` returns `undefined` because `'failed'` is in `TERMINAL_STAGES`, and
+`advanceRun` (orchestrator.ts:779) falls into its defensive branch and writes
+`status = 'succeeded'`. Net effect: no work is done, the failure reason is erased, and the run
+shows a green Succeeded pill. That branch's own comment says "a claimed 'pending' run should never
+already sit on a terminal stage" — but `retryRun` is a first-party path that produces exactly that
+state, so the assumption is false. Still latent: `b7ac6093` is the only failed run and nobody has
+pressed Retry on it. **Fix**: derive the resume stage from the checkpoint — the last
+`STAGE_SEQUENCE` member present in it, `queued` if none. It must filter to real stage names;
+`story_generated_progress` is a progress side-channel key, not a stage, so "last checkpoint key"
+would pick the wrong thing.
+
+**2. Agentic beats come out about a third of their configured length.** Story `57f01e35` is
+`ageGroup: adults`, `beatLength.level: 4` → target **150 words/beat**, absolute floor 72
+(`beatWordTargets: [72, 98, 124, 150, 176]`, lib/ai/story-audience.ts:101). The eight generated
+beats were **41, 61, 54, 45, 41, 53, 49, 44** — every one under the floor, none close to target.
+This is a generation defect in the seeded-beat path, not an evaluator miscalibration: the band is
+correct and the evaluator reported it accurately. `buildStoryAudienceGuidance` does emit the length
+instruction, so the question is whether the agentic materialization prompt carries it. Worth noting
+what this means about the whole exercise: **the evaluator found a real content defect on its first
+live run, one that two earlier "successful" runs had already shipped to review unnoticed.**
+
 ### Things that will bite you if you do not know them
 
-- **THE EVALUATOR HAS NEVER RUN, and the two existing drafts can never run it.** Both
-  `awaiting_review` runs on dev (`e9cd7325`, `ca2bb41b`) already have `evaluated` in their
-  `checkpoint`, banked by the Phase 6 placeholder that advanced the stage for free. `isCheckpointed`
-  is therefore true and `advanceRun` applies the stage without calling the executor — forever.
-  **Proving Phase 7 needs a brand-new run**, not a retry of either of those; `retryRun` does not
-  clear the checkpoint.
+- **The two Phase 6 drafts can never be evaluated.** Both older `awaiting_review` runs on dev
+  (`e9cd7325`, `ca2bb41b`) already have `evaluated` in their `checkpoint`, banked by the Phase 6
+  placeholder that advanced the stage for free. `isCheckpointed` is therefore true and `advanceRun`
+  applies the stage without calling the executor — forever. They will sit in the Evaluation panel's
+  third state ("passed Evaluated, stored no grade") permanently, which is what that state is for.
 - **Migration 108 is applied on dev (2026-09-08), and on nothing else.** Verified against the
   schema itself, not just the ledger row: 12 columns, RLS on, `anon` and `authenticated` both
   denied SELECT, 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial
@@ -117,21 +160,22 @@ check those, and they are exactly what a later reader will trust.
 ### THE NEXT STEP
 
 1. ~~Apply `108_agent_evaluations.sql` on dev.~~ **Done 2026-09-08**, schema verified (above).
-2. **Start a fresh run** — Test Lab against a persona, then promote — and watch it reach
-   `evaluated`. Verify:
+2. ~~Start a fresh run and verify it end to end.~~ **Done 2026-09-08** — run `73283a43`, all four
+   checks green. See "The proof run" at the top of this handoff. The verification queries, if you
+   need them again (note `ai_cost_events` has no `action_key`/`phase` columns — it is `task_key`
+   and `metadata->>'phase'`):
 
 ```sql
 select verdict, review_readiness, model_status, model_id,
        jsonb_array_length(warnings) as warning_count, scores
   from public.agent_evaluations;
+select w->>'code', w->>'severity', w->>'source', w->>'message'
+  from public.agent_evaluations, jsonb_array_elements(warnings) w;
 select stage, level, message from public.agent_run_events
  where stage = 'evaluated' order by created_at;
-select action_key, activity_key, phase from public.ai_cost_events
- where activity_key = 'agentic_creator' and phase = 'evaluated';
+select task_key, model_id, estimated_cost_usd, metadata->>'phase' from public.ai_cost_events
+ where activity_key = 'agentic_creator' and metadata->>'phase' = 'evaluated';
 ```
-
-   Expect exactly one `agent_evaluations` row per run, one `evaluated` event, and one cost row with
-   `phase = 'evaluated'` — and **no** coin movement on the system user (D9: telemetry, no reserve).
 3. ~~Then Unit 7c.~~ **Done 2026-09-08** (`ddf6047` + review fix `1cff69f`). `getRunAction` now
    returns `AgentRunDetail` — the run, its timeline, and every `agent_evaluations` row — and the
    detail row grew a third panel spanning both columns. Two things in it are load-bearing:
