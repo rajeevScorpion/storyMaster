@@ -8,9 +8,14 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ## Session handoff — 2026-09-08 (Phase 7 core landed; the evaluator has NOT yet run)
 
-**Phase 7 is done and PROVEN LIVE.** The `evaluated` stage is no longer a free advance: it computes
-a real grade, records it, surfaces it to an admin, and hands the run to a human. Migration 108 is
-applied on dev. Unit 7d (the Test Lab preview) is the only piece not written.
+**PHASE 7 IS COMPLETE AND PROVEN LIVE.** All four units (7a-7d) are written, gated and reviewed by
+diff. The `evaluated` stage is no longer a free advance: it computes a real grade, records it,
+surfaces it to an admin, and hands the run to a human. Migration 108 is applied on dev. The Test Lab
+now previews the deterministic verdict before you press Create draft.
+
+**Next: Phase 8 (narration).** `narration_pending` and `narration_complete` are still free advances
+in `storyAssemblyExecutor`, logging "not implemented yet (Phase 8)". Phase 9 is the reviewer queue,
+Phase 10 is media/publish.
 
 ### The proof run — 2026-09-08, run `73283a43`, story `57f01e35`, persona Arjun Rao
 
@@ -209,10 +214,36 @@ select task_key, model_id, estimated_cost_usd, metadata->>'phase' from public.ai
      `e9cd7325` and `ca2bb41b` bank `evaluated` for free from the Phase 6 placeholder and will
      sit there permanently. Collapsing it into "not evaluated yet" would state a falsehood about
      a run that was, in fact, evaluated.
-4. **Then Unit 7d** — the Test Lab's free deterministic preview. The Test Lab parks at
-   `story_generated`, before any draft exists, so `runDeterministicEvaluation` runs on the parked
-   beats with no model call and no cost. Agreed as worth doing: you see the structural verdict
-   before pressing "Create draft".
+4. ~~Then Unit 7d.~~ **Done 2026-09-08** (`4eb5c8b` + hardening `88e4118`). The Test Lab's
+   "Evaluation (preview)" section runs `runDeterministicEvaluation` on the parked beats — no model
+   call, no write, recomputed inline on every view (deliberately **not** cached the way its
+   `postNoveltyPreview` neighbour is, because nothing here is paid or written). Two properties
+   make it worth trusting, and one bounds that trust:
+   - `toEvaluatedBeats` in `evaluation.shared.ts` is now the **single** `StoryBeat[] →
+     EvaluatedBeat[]` mapping, used by both the preview and the real `runEvaluatedStage`. Two
+     copies could have drifted, and a preview that disagrees with the grade is worse than none.
+   - `sourceFidelity` is read from `AGENTIC_SOURCE_FIDELITY`, not from the Test Lab's own
+     `storyConfig`. That field is never set there — it only arrives as `normalizeStoryConfig`'s
+     `DEFAULT_AUTHORING` fallback, so the two agreed only because a default matched a constant.
+     Now the preview asks the same question the pipeline will.
+   - **The bound:** `noveltyVerdict` is `null` in the preview, because `draft_created` (which
+     carries the post-generation verdict) has not run. So the preview's verdict equals the real
+     one *except* that a novelty-driven warning can still appear later. The panel says exactly
+     this, in both directions — an operator who thinks it merely indicative will ignore it, and
+     one who thinks it final will be surprised.
+
+### PHASE 8 — narration — starts here
+
+`narration_pending` and `narration_complete` are still free advances in `storyAssemblyExecutor`
+(`story-assembly.ts`, the block above the flag read), logging "Narration is not implemented yet
+(Phase 8); advancing without it." Before designing it, note two things this phase already learned:
+- `app/actions/gemini-proxy.ts`'s `AgenticJsonCallParams.task` union needed widening for
+  `agent_story_evaluation` even though the TaskKey was pre-registered. **A narration-side agentic
+  call will hit the same gap.**
+- Narration is a paid, long-running, externally-triggered job — much closer to
+  `narration-batch.ts` and the media workers than to the evaluator. It will need the
+  reserve→finalize/release billing cycle, not the telemetry-only shortcut D9 chose for evaluation,
+  because unlike a grade it produces an artifact a user can keep.
 
 ---
 

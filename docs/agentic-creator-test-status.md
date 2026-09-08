@@ -152,15 +152,15 @@ because a supervisor that answers the same question differently each time cannot
 
 ### Phase 6c — wiring, enqueue, and the Persona Test Lab (2026-09-07)
 
-## Phase 7 (units 7a + 7b + 7c) — 2026-09-08
+## Phase 7 (complete: units 7a-7d) — 2026-09-08
 
 | Gate | Result | Delta vs Phase 6c |
 |---|---|---|
 | `npx tsc --noEmit` | pass | none |
 | `npm run lint` | pass | none — still 0 warnings |
-| `npm test` | pass | **94 files, 821 tests** (from 93/752): +69 in `evaluation.shared.test.ts`, +1 file |
-| `npm run build:verify` | pass | no route change — Phase 7 adds no page, 7c included |
-| `npm run test:e2e` | pass | **15 passed, 0 skipped** |
+| `npm test` | pass | **94 files, 833 tests** (from 93/752): +69 `evaluation.shared.test.ts` (+1 file), +3 source-fidelity, +5 `resumeStageFromCheckpoint`, +4 `toEvaluatedBeats` |
+| `npm run build:verify` | pass | no route change — Phase 7 adds no page; 7c and 7d both extend existing admin surfaces |
+| `npm run test:e2e` | pass | **15 passed, 0 skipped** on the units. One later full-suite run had `auth-dialog.spec.ts:52` fail and then pass 3/3 in isolation — untouched by this phase, recorded as suspected flake, **not proven one** |
 
 Every gate above was re-run independently after each delegated unit landed, not taken on report.
 Reading the diff caught six defects the 821 tests could not — two of them unreachable without a
