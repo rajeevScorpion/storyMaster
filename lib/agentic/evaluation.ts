@@ -54,6 +54,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
 import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import type { AgentRunWithTimeline } from './orchestrator';
 import {
   runDeterministicEvaluation,
   composeEvaluation,
@@ -95,6 +96,20 @@ export interface StoredEvaluation extends StoryEvaluation {
   triggerSource: 'pipeline' | 'manual';
   modelId: string | null;
   createdAt: string;
+}
+
+/**
+ * The run monitor's admin detail row: a run's stage timeline plus every
+ * evaluation recorded against it. Defined here, not in orchestrator.ts,
+ * because orchestrator.ts is the lower layer of this pair and must not learn
+ * about evaluations -- the same direction of dependency this module's own
+ * header enforces (evaluation.ts calls into orchestrator's types, never the
+ * reverse). AgentRunWithTimeline is imported type-only above so this stays a
+ * compile-time-only dependency, creating no runtime import from evaluation.ts
+ * into orchestrator.ts.
+ */
+export interface AgentRunDetail extends AgentRunWithTimeline {
+  evaluations: StoredEvaluation[];
 }
 
 interface EvaluationRow {

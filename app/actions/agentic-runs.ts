@@ -3,8 +3,8 @@
 // Agentic Creator System: run admin entry points. Every export starts with
 // verifyAdmin() -- a 'use server' file may only export async functions, so the types
 // (AgentRun, AgentRunEvent, AgentRunWithTimeline, AgentRunListFilters, AgentRunStage,
-// AgentRunStatus) live in lib/agentic/orchestrator.ts and lib/agentic/orchestrator.shared.ts,
-// not here.
+// AgentRunStatus, AgentRunDetail, StoredEvaluation) live in lib/agentic/orchestrator.ts,
+// lib/agentic/orchestrator.shared.ts and lib/agentic/evaluation.ts, not here.
 //
 // Reads (listRunsAction, getRunAction, getRunSchemaStatusAction) are allowed even while
 // the master flag is off -- an admin browsing an empty (or migration-107-absent) run
@@ -19,6 +19,11 @@
 // getTaskPoolStatus in agentic-supervisor.ts -- needed to tell "not applied" apart from
 // "applied but empty" apart from "no rows match the filters") are both new here; every
 // other export is unchanged from Phase 5a.
+//
+// Unit 7c: getRunAction now also returns each evaluation recorded against the run
+// (migration 108, lib/agentic/evaluation.ts), for the run monitor's Evaluation panel.
+// See getRunAction's own doc comment for why that fetch is not allowed to break the
+// timeline/checkpoint half of the same response.
 //
 // Migration 107 will not be applied when this code first ships (see
 // docs/agentic-creator-working-memory.md). Every call here fails closed through
@@ -37,9 +42,11 @@ import {
   type AgentRunWithTimeline,
 } from '@/lib/agentic/orchestrator';
 import { isMissingRunSchemaError } from '@/lib/agentic/orchestrator.shared';
+import { listEvaluationsForRun, type AgentRunDetail, type StoredEvaluation } from '@/lib/agentic/evaluation';
 
 export type { AgentRun, AgentRunEvent, AgentRunEventLevel, AgentRunListFilters, AgentRunWithTimeline } from '@/lib/agentic/orchestrator';
 export type { AgentRunStage, AgentRunStatus } from '@/lib/agentic/orchestrator.shared';
+export type { AgentRunDetail, StoredEvaluation } from '@/lib/agentic/evaluation';
 
 async function requireCreatorEnabled(): Promise<void> {
   const flags = await getAgenticFlags();
@@ -109,10 +116,35 @@ export async function listRunsAction(filters?: AgentRunListFilters): Promise<Age
   return listRuns(filters);
 }
 
-/** Read-only: one run plus its full agent_run_events timeline. Allowed while the system is off. */
-export async function getRunAction(id: string): Promise<AgentRunWithTimeline | null> {
+/**
+ * Read-only: one run plus its full agent_run_events timeline and every
+ * evaluation recorded against it (Unit 7c). Allowed while the system is off.
+ *
+ * The evaluation fetch is wrapped separately from the run/timeline fetch on
+ * purpose. listEvaluationsForRun rethrows every error that isn't a
+ * recognized "migration 108 missing" signature (lib/agentic/evaluation.ts:
+ * 267-294), and the Evaluation panel this feeds is strictly supplementary to
+ * the stage timeline and checkpoint the detail row already showed before
+ * this unit existed. A single transient Postgres error in that one query
+ * must never take down the whole detail row -- timeline and checkpoint
+ * included -- for a panel that is, by construction, allowed to come back
+ * empty. So this half fails open: log and fall back to [], never let it
+ * throw past this action.
+ */
+export async function getRunAction(id: string): Promise<AgentRunDetail | null> {
   await verifyAdmin();
-  return getRun(id);
+
+  const run = await getRun(id);
+  if (!run) return null;
+
+  let evaluations: StoredEvaluation[] = [];
+  try {
+    evaluations = await listEvaluationsForRun(id);
+  } catch (error) {
+    console.error(`Failed to load evaluations for run ${id}:`, error);
+  }
+
+  return { ...run, evaluations };
 }
 
 /** Cancels a run outright, regardless of its current stage or status. */
