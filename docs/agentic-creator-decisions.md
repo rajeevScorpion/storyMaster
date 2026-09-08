@@ -202,3 +202,103 @@ flagged a safety concern. Mitigated by showing both in the same panel, with `sou
 warning, so "the deterministic layer passed it" and "the model was uneasy" are never conflated.
 `model_status` separately distinguishes "the model said nothing bad" from "the model was never
 asked".
+
+---
+
+## D10 — Narration is a reviewer action, not a pipeline stage
+
+**Decision.** `narration_pending` and `narration_complete` stay free advances. The pipeline never
+generates audio. A human narrates an agent draft after review, with the batch narration flow that
+already exists. Phase 8 ships no narration stage executor, no narration feature flag, and no
+migration for one.
+
+**Evidence.** The batch narration path is already complete and already hardened:
+`submitStoryNarrationBatch` → `narration_batch_jobs` → the self-re-kicking worker at
+`/api/batch/generate-narration` → per-beat `beats.audio_status`, with the daily reconcile cron, the
+banner's Resume button and the per-beat narrate button as recovery. It already bills through the real
+reserve→finalize/release cycle (`runMeteredNarrationOperation`, `app/actions/narration.ts:85`), and
+`generate_story_narration` is already a priced `PricingActionKey` (0.50 beats on dev, plus 0.30 for
+`align_story_text_overlay` riding inside the same call). A pipeline stage would have reimplemented an
+orchestration that exists, to reach a button a human has to press anyway.
+
+Two facts decided it rather than taste. First, **`drainAgentRuns` has no self re-kick** — it runs on
+the daily cron plus the admin button — so an in-stage per-beat loop bounded by `RUN_TIME_BUDGET_MS`
+(20s) would narrate roughly one beat per day. Second, the stages sit **before** `awaiting_review`, so
+the pipeline would pay TTS on every draft including the ones a reviewer discards: ~5 beats of spend
+per story, before anyone decided the story was worth keeping.
+
+**How this stands to D9.** D9's rule is that a model call may never be the sole cause of an automatic
+consequence. Narration has no opinion to overrule — it produces an artifact or it does not — so that
+rule is not the operative one here. The operative constraint is D9's sibling, and it is the half that
+generalizes: **a stage that runs after a draft exists may never be the sole cause of that draft
+becoming invisible to review.** A narration stage would have had to honour it (no failure path, and
+no unbounded wait for an async job), and the cheapest way to honour it turned out to be not having
+the stage. Nothing here weakens D9; the reviewer gate it protects is now the only thing standing
+between a draft and its audio.
+
+**Rejected.** (a) A narration stage that submits a batch job and waits — a deferred run at
+`narration_pending` is a finished draft invisible to review for up to a day, a time-boxed version of
+exactly the harm D9 exists to prevent. (b) The same stage without waiting — then
+`narration_complete` means "dispatched", not "complete", and the run's recorded counts are a snapshot
+taken seconds after submit, which `beats.audio_status` already tells you better. (c) An
+`agentic_narration_enabled` flag mirroring `agentic_image_generation_enabled` — with a human pressing
+the button, the human **is** the kill switch, and `agent_personas.allow_narration` remains the
+persona-level signal to that human.
+
+**Cost.** Agent drafts reach `awaiting_review` with no audio, and someone must press a button. That
+is the intended shape: V1 has no autonomous publish, so a reviewer is already in the loop. Two pieces
+of real work survive and are not optional — the reviewer cannot press that button today
+(`submitStoryNarrationBatch` throws `Forbidden.` on a story it does not own, `narration-batch.ts:132`,
+which is Phase 9's reviewer-authorization problem), and agent-owned narration cannot bill the agent
+until `authorizeCoinOperationForUser` forwards `actorKind` (`lib/pricing/coin-economy.ts:69`), so the
+agentic bypass is currently unreachable from every narration path.
+
+**This supersedes** the Phase 8 note in the 2026-09-08 working-memory handoff, which anticipated a
+paid, long-running narration stage needing the reserve→finalize/release cycle. The billing half of
+that note was right and survives; the stage half does not. It also supersedes the architecture doc's
+safety-property row reading "Narration independent of images | Separate `allow_narration` column and
+a separate run stage" — the column is real, the separate run stage is not.
+
+---
+
+## D11 — One persona, one fixed voice, from the list the reader-facing picker exposes
+
+**Decision.** `agent_personas.preferred_voice` becomes the persona's single, fixed narration voice,
+chosen in the admin editor from a dropdown built from the same voice lists the consumer "advanced
+settings" picker offers. `approved_voice_pool` is retired as a concept — column and data untouched,
+simply never read. Uniqueness across personas is **not** enforced.
+
+**Evidence.** The column has held a real value for all 15 seed personas since migration 104, and
+**nothing in the codebase read it.** Traced end to end: `stories.narrator_voice` is null on every
+agent story on dev, so `resolveNarrationVoiceServer` resolves `narration_voice_mode` to
+`'legacy_auto'`, `resolveNarrationVoiceDecision` (`lib/ai/narration-voice-resolver.ts:37-54`) returns
+`shouldUseLegacySelector: true`, and `selectLegacyNarratorVoiceServer` fires a **Gemini call** that
+picks from all 30 provider voices by genre and tone. The persona's voice was decorative, and because
+`narrator_voice` locks on first use, that model-chosen voice would then have become permanent for the
+story and every episode extended from it.
+
+Parity is structural, not copied: both the admin dropdown and the reader's picker read
+`getNarrationVoiceSettings()`, so changing the admin voice-list flag moves both at once.
+
+**Why uniqueness is not enforced.** 15 personas, 12 exposed voices (6 male + 6 female) — it is
+arithmetically impossible, and enforcing it would make three personas unsavable. Sharing barely
+matters anyway: of the four shared voices, three pairs write in different languages and never reach a
+listener's ear side by side. Exactly one real collision existed — **Leda, held by `madhurima-bose`
+and `riya-sen`, both Bangla** — and migration 110 moves `riya-sen` to Callirrhoe, which was already
+inside that persona's own seeded pool. The dropdown therefore *informs* rather than blocks: it names
+every other persona on a voice, and distinguishes the same-language case, which is the only one worth
+acting on.
+
+**Rejected.** (a) Widening the exposed voice list to make uniqueness reachable — that changes the
+consumer product to solve an internal problem. (b) Letting a model pick from the persona's approved
+pool per story — it reintroduces exactly the unauditable choice this decision removes, and would have
+needed a new agentic model call and the `AgenticJsonCallParams.task` widening Phase 7 warned about.
+Because voice is deterministic config, Phase 8 makes **no** agentic model call and that gap never
+opens. (c) A free-text voice field, i.e. today's editor — it is how a persona can be configured with
+a voice the product does not offer, silently.
+
+**Cost.** Some personas share a voice, and nothing stops an admin creating a new same-language
+collision. Mitigated by the dropdown's hints, which state the collision plainly at the moment of
+choosing. `approved_voice_pool` lingers as a populated column nothing reads; recorded here and in
+`lib/agentic/persona-voice.shared.ts`'s header so a later reader treats it as history rather than
+configuration.

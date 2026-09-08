@@ -85,11 +85,19 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**All seven (102-108) applied to dev.** 102-107 verified against `schema_migration_ledger` on
-2026-09-07; **108 applied 2026-09-08** and verified against the schema itself rather than only its
-ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and
-`idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial.
+**102-108 applied to dev; 110 is written and NOT yet applied anywhere.** 102-107 verified against
+`schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against the schema
+itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT,
+0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial.
 **Production has none of them.**
+
+**There is no migration 109, and there will not be one.** Phase 8 planned an
+`agentic_narration_enabled` flag to sit above each persona's `allow_narration`, mirroring
+`agentic_image_generation_enabled`. It was dropped when narration became a reviewer action rather
+than a pipeline stage (D10): with a human pressing the button, the human is the kill switch. The gap
+in the numbering is deliberate — do not go looking for the file, and do not treat 110 as blocked on
+it. Numeric order is convention here anyway; `schema_migration_ledger` is the only source of truth
+for what has actually run.
 
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
@@ -100,6 +108,7 @@ ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows,
 | 106 | `agent_tasks` | table `agent_tasks`; `stories.agent_task_id` | **Applied** 2026-09-07, 0 rows | Not applied |
 | 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
 | 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **Applied** 2026-09-08. Schema verified directly, not just the ledger row: 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and the index confirmed UNIQUE *and* partial | Not applied |
+| 110 | `riya_sen_narration_voice` | data-only: moves `riya-sen`'s `preferred_voice` from `Leda` to `Callirrhoe`, resolving the one same-language voice collision among the seeds (both it and `madhurima-bose` are Bangla) | **Not yet applied.** Needed on dev | Not applied (depends on 103 + 104, not on a contiguous run below it) |
 
 #### Promoting the agentic system to production — checklist
 

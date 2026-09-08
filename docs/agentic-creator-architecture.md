@@ -129,7 +129,7 @@ already present. That is the whole idempotency contract for paid calls.
 | Un-migrated database is safe | Every flag read fails closed; missing table means feature-off, not a 500 |
 | No autonomous publish | The orchestrator's terminal stage is `awaiting_review`; only reviewer actions publish |
 | Images off means no image call | Persona permission resolves to `imageGenerationMode: 'prompt_only'` |
-| Narration independent of images | Separate `allow_narration` column and a separate run stage |
+| Narration independent of images | Separate `allow_narration` column; narration is a reviewer action, not a run stage (D10) |
 | Retries never double-charge | Partial unique index for one live run per task, plus `checkpoint` |
 | No secrets or prompts leaked | Persona prompts are admin-only data; run events store concise messages, never full prompts or chain-of-thought |
 | Agent cannot act as admin | Agent work runs as the system user through bounded server functions, never `verifyAdmin()` paths |
@@ -160,3 +160,19 @@ already present. That is the whole idempotency contract for paid calls.
 - **The multi-beat loop is duplicated in spirit.** `lib/store/story-store.ts` keeps its own client-side
   orchestration; `lib/agentic/story-assembly.ts` is a separate, simpler, canonical-path-only server
   version. Unifying them was considered and rejected for V1 (D2).
+- **Neither narration nor images happen in the pipeline.** Both are reviewer actions on a finished
+  draft, using the batch flows that already exist (D10). The pipeline's job ends at `awaiting_review`.
+- **A reviewer cannot yet press either button.** `submitStoryNarrationBatch`
+  (`app/actions/narration-batch.ts:132`) and both image submits (`app/actions/image-batch.ts:161`)
+  resolve the caller from the session and throw `Forbidden.` on a story they do not own. Agent drafts
+  are owned by `AGENTIC_SYSTEM_USER_ID`, so this is the same reviewer-authorization gap already
+  recorded against Phase 9 — narration and images are its first two customers, and it is worth solving
+  once for both rather than twice.
+- **Images will need two things narration did not, when that phase comes.** First, an entitlement
+  gate: `assertImageGenerationEntitled` (`app/actions/image-batch.ts:72`) denies `tier_locked` because
+  `image_generation` is `free_enabled: false`, and because it is a *quote* rather than an authorize,
+  the `actorKind` bypass is never reached — the likely answer is promoting the system user's
+  entitlement tier (an admin action; per GOTCHAS, a tier promotion grants access without granting
+  coins), not a code change. Second, image batches hold **one reservation for the whole job**
+  (`reservation_id` on the job row) where narration reserves and finalizes per beat, so the
+  partial-failure release path is a different shape and narration's answer does not transfer.
