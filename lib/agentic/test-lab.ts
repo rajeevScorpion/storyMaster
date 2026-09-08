@@ -73,7 +73,7 @@ import {
   STORY_PROGRESS_CHECKPOINT_KEY,
   type StoryBrief,
 } from '@/lib/agentic/story-assembly';
-import type { SeedGenerationProgress } from '@/lib/agentic/story-assembly.shared';
+import { AGENTIC_SOURCE_FIDELITY, type SeedGenerationProgress } from '@/lib/agentic/story-assembly.shared';
 import { buildTestLabBrief } from '@/lib/agentic/test-lab.shared';
 import type { SeedPlan, StoryBeat, StoryConfig } from '@/lib/types/story';
 
@@ -300,10 +300,20 @@ async function buildTestLabRunView(
   // agrees with the real pipeline's construction by definition --
   // story-assembly.ts's buildSeededStoryConfig builds its StoryConfig from
   // resolvePersonaStoryConfig(persona) too (the same function storyConfig
-  // above is built from), so both land on the same ageGroup, language,
-  // beatLength and authoring.sourceFidelity (normalizeStoryConfig's default
-  // 'strictly_follow', the same value buildSeededStoryConfig pins explicitly
-  // to AGENTIC_SOURCE_FIDELITY).
+  // above is built from), so both land on the same ageGroup, language and
+  // beatLength.
+  //
+  // sourceFidelity is the ONE field taken from AGENTIC_SOURCE_FIDELITY rather
+  // than from storyConfig, and the distinction is not pedantic. storyConfig
+  // does not set authoring.sourceFidelity at all; it only ever arrives here as
+  // normalizeStoryConfig's DEFAULT_AUTHORING fallback, which happens to be
+  // 'strictly_follow' today. buildSeededStoryConfig, meanwhile, pins the field
+  // explicitly. So the two agree by coincidence of a default, not by
+  // construction -- change DEFAULT_AUTHORING.sourceFidelity and this preview
+  // would start applying the beat-length band while the real evaluated stage
+  // still skipped it, or vice versa, and the preview would quietly disagree
+  // with the grade it exists to predict. Reading the constant the pipeline
+  // itself pins makes that agreement structural.
   //
   // noveltyVerdict/noveltyReason are ALWAYS null here -- never preNovelty.
   // DeterministicEvaluationInput.noveltyVerdict specifically wants the
@@ -322,7 +332,7 @@ async function buildTestLabRunView(
           targetBeatCount,
           ageGroup: storyConfig.ageGroup,
           beatLengthLevel: storyConfig.beatLength?.level,
-          sourceFidelity: storyConfig.authoring.sourceFidelity ?? null,
+          sourceFidelity: AGENTIC_SOURCE_FIDELITY,
           language: storyConfig.language,
           restrictedThemes: persona.restrictedThemes,
           briefThemes: brief.themes,
