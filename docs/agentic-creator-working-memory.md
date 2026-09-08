@@ -75,9 +75,13 @@ a live database, three are accuracy of the record.
   is therefore true and `advanceRun` applies the stage without calling the executor — forever.
   **Proving Phase 7 needs a brand-new run**, not a retry of either of those; `retryRun` does not
   clear the checkpoint.
-- **Migration 108 is applied NOWHERE** — not dev, not prod. The code fails closed without it: the
-  evaluation is still computed and still written into `agent_run_events`, only the persist is
-  skipped. So a run today produces a grade in the timeline and no `agent_evaluations` row.
+- **Migration 108 is applied on dev (2026-09-08), and on nothing else.** Verified against the
+  schema itself, not just the ledger row: 12 columns, RLS on, `anon` and `authenticated` both
+  denied SELECT, 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial
+  (`WHERE trigger_source = 'pipeline'`) — which is the guarantee `getPipelineEvaluationForRun`
+  leans on. **Production still has none of 102-108.** Where it is unapplied the code fails closed:
+  the evaluation is still computed and still written into `agent_run_events`, only the persist is
+  skipped, so a run produces a grade in the timeline and no `agent_evaluations` row.
 - **The restricted-theme check is effectively English-only against beat text.** Verified by query,
   not assumed: all 15 seeded personas store `restricted_themes` as English phrases, including the 12
   writing in Hindi, Bangla, Gujarati or Marathi. JS `\b` is defined over `[A-Za-z0-9_]` and never
@@ -101,9 +105,7 @@ a live database, three are accuracy of the record.
 
 ### THE NEXT STEP
 
-1. **Apply `108_agent_evaluations.sql` on dev** by hand in the Supabase dashboard. Then confirm:
-   `select * from public.schema_migration_ledger where migration_number = 108;`
-   `select count(*) from public.agent_evaluations;   -- expect 0`
+1. ~~Apply `108_agent_evaluations.sql` on dev.~~ **Done 2026-09-08**, schema verified (above).
 2. **Start a fresh run** — Test Lab against a persona, then promote — and watch it reach
    `evaluated`. Verify:
 
@@ -311,7 +313,7 @@ select count(*) from public.image_generation_jobs where created_at > now() - int
   **Phase 7 is core-complete but unproven:** the pure evaluator (7a) and its server half wired into
   a no-failure `evaluated` stage (7b) are landed and gated; the Run monitor surface (7c) and the
   Test Lab deterministic preview (7d) are designed and agreed but not written. **The evaluator has
-  never executed** — migration 108 is applied nowhere, and both existing `awaiting_review` runs
+  never executed** — migration 108 is applied on dev now, but both existing `awaiting_review` runs
   already banked `evaluated` from the Phase 6 placeholder, so proving it needs a brand-new run.
 - **Branch:** `feat/agentic-creator`, cut from `dev` at `1d93dea`
 - **Plan of record:** `C:\Users\User\.claude\plans\kisago-agentic-creator-prompt-pack-imple-refactored-dragon.md`
@@ -356,9 +358,10 @@ explicitly rather than incidentally — that is why the three empty states are d
 
 ## Next step
 
-**Apply migration 108 on dev, start one fresh run to prove the evaluator, then build units 7c and
-7d.** The exact SQL to verify each claim, and the specs for both remaining units, are in the
-session handoff at the top of this file. 7c and 7d need code; the proof run does not.
+**Start one fresh run to prove the evaluator, then build units 7c and 7d.** Migration 108 is
+applied on dev as of 2026-09-08. The exact SQL to verify each claim, and the specs for both
+remaining units, are in the session handoff at the top of this file. 7c and 7d need code; the
+proof run does not.
 
 ### Superseded: Phase 5b (complete, landed at `78e8aaa`)
 
@@ -442,9 +445,6 @@ Still worth doing, neither blocking:
 
 None blocking work. Three open items:
 
-- **Migration 108 is applied nowhere, so the evaluator cannot persist a grade.** Not a defect: the
-  code fails closed, computing the evaluation and writing it into `agent_run_events` while skipping
-  the `agent_evaluations` insert. Apply `108_agent_evaluations.sql` on dev to turn the record on.
 - **Production has none of 102-108, and needs two more things besides the migrations.** See the
   "Promoting the agentic system to production" checklist in `docs/agent-context/PROJECT_STATE.md`:
   prod needs its own `AGENTIC_SYSTEM_USER_ID` auth user (a *different* UUID from dev's, set as a Vercel
@@ -482,7 +482,7 @@ guarantee stops being a guarantee.
 | 105 | `105_agent_story_memory.sql` | 3 | **APPLIED** 2026-09-06 | not applied |
 | 106 | `106_agent_tasks.sql` | 4 | **APPLIED** 2026-09-07 | not applied |
 | 107 | `107_agent_runs.sql` | 5 | **APPLIED** 2026-09-07 | not applied |
-| 108 | `108_agent_evaluations.sql` | 7 | **WRITTEN, NOT APPLIED** | not applied |
+| 108 | `108_agent_evaluations.sql` | 7 | **APPLIED** 2026-09-08 — schema verified, 0 rows | not applied |
 | 109–110 | reviewers / labels | 9, 11 | not written | not written |
 
 Migrations are applied **by hand by the owner** in the Supabase dashboard, per environment.

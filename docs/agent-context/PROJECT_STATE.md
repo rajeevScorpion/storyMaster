@@ -9,7 +9,7 @@ context that does not live in the code or in git history.
 **Partially re-verified 2026-09-06** against both dev and prod via the read-only MCP connections, while
 planning the Agentic Creator System. Three corrections landed: migration 101 is applied on both (the row said
 "not yet applied anywhere"); Runware rows exist on prod and are disabled rather than absent; and the agentic
-migrations 102–108 are recorded, with 102–107 applied on dev and none on prod. **108 is written but applied nowhere.** Everything not named here still carries its
+migrations 102–108 are recorded, with 102–108 applied on dev and none on prod. Everything not named here still carries its
 2026-08-26 verification date.
 
 Keep this file current. When you finish a pack, move it out of "pending"; when you defer something, add it to
@@ -85,19 +85,21 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**All six (102-107) applied to dev**, verified by query against `schema_migration_ledger` on 2026-09-07.
-**108 is written and committed but applied NOWHERE — not dev, not prod.**
+**All seven (102-108) applied to dev.** 102-107 verified against `schema_migration_ledger` on
+2026-09-07; **108 applied 2026-09-08** and verified against the schema itself rather than only its
+ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and
+`idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial.
 **Production has none of them.**
 
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
-| 102 | `agentic_creator_flags` | six `agentic_*` rows in `feature_flags`, all `false` | **Applied.** All six flags present, **all off** | Not applied |
+| 102 | `agentic_creator_flags` | six `agentic_*` rows in `feature_flags`, all `false` | **Applied.** All six present. **`agentic_creator_enabled` and `agentic_billing_bypass_enabled` are ON** (both since 2026-09-07, to run the pipeline); the other four remain off | Not applied |
 | 103 | `agent_personas` | tables `agent_personas`, `agent_persona_memory` + AFTER INSERT trigger; `stories.agent_persona_id` | **Applied.** | Not applied |
 | 104 | `seed_agent_personas` | the 15 seed creator personas | **Applied.** 15 personas, and 15 `agent_persona_memory` rows created by 103's trigger | Not applied |
 | 105 | `agent_story_memory` | tables `agent_story_memory`, `agent_novelty_checks` + `pg_trgm` GIN indexes | **Applied**, both tables empty | Not applied |
 | 106 | `agent_tasks` | table `agent_tasks`; `stories.agent_task_id` | **Applied** 2026-09-07, 0 rows | Not applied |
 | 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
-| 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **NOT APPLIED.** Code fails closed without it: the evaluation is still computed and still written to `agent_run_events`, only the persist is skipped | Not applied |
+| 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **Applied** 2026-09-08. Schema verified directly, not just the ledger row: 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and the index confirmed UNIQUE *and* partial | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
@@ -297,7 +299,7 @@ below were verified 2026-08-26; the Runware and Agentic rows were re-verified ag
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
 | Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
-| Agentic Creator System | six `agentic_*` flags | present, **all six off** — 102–107 all applied (105 on 2026-09-06, 106/107 on 2026-09-07), 15 personas seeded (all `draft`), nothing runs | **absent** — 102–107 not applied |
+| Agentic Creator System | six `agentic_*` flags | present; **`agentic_creator_enabled` + `agentic_billing_bypass_enabled` ON** since 2026-09-07, other four off. 102–108 all applied (105 on 2026-09-06, 106/107 on 2026-09-07, 108 on 2026-09-08), 15 personas seeded (all `draft`), **two real drafts generated** and sitting at `awaiting_review` | **absent** — 102–108 not applied |
 
 The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
 the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on
