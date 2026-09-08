@@ -121,7 +121,11 @@ const SCRIPT_PATTERNS: Record<StoryScript, RegExp> = {
   devanagari: /[\u0900-\u097F]/,
   bengali: /[\u0980-\u09FF]/,
   gujarati: /[\u0A80-\u0AFF]/,
-  arabic: /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/,
+  // Presentation Forms-B stops at \uFEFC, the last Arabic form in the block --
+  // NOT at \uFEFF, which is the block's final code point but is ZERO WIDTH
+  // NO-BREAK SPACE (the BOM), not a letter. Including it would count a stray
+  // BOM as one Arabic character in every text that carries one.
+  arabic: /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFC]/,
 };
 
 /** Below this many total scripted characters, there is too little evidence to judge. */
@@ -250,6 +254,23 @@ export function runDeterministicEvaluation(input: DeterministicEvaluationInput):
   // Word-boundary, case-insensitive matching so "war" cannot match inside
   // "warm" or "toward" -- \b only holds at a transition into/out of a \w
   // character, and the letters either side of "war" in both words are \w.
+  //
+  // KNOWN LIMIT, verified against the seeded personas rather than assumed:
+  // all 15 seeds carry their restricted_themes as ENGLISH phrases ("graphic
+  // violence", "self-harm"), including the 12 whose stories are written in
+  // Hindi, Bangla, Gujarati or Marathi. JS \b is defined over \w
+  // ([A-Za-z0-9_]), so it never holds beside a Devanagari/Bengali/Gujarati/
+  // Arabic character -- and the English phrase would not appear in that prose
+  // anyway. So the beat-text half of this check is effectively English-only.
+  // The briefThemes half works for every persona, because buildStoryBriefPrompt
+  // asks for themes "in English" while the title, premise and prose go in the
+  // target language.
+  //
+  // This fails OPEN (a missed restriction, never a false one) and the model's
+  // `safety` dimension covers the same ground advisorily, so it is a gap in
+  // coverage, not a wrong answer. Closing it properly needs script-aware
+  // boundaries plus translated restriction vocabularies -- recorded as
+  // deferred work in PROJECT_STATE.md rather than half-done here.
   const matchedThemes = new Set<string>();
   for (const theme of restrictedThemes) {
     const trimmed = theme.trim();
@@ -356,11 +377,18 @@ export function composeEvaluation(params: {
 // ── Model result parsing ─────────────────────────────────────────────────
 
 /**
- * Strips a ```json fence if the model wrapped its response in one. Every
- * prompt this module writes asks for JSON with no markdown fences (see
- * buildStoryEvaluationPrompt), but models add one anyway often enough that
- * every JSON-parsing call site in this codebase treats it as expected input,
- * not an error.
+ * Strips a ```json fence if the model wrapped its response in one.
+ *
+ * DELIBERATELY STRICTER THAN THE NEIGHBOURING PARSERS, not consistent with
+ * them. parseStoryBrief (story-assembly.ts) and the novelty adjudicator's
+ * parser both hand `raw` straight to JSON.parse and let a fenced response
+ * throw, relying entirely on the prompt's "no markdown fences" instruction.
+ * That is defensible where a throw fails a stage that will be retried. It is
+ * not defensible here: a fenced response would be scored as
+ * modelStatus 'unavailable', silently discarding a grade the model actually
+ * produced, and nothing downstream would ever retry it -- the run advances
+ * either way. Stripping the fence costs one regex and removes that whole
+ * failure mode.
  */
 function stripMarkdownFences(raw: string): string {
   const trimmed = raw.trim();
