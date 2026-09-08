@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 import { AlertTriangle, Loader2, X } from 'lucide-react';
@@ -8,6 +8,7 @@ import FilterDropdown from '@/components/ui/FilterDropdown';
 import AdminToggle from '@/components/admin/AdminToggle';
 import { createPersona, updatePersona, type AgentPersona, type AgentPersonaInput } from '@/app/actions/agentic-personas';
 import { STORY_CONFIG_KEYS } from '@/lib/agentic/personas.shared';
+import { buildPersonaVoiceOptions, buildPersonaVoiceUsage, type PersonaVoiceLists } from '@/lib/agentic/persona-voice.shared';
 import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import { STORY_AUDIENCE_OPTIONS } from '@/lib/ai/story-audience';
 import { STORY_GENRES } from '@/lib/story/genres';
@@ -71,7 +72,6 @@ interface FormState {
   beatCountMin: string;
   beatCountMax: string;
   preferredVoice: string;
-  approvedVoicePool: string;
   allowImageGeneration: boolean;
   allowNarration: boolean;
   modelOverrides: string;
@@ -98,7 +98,6 @@ function buildInitialState(persona: AgentPersona | null): FormState {
       beatCountMin: '6',
       beatCountMax: '10',
       preferredVoice: '',
-      approvedVoicePool: '',
       allowImageGeneration: false,
       allowNarration: false,
       modelOverrides: '{}',
@@ -124,7 +123,6 @@ function buildInitialState(persona: AgentPersona | null): FormState {
     beatCountMin: String(persona.beatCountMin),
     beatCountMax: String(persona.beatCountMax),
     preferredVoice: persona.preferredVoice ?? '',
-    approvedVoicePool: joinList(persona.approvedVoicePool),
     allowImageGeneration: persona.allowImageGeneration,
     allowNarration: persona.allowNarration,
     modelOverrides: JSON.stringify(persona.modelOverrides ?? {}, null, 2),
@@ -141,11 +139,17 @@ function buildInitialState(persona: AgentPersona | null): FormState {
  */
 export default function PersonaEditorDrawer({
   persona,
+  voiceLists,
+  allPersonas,
   onClose,
   onSaved,
 }: {
   /** null = create mode. */
   persona: AgentPersona | null;
+  /** The two voice lists the narration-voice dropdown offers (Phase 8, Unit 8b). */
+  voiceLists: PersonaVoiceLists;
+  /** Full roster (not filtered to the catalogue's current view) so buildPersonaVoiceUsage sees every persona already using a voice. */
+  allPersonas: AgentPersona[];
   onClose: () => void;
   onSaved: (persona: AgentPersona) => void;
 }) {
@@ -153,6 +157,33 @@ export default function PersonaEditorDrawer({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isEdit = Boolean(persona);
+
+  // The slug this persona is known by in `allPersonas` -- an existing
+  // persona's stored slug (stable, matches what buildPersonaVoiceUsage keyed
+  // its sharers by), or, for a brand-new persona, the slug the form is
+  // currently deriving from its own fields. Either way, this is what excludes
+  // the persona being edited from its own voice's sharer list.
+  const currentSlug = useMemo(
+    () => (persona ? persona.slug : slugify(form.slug || form.displayName)),
+    [persona, form.slug, form.displayName]
+  );
+
+  const voiceUsage = useMemo(() => buildPersonaVoiceUsage(allPersonas), [allPersonas]);
+
+  const voiceOptions = useMemo(
+    () =>
+      buildPersonaVoiceOptions({
+        lists: voiceLists,
+        storedVoice: persona?.preferredVoice ?? null,
+        usage: voiceUsage,
+        currentSlug,
+        // The form's live language, not the saved one -- switching a
+        // persona's language should immediately re-evaluate which sharers
+        // count as same-language.
+        currentLanguage: form.language,
+      }),
+    [voiceLists, persona, voiceUsage, currentSlug, form.language]
+  );
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -217,7 +248,12 @@ export default function PersonaEditorDrawer({
           beatCountMin,
           beatCountMax,
           preferredVoice: form.preferredVoice.trim() || null,
-          approvedVoicePool: splitList(form.approvedVoicePool),
+          // approvedVoicePool intentionally omitted (Phase 8, Unit 8b): the
+          // field is retired from this editor, not deleted from the schema.
+          // mapInputToRow (agentic-personas.ts) only writes a column when its
+          // key is present on the patch, so leaving this key out preserves
+          // whatever approved_voice_pool the row already holds -- sending `[]`
+          // or the old value back would either erase or needlessly rewrite it.
           allowImageGeneration: form.allowImageGeneration,
           allowNarration: form.allowNarration,
           modelOverrides,
@@ -244,7 +280,11 @@ export default function PersonaEditorDrawer({
           beatCountMin,
           beatCountMax,
           preferredVoice: form.preferredVoice.trim() || null,
-          approvedVoicePool: splitList(form.approvedVoicePool),
+          // approvedVoicePool intentionally omitted here too -- see the
+          // matching comment in the update-patch branch above. A brand-new
+          // persona simply starts with no approved_voice_pool value (the DB
+          // column's own default applies), since nothing in this codebase
+          // reads that column anymore.
           allowImageGeneration: form.allowImageGeneration,
           allowNarration: form.allowNarration,
           modelOverrides,
@@ -453,18 +493,13 @@ export default function PersonaEditorDrawer({
               </FieldGroup>
 
               <FieldGroup title="Voice">
-                <Field label="Preferred voice id">
-                  <input
+                <Field label="Narration voice">
+                  <FilterDropdown
                     value={form.preferredVoice}
-                    onChange={(event) => update('preferredVoice', event.target.value)}
-                    className={inputClass}
-                  />
-                </Field>
-                <Field label="Approved voice pool (comma separated)">
-                  <input
-                    value={form.approvedVoicePool}
-                    onChange={(event) => update('approvedVoicePool', event.target.value)}
-                    className={inputClass}
+                    options={voiceOptions}
+                    onChange={(value) => update('preferredVoice', value)}
+                    ariaLabel="Persona narration voice"
+                    fullWidth
                   />
                 </Field>
               </FieldGroup>

@@ -29,6 +29,7 @@ import {
 import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import { STORY_AUDIENCE_OPTIONS } from '@/lib/ai/story-audience';
 import { STORY_GENRES } from '@/lib/story/genres';
+import type { PersonaVoiceLists } from '@/lib/agentic/persona-voice.shared';
 import PersonaEditorDrawer from './PersonaEditorDrawer';
 
 const STATUS_FILTER_OPTIONS = [
@@ -67,11 +68,22 @@ type EditorTarget = { mode: 'create' } | { mode: 'edit'; persona: AgentPersona }
 export default function PersonaCatalogue({
   initialPersonas,
   schemaApplied,
+  voiceLists,
 }: {
   initialPersonas: AgentPersona[];
   schemaApplied: boolean;
+  /** The two voice lists the editor's narration-voice dropdown offers (Phase 8, Unit 8b) -- resolved server-side in page.tsx. */
+  voiceLists: PersonaVoiceLists;
 }) {
   const [personas, setPersonas] = useState(initialPersonas);
+  // Full roster, independent of the status/language/age/genre/search filters
+  // above -- buildPersonaVoiceUsage (the editor's voice dropdown) needs every
+  // persona's voice, including ones currently filtered out of the table, since
+  // a hidden persona still occupies a voice. `reload()` below replaces
+  // `personas` with a filtered subset on every filter change; it deliberately
+  // never touches this state. Mutations (create/update/clone/status change)
+  // land in both via upsertPersona.
+  const [allPersonas, setAllPersonas] = useState(initialPersonas);
   const [status, setStatus] = useState('all');
   const [language, setLanguage] = useState('all');
   const [ageGroup, setAgeGroup] = useState('all');
@@ -125,10 +137,12 @@ export default function PersonaCatalogue({
   }
 
   function upsertPersona(saved: AgentPersona) {
-    setPersonas((current) => {
+    const merge = (current: AgentPersona[]) => {
       const exists = current.some((row) => row.id === saved.id);
       return exists ? current.map((row) => (row.id === saved.id ? saved : row)) : [saved, ...current];
-    });
+    };
+    setPersonas(merge);
+    setAllPersonas(merge);
   }
 
   function openClone(target: AgentPersona) {
@@ -432,6 +446,8 @@ export default function PersonaCatalogue({
         <PersonaEditorDrawer
           key={editorTarget.mode === 'edit' ? editorTarget.persona.id : 'new'}
           persona={editorTarget.mode === 'edit' ? editorTarget.persona : null}
+          voiceLists={voiceLists}
+          allPersonas={allPersonas}
           onClose={() => setEditorTarget(null)}
           onSaved={(saved) => {
             upsertPersona(saved);

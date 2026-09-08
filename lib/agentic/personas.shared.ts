@@ -53,8 +53,24 @@ export interface AgentPersona {
   updatedAt: string;
 }
 
-/** Fields needed to create (or clone into) a persona -- everything but server-generated columns. */
-export type AgentPersonaInput = Omit<AgentPersona, 'id' | 'createdAt' | 'updatedAt'>;
+/**
+ * Fields needed to create (or clone into) a persona -- everything but
+ * server-generated columns.
+ *
+ * `approvedVoicePool` is optional here (unlike on `AgentPersona`, where it
+ * mirrors a NOT NULL-shaped DB column and stays required). Phase 8 Unit 8b
+ * retires the field from the persona editor -- one persona now has one fixed
+ * voice, not a shortlist -- so the editor's create/update payloads no longer
+ * set it. `mapInputToRow` (app/actions/agentic-personas.ts) only writes a
+ * column when its key is present on the input, so omitting the key leaves an
+ * existing row's `approved_voice_pool` untouched rather than clearing it.
+ * `buildClonedPersonaInput` below still sets it explicitly when cloning, and
+ * that continues to work unchanged since a required field satisfies an
+ * optional one.
+ */
+export type AgentPersonaInput = Omit<AgentPersona, 'id' | 'createdAt' | 'updatedAt' | 'approvedVoicePool'> & {
+  approvedVoicePool?: string[];
+};
 
 /** Mirrors public.agent_persona_memory (migration 103), camelCased. */
 export interface AgentPersonaMemory {
