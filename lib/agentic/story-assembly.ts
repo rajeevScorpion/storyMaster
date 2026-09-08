@@ -996,7 +996,19 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
  * tolerant handling, instead of reusing that preamble.
  */
 async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> {
-  const startedAt = Date.now();
+  // MEASURED FROM claimed_at, NOT FROM THE TOP OF THIS FUNCTION. Every other
+  // timeBudgetExceeded() call site in this file (runStoryGeneratedStage) opens
+  // with `Date.now()` and then checks the budget AFTER doing seconds of paid
+  // generation, so a local origin is the right one there. This stage does no
+  // such work before its check -- only a flag read and three short queries --
+  // so a local origin would put roughly 200ms against a 20s budget and the
+  // guard could never fire. The meaningful origin is when the worker claimed
+  // this run: if draft_created already burned the pass's budget, this stage
+  // starts already over it. A null claimed_at (an unclaimed run should never
+  // reach an executor) falls back to "not exceeded" rather than silently
+  // skipping the model call.
+  const claimedAtMs = run.claimedAt ? Date.parse(run.claimedAt) : Number.NaN;
+  const budgetOriginMs = Number.isFinite(claimedAtMs) ? claimedAtMs : Date.now();
 
   const flags = await getAgenticFlags();
   if (!flags.creatorEnabled) {
@@ -1015,7 +1027,28 @@ async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> 
   // still short of 'evaluated' -- and every subsequent retry would pay for a
   // fresh model call, only to have its own insert fail the unique constraint
   // and the verdict never get recorded at all.
-  const existing = await getPipelineEvaluationForRun(run.id);
+  //
+  // Wrapped, because getPipelineEvaluationForRun RETHROWS anything that is not
+  // a schema-missing error (it only swallows the 108 latch cases). An executor
+  // that throws is caught by advanceRun and routed straight into
+  // handleStageFailure -- so one transient Postgres error on this read would
+  // fail the run at 'evaluated' and strand the saved draft, which is precisely
+  // the outcome this stage exists to make impossible. Losing the read degrades
+  // to computing a fresh evaluation; if a row really did already exist, the
+  // insert then trips the partial unique index and evaluateAndRecord records
+  // that as persisted: false. A duplicate grade is not written, and the run
+  // still advances.
+  let existing: Awaited<ReturnType<typeof getPipelineEvaluationForRun>> = null;
+  try {
+    existing = await getPipelineEvaluationForRun(run.id);
+  } catch (error) {
+    await appendRunEvent(
+      run.id,
+      'evaluated',
+      'warn',
+      `Could not read this run's existing evaluation: ${error instanceof Error ? error.message : 'unknown error'}.`
+    );
+  }
   if (existing) {
     await appendRunEvent(
       run.id,
@@ -1129,7 +1162,7 @@ async function runEvaluatedStage(run: AgentRun): Promise<StageExecutionOutcome> 
   // costs nothing, and it is strictly more useful to a reviewer than no grade
   // at all. So this stage always evaluates and only drops the model call when
   // the budget is already gone.
-  const promptInput = timeBudgetExceeded(startedAt)
+  const promptInput = timeBudgetExceeded(budgetOriginMs)
     ? null
     : {
         personaDisplayName: persona.displayName,
