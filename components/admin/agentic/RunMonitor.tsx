@@ -645,6 +645,10 @@ export default function RunMonitor({
                                         {detail.evaluations.map((evaluation: StoredEvaluation) => (
                                           <EvaluationEntry key={evaluation.id} evaluation={evaluation} />
                                         ))}
+                                        <p className="text-[11px] text-neutral-600">
+                                          The verdict above is decided by the deterministic layer alone — the model
+                                          contributes scores and concerns but never changes it.
+                                        </p>
                                       </div>
                                     ) : 'evaluated' in run.checkpoint ? (
                                       <p className="text-sm text-neutral-500">
@@ -658,10 +662,6 @@ export default function RunMonitor({
                                         stage.
                                       </p>
                                     )}
-                                    <p className="mt-3 text-[11px] text-neutral-600">
-                                      The verdict above is decided by the deterministic layer alone -- the model
-                                      contributes scores and concerns but never changes it.
-                                    </p>
                                   </div>
                                 </div>
                               )}
