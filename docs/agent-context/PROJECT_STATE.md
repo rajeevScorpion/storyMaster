@@ -413,6 +413,13 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Agentic Creator (branch `feat/agentic-creator`)**
+- **`retryRun` cannot re-brief, so the admin Retry button is weaker than the automatic path.** A
+  novelty block now clears `brief_ready` and the cached verdict so the next *automatic* attempt
+  regenerates a brief (D12). `retryRun` resets `status`, `attempt_count` and `error_detail` but never
+  touches `checkpoint`, so pressing Retry on a novelty-failed run replays the cached block and burns
+  three more attempts achieving nothing. Not a regression — it behaved this way before D12 — but
+  newly conspicuous now that the automatic path self-corrects. The fix is small (clear the same two
+  keys `clearBriefForRebrief` clears) and belongs with whoever next touches `retryRun`.
 - **Phase 8's Unit 8d is written up but not built: agent-owned narration cannot bill the agent.**
   `authorizeCoinOperationForUser` (`lib/pricing/coin-economy.ts`) never forwards `actorKind`, so the
   agentic bypass in `authorizeBillableAction` is unreachable from every narration path. Narrating an

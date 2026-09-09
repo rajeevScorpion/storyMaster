@@ -302,3 +302,54 @@ collision. Mitigated by the dropdown's hints, which state the collision plainly 
 choosing. `approved_voice_pool` lingers as a populated column nothing reads; recorded here and in
 `lib/agentic/persona-voice.shared.ts`'s header so a later reader treats it as history rather than
 configuration.
+
+---
+
+## D12 — Persona memory nudges the brief; the deterministic check still decides; a block re-briefs
+
+**Decision.** `agent_persona_memory` is injected into the brief prompt as a **bounded** nudge, and
+`runNoveltyCheck` remains the sole authority on whether a story is too similar. When it blocks, the
+run clears its `brief_ready` checkpoint and its cached verdict, records what to avoid, and
+regenerates a fresh brief on the next attempt — bounded by the existing `max_attempts`, with no
+separate re-brief counter.
+
+**Evidence.** The table was written and read by nothing. Its only two reads in the codebase were
+inside `updatePersonaMemory`'s own read-modify-write; `buildStoryBriefPrompt` never received any of
+it. Observed live: persona Kabir Sinha produced the title `कट-ऑफ`, and forty minutes later produced
+`कट-ऑफ` again and was terminally blocked at 100% title similarity, 0 of 8 beats generated, while its
+`recent_titles` held that exact title the whole time. Same defect class as `preferred_voice` (D11).
+
+It was near-deterministic rather than unlucky: the Test Lab's task brief is identical boilerplate for
+a given persona, so an identical prompt with no memory reproduces the story. The retries made it
+worse — `brief_ready` was checkpointed and the verdict cached (`32f2c65`, deliberately, so a block is
+not a lottery), so attempts 2 and 3 replayed a verdict that could not change.
+
+**How this stands to D9.** The model gets another attempt, never a vote. The deterministic layer
+still decides every verdict, and a regenerated brief is re-checked from scratch rather than being
+waved through. The memory block reduces how often a collision happens; it never decides whether one
+has. That distinction is written at both call sites, because the tempting future mistake is to drop
+the check on the grounds that the prompt now handles it.
+
+**On the token objection, which was raised and is the reason the caps exist.** Storage keeps up to 50
+entries per field; **injection uses its own much smaller caps** — 5 titles, 3 premises truncated to
+120 characters, 10 character names, 5 settings, 5 themes — under a hard 1500-character ceiling on the
+rendered block, with a test that stuffs every field to its storage cap and asserts the render still
+fits. The prompt does not grow with the persona's history.
+
+**Rejected.** (a) **Stateful model continuity**, so each story is a turn in an ongoing session. It is
+not cheaper — the model still attends over prior context, and a capped title list is far smaller than
+any session; it makes the strength of the novelty guarantee vary silently by provider, which is
+exactly what D9 forbids; it does not survive an architecture where runs are checkpointed, deferred
+across days and retried across process boundaries; and since a model without it needs the list-based
+path anyway, that path has to exist and be correct regardless. Build only the one that always works.
+(b) **Querying `stories` live instead of the memory table** — the memory table already *is* that
+projection, maintained by 103's trigger, and where the data is fetched from has no bearing on prompt
+size: whatever is retrieved still has to be injected. (c) **A separate re-brief counter** —
+`max_attempts` is the existing, correct bound, and a second one is a second thing to get wrong.
+
+**Cost.** A re-brief is real spend: each regenerated brief is a `preview_seed_plan` authorization, so
+a persona that keeps colliding now pays up to three brief calls instead of one. That is the intended
+trade — those attempts previously bought nothing at all. Separately, `retryRun` does not clear the
+checkpoint, so an admin pressing **Retry** on a novelty-failed run still replays the cached block; the
+automatic path self-corrects while the manual button cannot. Recorded in PROJECT_STATE's deferred
+list rather than fixed here.
