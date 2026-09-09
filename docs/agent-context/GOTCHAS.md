@@ -290,6 +290,32 @@ attempt cap (needs a migration).
 
 ---
 
+### `saveBeat` is not an owner-only path, and gating it breaks shared branching
+
+`app/actions/persistence.ts`'s `saveBeat` looks like it should be gated on story ownership. It must not
+be. **Any authenticated user may continue someone else's non-archived story on their own branch** — a
+real, working feature, and `saveBeat` is its persistence path. The gate for it is `beats` RLS from
+migration 003, not application code:
+
+```
+beats INSERT  auth.uid() IS NOT NULL AND generated_by = auth.uid() AND story not archived
+beats UPDATE  generated_by = auth.uid()
+```
+
+Note that `beats.UPDATE` keys on `generated_by`, **not** on the story's owner — a differently shaped
+predicate from `stories.UPDATE` (`auth.uid() = user_id`), and the reason an explorer can write their own
+beats onto a story they do not own.
+
+Phase 9 nearly broke this. Wiring the reviewer authorization helper into `saveBeat` as a strict
+allow/deny gate — the way the other three ownership guards use it — would have thrown `Forbidden.` for
+every explorer continuing any story, agent-owned or not, because they are neither the owner nor a
+reviewer. The fix is that `saveBeat` consults the helper **only to decide routing** — reviewer writes
+swap to the admin client and drop the `generated_by` / `user_id` filters — and every other outcome,
+including the helper throwing, falls through to the ordinary path unchanged.
+
+The whole test suite passes either way. If you add an ownership check here, prove a non-owner can still
+branch before you believe it.
+
 ## Product decisions worth not re-deriving
 
 - **`/gallery` is a 307, not a 308.** A cached permanent redirect would make moving the gallery back very hard.

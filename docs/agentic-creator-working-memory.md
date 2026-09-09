@@ -51,8 +51,13 @@ narration, which is the shape D12 already paid for.
 | `c99f54e` | D13 and D14 |
 | `54b4d14` | Unit 9a — `agent_reviewers`, migration 111, `requireReviewer` / `assertCanEditStory` |
 | `b394c52` | **Review fix** — type-predicate narrowing; guards choose their own columns |
+| `b7041b2` | Unit 9b — the four ownership guards delegate to `assertCanEditStory` |
 
-Gate re-run independently: **tsc 0, lint clean, 96 files / 894 tests** (from 95 / 877).
+Gate re-run independently: **tsc 0, lint clean, 96 files / 905 tests** (from 95 / 877).
+
+**9b reviewed by diff and found clean** — the first unit this phase with nothing to fix. Its one
+deviation was a genuine catch the brief had missed: `saveBeat` is also shared branching's persistence
+path, so gating it would have broken every non-owner continuing any story. Written up in GOTCHAS.
 
 ### THE NEXT STEP
 
