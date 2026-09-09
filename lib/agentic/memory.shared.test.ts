@@ -6,16 +6,25 @@ import {
   AMBIGUOUS_BAND_LOW,
   CHARACTER_REUSE_BLOCK_COUNT,
   CHARACTER_REUSE_WARN_COUNT,
+  MEMORY_BRIEF_CHARACTER_NAME_LIMIT,
+  MEMORY_BRIEF_MAX_CHARS,
+  MEMORY_BRIEF_PREMISE_LIMIT,
+  MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS,
+  MEMORY_BRIEF_SETTING_LIMIT,
+  MEMORY_BRIEF_THEME_LIMIT,
+  MEMORY_BRIEF_TITLE_LIMIT,
   THEME_SATURATION_WARN_COUNT,
   TITLE_BLOCK_THRESHOLD,
   TITLE_WARN_THRESHOLD,
   buildNoveltyAdjudicationPrompt,
+  formatPersonaMemoryForBrief,
   isMissingMemorySchemaError,
   needsModelAdjudication,
   scoreNovelty,
   trigramSimilarity,
   type NoveltyCandidate,
   type NoveltyPrior,
+  type PersonaMemorySnapshot,
 } from './memory.shared';
 
 const SERIES = '11111111-1111-1111-1111-111111111111';
@@ -330,5 +339,153 @@ describe('applyAdjudication — the model may soften a verdict, never harden it'
     expect(applyAdjudication('clear', 'clear')).toBe('clear');
     expect(applyAdjudication('warn', 'warn')).toBe('warn');
     expect(applyAdjudication('block', 'block')).toBe('block');
+  });
+});
+
+function memorySnapshot(overrides: Partial<PersonaMemorySnapshot> = {}): PersonaMemorySnapshot {
+  return {
+    recentTitles: [],
+    recentPremises: [],
+    characterNames: [],
+    settingsUsed: [],
+    themesUsed: [],
+    ...overrides,
+  };
+}
+
+/**
+ * `label(prefix, 0)` is defined to be the NEWEST entry — matching how
+ * lib/agentic/memory.ts's appendCapped actually stores these arrays
+ * (`[...incoming, ...existing]`, so index 0 is always the latest addition).
+ * Zero-padded so no two labels are substring-prefixes of one another (e.g.
+ * "Title-001" is never a substring of "Title-010"), which would otherwise
+ * make a `toContain` assertion pass or fail for the wrong reason.
+ */
+function label(prefix: string, index: number): string {
+  return `${prefix}-${String(index).padStart(3, '0')}`;
+}
+
+function numbered(prefix: string, count: number): string[] {
+  return Array.from({ length: count }, (_unused, index) => label(prefix, index));
+}
+
+describe('formatPersonaMemoryForBrief', () => {
+  it('returns an empty string for absent memory', () => {
+    expect(formatPersonaMemoryForBrief(null)).toBe('');
+    expect(formatPersonaMemoryForBrief(undefined)).toBe('');
+  });
+
+  it('returns an empty string when every field is empty (the common case right after the 103 trigger creates a fresh row)', () => {
+    expect(formatPersonaMemoryForBrief(memorySnapshot())).toBe('');
+  });
+
+  it('renders an instruction telling the model to diverge, not a raw data dump', () => {
+    const block = formatPersonaMemoryForBrief(memorySnapshot({ recentTitles: ['The Lantern That Would Not Go Out'] }));
+    expect(block).toMatch(/do not repeat/i);
+    expect(block).toContain('The Lantern That Would Not Go Out');
+  });
+
+  describe('recency direction — pinned explicitly, not just by count', () => {
+    it('keeps the array HEAD (newest, per appendCapped) and drops the TAIL (oldest)', () => {
+      // A formatter that sliced from the wrong end would return the same
+      // NUMBER of entries (2 of 4) here, so a test that only counts entries
+      // would pass either way. This test pins WHICH two survive.
+      const titles = [label('Newest', 0), label('Second', 1), label('Third', 2), label('Oldest', 3)];
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ recentTitles: titles }), { titleLimit: 2 });
+      expect(block).toContain(label('Newest', 0));
+      expect(block).toContain(label('Second', 1));
+      expect(block).not.toContain(label('Third', 2));
+      expect(block).not.toContain(label('Oldest', 3));
+    });
+  });
+
+  describe('per-field injection caps', () => {
+    it(`keeps only the ${MEMORY_BRIEF_TITLE_LIMIT} most recent titles`, () => {
+      const titles = numbered('Title', MEMORY_BRIEF_TITLE_LIMIT + 3);
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ recentTitles: titles }));
+      for (let i = 0; i < MEMORY_BRIEF_TITLE_LIMIT; i += 1) expect(block).toContain(label('Title', i));
+      for (let i = MEMORY_BRIEF_TITLE_LIMIT; i < titles.length; i += 1) expect(block).not.toContain(label('Title', i));
+    });
+
+    it(`keeps only the ${MEMORY_BRIEF_PREMISE_LIMIT} most recent premises`, () => {
+      const premises = numbered('Premise', MEMORY_BRIEF_PREMISE_LIMIT + 3);
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ recentPremises: premises }));
+      for (let i = 0; i < MEMORY_BRIEF_PREMISE_LIMIT; i += 1) expect(block).toContain(label('Premise', i));
+      for (let i = MEMORY_BRIEF_PREMISE_LIMIT; i < premises.length; i += 1) expect(block).not.toContain(label('Premise', i));
+    });
+
+    it(`keeps only the ${MEMORY_BRIEF_CHARACTER_NAME_LIMIT} most recent character names`, () => {
+      const names = numbered('Name', MEMORY_BRIEF_CHARACTER_NAME_LIMIT + 3);
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ characterNames: names }));
+      for (let i = 0; i < MEMORY_BRIEF_CHARACTER_NAME_LIMIT; i += 1) expect(block).toContain(label('Name', i));
+      for (let i = MEMORY_BRIEF_CHARACTER_NAME_LIMIT; i < names.length; i += 1) expect(block).not.toContain(label('Name', i));
+    });
+
+    it(`keeps only the ${MEMORY_BRIEF_SETTING_LIMIT} most recent settings`, () => {
+      const settings = numbered('Setting', MEMORY_BRIEF_SETTING_LIMIT + 3);
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ settingsUsed: settings }));
+      for (let i = 0; i < MEMORY_BRIEF_SETTING_LIMIT; i += 1) expect(block).toContain(label('Setting', i));
+      for (let i = MEMORY_BRIEF_SETTING_LIMIT; i < settings.length; i += 1) expect(block).not.toContain(label('Setting', i));
+    });
+
+    it(`keeps only the ${MEMORY_BRIEF_THEME_LIMIT} most recent themes`, () => {
+      const themes = numbered('Theme', MEMORY_BRIEF_THEME_LIMIT + 3);
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ themesUsed: themes }));
+      for (let i = 0; i < MEMORY_BRIEF_THEME_LIMIT; i += 1) expect(block).toContain(label('Theme', i));
+      for (let i = MEMORY_BRIEF_THEME_LIMIT; i < themes.length; i += 1) expect(block).not.toContain(label('Theme', i));
+    });
+  });
+
+  describe('premise truncation', () => {
+    it('truncates a premise longer than the truncation limit to a short prefix', () => {
+      const longPremise = 'A '.repeat(MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS); // well over the char limit
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ recentPremises: [longPremise] }));
+      expect(block).not.toContain(longPremise);
+      expect(block).toContain(longPremise.slice(0, MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS).trimEnd());
+    });
+
+    it('leaves a premise at or under the truncation limit untouched', () => {
+      const shortPremise = 'A short premise about a kite that would not stay down.';
+      expect(shortPremise.length).toBeLessThanOrEqual(MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS);
+      const block = formatPersonaMemoryForBrief(memorySnapshot({ recentPremises: [shortPremise] }));
+      expect(block).toContain(shortPremise);
+    });
+  });
+
+  describe('total ceiling', () => {
+    it('stays under the ceiling even fully stuffed at the real storage caps with long premises', () => {
+      // Mirrors the actual storage caps enforced by memory.ts's
+      // updatePersonaMemory/appendCapped: 50 titles/premises/settings/themes,
+      // 75 character names. This is the worst case the function will ever
+      // actually be handed. Premises are real 2-4 sentence length, comfortably
+      // over MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS each.
+      const longPremise =
+        'A curious child discovers something extraordinary in an unlikely place, and must decide ' +
+        'whether to tell the truth about it even though the truth will cost them something real. ' +
+        'Along the way they are helped and hindered by a colorful cast of neighbours and rivals.';
+
+      const stuffed = memorySnapshot({
+        recentTitles: numbered('A Very Long And Elaborate Story Title', 50),
+        recentPremises: Array.from({ length: 50 }, () => longPremise),
+        characterNames: numbered('Character Name', 75),
+        settingsUsed: numbered('An Elaborate Recurring Setting', 50),
+        themesUsed: numbered('Theme', 50),
+      });
+
+      const block = formatPersonaMemoryForBrief(stuffed);
+      expect(block.length).toBeLessThanOrEqual(MEMORY_BRIEF_MAX_CHARS);
+    });
+
+    it('never exceeds the ceiling regardless of what it is handed, even outside the per-field caps', () => {
+      // Not a realistic input (storage never lets one string get this long),
+      // but the contract is "never more than the ceiling, whatever it is
+      // handed" -- this pins the hard backstop independent of, and in addition
+      // to, the per-field caps above. Titles are not individually truncated
+      // (only premises are), so this also proves the backstop is load-bearing
+      // and not merely decorative.
+      const pathological = memorySnapshot({ recentTitles: ['X'.repeat(MEMORY_BRIEF_MAX_CHARS * 5)] });
+      const block = formatPersonaMemoryForBrief(pathological);
+      expect(block.length).toBeLessThanOrEqual(MEMORY_BRIEF_MAX_CHARS);
+    });
   });
 });

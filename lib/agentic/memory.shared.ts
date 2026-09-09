@@ -406,6 +406,157 @@ export function buildNoveltyAdjudicationPrompt(
   ].join('\n');
 }
 
+// ── Persona memory → brief prompt injection ─────────────────────────────
+//
+// Storage (lib/agentic/memory.ts's updatePersonaMemory / appendCapped) keeps
+// up to PERSONA_TITLE_HISTORY_LIMIT / PERSONA_THEME_HISTORY_LIMIT /
+// CHARACTER_NAME_HISTORY_LIMIT (50/50/75) entries per persona. That is a
+// scratchpad sized to answer "has this persona done this before" -- it was
+// never meant to be a prompt payload, and nothing read it back into
+// generation until now (the defect this file's caller exists to fix).
+//
+// Injecting the whole scratchpad into every brief would grow the prompt
+// without bound as a persona's story count climbs toward those caps -- the
+// owner's explicit worry. So injection uses a SEPARATE, DELIBERATELY SMALLER
+// budget: a handful of the persona's most recent entries per field, premises
+// truncated to a short prefix (they are 2-4 sentences and by far the largest
+// contributor), and a hard ceiling on the whole rendered block's length so
+// even a pathological input -- more entries than the storage cap should ever
+// allow, or unexpectedly long strings -- cannot blow the prompt up. Never
+// derive these from the storage caps; they answer a different question
+// ("what's worth mentioning to steer this one brief" vs "what's worth
+// keeping at all").
+
+/** How many of the persona's most recent titles to mention. */
+export const MEMORY_BRIEF_TITLE_LIMIT = 5;
+/** How many of the persona's most recent premises to mention. */
+export const MEMORY_BRIEF_PREMISE_LIMIT = 3;
+/** How many of the persona's most recent character names to mention. */
+export const MEMORY_BRIEF_CHARACTER_NAME_LIMIT = 10;
+/** How many of the persona's most recent settings to mention. */
+export const MEMORY_BRIEF_SETTING_LIMIT = 5;
+/** How many of the persona's most recent themes to mention. */
+export const MEMORY_BRIEF_THEME_LIMIT = 5;
+/** A premise is 2-4 sentences; only a short prefix is worth spending tokens on. */
+export const MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS = 120;
+/** Hard ceiling on the whole rendered block, regardless of what is handed in. */
+export const MEMORY_BRIEF_MAX_CHARS = 1500;
+
+/**
+ * The slice of AgentPersonaMemory (personas.shared.ts) this formatter needs.
+ * Declared locally rather than importing that type, so this pure module does
+ * not take on a dependency on the persona module just to describe five
+ * string arrays -- an AgentPersonaMemory value satisfies this structurally.
+ */
+export interface PersonaMemorySnapshot {
+  recentTitles: string[];
+  recentPremises: string[];
+  characterNames: string[];
+  settingsUsed: string[];
+  themesUsed: string[];
+}
+
+export interface FormatPersonaMemoryOptions {
+  titleLimit?: number;
+  premiseLimit?: number;
+  characterNameLimit?: number;
+  settingLimit?: number;
+  themeLimit?: number;
+  premiseTruncateChars?: number;
+  maxChars?: number;
+}
+
+function cleanList(values: string[] | null | undefined): string[] {
+  return (values ?? [])
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim());
+}
+
+/**
+ * Most-recent-first slice of a persona-memory array.
+ *
+ * appendCapped (lib/agentic/memory.ts) builds each stored array as
+ * `[...incoming, ...(existing ?? [])]` before deduping and capping, so index
+ * 0 is always the NEWEST entry and the array degrades toward its tail as it
+ * grows past the storage cap. Taking the tail here instead of the head would
+ * silently feed the persona its OLDEST history -- both ends typecheck
+ * identically as string[], so nothing but a test that pins the direction
+ * (see memory.shared.test.ts) would catch getting this backwards.
+ */
+function takeMostRecent(values: string[], limit: number): string[] {
+  return values.slice(0, Math.max(0, limit));
+}
+
+function truncatePremise(premise: string, limit: number): string {
+  if (premise.length <= limit) return premise;
+  return `${premise.slice(0, limit).trimEnd()}…`;
+}
+
+/**
+ * Formats a persona's own recent-story memory into an instruction block to
+ * splice into the brief prompt, or '' when there is nothing worth saying --
+ * absent memory, or a memory whose fields are all empty (the common case
+ * right after migration 103's AFTER INSERT trigger creates a fresh row and
+ * the persona has not written anything yet).
+ *
+ * Rendered as an instruction ("here is what you already wrote, do something
+ * different"), not as raw data dumped on the model -- the model is meant to
+ * read this as its own recent output and diverge from it.
+ *
+ * THIS IS A NUDGE, NOT A GUARANTEE. It reduces how often a persona repeats a
+ * recent title, premise, cast or setting; it does not decide whether a story
+ * IS too similar to a prior one. That authority stays entirely with
+ * runNoveltyCheck (lib/agentic/memory.ts), per decision D9 -- a model call
+ * (and a fortiori a hint fed to one) never gets to be the thing that clears
+ * or blocks a story. Do not remove or weaken runNoveltyCheck on the theory
+ * that this prompt block makes it redundant; it does not.
+ */
+export function formatPersonaMemoryForBrief(
+  memory: PersonaMemorySnapshot | null | undefined,
+  options: FormatPersonaMemoryOptions = {}
+): string {
+  if (!memory) return '';
+
+  const titleLimit = options.titleLimit ?? MEMORY_BRIEF_TITLE_LIMIT;
+  const premiseLimit = options.premiseLimit ?? MEMORY_BRIEF_PREMISE_LIMIT;
+  const characterNameLimit = options.characterNameLimit ?? MEMORY_BRIEF_CHARACTER_NAME_LIMIT;
+  const settingLimit = options.settingLimit ?? MEMORY_BRIEF_SETTING_LIMIT;
+  const themeLimit = options.themeLimit ?? MEMORY_BRIEF_THEME_LIMIT;
+  const premiseTruncateChars = options.premiseTruncateChars ?? MEMORY_BRIEF_PREMISE_TRUNCATE_CHARS;
+  const maxChars = options.maxChars ?? MEMORY_BRIEF_MAX_CHARS;
+
+  const titles = takeMostRecent(cleanList(memory.recentTitles), titleLimit);
+  const premises = takeMostRecent(cleanList(memory.recentPremises), premiseLimit).map((premise) =>
+    truncatePremise(premise, premiseTruncateChars)
+  );
+  const characterNames = takeMostRecent(cleanList(memory.characterNames), characterNameLimit);
+  const settings = takeMostRecent(cleanList(memory.settingsUsed), settingLimit);
+  const themes = takeMostRecent(cleanList(memory.themesUsed), themeLimit);
+
+  if (!titles.length && !premises.length && !characterNames.length && !settings.length && !themes.length) {
+    return '';
+  }
+
+  const lines: string[] = [
+    "This persona's own recent work -- do not repeat it. Write a clearly different title, premise, cast and setting from every story listed below.",
+  ];
+  if (titles.length) lines.push(`Recent titles: ${titles.join(' | ')}`);
+  if (premises.length) {
+    lines.push('Recent premises:');
+    for (const premise of premises) lines.push(`- ${premise}`);
+  }
+  if (characterNames.length) {
+    lines.push(`Recently used character names (reuse only for an intentional recurring character): ${characterNames.join(', ')}`);
+  }
+  if (settings.length) lines.push(`Recently used settings: ${settings.join(', ')}`);
+  if (themes.length) lines.push(`Recently used themes: ${themes.join(', ')}`);
+
+  const block = lines.join('\n');
+  // Defensive, not expected to fire given the per-field caps above: whatever
+  // this function is handed, it must never hand back more than maxChars.
+  return block.length > maxChars ? block.slice(0, maxChars) : block;
+}
+
 /**
  * True when a Postgres/PostgREST error means migration 105 has not run on this
  * database, as opposed to any other failure that should surface as a real error.
