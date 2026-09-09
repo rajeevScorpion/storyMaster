@@ -38,6 +38,7 @@ import {
   getBeatPersistedImageUrl,
 } from '@/lib/types/beat-media';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character } from '@/lib/types/story';
+import type { DbBeat } from '@/lib/types/database';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import {
   extractImageContinuityState,
@@ -709,4 +710,73 @@ export async function saveStoryForUser(
   }
 
   return { storyId };
+}
+
+// ── Storyline publish helpers, shared with lib/agentic/review-publish.ts (D15) ─────
+//
+// Moved here verbatim from app/actions/persistence.ts, for the identical reason
+// everything else above did: persistence.ts is 'use server' and Next.js requires every
+// export from a 'use server' file to be an async function, so these -- one sync, one
+// merely small -- could not be exported from there for a second, non-'use-server' caller
+// to import back. Unit 9e-ii (D15, docs/agentic-creator-decisions.md) needs both:
+// review-publish.ts builds a reviewer's storyline row the same way autoPublishStoryline
+// does, on the admin client instead of the session client, and must compute the same
+// path_hash and walk the same parent_node_id chain to get there. persistence.ts imports
+// them back for its own two publish paths; nothing about their behavior changed in the
+// move.
+
+/**
+ * Additive storyline columns (migrations 073 visibility/share/moderation, 089 discovery
+ * classification, 093 series) that may not exist yet on every environment. Stripped via
+ * isMissingAdditiveColumnError/withoutAdditiveColumns (above) on a missing-column error so
+ * publishing keeps working during rollout -- see WORKING_AGREEMENTS's fail-closed rule.
+ */
+export const ADDITIVE_STORYLINE_COLUMNS = [
+  'story_kind',
+  // Migration 073 visibility columns — stripped when the migration hasn't
+  // been applied yet so publishing keeps working during rollout.
+  'visibility',
+  'share_token',
+  'published_at',
+  'unpublished_at',
+  'moderation_status',
+  'publish_quality',
+  // Migration 089 discovery classification columns.
+  'age_group',
+  'genre',
+  // Migration 093 series columns — stripped when the migration hasn't been
+  // applied yet so publishing keeps working during rollout.
+  'series_id',
+  'episode_number',
+  'series_title',
+] as const;
+
+/**
+ * Compute a path hash for duplicate storyline detection.
+ * Uses a simple hash of the node_path joined by '|'.
+ */
+export async function computePathHash(nodePath: string[]): Promise<string> {
+  const data = new TextEncoder().encode(nodePath.join('|'));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Walk from an ending beat back to root to get the full node path.
+ */
+export function walkPathToRoot(beats: DbBeat[], endingNodeId: string): string[] {
+  const beatMap = new Map<string, DbBeat>();
+  for (const beat of beats) {
+    beatMap.set(beat.node_id, beat);
+  }
+
+  const path: string[] = [];
+  let currentId: string | null = endingNodeId;
+  while (currentId) {
+    path.unshift(currentId);
+    const beat = beatMap.get(currentId);
+    currentId = beat?.parent_node_id || null;
+  }
+  return path;
 }

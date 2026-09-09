@@ -6,6 +6,100 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-09 late (9c and 9e-i landed; 9e-ii was in flight at the stop)
+
+**Read this section first; the one below it is the previous stop and is still accurate for 9a/9b/9d.**
+
+### What landed this session
+
+| SHA | What |
+|---|---|
+| `f7379f1` | **D15**, the plan's 9e correction, and the handoff's stale "apply 111" step |
+| `8994004` | Unit 9c — the review queue at `/admin/authors` |
+| `143d315` | Unit 9e-i — reviewer decisions (approve / reject / request-rewrite) + migration 112 |
+| `b0ed9c6` | **Review fix** — a decision on a run that already left review is refused |
+| `3cc028e` | PROJECT_STATE: 111 and 112 recorded as applied on dev |
+
+Gate re-run independently at `b0ed9c6`, not taken on report: **tsc 0, lint clean, 100 files / 932
+tests** (from 99 / 916 at the last stop). `build:verify` green at `8994004`. **`test:e2e` NOT run this
+session** — again.
+
+### THE NEXT STEP
+
+1. **`9e-ii` (reviewer publish) was still running when this session stopped.** Check `git log` before
+   assuming anything about it. If it committed, **review the diff, do not trust the report** — every
+   unit this phase has come back with at least one defect the suite passed over, including 9e-i's.
+   Its brief is reproduced in substance by D15 plus the traps listed below.
+2. **Everything else in Phase 9 is written and gated. Nothing has been run live.** This has now been
+   true at three consecutive stops. Every real defect in Phases 6, 7 and 8 was found by running the
+   thing; the 932-test suite has never once found one.
+3. **To run it, flip `agentic_reviewer_workflow_enabled`** — it is `false` on dev, so `/admin/authors`
+   renders only its "switched off" notice. It is a toggle on the Agents Overview page, not a
+   migration. (`feature_flags.flag_key`, not `key`, if querying by hand.)
+4. **Then insert an `agent_reviewers` row.** The table is applied and **empty**, so the only account
+   passing `requireReviewer()` today is `ADMIN_USER_ID`, via the implicit short-circuit that never
+   reads the table. Nothing exercises `can_publish` / `can_trigger_media` until a row exists — which
+   means 9e-ii's publish gate is currently unprovable.
+
+### Dev database, queried this session
+
+Migrations **102-108, 110, 111, 112** applied; **there is no 109**; production has **none** of them.
+5 `agent_runs` at `awaiting_review`, 5 stories with `agent_persona_id`, 3 `agent_evaluations`,
+**0 `agent_reviewers`**, 0 `agent_review_decisions`.
+
+**Migration 112 was applied by the owner mid-session, while the file was still uncommitted in the
+working tree.** The applied schema was verified against the file and they match (9 columns, the
+four-value `decision` CHECK, 4 FKs, RLS on with 0 policies, 2 indexes). **112 is now immutable** — any
+change to it ships as 113, never as an edit, or the file and the database diverge permanently.
+
+### The corrections this session made to the record
+
+The pattern holds: five of the six findings were the *record* asserting something untrue, not the code.
+
+1. **The handoff's "next step 1" was already done.** 111 was applied at 16:20:41+00.
+2. **The plan's 9e said "reusing `publishStoryline`".** It cannot be reused: it takes
+   `beats`/`choices`/`nodePath` from the client-side Zustand session and its only caller is
+   `PublishDialog.tsx:195`. `autoPublishStoryline` (`persistence.ts:1217`) is the server-side path —
+   it walks `parent_node_id` to the root itself via `walkPathToRoot` (`:1195`).
+3. **Both publish paths stamp the CALLER as the storyline's owner and author** (`:2244`/`:2266` and
+   `:1468`/`:1484`). A reviewer publish would put a staff account's name on agent fiction in the public
+   gallery — D13's defect one layer up. **D15** resolves it.
+4. **`media_pending` has no consumer.** No worker, no cron drains it; the only non-test references are
+   the type union, `STAGE_SEQUENCE`, a doc comment and an exclusion at `orchestrator.ts:683`. An
+   approve routed through it would look like progress and dead-end. 9e-i therefore moves the stage only
+   on terminal outcomes.
+5. **`agent_tasks.status` already permitted `approved`, `published`, `rejected`** (migration 106) and
+   nothing wrote them. They were reserved for exactly this unit.
+6. **`RunMonitor`'s four "reusable" helpers were all module-local and unexported.** Reuse required the
+   extraction into `components/admin/agentic/run-presentation.tsx` that 9c performs.
+
+### The defect review caught in 9e-i, and why it matters for 9e-ii
+
+`recordReviewDecision` fetched the run and never checked its stage. Two reviewers hold the queue open;
+A rejects (run → `cancelled`, task → `rejected`); B's page is stale, still lists the row, B clicks
+approve; `agent_tasks.status` becomes `approved` for a draft that was rejected and whose run is dead.
+The queue's optimistic client-side row removal is not a gate — **a server action is directly
+invocable**. Fixed in `b0ed9c6` as the tested pure predicate `canRecordDecisionForStage`.
+
+The delegated reasoning for omitting it was that decisions must stay re-recordable
+(rewrite-requested, then later approved). That does not follow: both of those return `run: null` and
+leave the stage at `awaiting_review`, so the guard preserves the sequence exactly. **9e-ii's publish
+must go through the same guard.**
+
+### Sharp edges still live
+
+- **`requireReviewer()` is load-bearing security** (D14). Reviewer writes run service-role and bypass
+  RLS entirely; the helper is the whole boundary.
+- **`can_trigger_media` gates reviewers only.** An ordinary user narrating their own story has no
+  reviewer row, and `canTriggerMedia(null)` is false. Checking the capability before the ownership
+  branch silently breaks narration for every human on the site.
+- **The 2×2 storyboard grid must never reach a viewer.** A published storyline's cover is
+  viewer-facing, which makes this 9e-ii's sharpest trap.
+- **`retryRun` cannot re-brief**, so `rewrite_requested` deliberately changes no state and triggers
+  nothing. The redo is a separate commission.
+
+---
+
 ## Session handoff — 2026-09-09 evening (Phase 9 started; two documented facts were wrong)
 
 **Phase 9 is underway.** Full plan, self-contained, in `docs/agentic-creator-phase9-plan.md`. Read it

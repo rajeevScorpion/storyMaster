@@ -56,6 +56,11 @@ import {
   nodeToBeatRow,
   resolvePersistedImageUrlForSave,
   resolvePersistedAudioUrlForSave,
+  // Path-hash + parent-walk + additive-column-list helpers, moved to save-story.ts so
+  // lib/agentic/review-publish.ts (D15) can import them too — see that file's header.
+  ADDITIVE_STORYLINE_COLUMNS,
+  computePathHash,
+  walkPathToRoot,
 } from '@/lib/story/save-story';
 
 function mergeCharactersWithFallback(
@@ -288,26 +293,6 @@ export async function repairMissingReadyBeatImageUrls(
     failedCount,
   };
 }
-
-const ADDITIVE_STORYLINE_COLUMNS = [
-  'story_kind',
-  // Migration 073 visibility columns — stripped when the migration hasn't
-  // been applied yet so publishing keeps working during rollout.
-  'visibility',
-  'share_token',
-  'published_at',
-  'unpublished_at',
-  'moderation_status',
-  'publish_quality',
-  // Migration 089 discovery classification columns.
-  'age_group',
-  'genre',
-  // Migration 093 series columns — stripped when the migration hasn't been
-  // applied yet so publishing keeps working during rollout.
-  'series_id',
-  'episode_number',
-  'series_title',
-] as const;
 
 type StorylineSeriesFields = {
   series_id: string | null;
@@ -1177,36 +1162,6 @@ export async function updateBeatAssets(
 // ============================================================
 // Auto-Publish Storyline
 // ============================================================
-
-/**
- * Compute a path hash for duplicate storyline detection.
- * Uses a simple hash of the node_path joined by '|'.
- */
-async function computePathHash(nodePath: string[]): Promise<string> {
-  const data = new TextEncoder().encode(nodePath.join('|'));
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-/**
- * Walk from an ending beat back to root to get the full node path.
- */
-function walkPathToRoot(beats: DbBeat[], endingNodeId: string): string[] {
-  const beatMap = new Map<string, DbBeat>();
-  for (const beat of beats) {
-    beatMap.set(beat.node_id, beat);
-  }
-
-  const path: string[] = [];
-  let currentId: string | null = endingNodeId;
-  while (currentId) {
-    path.unshift(currentId);
-    const beat = beatMap.get(currentId);
-    currentId = beat?.parent_node_id || null;
-  }
-  return path;
-}
 
 /**
  * Auto-publish a completed storyline when an ending beat is reached.
