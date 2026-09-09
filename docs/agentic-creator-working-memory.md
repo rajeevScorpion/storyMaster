@@ -74,6 +74,44 @@ would have hidden a filtered-out persona from the sharer hints. It now tracks an
 alongside. Archive is the only other mutation path and goes through `upsertPersona`, which syncs
 both; there is no delete path, so the parallel state cannot drift.
 
+### After the first live run — five more commits
+
+The proof run (`8fa3a959`, persona Kabir Sinha, 8 beats) confirmed every Phase 8 claim: the story
+carries `Charon` / `user_selected` / `male` / `hi-IN`, `story_config.narrationVoice` agrees, and the
+timeline reads `Draft story saved (8 beats).` **then** `Narration voice locked from persona: Charon.`
+— the right order. The persona has `allow_narration = false` and the voice locked anyway, as decided.
+
+It also surfaced two things that were not Phase 8, and a third fell out of fixing them:
+
+| SHA | What |
+|---|---|
+| `d1b6d12` | Stage-failure events were filed under the stage the run sat on, not the one that failed |
+| `57bcf99` | Agent personas exempted from the 500-word seed source cap |
+| `382fa6e` | Human seed source cap 500 → 800 |
+| `2dcd095` | The prompt cap becomes a hardcoded 800 constant; its admin setting removed |
+| `cbf759f` | **Review fix** — a dead 500 constant, and the shipped admin manual |
+
+- **The stage-attribution bug was the deferral bug's twin.** `fe9406f` fixed it for deferrals in
+  Phase 6; the failure path had the identical defect and was never fixed. Evidence was two
+  `Seed source response exceeds the 500-word cap` warnings — unmistakably `story_generated` work —
+  filed under `novelty_checked`. `handleStageFailure` now takes an explicit `failedStage`. The outer
+  safety-net catches in `executeRunNow`/`drainAgentRuns` still pass `run.stage`, deliberately: they
+  wrap the whole `advanceRun` call and have no single target stage in scope.
+- **The word cap was a prompt contradiction, not a flaky model.** `buildSeedSourcePrompt` asked for
+  N scenes *and* "under 500 words" — for 8 beats that is ~62 words/scene, while an adults persona at
+  beat-length level 4 targets ~150. The run burned 2 of 3 attempts on it, each a paid call thrown
+  away, and succeeded with **zero retries left**. There were **two** enforcement points and missing
+  either leaves the cap in force: the throw in `story-assembly.ts`, and `generateSeedPlanPreview`
+  re-validating the same cap. The latter now takes `enforceSourceWordCap`, defaulting to `true` so
+  the human path is byte-for-byte unchanged.
+- **Removing the cap cannot leak into grading.** `evaluation.shared.ts` skips the beat-length check
+  entirely under `sourceFidelity === 'strictly_follow'`, which the pipeline always uses. Verified
+  before the change, not assumed.
+- **Both human caps are now hardcoded at 800 and there is no admin control for either.** They are
+  separate constants on purpose: `STORY_PROMPT_WORD_CAP` bounds the typed prompt,
+  `SEED_SOURCE_WORD_CAP` the pasted story. The `story_authoring_word_cap` flag row still exists on
+  both environments and **is read by nothing** — editing it has no effect. Do not "fix" a cap there.
+
 ### Things that will bite you if you do not know them
 
 - **There is no migration 109, and there will not be one.** The gap is deliberate. An
