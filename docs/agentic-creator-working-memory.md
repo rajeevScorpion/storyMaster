@@ -74,6 +74,88 @@ would have hidden a filtered-out persona from the sharer hints. It now tracks an
 alongside. Archive is the only other mutation path and goes through `upsertPersona`, which syncs
 both; there is no delete path, so the parallel state cannot drift.
 
+### Novelty work — four more commits, and the second live run
+
+The second Test Lab run (`e4c7d1e7`, same persona) was **terminally blocked** by the novelty check at
+100% title similarity, 0 of 8 beats, all 3 attempts spent. Investigating it found a real defect and
+two design gaps. Full reasoning in decision **D12**.
+
+| SHA | What |
+|---|---|
+| `280a372` | `formatPersonaMemoryForBrief` — token-bounded memory block + 13 tests |
+| `dd0b514` | `loadPersonaMemory`, and the block wired into the brief prompt |
+| `38759b4` | Novelty reasons now name the prior they collided with |
+| `81f16f8` | A block clears the brief + cached verdict and re-briefs on the next attempt |
+
+Gate, re-run independently: **tsc 0, lint clean, 95 files / 877 tests (from 854), `build:verify`
+green.**
+
+- **The block was correct, not a false positive.** `agent_story_memory` genuinely held `कट-ऑफ` from
+  the run 40 minutes earlier. Checked for the failure mode this codebase keeps hitting — Devanagari
+  normalising to an empty string, the way JS `\b` and `detectDominantScript` have — and that was
+  **not** what happened. The scorer was right.
+- **`agent_persona_memory` was written and read by nothing**, exactly like `preferred_voice` before
+  D11. That is now twice in one phase; when you find a table this system maintains, check that
+  something consumes it.
+- **The Test Lab's task brief is identical boilerplate** for a given persona ("Persona Test Lab run
+  for X. Speciality: … Preferred genres: …"), so leaving **Theme** blank makes two runs of the same
+  persona near-deterministic. That is why the titles matched. Leaving Theme blank is now the sharpest
+  way to *test* the memory fix — it should no longer collide.
+- **The supervisor is not implicated.** Verified by querying its commissions: both runs were
+  `origin: 'test_lab'`. For real commissions it writes a concrete per-gap brief.
+
+### Things that will bite you in this area
+
+- **`advanceRun` never regresses `stage`, so a brief can only be regenerated inside
+  `runNoveltyStage`.** The obvious implementation — delete `brief_ready` from the checkpoint and
+  expect `advanceRun` to re-dispatch to `runBriefStage` — **does not work**, and this was gotten wrong
+  once during planning. `advanceRun` computes `target = nextStage(run.stage)` from the persisted
+  column, and `handleStageFailure`'s retry branch touches `status` and the error columns only. A run
+  sits at `brief_ready` for its whole life, so every attempt after the first dispatches to
+  `novelty_checked` again, never back to `runBriefStage`. `runNoveltyStage` is therefore the only
+  place a brief is ever regenerated, and it says so in a header comment.
+- **Both brief paths share `generateStoryBrief`, and that is load-bearing for billing.** A regenerated
+  brief is real spend — `authorizeAgenticSpend('preview_seed_plan', …)` — with the idempotency key
+  carrying `:rebrief:${run.attemptCount}` so each attempt takes its own reservation rather than
+  colliding with the first. A parallel re-brief implementation would have been an unbilled paid call
+  or a duplicate-key conflict. It also means the re-brief inherits the persona memory block for free.
+- **The retry budget is the only bound on re-briefing, deliberately.** `max_attempts = 3` yields at
+  most two re-briefs. There is no separate counter, and adding one would be a second thing to get
+  wrong.
+- **Injection caps are not the storage caps.** Storage keeps 50 per field; the prompt gets 5 titles,
+  3 premises truncated to 120 chars, 10 names, 5 settings, 5 themes, under a 1500-char ceiling. If you
+  raise these, re-run the stuffed-memory test — it exists to prove the block cannot grow with a
+  persona's history.
+- **`appendCapped` prepends, so index 0 is the NEWEST entry.** `takeMostRecent` slices the head.
+  Slicing the tail would feed a persona its oldest history, return the same *count*, and be invisible
+  to any test that only checks length — which is why there is a test asserting *which* entries
+  survive.
+- **The admin Retry button cannot re-brief.** `retryRun` never touches `checkpoint`, so it replays the
+  cached block. Recorded in PROJECT_STATE's deferred list.
+
+### THE NEXT STEP
+
+1. **Run the Test Lab against Kabir Sinha again, with Theme left blank.** That is the exact condition
+   that produced the collision, so it is the honest test. Expect a different title, and either no
+   block or a block that visibly re-briefs. Watch for:
+
+```sql
+select stage, level, message from public.agent_run_events
+ where run_id = '<new run>' order by created_at;
+-- a block should now read "... (\"<prior title>\") ..." and be followed by
+-- "Brief regenerated after a prior collision (… avoiding N prior title(s))."
+select recent_titles, story_count from public.agent_persona_memory m
+  join public.agent_personas p on p.id = m.persona_id where p.slug = 'kabir-sinha';
+```
+
+2. **None of the four commits above has been exercised against a live database.** The whole gate is
+   static. Every real defect in Phases 6, 7 and 8 was found by running the thing, including the two
+   this session's runs found. Treat step 1 as required, not optional.
+3. **Unit 8d (agentic narration billing) is still unbuilt**, and still belongs with Phase 9's
+   reviewer-authorization work — see the earlier handoff section below for its full shape.
+
+---
+
 ### After the first live run — five more commits
 
 The proof run (`8fa3a959`, persona Kabir Sinha, 8 beats) confirmed every Phase 8 claim: the story
