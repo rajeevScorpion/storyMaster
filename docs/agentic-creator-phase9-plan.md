@@ -187,11 +187,12 @@ threading one optional field reuses the whole cycle for free.
 
 ## 3. Decisions this plan needs
 
-### D13 — whose wallet pays when a reviewer narrates an agent draft? **UNRESOLVED — owner's call**
+### D13 — whose wallet pays when a reviewer narrates an agent draft? **RESOLVED 2026-09-09**
 
-See §1.1. `narration_batch_jobs.user_id` is the caller, so today's answer is "the reviewer, personally",
-at 0.80/beat — 6.40 beats for an 8-beat story. Options in §7. **Do not start Unit 9d until this is
-answered**; every other unit is independent of it.
+**Nobody.** The system user is the payer of record: stamp the job with the story owner, derive `actorKind`
+from it, let the bypass fire. Full reasoning and the two rejected alternatives are in
+`docs/agentic-creator-decisions.md` under **D13**. Unit 9d is unblocked and its step 1 below is correct
+as written.
 
 ### D14 — reviewer writes go through a shared authorization helper, not widened RLS
 
@@ -308,9 +309,9 @@ actions — `agent_runs` has no RLS policies.
 Behind `reviewerWorkflowEnabled`, failing closed per D8. Dropdowns use `FilterDropdown`; row actions use
 `RowActionsMenu`.
 
-### Unit 9d — agentic narration billing (was 8d) — **BLOCKED ON D13**
+### Unit 9d — agentic narration billing (was 8d)
 
-Assuming D13 picks option (b) in §7:
+Per D13 (resolved — the system user is the payer of record and the bypass fires):
 
 1. `app/actions/narration-batch.ts:141` — when the story is agent-owned, stamp the job's `user_id` with
    the **story owner** (the system user) instead of the caller. Record the submitting reviewer in the job's
@@ -377,18 +378,15 @@ movement.** Check the reviewer's own wallet is untouched too.
 
 ---
 
-## 7. The open question for the owner (D13)
+## 7. D13, as decided
 
-When a reviewer narrates an agent-owned draft, whose wallet pays?
+Resolved 2026-09-09: **nobody pays.** The system user becomes the job's payer of record, `actorKind`
+derives from it inside `processNarrationJob`, and the bypass fires — real provider spend in
+`ai_cost_events`, zero coin movement, the reviewer's own wallet untouched. The submitting reviewer is
+kept in the job metadata.
 
-- **(a) The reviewer's.** Zero code beyond 9b. A human's personal coins fund platform content at 0.80/beat.
-- **(b) Nobody — the system user is the payer of record and the bypass fires.** Stamp the job with the
-  story owner, derive `actorKind` from it. Platform absorbs the provider cost, visible in `ai_cost_events`,
-  consistent with how the novelty adjudicator and evaluator already work. **Recommended.** Cost: the job
-  row leaves the submitting reviewer's RLS visibility (§1.3), so the queue must read it via the admin
-  client — which it does anyway.
-- **(c) Keep the reviewer as the job's user, derive `actorKind` from the story instead**
-  (`agent_persona_id IS NOT NULL`). Preserves RLS visibility, but breaks the bypass's fourth condition —
-  `input.userId === systemUserId` fails, since userId is the reviewer. Would require weakening that check,
-  which is the one thing making `actorKind` non-forgeable. **Do not pick this without redesigning the
-  bypass.**
+The two rejected options — the reviewer paying personally, and deriving `actorKind` from the story while
+leaving the reviewer as the job's user — are recorded with their reasons in
+`docs/agentic-creator-decisions.md` under **D13**. The second is the dangerous one: it fails the bypass's
+`userId === systemUserId` condition, and making it pass would weaken the only check that makes a claimed
+`actorKind` non-forgeable.

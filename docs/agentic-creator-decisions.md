@@ -353,3 +353,91 @@ trade — those attempts previously bought nothing at all. Separately, `retryRun
 checkpoint, so an admin pressing **Retry** on a novelty-failed run still replays the cached block; the
 automatic path self-corrects while the manual button cannot. Recorded in PROJECT_STATE's deferred
 list rather than fixed here.
+
+---
+
+## D13 — A reviewer's narration of an agent draft bills nobody; the system user is the payer of record
+
+**Decision.** When the story is agent-owned, `submitStoryNarrationBatch` stamps the narration job's
+`user_id` with the **story owner** — `AGENTIC_SYSTEM_USER_ID` — rather than the reviewer who pressed the
+button, and records the submitting reviewer in the job's metadata instead. `processNarrationJob` then
+derives `actorKind` from `job.user_id`, the agentic bypass in `authorizeBillableAction` fires, and no
+coins move. The provider spend is still real and still lands in `ai_cost_events`.
+
+**Evidence — and it is a correction, not a confirmation.** Unit 8d was specified in the 2026-09-09
+handoff as "derive `actorKind` inside `processNarrationJob` from
+`job.user_id === process.env.AGENTIC_SYSTEM_USER_ID`". That condition can never be true on the path 8d
+exists to serve. `submitStoryNarrationBatch` (`app/actions/narration-batch.ts:141`) writes
+`user_id: user.id` — the caller, resolved from the session cookie. A reviewer pressing narrate writes
+their own id, so the derivation would always yield `'user'`, the bypass would never fire, and the
+reviewer's personal wallet would be charged 0.50 + 0.30 = **0.80 beats per beat**, 6.40 for an eight-beat
+story. The unit would have compiled, passed the whole suite, changed nothing observable, and looked done.
+
+That reframed 8d from plumbing into a question about whose money funds platform-owned content, which is
+why it became a decision rather than an implementation note.
+
+**Why the payer of record is the right lever.** `narration_batch_jobs.user_id` already means "the account
+this job bills"; it was only incidentally the caller because, until Phase 9, the caller was always the
+owner. Writing the owner there makes the column mean what the rest of the chain already assumes, and it
+makes the handoff's stated derivation correct rather than requiring a different one.
+
+**What makes it safe.** The bypass is not a claim the caller can forge: `authorizeBillableAction`
+(`lib/pricing/enforcement.ts:281-294`) independently re-checks four things — `actorKind`, the
+`agentic_billing_bypass_enabled` flag, that `AGENTIC_SYSTEM_USER_ID` is set at all, and that the request's
+`userId` **is** that account. Stamping the owner is what satisfies the fourth; asserting `actorKind`
+alone never would.
+
+**Rejected.** (a) **The reviewer pays personally** — a human's coin balance funding platform content,
+and a review queue that costs the reviewer 6.40 beats per story to work through. (b) **Keep the reviewer
+as the job's user and derive `actorKind` from `stories.agent_persona_id IS NOT NULL`** — this preserves
+the reviewer's RLS visibility of their own job, but `userId` is then the reviewer and the bypass's fourth
+condition fails. Making it pass would mean weakening the single check that makes a claimed `actorKind`
+non-forgeable, to save a query the admin client makes anyway.
+
+**Cost.** `narration_batch_jobs` SELECT RLS is `auth.uid() = user_id`, so a re-stamped job leaves the
+submitting reviewer's own visibility. The review queue must read job status through an admin-client server
+action — which it does regardless, since `agent_runs` has RLS enabled with no policies at all. The
+submitting reviewer survives in the job metadata, so "who pressed it" is not lost, only relocated.
+
+This decision governs narration only. **Images are not covered and their answer is not the same**: both
+image submits gate and bill `user.id`, the caller, and hold one reservation for the whole job where
+narration reserves per beat. Deferred, in the Phase 9 plan's §6.
+
+---
+
+## D14 — Reviewer writes go through a shared authorization helper, not widened RLS
+
+**Decision.** `requireReviewer()` mirrors `verifyAdmin()`, and one shared helper —
+`assertCanEditStory(storyId, userId)` in `lib/agentic/reviewers.ts` — returns the story when the caller is
+either its owner or an active reviewer on a story with `agent_persona_id IS NOT NULL`. Every ownership
+guard delegates to it, and reviewer writes run on the service-role client. No RLS policy is added.
+
+**Evidence.** `PROJECT_STATE.md` framed this as "a reviewer RLS policy or an admin-client server-action
+path", as though they were alternatives of equal standing. They are not: **RLS is not the binding
+constraint**, and a migration that only widened it would fix nothing observable. Every write path carries
+its own hardcoded ownership filter in application code — `loadOwnedStory`'s `user_id !== userId` throw in
+both `narration-batch.ts:132` and `image-batch.ts:161`, `requireOwnedStory`'s `.eq('user_id', user.id)` in
+`beat-control.ts:119-135`, `.eq('generated_by', user.id)` in `persistence.ts:744`, and the same filter on
+both publish paths. The two batch guards do not even consult RLS: they already run on the service-role
+client, so `loadOwnedStory` *is* the entire access-control boundary there.
+
+A second fact makes the RLS route worse than it looks: `beats.UPDATE` is `generated_by = auth.uid()`, not
+story ownership — a differently shaped predicate from `stories.UPDATE`, recorded in no doc. Widening only
+`stories` would let a reviewer rename a story and then fail on every beat inside it.
+
+**Precedent.** `requeueImageJob` (`app/actions/admin-media-pipeline.ts:198-214`) already writes to any
+story's beats with `verifyAdmin()` as the only gate. A survey of seven admin-client write sites found it
+is the only one without an ownership check in its call chain — so this is a real precedent, but a lone
+one, which is why the capability lives in a named, tested helper rather than being open-coded per guard.
+
+**Rejected.** (a) **Reviewer RLS policies on `stories` and `beats`** — invisible without also changing
+every query filter, and it puts two policies referencing a new table on every story write by every user,
+forever, to serve a handful of admin edits. (b) **Reusing `persistence.ts`'s `serverAuth` escape hatch** —
+it has exactly one caller in the codebase, which always passes the story owner's own id; it has never been
+an impersonation mechanism and widening it into one would give a media-state patch path general write
+authority.
+
+**Cost.** Reviewer writes bypass RLS, so `requireReviewer()` becomes load-bearing security rather than a
+convenience. That is the same trust model `verifyAdmin()` already carries across roughly forty admin pages
+and twenty-five files. The helper must fail closed when `agent_reviewers` is absent — production has none
+of migrations 102-111 — denying everyone except `ADMIN_USER_ID` rather than throwing.
