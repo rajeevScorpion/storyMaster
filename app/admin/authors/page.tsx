@@ -42,7 +42,7 @@ export default async function AuthorsReviewQueuePage() {
     <div className="mx-auto max-w-6xl space-y-6">
       <AdminPageHeader
         title="Review queue"
-        description="Every agent run sitting at stage 'awaiting_review', joined to its story and its latest evaluation. Read-only -- approve, reject, and publish are not built yet (Unit 9e)."
+        description="Every agent run sitting at stage 'awaiting_review', joined to its story, its latest evaluation, and any reviewer decision. Approve, reject, and request-rewrite are available below; publishing an approved draft is a separate step (Unit 9e-ii) and is not built yet."
       />
       <ReviewQueue initialRows={initialRows} schemaApplied={schemaStatus.schemaApplied} />
     </div>

@@ -3,18 +3,28 @@
 import { Fragment, useState, useTransition } from 'react';
 import {
   AlertTriangle,
+  Ban,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
   Loader2,
   RefreshCcw,
+  RotateCcw,
   ShieldAlert,
 } from 'lucide-react';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
+  approveRunAction,
   listReviewQueueAction,
+  rejectRunAction,
+  requestRunRewriteAction,
+  type ReviewDecisionKind,
   type ReviewQueueReadiness,
   type ReviewQueueRow,
+  type StoredReviewDecisionValue,
 } from '@/app/actions/agentic-review';
 import {
   EVALUATION_VERDICT_LABELS,
@@ -25,17 +35,38 @@ import {
   EvaluationEntry,
 } from '@/components/admin/agentic/run-presentation';
 
-// ── Agentic Creator System: Phase 9 review queue (Unit 9c) ───────────────
+// ── Agentic Creator System: Phase 9 review queue (Units 9c + 9e-i) ────────
 //
-// Read-only, on purpose -- there is no approve/reject/publish button anywhere in
-// this file. Unit 9e adds those; this unit's whole job is to make the queue
-// VISIBLE first: every run at stage 'awaiting_review', its story, and its latest
-// evaluation, in one place, filterable by review readiness.
+// Unit 9c made the queue VISIBLE: every run at stage 'awaiting_review', its story,
+// and its latest evaluation, in one place, filterable by review readiness. Unit
+// 9e-i adds the three reviewer decisions -- approve, reject, request rewrite --
+// as row actions. PUBLISH IS STILL NOT HERE: there is no publish button anywhere
+// in this file, on purpose -- Unit 9e-ii is a separate commit (D15,
+// docs/agentic-creator-decisions.md).
+//
+// 9c deliberately used a plain chevron for the expand toggle because there were
+// no mutating actions yet. Now there are, so the expand toggle stays a bare
+// chevron cell (still just a UI affordance, not an action) and a separate
+// RowActionsMenu column carries Approve / Request rewrite / Reject, exactly the
+// pattern RunMonitor.tsx already uses for Retry / Cancel.
+//
+// WHAT EACH DECISION DOES TO THE ROW, so the optimistic local update below reads
+// as intentional rather than guessed (full state machine:
+// lib/agentic/review-decisions.shared.ts's decideReviewTransition):
+//   - Approve / Request rewrite: the run stays at 'awaiting_review' (approving
+//     does NOT publish -- that is 9e-ii), so the row stays in this list. Only its
+//     `latestDecision` badge changes.
+//   - Reject: the run moves to stage 'cancelled', so it no longer belongs in a
+//     list filtered to 'awaiting_review' -- the row is removed locally rather
+//     than left showing a stage the next real reload would never return.
 //
 // This component assumes the reviewer-workflow flag is already ON. The flag-off
 // state (D8) is rendered by app/admin/authors/page.tsx BEFORE this component is
 // ever mounted -- that is what makes "does not fetch while off" literally true,
-// rather than this component fetching and then hiding the result.
+// rather than this component fetching and then hiding the result. The three
+// decision actions ALSO re-check the flag server-side (agentic-review.ts's
+// requireReviewerWorkflowEnabled) -- this component does not duplicate that
+// check, it just surfaces whatever error a disabled flag throws back.
 //
 // Four distinguishable empty states, the same discipline RunMonitor.tsx's own
 // doc comment describes for its run list:
@@ -73,6 +104,54 @@ const QUEUE_READINESS_LABELS: Record<ReviewQueueReadiness, string> = {
   unscored: 'Not yet evaluated',
 };
 
+// Covers every value migration 112's CHECK constraint allows (StoredReviewDecisionValue),
+// including 'published' -- Unit 9e-ii's value, which nothing in this file ever writes but
+// which a stored row could in principle carry once that unit ships. Keeping the table
+// exhaustive now means 9e-ii adds no new badge styling here later.
+const DECISION_LABELS: Record<StoredReviewDecisionValue, string> = {
+  approved: 'Approved',
+  rewrite_requested: 'Rewrite requested',
+  rejected: 'Rejected',
+  published: 'Published',
+};
+
+const DECISION_STYLES: Record<StoredReviewDecisionValue, string> = {
+  approved: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
+  rewrite_requested: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
+  rejected: 'border-rose-500/25 bg-rose-500/10 text-rose-300',
+  published: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-300',
+};
+
+/** One row's confirm-dialog target: which run, and which of the three decisions it's for. */
+interface DecisionTarget {
+  row: ReviewQueueRow;
+  kind: ReviewDecisionKind;
+}
+
+const DECISION_DIALOG_COPY: Record<
+  ReviewDecisionKind,
+  { title: string; confirmLabel: string; tone: 'default' | 'danger'; body: string }
+> = {
+  approved: {
+    title: 'Approve this draft?',
+    confirmLabel: 'Approve',
+    tone: 'default',
+    body: 'Records your approval. The run stays at "awaiting review" -- publishing is a separate step, not built yet.',
+  },
+  rewrite_requested: {
+    title: 'Request a rewrite?',
+    confirmLabel: 'Request rewrite',
+    tone: 'default',
+    body: 'Records that this draft needs redoing. Nothing is regenerated automatically -- the redo is a fresh commission someone issues separately.',
+  },
+  rejected: {
+    title: 'Reject this draft?',
+    confirmLabel: 'Reject',
+    tone: 'danger',
+    body: 'Cancels the run and marks its task rejected. This is terminal -- the row drops out of this queue once rejected.',
+  },
+};
+
 export default function ReviewQueue({
   initialRows,
   schemaApplied,
@@ -85,6 +164,12 @@ export default function ReviewQueue({
   const [isPending, startTransition] = useTransition();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // ── Reviewer decisions (Unit 9e-i) ──────────────────────────────
+  const [decisionTarget, setDecisionTarget] = useState<DecisionTarget | null>(null);
+  const [decisionNotes, setDecisionNotes] = useState('');
+  const [busyRunId, setBusyRunId] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   const filterActive = readinessFilter !== 'all';
 
@@ -100,6 +185,41 @@ export default function ReviewQueue({
         setLoadError(error instanceof Error ? error.message : 'Unable to load the review queue.');
       }
     });
+  }
+
+  function openDecision(row: ReviewQueueRow, kind: ReviewDecisionKind) {
+    setDecisionError(null);
+    setDecisionNotes('');
+    setDecisionTarget({ row, kind });
+  }
+
+  async function confirmDecision() {
+    if (!decisionTarget) return;
+    const { row, kind } = decisionTarget;
+    const runId = row.run.id;
+    const action =
+      kind === 'approved' ? approveRunAction : kind === 'rewrite_requested' ? requestRunRewriteAction : rejectRunAction;
+
+    setBusyRunId(runId);
+    setDecisionError(null);
+    try {
+      const decision = await action(runId, decisionNotes.trim() || undefined);
+      // 'rejected' moves the run to stage 'cancelled' -- it no longer belongs in a list
+      // filtered to 'awaiting_review', so it is removed locally rather than left showing a
+      // stage the next real reload would never return it under. 'approved' and
+      // 'rewrite_requested' leave the run right where it was; only the badge changes.
+      if (kind === 'rejected') {
+        setRows((current) => current.filter((r) => r.run.id !== runId));
+      } else {
+        setRows((current) => current.map((r) => (r.run.id === runId ? { ...r, latestDecision: decision } : r)));
+      }
+      setDecisionTarget(null);
+      setDecisionNotes('');
+    } catch (error) {
+      setDecisionError(error instanceof Error ? error.message : 'Unable to record the decision.');
+    } finally {
+      setBusyRunId(null);
+    }
   }
 
   function emptyReason(): { title: string; body: string } {
@@ -121,6 +241,7 @@ export default function ReviewQueue({
   const reason = emptyReason();
 
   return (
+    <>
     <section className="rounded-2xl border border-white/10 bg-white/[0.035]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
         <div>
@@ -172,8 +293,15 @@ export default function ReviewQueue({
             </div>
           )}
 
+          {decisionError && (
+            <div className="flex items-center gap-2 border-b border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+              <AlertTriangle size={16} className="shrink-0" />
+              {decisionError}
+            </div>
+          )}
+
           <div className={`relative overflow-x-auto transition-opacity ${isPending ? 'opacity-55' : ''}`}>
-            <table className="w-full min-w-[980px] text-sm">
+            <table className="w-full min-w-[1180px] text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
                   <th className="px-2 py-3" aria-label="Expand" />
@@ -181,13 +309,36 @@ export default function ReviewQueue({
                   <th className="px-4 py-3 font-medium">Persona</th>
                   <th className="px-4 py-3 font-medium">Readiness</th>
                   <th className="px-4 py-3 font-medium">Latest verdict</th>
+                  <th className="px-4 py-3 font-medium">Decision</th>
                   <th className="px-4 py-3 font-medium">Entered review</th>
                   <th className="px-4 py-3 font-medium">Run</th>
+                  <th className="px-4 py-3 font-medium" aria-label="Row actions" />
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row) => {
                   const isExpanded = expandedId === row.run.id;
+                  const actions: RowAction[] = [
+                    {
+                      key: 'approve',
+                      label: 'Approve',
+                      icon: CheckCircle2,
+                      onSelect: () => openDecision(row, 'approved'),
+                    },
+                    {
+                      key: 'rewrite',
+                      label: 'Request rewrite',
+                      icon: RotateCcw,
+                      onSelect: () => openDecision(row, 'rewrite_requested'),
+                    },
+                    {
+                      key: 'reject',
+                      label: 'Reject',
+                      icon: Ban,
+                      tone: 'danger',
+                      onSelect: () => openDecision(row, 'rejected'),
+                    },
+                  ];
                   return (
                     <Fragment key={row.run.id}>
                       <tr
@@ -224,14 +375,34 @@ export default function ReviewQueue({
                             <span className="text-neutral-600">—</span>
                           )}
                         </td>
+                        <td className="px-4 py-4">
+                          {row.latestDecision ? (
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${DECISION_STYLES[row.latestDecision.decision]}`}
+                              title={row.latestDecision.reviewerLabel ? `By ${row.latestDecision.reviewerLabel}` : undefined}
+                            >
+                              {DECISION_LABELS[row.latestDecision.decision]}
+                            </span>
+                          ) : (
+                            <span className="text-neutral-600">Undecided</span>
+                          )}
+                        </td>
                         <td className="px-4 py-4 text-neutral-500">{formatDateTime(row.run.finishedAt)}</td>
                         <td className="px-4 py-4 font-mono text-xs text-neutral-500" title={row.run.id}>
                           {shortId(row.run.id)}
                         </td>
+                        <td className="px-4 py-4 text-right" onClick={(event) => event.stopPropagation()}>
+                          <RowActionsMenu
+                            actions={actions}
+                            ariaLabel={`Decide on run ${row.run.id}`}
+                            busy={busyRunId === row.run.id}
+                            className="ml-auto"
+                          />
+                        </td>
                       </tr>
                       {isExpanded && (
                         <tr className="border-b border-white/5 bg-white/[0.02]">
-                          <td colSpan={7} className="px-6 py-5">
+                          <td colSpan={9} className="px-6 py-5">
                             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                               Evaluation
                             </h4>
@@ -273,5 +444,31 @@ export default function ReviewQueue({
         </>
       )}
     </section>
+
+    <ConfirmDialog
+      open={Boolean(decisionTarget)}
+      title={decisionTarget ? DECISION_DIALOG_COPY[decisionTarget.kind].title : ''}
+      tone={decisionTarget ? DECISION_DIALOG_COPY[decisionTarget.kind].tone : 'default'}
+      confirmLabel={decisionTarget ? DECISION_DIALOG_COPY[decisionTarget.kind].confirmLabel : 'Confirm'}
+      busy={Boolean(decisionTarget) && busyRunId === decisionTarget?.row.run.id}
+      onCancel={() => setDecisionTarget(null)}
+      onConfirm={confirmDecision}
+      message={
+        <div className="space-y-3">
+          <p>{decisionTarget ? DECISION_DIALOG_COPY[decisionTarget.kind].body : ''}</p>
+          <p className="text-neutral-500">
+            {decisionTarget?.row.story?.title ?? 'Untitled'} · {decisionTarget ? shortId(decisionTarget.row.run.id) : ''}
+          </p>
+          <textarea
+            value={decisionNotes}
+            onChange={(event) => setDecisionNotes(event.target.value)}
+            placeholder="Optional notes for the record (not shown to anyone yet)"
+            rows={3}
+            className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:border-emerald-400/40 focus:outline-none"
+          />
+        </div>
+      }
+    />
+    </>
   );
 }

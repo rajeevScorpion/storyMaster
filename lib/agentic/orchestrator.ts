@@ -78,7 +78,11 @@ import type { AgentTaskStatus } from '@/lib/agentic/supervisor';
 import { isMissingTaskSchemaError } from '@/lib/agentic/supervisor.shared';
 import { isMissingPersonaSchemaError } from '@/lib/agentic/personas.shared';
 
-type AdminClient = ReturnType<typeof createAdminClient>;
+// Exported (Unit 9e, lib/agentic/review-decisions.ts) so a reviewer-decision write can
+// pass the SAME admin client instance it already opened for its own agent_review_decisions
+// insert into setTaskStatus below, rather than opening a second one. Exporting a type alias
+// changes nothing about runtime behaviour.
+export type AdminClient = ReturnType<typeof createAdminClient>;
 
 const RUN_SCHEMA_UNAVAILABLE_MESSAGE =
   'Run storage is not available yet — migration 107 has not been applied to this environment.';
@@ -433,8 +437,16 @@ export async function createRunForTask(taskId: string): Promise<CreateRunResult>
  * corrupt the run's own state or abort a drain that is otherwise progressing fine.
  * Latches migration 106 through latchTaskSchemaUnavailable on a schema-missing error,
  * same classifier and latch every other agent_tasks access in this module uses.
+ *
+ * Exported for Unit 9e (lib/agentic/review-decisions.ts): a reviewer decision moves
+ * agent_tasks.status to 'approved' or 'rejected' (values migration 106 already permits
+ * alongside the ones this module writes -- see 106_agent_tasks.sql's CHECK constraint),
+ * and this is the one place that write already fails closed for migration 106. Every
+ * EXISTING caller in this file (cancelRun, persistStageAdvance, handleStageFailure) is
+ * unchanged -- this export adds a caller, it does not alter behaviour for the ones already
+ * here.
  */
-async function setTaskStatus(admin: AdminClient, taskId: string, status: AgentTaskStatus, context: string): Promise<void> {
+export async function setTaskStatus(admin: AdminClient, taskId: string, status: AgentTaskStatus, context: string): Promise<void> {
   if (taskSchemaUnavailable) return;
 
   try {
