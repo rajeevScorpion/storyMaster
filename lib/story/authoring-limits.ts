@@ -1,4 +1,3 @@
-export const DEFAULT_STORY_AUTHORING_WORD_CAP = 500;
 // Two hardcoded word caps bound the two different things a human can type into
 // the composer: SEED_SOURCE_WORD_CAP caps the pasted story (seed mode),
 // STORY_PROMPT_WORD_CAP caps the typed prompt (prompt mode, and reel prompts).
