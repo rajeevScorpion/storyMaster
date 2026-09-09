@@ -85,10 +85,11 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**102-108 and 110 applied to dev.** 102-107 verified against
+**102-108, 110, 111 and 112 applied to dev.** 102-107 verified against
 `schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against the schema
 itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT,
-0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial.
+0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112 applied
+2026-09-09**, both verified against the schema rather than only their ledger rows (see their rows below).
 **Production has none of them.**
 
 **There is no migration 109, and there will not be one.** Phase 8 planned an
@@ -109,6 +110,8 @@ for what has actually run.
 | 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
 | 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **Applied** 2026-09-08. Schema verified directly, not just the ledger row: 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and the index confirmed UNIQUE *and* partial | Not applied |
 | 110 | `riya_sen_narration_voice` | data-only: moves `riya-sen`'s `preferred_voice` from `Leda` to `Callirrhoe`, resolving the one same-language voice collision among the seeds (both it and `madhurima-bose` are Bangla) | **Applied** 2026-09-08. Verified against the data, not only the ledger: `riya-sen` now holds `Callirrhoe`, and a group-by over `(preferred_voice, language)` returns **zero** personas sharing a voice within a language, with all 15 voices inside the exposed 12 | Not applied (depends on 103 + 104, not on a contiguous run below it) |
+| 111 | `agent_reviewers` | table `agent_reviewers` — Phase 9's reviewer authorization, read only through `requireReviewer()` (D6, D14) | **Applied** 2026-09-09 16:20:41+00. **0 rows**, and that matters: with the table empty, the only account that passes `requireReviewer()` is `ADMIN_USER_ID`, through the implicit short-circuit that never touches the table. Insert a row to exercise the `can_publish` / `can_trigger_media` capability columns at all | Not applied |
+| 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
