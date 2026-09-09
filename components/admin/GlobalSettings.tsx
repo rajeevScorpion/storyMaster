@@ -52,7 +52,6 @@ import {
   setStoryIncrementalAssetSync,
   setStoryAssetUploadPauseDuringGeneration,
   setStoryAssetSyncWarningTimeout,
-  setAuthoringWordCap,
   setStoryBeatLengthDefaultLevel,
   setPreviewSeedPlanPriceCoins,
   setFreePlusCharacterSheets,
@@ -273,9 +272,6 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const [storyAssetSyncWarningTimeoutMs, setStoryAssetSyncWarningTimeoutMs] = useState(15000);
   const [storyAssetSyncWarningTimeoutInput, setStoryAssetSyncWarningTimeoutInput] = useState('15');
   const [storyAssetSyncWarningTimeoutSaving, setStoryAssetSyncWarningTimeoutSaving] = useState(false);
-  const [authoringWordCap, setAuthoringWordCapState] = useState(500);
-  const [authoringWordCapInput, setAuthoringWordCapInput] = useState('500');
-  const [authoringWordCapSaving, setAuthoringWordCapSaving] = useState(false);
   const [storyBeatLengthDefaultLevel, setStoryBeatLengthDefaultLevelState] = useState<StoryBeatLengthLevel>(3);
   const [storyBeatLengthDefaultSaving, setStoryBeatLengthDefaultSaving] = useState(false);
   const [previewSeedPlanPriceCoins, setPreviewSeedPlanPriceCoinsState] = useState(0);
@@ -371,7 +367,6 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         storyIncrementalAssetSyncEnabled: incrementalAssetSyncEnabled,
         storyAssetUploadPauseDuringGenerationEnabled: pauseUploadsDuringGenerationEnabled,
         storyAssetSyncWarningTimeoutMs: assetSyncWarningTimeoutMs,
-        authoringWordCap: awc,
         storyBeatLengthDefaultLevel: beatLengthDefault,
         previewSeedPlanPriceCoins: previewPriceCoins,
         imageUploadOptimizationSettings: nextImageUploadSettings,
@@ -434,8 +429,6 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         setStoryAssetUploadPauseDuringGenerationEnabledState(pauseUploadsDuringGenerationEnabled);
         setStoryAssetSyncWarningTimeoutMs(assetSyncWarningTimeoutMs);
         setStoryAssetSyncWarningTimeoutInput(String(Math.round(assetSyncWarningTimeoutMs / 1000)));
-        setAuthoringWordCapState(awc);
-        setAuthoringWordCapInput(String(awc));
         setStoryBeatLengthDefaultLevelState(beatLengthDefault);
         setPreviewSeedPlanPriceCoinsState(previewPriceCoins);
         setPreviewSeedPlanPriceCoinsInput(String(previewPriceCoins));
@@ -762,18 +755,6 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
     }
   }
 
-  async function handleAuthoringWordCapSave() {
-    const words = parseInt(authoringWordCapInput, 10);
-    if (!Number.isFinite(words) || words < 50) return;
-    setAuthoringWordCapSaving(true);
-    try {
-      await setAuthoringWordCap(words);
-      setAuthoringWordCapState(words);
-    } finally {
-      setAuthoringWordCapSaving(false);
-    }
-  }
-
   async function handleStoryBeatLengthDefaultSave(level: StoryBeatLengthLevel) {
     const previous = storyBeatLengthDefaultLevel;
     setStoryBeatLengthDefaultLevelState(level);
@@ -878,7 +859,6 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
   const parsedStorylineChoiceFlashMs = Number.isFinite(parsedStorylineChoiceFlashSec)
     ? Math.round(parsedStorylineChoiceFlashSec * 1000)
     : NaN;
-  const parsedAuthoringWordCap = parseInt(authoringWordCapInput, 10);
   const parsedPreviewSeedPlanPriceCoins = previewSeedPlanPriceCoinsInput.trim() === ''
     ? NaN
     : Number(previewSeedPlanPriceCoinsInput);
@@ -911,7 +891,7 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
         narration: narrationVoiceSettings
           ? `${formatToggleSummary(narrationVoiceSettings.userLedVoiceSelectionEnabled)} user-led selection, ${narrationVoiceSampleStatuses.length} samples tracked`
           : 'Voice settings not loaded',
-        authoring: `${authoringWordCap} word cap, ${STORY_BEAT_LENGTH_LABELS[storyBeatLengthDefaultLevel]} beat default, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
+        authoring: `${STORY_BEAT_LENGTH_LABELS[storyBeatLengthDefaultLevel]} beat default, ${previewSeedPlanPriceCoins} coin preview, vertical stories ${formatToggleSummary(verticalStoriesSettingEnabled).toLowerCase()}`,
         characters: `Free/Plus sheets ${formatToggleSummary(freePlusCharacterSheetsEnabled).toLowerCase()}, Creator sheets ${formatToggleSummary(creatorCharacterSheetsEnabled).toLowerCase()}`,
         media: `Storage ${mediaStorage.settings.storageProvider}, R2 ${formatToggleSummary(mediaStorage.settings.r2Enabled && mediaStorage.envStatus.effectiveEnabled).toLowerCase()}, compression ${formatToggleSummary(imageUploadSettings.clientSideCompressionEnabled).toLowerCase()}`,
         'video-export': `Video download ${formatToggleSummary(videoDownloadEnabled).toLowerCase()}, admin bypass ${formatToggleSummary(videoDownloadAdminBypass).toLowerCase()}`,
@@ -1991,35 +1971,6 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
             <p className="text-xs text-neutral-400 -mt-2">
               Shared limits and preview pricing for prompt-based and seeded story setup.
             </p>
-
-            <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
-              <p className="text-sm font-medium text-neutral-100 mb-1">Story authoring word cap</p>
-              <p className="text-xs text-neutral-400 mb-3">
-                Applies to Quick Story and Reel prompts. Seed Story source text has a fixed 500-word limit, and its extra visual guidance has a separate fixed 150-word limit. Titles are excluded.
-              </p>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={50}
-                  step={25}
-                  value={authoringWordCapInput}
-                  onChange={(e) => setAuthoringWordCapInput(e.target.value)}
-                  className="w-24 rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  placeholder="500"
-                />
-                <span className="text-xs text-neutral-500">words</span>
-                <button
-                  onClick={handleAuthoringWordCapSave}
-                  disabled={authoringWordCapSaving || !Number.isFinite(parsedAuthoringWordCap) || parsedAuthoringWordCap < 50}
-                  className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50 transition-colors"
-                >
-                  {authoringWordCapSaving ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
-                </button>
-                {authoringWordCap !== parsedAuthoringWordCap && parsedAuthoringWordCap >= 50 && (
-                  <span className="text-xs text-amber-400">Unsaved</span>
-                )}
-              </div>
-            </div>
 
             <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
               <div className="flex items-start justify-between gap-4">

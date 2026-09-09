@@ -13,7 +13,6 @@ import {
   DEFAULT_ENABLED_STORY_LANGUAGE_IDS,
   type StoryLanguageOption,
 } from '@/lib/ai/story-config';
-import { DEFAULT_STORY_AUTHORING_WORD_CAP } from '@/lib/story/authoring-limits';
 import {
   DEFAULT_STORY_BEAT_LENGTH_LEVEL,
   normalizeStoryBeatLengthLevel,
@@ -35,7 +34,6 @@ export interface LandingSetupSettings {
 
 export interface LandingInitialData {
   setupSettings: LandingSetupSettings;
-  authoringWordCap: number;
   /** Admin baseline for standard-story text per beat. Reels remain independent. */
   storyBeatLengthDefaultLevel: StoryBeatLengthLevel;
   reelSetup: ReelStorySetupSettings;
@@ -61,7 +59,6 @@ export const FALLBACK_REEL_SETUP: ReelStorySetupSettings = {
 
 export const DEFAULT_LANDING_INITIAL_DATA: LandingInitialData = {
   setupSettings: DEFAULT_LANDING_SETUP_SETTINGS,
-  authoringWordCap: DEFAULT_STORY_AUTHORING_WORD_CAP,
   storyBeatLengthDefaultLevel: DEFAULT_STORY_BEAT_LENGTH_LEVEL,
   reelSetup: FALLBACK_REEL_SETUP,
   narrationVoiceConfig: null,
@@ -75,9 +72,6 @@ export function normalizeLandingInitialData(input?: Partial<LandingInitialData> 
       ...DEFAULT_LANDING_SETUP_SETTINGS,
       ...(input?.setupSettings ?? {}),
     },
-    authoringWordCap: typeof input?.authoringWordCap === 'number' && Number.isFinite(input.authoringWordCap)
-      ? input.authoringWordCap
-      : DEFAULT_LANDING_INITIAL_DATA.authoringWordCap,
     storyBeatLengthDefaultLevel: normalizeStoryBeatLengthLevel(
       input?.storyBeatLengthDefaultLevel ?? DEFAULT_LANDING_INITIAL_DATA.storyBeatLengthDefaultLevel
     ),
