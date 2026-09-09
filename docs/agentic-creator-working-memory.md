@@ -52,8 +52,12 @@ narration, which is the shape D12 already paid for.
 | `54b4d14` | Unit 9a — `agent_reviewers`, migration 111, `requireReviewer` / `assertCanEditStory` |
 | `b394c52` | **Review fix** — type-predicate narrowing; guards choose their own columns |
 | `b7041b2` | Unit 9b — the four ownership guards delegate to `assertCanEditStory` |
+| `8189bb4` | GOTCHAS: `saveBeat` is shared branching's path, not an owner-only one |
+| `57b516b` | Unit 9d — agent narration bills the system user, not the reviewer |
+| `cff8b76` | **Review fix** — D13 asserted a metadata column that does not exist |
 
-Gate re-run independently: **tsc 0, lint clean, 96 files / 905 tests** (from 95 / 877).
+Gate re-run independently: **tsc 0, lint clean, 99 files / 916 tests** (from 95 / 877),
+`build:verify` green. `test:e2e` NOT run this session.
 
 **9b reviewed by diff and found clean** — the first unit this phase with nothing to fix. Its one
 deviation was a genuine catch the brief had missed: `saveBeat` is also shared branching's persistence
@@ -70,13 +74,33 @@ insert into public.agent_reviewers (user_id, status, can_publish, can_trigger_me
 values ('<a real auth.users id>', 'active', true, true, 'Test reviewer');
 ```
 
-2. **Unit 9b** (the four ownership guards) is in flight. **9c** is the queue at `/admin/authors`;
-   **9d** is the billing thread, unblocked by D13; **9e** is reviewer decisions.
-3. **The capability check in 9b is the sharp edge.** `can_trigger_media` gates reviewers only — an
+2. **9a, 9b and 9d are done and gated. 9c and 9e are not started.** 9c is the review queue at
+   `/admin/authors` — the plan's §4 pins its nav definition, the `RunMonitor` pieces to reuse and the
+   flag. 9e is reviewer decisions (approve / reject / publish), the least constrained unit.
+3. **Nothing in Phase 9 has been exercised against a live database.** The whole gate is static. Every
+   real defect in Phases 6, 7 and 8 was found by running the thing — treat this as required. The proof
+   run is now possible without 9c: apply 111, insert a reviewer row, open an agent draft at
+   `/story/[id]` as that reviewer, press narrate, then check **real TTS spend with zero coin
+   movement**:
+
+```sql
+select action_key, status from public.beat_spend_reservations
+ where related_story_id = '<agent story>';                 -- expect zero rows
+select sum(beats_remaining) from public.beat_grants
+ where user_id = '616af55e-8dfa-4a3e-bb0f-802462ef3333';   -- expect still 5.00
+select task_key, phase, cost_usd from public.ai_cost_events
+ where related_story_id = '<agent story>' order by created_at desc;   -- expect real spend
+select user_id, status from public.narration_batch_jobs
+ where story_id = '<agent story>';   -- user_id should be the SYSTEM user, not the reviewer
+```
+
+   Also check the reviewer's own wallet is untouched. The last query is the one that proves D13
+   landed.
+4. **The capability check in 9b is the sharp edge.** `can_trigger_media` gates reviewers only — an
    ordinary user narrating their own story has no reviewer row, and `canTriggerMedia(null)` is false.
    Checking the capability before the ownership branch silently breaks narration for every human on
    the site.
-4. **`requireReviewer()` is load-bearing security now** (D14). Reviewer writes run on the service-role
+5. **`requireReviewer()` is load-bearing security now** (D14). Reviewer writes run on the service-role
    client and bypass RLS entirely; the helper is the whole boundary.
 
 ---
