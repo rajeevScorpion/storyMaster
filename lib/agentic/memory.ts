@@ -17,6 +17,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig, getFeatureFlagValue, setFeatureFlagValue } from '@/lib/ai/model-config';
 import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
 import { CHARACTER_NAME_HISTORY_LIMIT } from '@/lib/ai/character-novelty.shared';
+import { isMissingPersonaSchemaError, type AgentPersonaMemory } from '@/lib/agentic/personas.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import {
   NOVELTY_PRIOR_FETCH_LIMIT,
@@ -236,6 +237,77 @@ export async function updatePersonaMemory(personaId: string, entry: StoryMemoryE
     }
   } catch (error) {
     if (isMissingMemorySchemaError(error as { code?: string })) return;
+    throw error;
+  }
+}
+
+interface PersonaMemoryRow {
+  persona_id: string;
+  recent_titles: string[] | null;
+  recent_premises: string[] | null;
+  character_names: string[] | null;
+  settings_used: string[] | null;
+  themes_used: string[] | null;
+  reviewer_feedback: unknown[] | null;
+  story_count: number | null;
+  updated_at: string;
+}
+
+function rowToPersonaMemory(row: PersonaMemoryRow): AgentPersonaMemory {
+  return {
+    personaId: row.persona_id,
+    recentTitles: row.recent_titles ?? [],
+    recentPremises: row.recent_premises ?? [],
+    characterNames: row.character_names ?? [],
+    settingsUsed: row.settings_used ?? [],
+    themesUsed: row.themes_used ?? [],
+    reviewerFeedback: row.reviewer_feedback ?? [],
+    storyCount: row.story_count ?? 0,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Reads one persona's own recent-story memory (agent_persona_memory,
+ * migration 103), for injection into its next brief prompt via
+ * formatPersonaMemoryForBrief (memory.shared.ts).
+ *
+ * Returns null for two distinct reasons the caller does not need to tell
+ * apart: no memory row exists for this persona (should not happen -- 103's
+ * AFTER INSERT trigger creates one per persona -- but a `.maybeSingle()` miss
+ * is "no memory", not an error), and migration 103 itself is not applied on
+ * this database. A successful read commonly returns a row with every array
+ * empty (a persona that has not written anything yet) -- that is NOT this
+ * null case, and formatPersonaMemoryForBrief already treats an all-empty
+ * memory as "nothing worth saying" on its own.
+ *
+ * Classified with isMissingPersonaSchemaError (personas.shared.ts), NOT
+ * isMissingMemorySchemaError (memory.shared.ts, this file's own sibling) --
+ * agent_persona_memory is a 103 table, not a 105 one. Per GOTCHAS.md these
+ * two classifiers accept the identical error codes and are told apart only by
+ * which table the failing query touched, never by the error itself.
+ *
+ * Anything else rethrows: a real, unexpected error is the caller's
+ * (runBriefStage's) decision to degrade or not, not this function's.
+ */
+export async function loadPersonaMemory(personaId: string): Promise<AgentPersonaMemory | null> {
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('agent_persona_memory')
+      .select('persona_id, recent_titles, recent_premises, character_names, settings_used, themes_used, reviewer_feedback, story_count, updated_at')
+      .eq('persona_id', personaId)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingPersonaSchemaError(error)) return null;
+      throw new Error(`Failed to read persona memory: ${error.message}`);
+    }
+    if (!data) return null;
+
+    return rowToPersonaMemory(data as PersonaMemoryRow);
+  } catch (error) {
+    if (isMissingPersonaSchemaError(error as { code?: string })) return null;
     throw error;
   }
 }

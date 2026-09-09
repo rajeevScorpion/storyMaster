@@ -69,7 +69,8 @@ import {
   type PersonaRow,
 } from '@/lib/agentic/personas.shared';
 import { getAgentTask, type AgentTask } from '@/lib/agentic/supervisor';
-import { runNoveltyCheck, recordStoryMemory, updatePersonaMemory } from '@/lib/agentic/memory';
+import { runNoveltyCheck, recordStoryMemory, updatePersonaMemory, loadPersonaMemory } from '@/lib/agentic/memory';
+import { formatPersonaMemoryForBrief } from '@/lib/agentic/memory.shared';
 import type { NoveltyCandidate, NoveltyVerdict } from '@/lib/agentic/memory.shared';
 import { evaluateAndRecord, getPipelineEvaluationForRun } from '@/lib/agentic/evaluation';
 import { toEvaluatedBeats, type DeterministicEvaluationInput } from '@/lib/agentic/evaluation.shared';
@@ -133,7 +134,23 @@ export interface StoryBrief {
   characters: StoryBriefCharacter[];
 }
 
-function buildStoryBriefPrompt(persona: AgentPersona, task: AgentTask): string {
+/**
+ * `memoryBlock` is formatPersonaMemoryForBrief's rendered output (memory.shared.ts)
+ * -- '' when the persona has no memory worth mentioning, or when loading it
+ * failed (see loadPersonaMemoryBlockForBrief below). Spliced in after the
+ * persona identity and commission brief, before the JSON output contract, so
+ * it reads as context the model has by the time it is asked to write, not as
+ * a trailing afterthought below the response-shape instructions.
+ *
+ * THIS IS A NUDGE, NOT A NOVELTY GUARANTEE. It reduces how often an identical
+ * boilerplate brief reproduces an identical story; it never decides whether a
+ * story IS too similar to a prior one. That authority stays entirely with
+ * runNoveltyCheck (memory.ts), per decision D9. Do not remove or weaken that
+ * check on the theory that this prompt block makes it redundant -- a missing
+ * or empty memoryBlock only costs one extra chance of a collision, which the
+ * novelty check still catches downstream.
+ */
+function buildStoryBriefPrompt(persona: AgentPersona, task: AgentTask, memoryBlock: string): string {
   const restricted = persona.restrictedThemes.length
     ? `Restricted themes -- never use these: ${persona.restrictedThemes.join(', ')}.`
     : '';
@@ -155,6 +172,7 @@ function buildStoryBriefPrompt(persona: AgentPersona, task: AgentTask): string {
     constraints,
     '',
     `Audience: ${persona.ageGroup}. Language: ${persona.language}.`,
+    memoryBlock,
     '',
     'Respond with ONLY a JSON object of this exact shape -- no markdown fences, no commentary:',
     '{',
@@ -460,6 +478,34 @@ async function persistStoryGenerationProgress(run: AgentRun, progress: SeedGener
 
 // ── Stage: brief_ready ───────────────────────────────────────────────────
 
+/**
+ * Loads this persona's recent-story memory and formats it for the brief
+ * prompt, degrading to '' on ANY failure.
+ *
+ * FAILS SOFT, AND MUST NEVER FAIL brief_ready ON ITS OWN. loadPersonaMemory
+ * (memory.ts) already returns null for "no memory row" and for an unapplied
+ * migration 103, but it rethrows anything else -- a transient read error, say
+ * -- and this wrapper is what turns that rethrow into "no memory block"
+ * rather than failing the stage. The cost of that is bounded and known: one
+ * more chance the persona's brief repeats a recent title, premise, cast or
+ * setting. runNoveltyCheck (memory.ts) is still the gate that actually
+ * catches that downstream (D9) -- this block only makes the collision less
+ * likely to happen in the first place, so losing it costs a possible
+ * collision, never a lost run.
+ */
+async function loadPersonaMemoryBlockForBrief(personaId: string): Promise<string> {
+  try {
+    const memory = await loadPersonaMemory(personaId);
+    return formatPersonaMemoryForBrief(memory);
+  } catch (error) {
+    console.error(
+      '[agentic-story-assembly] failed to load persona memory for brief prompt; continuing without it:',
+      error instanceof Error ? error.message : error
+    );
+    return '';
+  }
+}
+
 async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPersona): Promise<StageExecutionOutcome> {
   const idempotencyKey = `agentic_run:${run.id}:brief_ready`;
   let authorization: AgenticAuthorization;
@@ -476,7 +522,8 @@ async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPerso
 
   try {
     const config = await getModelConfig('agent_story_brief');
-    const prompt = buildStoryBriefPrompt(persona, task);
+    const memoryBlock = await loadPersonaMemoryBlockForBrief(persona.id);
+    const prompt = buildStoryBriefPrompt(persona, task, memoryBlock);
     const raw = await callGeminiAgenticJson({
       task: 'agent_story_brief',
       model: config.model,
