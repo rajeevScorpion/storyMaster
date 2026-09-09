@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   canPublish,
   canTriggerMedia,
+  canTriggerMediaForEditAccess,
+  decideStoryEditAccess,
   isActiveReviewer,
   isMissingReviewerSchemaError,
   type AgentReviewer,
@@ -74,6 +76,180 @@ describe('canTriggerMedia', () => {
   it('is false for null and undefined (no row)', () => {
     expect(canTriggerMedia(null)).toBe(false);
     expect(canTriggerMedia(undefined)).toBe(false);
+  });
+});
+
+// Unit 9b (D14): the owner-vs-reviewer-vs-stranger decision behind
+// assertCanEditStory. This is the three-way branch the brief calls out as
+// the subtlety that matters most, so it's tested directly and independent
+// of any database.
+describe('decideStoryEditAccess', () => {
+  const OWNER = 'owner-1';
+  const OTHER_USER = 'someone-else';
+
+  it('grants the owner access, even with no reviewer row at all', () => {
+    // The load-bearing case: an ordinary user with zero rows in
+    // agent_reviewers must still be able to edit their OWN story.
+    const grant = decideStoryEditAccess({
+      userId: OWNER,
+      storyUserId: OWNER,
+      agentPersonaId: null,
+      reviewer: null,
+    });
+    expect(grant).toEqual({ granted: true, via: 'owner' });
+  });
+
+  it('grants the owner access to their own AGENT-owned story with no reviewer row', () => {
+    // Same case, but on an agent-owned story -- ownership must still win
+    // outright, without ever touching reviewer status.
+    const grant = decideStoryEditAccess({
+      userId: OWNER,
+      storyUserId: OWNER,
+      agentPersonaId: 'persona-1',
+      reviewer: null,
+    });
+    expect(grant).toEqual({ granted: true, via: 'owner' });
+  });
+
+  it('grants an active reviewer access to an agent-owned story they do not own', () => {
+    const reviewer: AgentReviewer = {
+      userId: OTHER_USER,
+      status: 'active',
+      canPublish: false,
+      canTriggerMedia: true,
+      displayName: null,
+      notes: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdBy: null,
+    };
+    const grant = decideStoryEditAccess({
+      userId: OTHER_USER,
+      storyUserId: OWNER,
+      agentPersonaId: 'persona-1',
+      reviewer,
+    });
+    expect(grant).toEqual({ granted: true, via: 'reviewer', reviewer });
+  });
+
+  it('denies a reviewer with no standing over an ordinary (non-agent) story', () => {
+    const reviewer: AgentReviewer = {
+      userId: OTHER_USER,
+      status: 'active',
+      canPublish: true,
+      canTriggerMedia: true,
+      displayName: null,
+      notes: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdBy: null,
+    };
+    const grant = decideStoryEditAccess({
+      userId: OTHER_USER,
+      storyUserId: OWNER,
+      agentPersonaId: null,
+      reviewer,
+    });
+    expect(grant).toEqual({ granted: false });
+  });
+
+  it('denies a suspended reviewer on an agent-owned story', () => {
+    const reviewer: AgentReviewer = {
+      userId: OTHER_USER,
+      status: 'suspended',
+      canPublish: true,
+      canTriggerMedia: true,
+      displayName: null,
+      notes: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdBy: null,
+    };
+    const grant = decideStoryEditAccess({
+      userId: OTHER_USER,
+      storyUserId: OWNER,
+      agentPersonaId: 'persona-1',
+      reviewer,
+    });
+    expect(grant).toEqual({ granted: false });
+  });
+
+  it('denies a plain stranger (no reviewer row, not the owner) on an agent-owned story', () => {
+    const grant = decideStoryEditAccess({
+      userId: OTHER_USER,
+      storyUserId: OWNER,
+      agentPersonaId: 'persona-1',
+      reviewer: null,
+    });
+    expect(grant).toEqual({ granted: false });
+  });
+
+  it('denies a plain stranger on an ordinary story', () => {
+    const grant = decideStoryEditAccess({
+      userId: OTHER_USER,
+      storyUserId: OWNER,
+      agentPersonaId: null,
+      reviewer: null,
+    });
+    expect(grant).toEqual({ granted: false });
+  });
+});
+
+// Unit 9b (D14): the capability check that must run AFTER edit access is
+// already decided, and must be skipped entirely for the owner branch.
+describe('canTriggerMediaForEditAccess', () => {
+  it('is true for the owner branch (reviewer === null) with no capability check at all', () => {
+    // This is the case the brief calls out explicitly: an ordinary owner
+    // has no agent_reviewers row, so canTriggerMedia(null) is false -- but
+    // that must never be consulted for an owner. reviewer === null here
+    // means "granted as owner", not "no row", per assertCanEditStory's
+    // contract, and this function must read it that way.
+    expect(canTriggerMediaForEditAccess(null)).toBe(true);
+  });
+
+  it('is true for an active reviewer with can_trigger_media', () => {
+    const reviewer: AgentReviewer = {
+      userId: 'reviewer-1',
+      status: 'active',
+      canPublish: false,
+      canTriggerMedia: true,
+      displayName: null,
+      notes: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdBy: null,
+    };
+    expect(canTriggerMediaForEditAccess(reviewer)).toBe(true);
+  });
+
+  it('is false for an active reviewer without can_trigger_media', () => {
+    const reviewer: AgentReviewer = {
+      userId: 'reviewer-1',
+      status: 'active',
+      canPublish: true,
+      canTriggerMedia: false,
+      displayName: null,
+      notes: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdBy: null,
+    };
+    expect(canTriggerMediaForEditAccess(reviewer)).toBe(false);
+  });
+
+  it('is false for a suspended reviewer even with can_trigger_media true', () => {
+    const reviewer: AgentReviewer = {
+      userId: 'reviewer-1',
+      status: 'suspended',
+      canPublish: false,
+      canTriggerMedia: true,
+      displayName: null,
+      notes: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      createdBy: null,
+    };
+    expect(canTriggerMediaForEditAccess(reviewer)).toBe(false);
   });
 });
 

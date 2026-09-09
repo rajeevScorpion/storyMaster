@@ -2,6 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
+import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
 import { normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
 import { generateCharacterPortraitServer } from '@/app/actions/portrait-server';
@@ -151,15 +153,18 @@ export async function getImageBatchScopeSettings(): Promise<ImageBatchScopeSetti
   }
 }
 
-async function loadOwnedStory(admin: AdminClient, storyId: string, userId: string): Promise<StoryRow> {
-  const { data, error } = await admin
-    .from('stories')
-    .select('id, user_id, story_map, story_config')
-    .eq('id', storyId)
-    .single();
-  if (error || !data) throw new Error('Story not found.');
-  if (data.user_id !== userId) throw new Error('Forbidden.');
-  return data as StoryRow;
+// D14/Unit 9b: an ordinary owner generating images for their own story is
+// unaffected -- assertCanEditStory grants owner access with reviewer ===
+// null, and canTriggerMediaForEditAccess short-circuits to true for that
+// case without ever consulting can_trigger_media. Only a reviewer's submit
+// is gated on it. Called by both submitStoryImageBatch and
+// submitStoryStatefulVisuals.
+async function loadOwnedStory(storyId: string, userId: string): Promise<StoryRow> {
+  const { story, reviewer } = await assertCanEditStory(storyId, userId, ['story_map', 'story_config']);
+  if (!canTriggerMediaForEditAccess(reviewer)) {
+    throw new Error('Forbidden.');
+  }
+  return story as unknown as StoryRow;
 }
 
 async function downloadStorageImageAsInlinePart(
@@ -298,7 +303,7 @@ export async function submitStoryImageBatch(input: {
   if (authError || !user) throw new Error('Not authenticated');
 
   const admin = createAdminClient();
-  const story = await loadOwnedStory(admin, input.storyId, user.id);
+  const story = await loadOwnedStory(input.storyId, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.rootNodeId) throw new Error('Story has no beats to visualise.');
 
@@ -834,7 +839,7 @@ export async function submitStoryStatefulVisuals(input: {
   if (authError || !user) throw new Error('Not authenticated');
 
   const admin = createAdminClient();
-  const story = await loadOwnedStory(admin, input.storyId, user.id);
+  const story = await loadOwnedStory(input.storyId, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.rootNodeId) throw new Error('Story has no beats to visualise.');
 

@@ -2,6 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
+import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getPathToNode } from '@/lib/utils/story-map';
 import { resolveNarrationVoiceServer } from '@/app/actions/narration';
@@ -122,15 +124,22 @@ async function kickNarrationWorker(jobId: string): Promise<void> {
   }).catch((error) => console.error('Failed to kick narration worker:', error));
 }
 
-async function loadOwnedStory(admin: AdminClient, storyId: string, userId: string): Promise<NarrationStoryRow> {
-  const { data, error } = await admin
-    .from('stories')
-    .select('id, user_id, story_map, story_config, genre, tone, target_age')
-    .eq('id', storyId)
-    .single();
-  if (error || !data) throw new Error('Story not found.');
-  if ((data as NarrationStoryRow).user_id !== userId) throw new Error('Forbidden.');
-  return data as NarrationStoryRow;
+// D14/Unit 9b: an ordinary owner narrating their own story is unaffected --
+// assertCanEditStory grants owner access with reviewer === null, and
+// canTriggerMediaForEditAccess short-circuits to true for that case without
+// ever consulting can_trigger_media. Only a reviewer's submit is gated on it.
+async function loadOwnedStory(storyId: string, userId: string): Promise<NarrationStoryRow> {
+  const { story, reviewer } = await assertCanEditStory(storyId, userId, [
+    'story_map',
+    'story_config',
+    'genre',
+    'tone',
+    'target_age',
+  ]);
+  if (!canTriggerMediaForEditAccess(reviewer)) {
+    throw new Error('Forbidden.');
+  }
+  return story as unknown as NarrationStoryRow;
 }
 
 /**
@@ -146,7 +155,7 @@ export async function submitStoryNarrationBatch(input: {
   if (authError || !user) throw new Error('Not authenticated');
 
   const admin = createAdminClient();
-  const story = await loadOwnedStory(admin, input.storyId, user.id);
+  const story = await loadOwnedStory(input.storyId, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.currentNodeId) throw new Error('Story has no beats to narrate.');
 

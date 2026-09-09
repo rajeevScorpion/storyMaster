@@ -27,6 +27,7 @@ import 'server-only';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
+  decideStoryEditAccess,
   isActiveReviewer,
   isMissingReviewerSchemaError,
   type AgentReviewer,
@@ -162,20 +163,25 @@ export async function requireReviewer(): Promise<{ userId: string; reviewer: Age
 }
 
 /**
- * The shared ownership/review gate every write-path guard delegates to (D14): returns
- * the story row when `userId` is EITHER the story's own `user_id` OR an active reviewer
- * AND the story is agent-owned (`stories.agent_persona_id IS NOT NULL`). Throws
- * 'Story not found.' when the story does not exist, 'Forbidden.' otherwise. Runs on the
- * service-role client, so this function itself is the entire access-control boundary
- * for a reviewer write -- callers must not additionally trust RLS.
+ * The shared ownership/review gate every write-path guard delegates to (D14): resolves
+ * access when `userId` is EITHER the story's own `user_id` OR an active reviewer AND
+ * the story is agent-owned (`stories.agent_persona_id IS NOT NULL`) -- delegating the
+ * actual owner/reviewer/stranger decision to the pure `decideStoryEditAccess()` in
+ * reviewers.shared.ts. Throws 'Story not found.' when the story does not exist,
+ * 'Forbidden.' otherwise. Runs on the service-role client, so this function itself is
+ * the entire access-control boundary for a reviewer write -- callers must not
+ * additionally trust RLS.
  *
- * Deliberately does NOT check any specific capability (can_publish / can_trigger_media)
- * -- this only proves "may edit this story at all". A caller that also needs a specific
- * capability (Unit 9b's narration/image submits, gated on can_trigger_media per the
- * plan) resolves its own reviewer separately -- e.g. via requireReviewer() when it has
- * the session cookie available -- and checks canTriggerMedia()/canPublish() from
- * reviewers.shared.ts against it. Unit 9a's job is this one shared ownership boundary,
- * not every capability-specific call site.
+ * Deliberately does NOT itself enforce any specific capability (can_publish /
+ * can_trigger_media) -- it only proves "may edit this story at all". What it DOES do
+ * (Unit 9b) is hand the caller `reviewer` -- `null` when access came from ownership,
+ * the resolved active `AgentReviewer` when it came from the reviewer branch -- so a
+ * caller that also needs a specific capability (narration/image submits, gated on
+ * can_trigger_media per the plan) can check `canTriggerMediaForEditAccess(reviewer)` /
+ * `canPublish(reviewer)` from reviewers.shared.ts against THIS reviewer, with no second
+ * database round-trip and, just as importantly, no risk of running the capability check
+ * on an owner at all (an owner's `reviewer` is always `null`, never a freshly re-fetched
+ * row that might not exist).
  *
  * Column selection: pass `columns` to fetch exactly what the call site needs, and `id`,
  * `user_id` and `agent_persona_id` are unioned in regardless -- this function's own
@@ -192,11 +198,21 @@ export interface EditableStoryRow {
   [key: string]: unknown;
 }
 
+/**
+ * What a successful `assertCanEditStory()` call hands back. `reviewer` says HOW access
+ * was granted, per decideStoryEditAccess(): `null` for the owner branch, the active
+ * `AgentReviewer` for the reviewer branch. Never both, never neither.
+ */
+export interface EditableStoryAccess {
+  story: EditableStoryRow;
+  reviewer: AgentReviewer | null;
+}
+
 export async function assertCanEditStory(
   storyId: string,
   userId: string,
   columns?: readonly string[]
-): Promise<EditableStoryRow> {
+): Promise<EditableStoryAccess> {
   // The three columns this function's own logic reads are always fetched, whatever the
   // caller asked for -- a guard that omitted user_id would silently authorize everyone.
   const select = columns?.length
@@ -218,20 +234,24 @@ export async function assertCanEditStory(
   // row shape and widens to GenericStringError. The column union above guarantees the
   // three fields EditableStoryRow declares are present.
   const row = story as unknown as EditableStoryRow;
-  if (row.user_id === userId) {
-    return row;
-  }
 
-  // Not the owner: only an active reviewer may proceed, and only onto a story an agent
-  // actually authored -- a reviewer has no standing over an ordinary user's own story.
-  if (!row.agent_persona_id) {
+  // Only fetch a reviewer row when ownership alone doesn't already grant access, and
+  // only when the story could possibly have one to check -- an ordinary user's own
+  // story has no reviewer standing regardless of agent_reviewers, so this never
+  // touches the table (or the ADMIN_USER_ID short-circuit) on that path.
+  const reviewer = row.user_id !== userId && row.agent_persona_id
+    ? await resolveReviewerForUser(userId)
+    : null;
+
+  const decision = decideStoryEditAccess({
+    userId,
+    storyUserId: row.user_id,
+    agentPersonaId: row.agent_persona_id,
+    reviewer,
+  });
+  if (!decision.granted) {
     throw new Error('Forbidden.');
   }
 
-  const reviewer = await resolveReviewerForUser(userId);
-  if (!isActiveReviewer(reviewer)) {
-    throw new Error('Forbidden.');
-  }
-
-  return row;
+  return { story: row, reviewer: decision.via === 'reviewer' ? decision.reviewer : null };
 }

@@ -9,6 +9,7 @@ import { GoogleGenAI } from '@google/genai';
 import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { getFeatureFlag, getFeatureFlagValue, getModelConfig } from '@/lib/ai/model-config';
 import { optionsRegenerationSchema } from '@/lib/ai/generation-schemas';
 import { OPTIONS_REGENERATION_PROMPT } from '@/lib/ai/prompts';
@@ -112,10 +113,17 @@ async function requireFeature(flagKey: string, label: string): Promise<void> {
 
 interface OwnedStoryContext {
   userId: string;
-  supabase: Awaited<ReturnType<typeof createClient>>;
+  supabase: Awaited<ReturnType<typeof createClient>> | ReturnType<typeof createAdminClient>;
   storyMap: StoryMap;
 }
 
+// D14/Unit 9b: ownership used to be baked straight into the query
+// (`.eq('user_id', user.id)`), so both a bad storyId and a non-owner
+// produced the same zero-rows "Story not found." -- never "Forbidden.".
+// assertCanEditStory distinguishes owner/reviewer/stranger internally, but
+// this function preserves that original single message for every caller it
+// rejects (a genuine stranger, same as a missing story) rather than leaking
+// "Forbidden." to a caller who was never told this endpoint is owner-only.
 async function requireOwnedStory(storyId: string): Promise<OwnedStoryContext> {
   const supabase = await createClient();
   const {
@@ -123,15 +131,22 @@ async function requireOwnedStory(storyId: string): Promise<OwnedStoryContext> {
   } = await supabase.auth.getUser();
   if (!user) throw new BeatControlError('Not authenticated.');
 
-  const { data: story, error } = await supabase
-    .from('stories')
-    .select('id, user_id, story_map')
-    .eq('id', storyId)
-    .eq('user_id', user.id)
-    .single();
-  if (error || !story?.story_map) throw new BeatControlError('Story not found.');
+  let access: Awaited<ReturnType<typeof assertCanEditStory>>;
+  try {
+    access = await assertCanEditStory(storyId, user.id, ['story_map']);
+  } catch {
+    throw new BeatControlError('Story not found.');
+  }
+  if (!access.story.story_map) throw new BeatControlError('Story not found.');
 
-  return { userId: user.id, supabase, storyMap: story.story_map as StoryMap };
+  // A reviewer write must run on the admin client: stories.UPDATE
+  // (`auth.uid() = user_id`) and beats.UPDATE (`generated_by = auth.uid()`)
+  // both key their RLS predicate on the story's own owner / the beat's own
+  // generated_by, neither of which a reviewer satisfies. The owner path is
+  // untouched -- same session client as before Unit 9b.
+  const client = access.reviewer ? createAdminClient() : supabase;
+
+  return { userId: user.id, supabase: client, storyMap: access.story.story_map as StoryMap };
 }
 
 export interface TimelineImpact {

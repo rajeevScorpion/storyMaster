@@ -57,6 +57,67 @@ export function canTriggerMedia(reviewer: AgentReviewer | null | undefined): boo
 }
 
 /**
+ * Unit 9b (D14): the pure owner-vs-reviewer-vs-stranger decision behind
+ * `assertCanEditStory` (lib/agentic/reviewers.ts). Fetching `storyUserId` /
+ * `agentPersonaId` / `reviewer` is that function's job; this only combines
+ * data the caller already has, so the three-way branch can be unit tested
+ * without a database.
+ *
+ * Order matters and is fixed: ownership is decided FIRST and unconditionally
+ * wins, before `reviewer` is ever consulted. `storyUserId === userId` alone
+ * grants `via: 'owner'` even when `agentPersonaId` is set and `reviewer` is
+ * `null` -- an ordinary user with zero rows in agent_reviewers must still be
+ * able to edit/narrate/generate images for their OWN story. Only a non-owner
+ * falls through to the reviewer branch, and only onto an agent-owned story
+ * (`agentPersonaId` truthy) with an actually-active reviewer row.
+ */
+export type StoryEditAccessGrant =
+  | { granted: true; via: 'owner' }
+  | { granted: true; via: 'reviewer'; reviewer: AgentReviewer }
+  | { granted: false };
+
+export function decideStoryEditAccess(params: {
+  userId: string;
+  storyUserId: string;
+  agentPersonaId: string | null;
+  reviewer: AgentReviewer | null;
+}): StoryEditAccessGrant {
+  if (params.storyUserId === params.userId) {
+    return { granted: true, via: 'owner' };
+  }
+  if (params.agentPersonaId) {
+    const { reviewer } = params;
+    if (isActiveReviewer(reviewer)) {
+      return { granted: true, via: 'reviewer', reviewer };
+    }
+  }
+  return { granted: false };
+}
+
+/**
+ * Unit 9b: whether a caller who has ALREADY been proven to have story-edit
+ * access (via assertCanEditStory / decideStoryEditAccess above) may also
+ * trigger narration or image generation. `reviewer` must be exactly what
+ * that access check produced: `null` when access came from being the
+ * story's own owner -- who needs no capability at all, and whose
+ * `agent_reviewers` row (if any exists) is irrelevant -- or the resolved,
+ * already-active `AgentReviewer` when access came from the reviewer branch,
+ * which DOES need `can_trigger_media`.
+ *
+ * The order is load-bearing: `reviewer === null` must short-circuit to
+ * `true` BEFORE `canTriggerMedia` is ever consulted. Calling
+ * `canTriggerMedia(reviewer)` directly on a `null` reviewer returns `false`
+ * -- correct for "does this account have the capability" but wrong for "may
+ * this call proceed", because an ordinary owner is never subject to the
+ * capability check in the first place. Getting this backwards breaks
+ * narration/image generation for every human user on the site, not just
+ * reviewers.
+ */
+export function canTriggerMediaForEditAccess(reviewer: AgentReviewer | null): boolean {
+  return reviewer === null || canTriggerMedia(reviewer);
+}
+
+/**
  * True when a Postgres/PostgREST error means "migration 111 hasn't run on this database
  * yet", as opposed to any other failure that should surface as a real error. Codes only,
  * deliberately -- see isMissingPersonaSchemaError (personas.shared.ts) and

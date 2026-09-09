@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
 import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, signMixedUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineShareCoverSource } from '@/lib/types/database';
@@ -757,13 +758,41 @@ export async function saveBeat(
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
 
-  const { data: existingBeat } = await supabase
+  // Reviewer writes (D14/Unit 9b): a reviewer saving a beat on an agent-owned
+  // draft is neither the story's own user_id nor the existing row's own
+  // generated_by, so the ordinary session-client path below (RLS-gated on
+  // both) would silently drop image/audio continuity and then fail the
+  // upsert outright. assertCanEditStory tells us which case we're in; when
+  // it's the reviewer branch we swap to the admin client and stop filtering
+  // by generated_by, mirroring the serverAuth escape hatch updateBeatMediaState
+  // already uses for this exact generated_by mismatch (below, :991-:1095).
+  //
+  // A caller who is neither the owner nor an active reviewer is NOT forbidden
+  // here -- saveBeat is also the persistence path for "shared branching" (any
+  // authenticated user may continue someone else's non-archived story on
+  // their own branch; migration 003's beats INSERT/UPDATE policies are the
+  // real gate for that, untouched by this change). assertCanEditStory throwing
+  // in that case is expected and the catch below leaves this exactly as it
+  // was before Unit 9b.
+  let reviewerWrite = false;
+  try {
+    const { reviewer } = await assertCanEditStory(storyId, user.id, ['id']);
+    reviewerWrite = reviewer !== null;
+  } catch {
+    // Not an owner-or-reviewer edit -- fall through unchanged (see above).
+  }
+  const client = reviewerWrite ? createAdminClient() : supabase;
+
+  let existingBeatQuery = client
     .from('beats')
-      .select('image_url, audio_url, image_synced_at, audio_synced_at')
+    .select('image_url, audio_url, image_synced_at, audio_synced_at')
     .eq('story_id', storyId)
-    .eq('node_id', nodeId)
-    .eq('generated_by', user.id)
-    .maybeSingle();
+    .eq('node_id', nodeId);
+  // The reviewer's own id is never the existing row's generated_by (the story's
+  // agent persona is), so keeping this filter would always miss it. The
+  // ordinary owner/explorer path keeps the RLS-aligned filter unchanged.
+  if (!reviewerWrite) existingBeatQuery = existingBeatQuery.eq('generated_by', user.id);
+  const { data: existingBeat } = await existingBeatQuery.maybeSingle();
 
   const beatForSave: StoryNode = {
     ...node,
@@ -795,7 +824,7 @@ export async function saveBeat(
     characters: node.data.characters || [],
   });
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('beats')
     .upsert(beatRow, { onConflict: 'story_id,node_id' })
     .select('id')
@@ -803,7 +832,7 @@ export async function saveBeat(
 
   if (error) {
     if (isMissingBeatColumnError(error)) {
-      const { data: fallbackData, error: fallbackError } = await supabase
+      const { data: fallbackData, error: fallbackError } = await client
         .from('beats')
         .upsert(withoutAdditiveBeatColumns(beatRow), { onConflict: 'story_id,node_id' })
         .select('id')
@@ -820,12 +849,12 @@ export async function saveBeat(
     throw new Error(`Failed to save beat: ${error.message}`);
   }
 
-  const { data: storyForPatch, error: storyForPatchError } = await supabase
+  let storyForPatchQuery = client
     .from('stories')
     .select('story_map')
-    .eq('id', storyId)
-    .eq('user_id', user.id)
-    .maybeSingle();
+    .eq('id', storyId);
+  if (!reviewerWrite) storyForPatchQuery = storyForPatchQuery.eq('user_id', user.id);
+  const { data: storyForPatch, error: storyForPatchError } = await storyForPatchQuery.maybeSingle();
 
   if (!storyForPatchError && storyForPatch?.story_map && typeof storyForPatch.story_map === 'object' && 'nodes' in storyForPatch.story_map) {
     const storyMap = storyForPatch.story_map as unknown as StoryMap;
@@ -846,14 +875,15 @@ export async function saveBeat(
       rootNodeId: storyMap.rootNodeId || nodeId,
     };
 
-    const { error: storyMapPatchError } = await supabase
+    let storyMapPatchQuery = client
       .from('stories')
       .update({
         story_map: stripBase64(patchedMap, storyMap) as unknown as Record<string, unknown>,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', storyId)
-      .eq('user_id', user.id);
+      .eq('id', storyId);
+    if (!reviewerWrite) storyMapPatchQuery = storyMapPatchQuery.eq('user_id', user.id);
+    const { error: storyMapPatchError } = await storyMapPatchQuery;
 
     if (storyMapPatchError) {
       console.warn('Failed to patch story_map during incremental beat save:', storyMapPatchError.message);
