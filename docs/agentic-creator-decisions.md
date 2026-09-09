@@ -453,3 +453,50 @@ authority.
 convenience. That is the same trust model `verifyAdmin()` already carries across roughly forty admin pages
 and twenty-five files. The helper must fail closed when `agent_reviewers` is absent — production has none
 of migrations 102-111 — denying everyone except `ADMIN_USER_ID` rather than throwing.
+
+---
+
+## D15 — A reviewer's publish is attributed to the system user, not to the reviewer
+
+**Decision.** When a reviewer approves and publishes an agent draft (Unit 9e), the `storylines` row is
+stamped with the **story's own owner** — the agentic system user — and authored under the persona's
+display name. The approving reviewer is recorded in the review decision trail, never on the storyline.
+The write runs on the service-role client, with `requireReviewer()` plus `canPublish()` as the whole
+boundary (D14). The base to build on is `autoPublishStoryline`, not `publishStoryline`.
+
+**Evidence.** Both existing publish paths stamp the caller. `publishStoryline`
+(`app/actions/persistence.ts:2168`) writes `user_id: user.id` at `:2244` and
+`author_name: profile?.display_name` at `:2266`; `autoPublishStoryline` (`:1217`) does the same at
+`:1468` and `:1484`. A reviewer calling either would publish an agent story into the gallery under
+their own name and into their own saved list. That is the same defect D13 was written to fix, one
+layer up: the *caller* silently becoming the record of who did the work.
+
+The choice of base is a second, separate fact. `publishStoryline` takes `beats`, `choices` and
+`nodePath` as parameters and has exactly one caller in the codebase —
+`components/story/PublishDialog.tsx:195` — which builds all three from the client-side Zustand
+session. An admin review queue has no such session. `autoPublishStoryline` already derives them
+server-side: it reads every beat for the story and walks `parent_node_id` to the root through
+`walkPathToRoot` (`:1195`), taking only `(storyId, endingNodeId, storyTitle, coverImageUrl?)`. Phase
+9's plan §4 named `publishStoryline`; that reference is wrong and is corrected here.
+
+A third fact constrains the client: `autoPublishStoryline` runs on the session client
+(`createClient()`), so RLS applies to its `storylines` insert. Stamping `user_id` with the system
+user while authenticated as the reviewer would be refused by the owner predicate. The reviewer
+publish must therefore run on the admin client — which is exactly what D14 already established for
+every other reviewer write.
+
+**Rejected.** (a) **Reviewer owns the storyline** — least code, and the option the plan implied. It
+puts a staff account's name on autonomously generated fiction in the public gallery, and files it in
+that person's saved list. It also makes "who published this" unanswerable later, because the reviewer
+is the only party recorded. (b) **A dedicated publisher identity distinct from the system user** —
+a third account to provision, seed and reason about, when `AGENTIC_SYSTEM_USER_ID` already exists and
+already owns the draft. Ownership continuity from draft to storyline is worth more than the
+separation. (c) **Extending `publishStoryline` with an optional `asUserId`** — the same escape-hatch
+shape D14 rejected for `serverAuth`: it would give the one client-facing publish path general
+impersonation authority to serve an admin surface that never calls it.
+
+**Cost.** A second publish path exists, and the two must not drift on the fields that matter for
+discovery (`age_group`, `genre`, `visibility`, `moderation_status`, `path_hash`). This is a real
+maintenance cost and is accepted deliberately: the alternative was impersonation in the shared path.
+Publishing also becomes a service-role write, so `canPublish()` is load-bearing security on the same
+terms `requireReviewer()` already is.

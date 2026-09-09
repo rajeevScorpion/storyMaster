@@ -65,14 +65,32 @@ path, so gating it would have broken every non-owner continuing any story. Writt
 
 ### THE NEXT STEP
 
-1. **Apply `111_agent_reviewers.sql` on dev.** Nothing in Phase 9 is verifiable live until it exists.
-   Production has none of 102-111.
+1. ~~**Apply `111_agent_reviewers.sql` on dev.**~~ **DONE — the owner applied it.** Ledger row 111,
+   `2026-09-09 16:20:41+00`. Queried 2026-09-09, not taken on report. Dev now carries 102-108, 110 and
+   111 (there is no 109). **Production still has none of them.**
+
+   Dev state as queried the same day, which is what 9c and 9e actually have to render:
+
+   | | count |
+   |---|---|
+   | `agent_reviewers` rows | **0** |
+   | `agent_runs` | 8, of which **5 at `awaiting_review`** |
+   | stories with `agent_persona_id` | 5 |
+   | `agent_evaluations` | 3 |
+
+   Two consequences. **`agent_reviewers` is empty**, so today only `ADMIN_USER_ID` passes
+   `requireReviewer()` — through the implicit-admin short-circuit, which never touches the table. That
+   is enough to build and prove 9c; a second reviewer is only needed to prove the capability columns
+   actually gate anything:
 
 ```sql
-select * from public.schema_migration_ledger where migration_number = 111;
 insert into public.agent_reviewers (user_id, status, can_publish, can_trigger_media, display_name)
 values ('<a real auth.users id>', 'active', true, true, 'Test reviewer');
 ```
+
+   And **`agentic_reviewer_workflow_enabled` is `false`** on dev (queried; `feature_flags.flag_key`, not
+   `key`). 9c fails closed behind it per D8, so the queue renders nothing until it is switched on from
+   the Agents Overview page. No migration — it is a toggle.
 
 2. **9a, 9b and 9d are done and gated. 9c and 9e are not started.** 9c is the review queue at
    `/admin/authors` — the plan's §4 pins its nav definition, the `RunMonitor` pieces to reuse and the

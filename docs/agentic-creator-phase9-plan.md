@@ -335,8 +335,23 @@ that is deliberate — a caller asserting `actorKind` is not sufficient.
 
 ### Unit 9e — reviewer decisions
 
-Approve / reject / request-rewrite recorded against the run, and publish gated on `can_publish` reusing
-`publishStoryline`. Shape this only after 9c exists; it is the least constrained unit.
+Approve / reject / request-rewrite recorded against the run, and publish gated on `can_publish`. Shape
+this only after 9c exists; it is the least constrained unit.
+
+**CORRECTION (2026-09-09, D15).** The line above originally said "reusing `publishStoryline`". That is
+wrong on two counts, both verified:
+
+1. `publishStoryline` (`app/actions/persistence.ts:2168`) takes `beats`, `choices` and `nodePath` as
+   parameters, built by its only caller — `components/story/PublishDialog.tsx:195` — from the
+   client-side Zustand session. An admin review queue has no such session. The server-side publish is
+   **`autoPublishStoryline` (`:1217`)**, which derives all three itself by walking `parent_node_id` to
+   the root through `walkPathToRoot` (`:1195`) and takes only
+   `(storyId, endingNodeId, storyTitle, coverImageUrl?)`. That is the base to build on.
+2. Both paths stamp the **caller** as the storyline's owner and author — `user_id: user.id` at `:2244`
+   / `:1468`, `author_name: profile?.display_name` at `:2266` / `:1484`. A reviewer publish would put a
+   staff account's name on the story. **D15** resolves this: the system user owns the storyline, the
+   persona supplies the author name, and the write runs on the admin client because
+   `autoPublishStoryline`'s session client would have RLS refuse a row it does not own.
 
 ---
 
