@@ -148,10 +148,29 @@ select recent_titles, story_count from public.agent_persona_memory m
   join public.agent_personas p on p.id = m.persona_id where p.slug = 'kabir-sinha';
 ```
 
-2. **None of the four commits above has been exercised against a live database.** The whole gate is
-   static. Every real defect in Phases 6, 7 and 8 was found by running the thing, including the two
+2. ~~None of the four commits above has been exercised against a live database.~~ **Done
+   2026-09-09** — run `2accd281`, story `568fb4bd`, same persona, blank Theme (the exact condition
+   that collided before). Novelty returned **`clear` on the first attempt**: title `रफ़ कट` (vs
+   `कट-ऑफ`) and an entirely fresh cast (आदि, वरुण, नीलिमा — no reuse of समर/ईशान/प्रिया). 8 beats,
+   `awaiting_review`, voice locked to Charon. Zero word-cap failures, where the previous run lost 2 of
+   3 attempts to the cap. Production data also confirms the recency direction independently of the
+   unit test: `recent_titles` reads `["रफ़ कट","कट-ऑफ"]`, newest first.
+
+   The run's one retry was **unrelated** — `Gemini timeout after 60s (seeded_beat_materialization)` —
+   and is filed under `story_generated`, which is `d1b6d12` working live; before it, that line would
+   have been attributed to `novelty_checked`. The run then resumed and finished all 8 beats, so the
+   checkpoint contract held through a mid-loop provider failure without re-paying.
+
+   **STILL UNPROVEN: the re-brief path itself (`81f16f8`).** Novelty came back clear, so the
+   clear-checkpoint / accumulate-avoid-list / regenerate branch has never executed. It is the only
+   part of this work with no live evidence, and exercising it means deliberately making a persona
+   collide — e.g. running the same persona repeatedly with a blank Theme until it repeats itself.
+3. **A succeeded run still carries a stale `error_category`.** `handleStageFailure` writes it and
+   nothing clears it on success, so `2accd281` shows `succeeded` alongside `error_category:
+   'unknown'` and an "Attempts 2/3" pill. Not false — it did fail once — but it reads as a warning on
+   a healthy run, and `unknown` is an unhelpful category for a provider timeout. Small; unclaimed. Every real defect in Phases 6, 7 and 8 was found by running the thing, including the two
    this session's runs found. Treat step 1 as required, not optional.
-3. **Unit 8d (agentic narration billing) is still unbuilt**, and still belongs with Phase 9's
+4. **Unit 8d (agentic narration billing) is still unbuilt**, and still belongs with Phase 9's
    reviewer-authorization work — see the earlier handoff section below for its full shape.
 
 ---
