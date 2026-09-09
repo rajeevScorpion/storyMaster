@@ -9,7 +9,7 @@ import {
 describe('seed authoring limits', () => {
   it('keeps story and visual guidance limits independent', () => {
     expect(DEFAULT_STORY_AUTHORING_WORD_CAP).toBe(500);
-    expect(SEED_SOURCE_WORD_CAP).toBe(500);
+    expect(SEED_SOURCE_WORD_CAP).toBe(800);
     expect(SEED_GUIDANCE_WORD_CAP).toBe(150);
   });
 
