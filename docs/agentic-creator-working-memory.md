@@ -19,18 +19,39 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 | `143d315` | Unit 9e-i — reviewer decisions (approve / reject / request-rewrite) + migration 112 |
 | `b0ed9c6` | **Review fix** — a decision on a run that already left review is refused |
 | `3cc028e` | PROJECT_STATE: 111 and 112 recorded as applied on dev |
+| `3bc3b98` | This handoff — **see the commit-boundary warning below** |
+| `a071d15` | Unit 9e-ii — reviewer publish (D15) |
+| `62b3258` | Line endings restored to LF on three docs mangled earlier in the session |
 
-Gate re-run independently at `b0ed9c6`, not taken on report: **tsc 0, lint clean, 100 files / 932
-tests** (from 99 / 916 at the last stop). `build:verify` green at `8994004`. **`test:e2e` NOT run this
-session** — again.
+Gate re-run independently at `a071d15`, not taken on report: **tsc 0, lint clean, 100 files / 934
+tests** (from 99 / 916 at the last stop). `build:verify` green at `8994004` and `a071d15`.
+**`test:e2e` NOT run this session** — again.
+
+### ⚠ `3bc3b98` IS NOT A DOCS-ONLY COMMIT — DO NOT REVERT IT ALONE
+
+Its message says "docs(agentic): handoff", but it also contains **`app/actions/persistence.ts` (−55)
+and the new `lib/story/save-story.ts` (+70)**: the `computePathHash` / `walkPathToRoot` /
+`ADDITIVE_STORYLINE_COLUMNS` extraction that Unit 9e-ii imports at `review-publish.ts:114`.
+
+Cause: `git add -A` was run from the main session to commit the handoff while a subagent was still
+editing the same working tree, so its in-flight files were swept into the wrong commit. The content is
+correct and the boundary was left alone deliberately (nothing was pushed, but rewriting was judged not
+worth the risk). **Reverting `3bc3b98` to undo a handoff would delete the extraction and break
+`a071d15`'s build.** Revert both together or neither.
+
+The lesson generalises: **never `git add -A` while a subagent is working in the same tree** — stage
+explicit paths instead.
 
 ### THE NEXT STEP
 
-1. **`9e-ii` (reviewer publish) was still running when this session stopped.** Check `git log` before
-   assuming anything about it. If it committed, **review the diff, do not trust the report** — every
-   unit this phase has come back with at least one defect the suite passed over, including 9e-i's.
-   Its brief is reproduced in substance by D15 plus the traps listed below.
-2. **Everything else in Phase 9 is written and gated. Nothing has been run live.** This has now been
+1. **9e-ii landed as `a071d15` and was reviewed by diff.** Verified rather than taken on report:
+   attribution is `user_id = AGENTIC_SYSTEM_USER_ID` plus the persona's `display_name` on the admin
+   client (D15); the cover leaves `cover_image_url` null and delegates to
+   `finalizeStorylineShareAssets`, which applies `getStoryboardSharePanelSourceCrop(0)` when the beat
+   is a storyboard, so the 2×2 grid never reaches a viewer; and `publishRunAction` checks
+   `canRecordDecisionForStage` **before** creating the storyline, which the guard inside
+   `recordReviewDecision` could not have covered on its own.
+2. **Everything in Phase 9 is now written and gated. Nothing has been run live.** This has now been
    true at three consecutive stops. Every real defect in Phases 6, 7 and 8 was found by running the
    thing; the 932-test suite has never once found one.
 3. **To run it, flip `agentic_reviewer_workflow_enabled`** — it is `false` on dev, so `/admin/authors`
@@ -95,6 +116,12 @@ must go through the same guard.**
   branch silently breaks narration for every human on the site.
 - **The 2×2 storyboard grid must never reach a viewer.** A published storyline's cover is
   viewer-facing, which makes this 9e-ii's sharpest trap.
+- **`autoPublishStoryline` never checks the admin publishing switches.** Found while reviewing 9e-ii
+  and verified: `getMediaPipelineSettings` appears only inside `publishStoryline`
+  (`persistence.ts:2151`), never in `autoPublishStoryline` (`:1217`). So the auto-publish-on-ending
+  path can publish publicly while `publicPublishingEnabled` is off, and ignores
+  `moderationRequiredForPublic`. 9e-ii's own publish path checks all three; the pre-existing gap on
+  `autoPublishStoryline` is untouched and deserves its own fix.
 - **`retryRun` cannot re-brief**, so `rewrite_requested` deliberately changes no state and triggers
   nothing. The redo is a separate commission.
 
