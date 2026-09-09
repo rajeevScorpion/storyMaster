@@ -83,6 +83,30 @@ export function decideReviewTransition(decision: ReviewDecisionKind): ReviewDeci
 }
 
 /**
+ * The stage a run must still be sitting at for a reviewer decision to be recordable
+ * against it. A decision is an opinion about a draft that is WAITING for one; once a run
+ * has left 'awaiting_review' there is nothing left to decide.
+ *
+ * This does NOT conflict with decisions being re-recordable. Both re-recordable decisions
+ * -- 'rewrite_requested' and 'approved' -- leave the run exactly where it was (see
+ * decideReviewTransition: their `run` transition is null), so a run can be
+ * rewrite-requested and later approved with this guard in place, which is the sequence the
+ * unit is required to support. Only 'rejected' moves the stage, and after it there is
+ * genuinely nothing further to decide.
+ *
+ * The defect this closes is a real two-reviewer race, not a hypothetical: A and B both
+ * have the queue open, A rejects the run (run stage/status -> 'cancelled',
+ * agent_tasks.status -> 'rejected'), B's page is now stale but still lists the row, and B
+ * clicks Approve. Without this guard that write lands, and agent_tasks.status reads
+ * 'approved' for a draft that was rejected and whose run is dead. The queue's optimistic
+ * client-side removal of a rejected row does not prevent it -- a server action is directly
+ * invocable, and B's page never learned about A's write.
+ */
+export function canRecordDecisionForStage(stage: string): boolean {
+  return stage === 'awaiting_review';
+}
+
+/**
  * True when a Postgres/PostgREST error means "migration 112 hasn't run on this database
  * yet", as opposed to any other failure that should surface as a real error. Codes only,
  * deliberately -- see isMissingReviewerSchemaError (reviewers.shared.ts) for the defect

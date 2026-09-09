@@ -35,6 +35,7 @@ import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getRun, appendRunEvent, setTaskStatus, type AdminClient } from '@/lib/agentic/orchestrator';
 import {
+  canRecordDecisionForStage,
   decideReviewTransition,
   isMissingReviewDecisionSchemaError,
   type ReviewDecisionKind,
@@ -198,6 +199,19 @@ export async function recordReviewDecision(params: {
   const run = await getRun(params.runId);
   if (!run) {
     throw new Error(`Run ${params.runId} was not found (or migration 107 is not applied on this environment).`);
+  }
+
+  // Re-read the run's CURRENT stage and refuse a decision on one that has already left
+  // review. This is what makes two reviewers holding the same queue page safe: the row B
+  // is looking at may already have been rejected by A, and a server action is directly
+  // invocable, so the queue's optimistic client-side removal is not a gate. Without this,
+  // B's approve would set agent_tasks.status to 'approved' on a run A had already
+  // cancelled. See canRecordDecisionForStage for why this does not prevent the
+  // rewrite-requested-then-approved sequence the unit is required to support.
+  if (!canRecordDecisionForStage(run.stage)) {
+    throw new Error(
+      `Run ${run.id} is no longer awaiting review (stage '${run.stage}'), so a '${params.decision}' decision cannot be recorded against it. Refresh the review queue to see its current state.`
+    );
   }
 
   const transition = decideReviewTransition(params.decision);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canRecordDecisionForStage,
   decideReviewTransition,
   isMissingReviewDecisionSchemaError,
 } from './review-decisions.shared';
@@ -71,5 +72,36 @@ describe('isMissingReviewDecisionSchemaError', () => {
 
   it('is false for an error with no code at all', () => {
     expect(isMissingReviewDecisionSchemaError({ message: 'something else broke' })).toBe(false);
+  });
+});
+
+describe('canRecordDecisionForStage', () => {
+  it('allows a decision on a run still awaiting review', () => {
+    expect(canRecordDecisionForStage('awaiting_review')).toBe(true);
+  });
+
+  it('refuses a decision on a run already cancelled by an earlier rejection', () => {
+    // The two-reviewer race: A rejected the run, B's queue page is stale and still
+    // lists it, B clicks approve. Without this guard B's write lands on a dead run.
+    expect(canRecordDecisionForStage('cancelled')).toBe(false);
+  });
+
+  it('refuses a decision on every other stage in the sequence', () => {
+    for (const stage of [
+      'queued', 'brief_ready', 'novelty_checked', 'story_generated', 'draft_created',
+      'narration_pending', 'narration_complete', 'evaluated', 'media_pending',
+      'complete', 'failed',
+    ]) {
+      expect(canRecordDecisionForStage(stage)).toBe(false);
+    }
+  });
+
+  it('does not block the rewrite-requested-then-approved sequence the unit must support', () => {
+    // Neither decision moves the run (decideReviewTransition returns run: null for both),
+    // so the stage is still 'awaiting_review' when the second one arrives.
+    expect(decideReviewTransition('rewrite_requested').run).toBeNull();
+    expect(canRecordDecisionForStage('awaiting_review')).toBe(true);
+    expect(decideReviewTransition('approved').run).toBeNull();
+    expect(canRecordDecisionForStage('awaiting_review')).toBe(true);
   });
 });
