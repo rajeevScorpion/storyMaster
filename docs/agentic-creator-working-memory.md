@@ -6,6 +6,76 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-09 evening (Phase 9 started; two documented facts were wrong)
+
+**Phase 9 is underway.** Full plan, self-contained, in `docs/agentic-creator-phase9-plan.md`. Read it
+before touching this area — it carries the migration SQL, the per-unit edits and the verified facts.
+Decisions **D13** and **D14** are the new authority.
+
+### Two things the record asserted that were not true
+
+Both would have shipped invisibly. This is the third phase running where the defects were in the
+*record*, not the code.
+
+1. **Unit 8d's specified derivation could never fire.** The handoff below says to derive `actorKind`
+   inside `processNarrationJob` from `job.user_id === AGENTIC_SYSTEM_USER_ID`.
+   `submitStoryNarrationBatch` (`narration-batch.ts:141`) stamps the job with `user.id` — **the
+   caller**. A reviewer pressing narrate writes their own id, so the condition is always false. The
+   unit would have compiled, passed all 877 tests, billed the reviewer exactly as before, and looked
+   done. Resolved by **D13**: stamp the job with the story owner, so the payer of record is the system
+   user and the bypass fires.
+2. **The reviewer-write blocker is not RLS.** `PROJECT_STATE.md` frames it as "a reviewer RLS policy
+   or an admin-client path". Every write path hardcodes its own ownership filter in application code,
+   and the narration/image guards already run on the **service-role client** where RLS is bypassed
+   anyway. A migration widening only RLS would have changed nothing observable. Resolved by **D14**.
+
+Two smaller corrections, both in the plan's §1: `beats.UPDATE` is `generated_by = auth.uid()`, not
+story ownership — a second predicate no doc records; and the architecture doc's claim that images need
+the *system user's* tier promoted is wrong, because both image submits gate and bill **the caller**.
+
+### The fact that shaped the design
+
+`runMeteredNarrationOperation` (`narration.ts:108-140`) **already handles a `bypassed` authorization
+correctly**, because its finalize and release branches are both guarded on `status === 'allowed' &&
+reservationId` and only `denied` throws. So Unit 9d threads one optional field and reuses the entire
+reserve→finalize/release cycle. The tempting alternative — mirroring `story-assembly.ts:386`'s direct
+`authorizeBillableAction` call — is rejected in the plan's §2: it would be a second billing path for
+narration, which is the shape D12 already paid for.
+
+### Landed this session
+
+| SHA | What |
+|---|---|
+| `b886780` | WORKING_AGREEMENTS: Opus plans and reviews, Sonnet executes — plus the delegation rules |
+| `15f1431` | The Phase 9 plan |
+| `c99f54e` | D13 and D14 |
+| `54b4d14` | Unit 9a — `agent_reviewers`, migration 111, `requireReviewer` / `assertCanEditStory` |
+| `b394c52` | **Review fix** — type-predicate narrowing; guards choose their own columns |
+
+Gate re-run independently: **tsc 0, lint clean, 96 files / 894 tests** (from 95 / 877).
+
+### THE NEXT STEP
+
+1. **Apply `111_agent_reviewers.sql` on dev.** Nothing in Phase 9 is verifiable live until it exists.
+   Production has none of 102-111.
+
+```sql
+select * from public.schema_migration_ledger where migration_number = 111;
+insert into public.agent_reviewers (user_id, status, can_publish, can_trigger_media, display_name)
+values ('<a real auth.users id>', 'active', true, true, 'Test reviewer');
+```
+
+2. **Unit 9b** (the four ownership guards) is in flight. **9c** is the queue at `/admin/authors`;
+   **9d** is the billing thread, unblocked by D13; **9e** is reviewer decisions.
+3. **The capability check in 9b is the sharp edge.** `can_trigger_media` gates reviewers only — an
+   ordinary user narrating their own story has no reviewer row, and `canTriggerMedia(null)` is false.
+   Checking the capability before the ownership branch silently breaks narration for every human on
+   the site.
+4. **`requireReviewer()` is load-bearing security now** (D14). Reviewer writes run on the service-role
+   client and bypass RLS entirely; the helper is the whole boundary.
+
+---
+
 ## Session handoff — 2026-09-09 (Phase 8 landed, but it is NOT the phase that was planned)
 
 **Read this before anything else: Phase 8 did not build narration into the pipeline, and never will.**
