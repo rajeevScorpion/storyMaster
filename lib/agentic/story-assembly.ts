@@ -81,6 +81,7 @@ import { getModelConfig } from '@/lib/ai/model-config';
 import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import type { PricingActionKey } from '@/lib/types/pricing';
 import { normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
+import { resolveStoryBeatLength, type ResolvedStoryBeatLength } from '@/lib/ai/story-audience';
 import { getNarrationVoiceSettings } from '@/lib/ai/narration-voice-settings';
 import { resolvePersonaVoice } from '@/lib/agentic/persona-voice.shared';
 import {
@@ -89,7 +90,6 @@ import {
   type NarrationLanguageCode,
   type StoryNarrationVoiceSelection,
 } from '@/lib/ai/narration-voices';
-import { SEED_SOURCE_WORD_CAP, countAuthoringWords } from '@/lib/story/authoring-limits';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type {
   Character,
@@ -223,10 +223,22 @@ function briefCharactersToRoster(characters: StoryBriefCharacter[]): Character[]
 
 // ── Seed source prose (story_generated, part 1) ─────────────────────────
 
-function buildSeedSourcePrompt(persona: AgentPersona, brief: StoryBrief, targetBeatCount: number): string {
+// Beat length is passed in, resolved once by the caller (runStoryGeneratedStage)
+// from the same StoryConfig it already built via resolvePersonaStoryConfig --
+// this function must NOT re-resolve persona.ageGroup/beatLength itself. Two
+// places deriving "how long should this be" independently is exactly how the
+// prior version's contradiction (a fixed word cap fighting a per-scene target)
+// arose; there must be exactly one source of truth for it.
+function buildSeedSourcePrompt(
+  persona: AgentPersona,
+  brief: StoryBrief,
+  targetBeatCount: number,
+  beatLength: ResolvedStoryBeatLength
+): string {
   const cast = brief.characters
     .map((character) => `- ${character.name} (${character.role}): ${character.appearanceSummary}. ${character.personalitySummary}`)
     .join('\n');
+  const approxTotalWords = beatLength.targetWords * targetBeatCount;
 
   return [
     `You are ${persona.displayName}, a story-writing persona on the Kissago platform.`,
@@ -241,7 +253,10 @@ function buildSeedSourcePrompt(persona: AgentPersona, brief: StoryBrief, targetB
     cast,
     '',
     `The prose must divide cleanly into ${targetBeatCount} sequential scenes. Write it as exactly ${targetBeatCount} short paragraphs, one per scene, in reading order, each ending on a clear sentence boundary, separated by a blank line.`,
-    `Keep the whole piece under ${SEED_SOURCE_WORD_CAP} words.`,
+    // A target to aim for, not a hard limit -- nothing downstream validates this
+    // any more (see parseSeedSourceText). A prompt that threatens a cap nothing
+    // enforces is worse than one that simply asks for a length.
+    `Aim for roughly ${beatLength.targetWords} words per scene (about ${approxTotalWords} words in total across all ${targetBeatCount} scenes) -- a pacing target, not a hard limit.`,
     '',
     'Respond with ONLY a JSON object of this exact shape -- no markdown fences, no commentary:',
     '{ "sourceText": string }',
@@ -259,9 +274,14 @@ function parseSeedSourceText(raw: string): string {
   const record = (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, unknown>;
   const sourceText = typeof record.sourceText === 'string' ? record.sourceText.trim() : '';
   if (!sourceText) throw new AgentValidationError('Seed source response is missing sourceText.');
-  if (countAuthoringWords(sourceText) > SEED_SOURCE_WORD_CAP) {
-    throw new AgentValidationError(`Seed source response exceeds the ${SEED_SOURCE_WORD_CAP}-word cap.`);
-  }
+  // No word-count validation here on purpose. SEED_SOURCE_WORD_CAP is a
+  // product limit on human-pasted input (lib/story/authoring-limits.ts) and
+  // has no business bounding machine-generated source prose -- length here is
+  // governed by the persona's beat-length range via buildSeedSourcePrompt's
+  // guidance instead. See generateSeedPlanPreview's enforceSourceWordCap
+  // parameter for the other half of this: the same cap used to be re-checked
+  // there too, against the same 500-word ceiling that 8 beats' worth of
+  // beat-length target already exceeds.
   return sourceText;
 }
 
@@ -603,6 +623,13 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
 
   const startedAt = Date.now();
   const targetBeatCount = clampBeatCount(persona, task.targetBeatCount ?? Number.NaN);
+  // Resolved ONCE here and threaded into both buildSeedSourcePrompt (part 1)
+  // and generateSeedPlanPreview (part 2) below -- never re-resolved from
+  // persona inside either. A single source of truth for "how long should this
+  // be" is the fix for the bug this replaced: a fixed SEED_SOURCE_WORD_CAP
+  // fighting this same persona's own beat-length target.
+  const baseConfig = resolvePersonaStoryConfig(persona);
+  const beatLength = resolveStoryBeatLength(baseConfig.ageGroup, baseConfig.beatLength?.level);
   let progress: SeedGenerationProgress =
     (run.checkpoint[STORY_PROGRESS_CHECKPOINT_KEY] as SeedGenerationProgress | undefined) ?? {};
 
@@ -620,7 +647,7 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
 
     try {
       const config = await getModelConfig('agent_seed_story_writing');
-      const prompt = buildSeedSourcePrompt(persona, brief, targetBeatCount);
+      const prompt = buildSeedSourcePrompt(persona, brief, targetBeatCount, beatLength);
       const raw = await callGeminiAgenticJson({
         task: 'agent_seed_story_writing',
         model: config.model,
@@ -656,7 +683,6 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
     }
 
     try {
-      const baseConfig = resolvePersonaStoryConfig(persona);
       const seedPlan = await generateSeedPlanPreview({
         storyConfig: baseConfig,
         sourceText: progress.sourceText!,
@@ -664,6 +690,12 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
         workingTitle: brief.workingTitle,
         sourceFidelity: AGENTIC_SOURCE_FIDELITY,
         costTelemetry: buildTelemetry(run, task, persona, 'story_generated:seed_plan'),
+        // See SeedPlanPreviewInput.enforceSourceWordCap: the human-facing
+        // 500-word cap has no business bounding this persona's own generated
+        // prose. Length here is governed by beatLength (resolved above and
+        // already threaded into buildSeedSourcePrompt's guidance), not a
+        // fixed word ceiling.
+        enforceSourceWordCap: false,
       });
       await finalizeAgenticSpend(authorization.reservationId);
       progress = { ...progress, seedPlan };

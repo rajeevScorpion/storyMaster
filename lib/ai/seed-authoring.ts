@@ -72,10 +72,27 @@ export interface SeedPlanPreviewInput {
   sourceFidelity?: SourceFidelity;
   modelOverrides?: StoryModelOverrides;
   costTelemetry?: CostTelemetryContext;
+  /**
+   * Whether to enforce SEED_SOURCE_WORD_CAP against `sourceText`. Defaults to
+   * `true` (enforced) so every existing caller -- the human composer path via
+   * app/actions/story-runtime.ts's re-export -- is byte-for-byte unaffected.
+   *
+   * SEED_SOURCE_WORD_CAP bounds what a human pastes into the composer; it is
+   * a product limit on input length, not a correctness constraint on the
+   * prose itself. The agentic pipeline (lib/agentic/story-assembly.ts)
+   * generates its own source prose from a persona and a target beat count and
+   * passes `false` here -- there length is governed by the persona's
+   * beat-length range instead. Stacking this fixed cap on top of a per-scene
+   * word target is exactly the contradiction that burned 2 of 3 attempts on a
+   * live run (8fa3a959-4fcf-4bdc-b243-01a9b380737f): 8 beats under a 500-word
+   * ceiling is ~62 words/scene, far below what the persona's own beat-length
+   * band asked for.
+   */
+  enforceSourceWordCap?: boolean;
 }
 
 export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Promise<SeedPlan> {
-  if (countAuthoringWords(input.sourceText) > SEED_SOURCE_WORD_CAP) {
+  if ((input.enforceSourceWordCap ?? true) && countAuthoringWords(input.sourceText) > SEED_SOURCE_WORD_CAP) {
     throw new Error(`Source text must be ${SEED_SOURCE_WORD_CAP} words or fewer.`);
   }
   if (countAuthoringWords(input.guidanceText || '') > SEED_GUIDANCE_WORD_CAP) {
