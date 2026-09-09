@@ -84,6 +84,9 @@ async function resolveNarrationBillingUserId(explicitUserId?: string | null): Pr
 
 async function runMeteredNarrationOperation<T>(input: {
   userId?: string | null;
+  // Flat, per hop 4 of the D13/Unit 9d billing chain -- userId already sits flat on
+  // this input, so actorKind rides beside it rather than inside a nested object.
+  actorKind?: 'user' | 'agentic_system';
   meterKey: Extract<
     PricingActionKey,
     'generate_story_narration' | 'generate_reel_narration' | 'generate_narration_preview'
@@ -97,6 +100,7 @@ async function runMeteredNarrationOperation<T>(input: {
   const userId = await resolveNarrationBillingUserId(input.userId);
   const authorization = await authorizeCoinOperationForUser({
     userId,
+    actorKind: input.actorKind,
     operationKey: input.meterKey,
     idempotencyKey: input.idempotencyKey ?? `${input.meterKey}:${randomUUID()}`,
     components: [{ meterKey: input.meterKey }],
@@ -1540,8 +1544,11 @@ export async function generateAndPersistNarration(
     generationMode?: NarrationGenerationMode;
     panelPauseMs?: number;
     // When present, upload + persist on behalf of `userId` via the service-role
-    // client (background worker path). Absent for the interactive path.
-    serverAuth?: { userId: string };
+    // client (background worker path). Absent for the interactive path. actorKind
+    // rides beside userId here (D13/Unit 9d, hops 1-3 of the billing chain carry it
+    // inside serverAuth) so the narration-batch worker's derived actorKind reaches
+    // runMeteredNarrationOperation below.
+    serverAuth?: { userId: string; actorKind?: 'user' | 'agentic_system' };
     billingIdempotencyKey?: string;
   } = {}
 ): Promise<{ audioUrl: string; reelCaptions?: ReelCaptionTiming; narrationMetadata?: BeatNarrationMetadata }> {
@@ -1550,6 +1557,7 @@ export async function generateAndPersistNarration(
     : 'generate_story_narration' as const;
   return runMeteredNarrationOperation({
     userId: options.serverAuth?.userId,
+    actorKind: options.serverAuth?.actorKind,
     meterKey,
     idempotencyKey: options.billingIdempotencyKey,
     storyId: savedStoryId,

@@ -55,6 +55,7 @@ const NARRATION_JOB_SELECT =
 interface NarrationStoryRow {
   id: string;
   user_id: string;
+  agent_persona_id: string | null;
   story_map: StoryMap | null;
   story_config: Partial<StoryConfig> | null;
   genre: string | null;
@@ -185,9 +186,29 @@ export async function submitStoryNarrationBatch(input: {
     targetAge,
   });
 
+  // D13/Unit 9d: an agent-owned story is billed to its owner -- the system user --
+  // never to the reviewer who happened to press the button. narration_batch_jobs.user_id
+  // is the column that decides who pays (processNarrationJob derives actorKind from it,
+  // never from who submitted), so stamping it with story.user_id here is what lets the
+  // agentic bypass in authorizeBillableAction fire downstream. For an ordinary user's own
+  // story story.user_id === user.id already, so this changes nothing on that path.
+  // narration_batch_jobs has no metadata/jsonb column to also record the submitting
+  // reviewer on the row (checked: migrations 068/069 are its only schema, neither adds
+  // one) -- logged instead so "who pressed it" is at least discoverable without a
+  // migration this unit was told not to invent.
+  const isAgentOwnedStory = Boolean(story.agent_persona_id);
+  const payerUserId = isAgentOwnedStory ? story.user_id : user.id;
+  if (isAgentOwnedStory && payerUserId !== user.id) {
+    console.info('[narration:batch] agent-owned story narration submitted by reviewer', {
+      storyId: story.id,
+      submittedByUserId: user.id,
+      payerUserId,
+    });
+  }
+
   const nodeIds = targetNodes.map((node) => node.id);
   const jobInsert = {
-    user_id: user.id,
+    user_id: payerUserId,
     story_id: story.id,
     scope: 'current_path',
     status: 'running',
@@ -252,6 +273,13 @@ export async function submitStoryNarrationBatch(input: {
  */
 async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Promise<void> {
   const startedAt = Date.now();
+  // D13/Unit 9d: derived HERE, not at submit time. reconcileStoryNarration and
+  // reconcileActiveNarrationJobs both re-enter processNarrationJob with no agentic
+  // context of their own -- they only have the job row -- so deriving actorKind from
+  // job.user_id (rather than trusting something stamped at submit) is what keeps the
+  // bypass alive through every recovery path, not just the first attempt.
+  const actorKind: 'user' | 'agentic_system' =
+    job.user_id === process.env.AGENTIC_SYSTEM_USER_ID ? 'agentic_system' : 'user';
   const nodeIds = Array.isArray(job.node_ids) ? job.node_ids : [];
   if (nodeIds.length === 0) {
     await admin.from('narration_batch_jobs')
@@ -334,7 +362,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
           audience: config.ageGroup,
           storyTextParts: node.data.storyTextParts as StoryTextParts | undefined,
           overlayConfig: config.storyTextOverlay,
-          serverAuth: { userId: job.user_id },
+          serverAuth: { userId: job.user_id, actorKind },
           billingIdempotencyKey: `narration-batch:${job.id}:${nodeId}:${Date.now()}`,
         }
       );
