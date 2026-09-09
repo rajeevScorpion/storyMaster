@@ -20,6 +20,8 @@ import {
   formatPersonaMemoryForBrief,
   isMissingMemorySchemaError,
   needsModelAdjudication,
+  NOVELTY_REASON_TITLE_MAX_CHARS,
+  sanitizeNoveltyTitleForDisplay,
   scoreNovelty,
   trigramSimilarity,
   type NoveltyCandidate,
@@ -144,6 +146,58 @@ describe('scoreNovelty — the clear cases', () => {
     });
     expect(result.verdict).toBe('block');
     expect(result.reasons.join(' ')).toMatch(/premise/i);
+  });
+});
+
+describe('scoreNovelty — reasons name the colliding prior', () => {
+  it('names the specific prior story in the title-block reason', () => {
+    const result = scoreNovelty({
+      candidate: candidate(),
+      priors: [prior({ title: 'The Lantern That Would Not Go Out' })],
+    });
+    expect(result.verdict).toBe('block');
+    expect(result.reasons.join(' ')).toContain('"The Lantern That Would Not Go Out"');
+  });
+
+  it('falls back to generic wording, never an empty quote, when the colliding prior has no usable title', () => {
+    // Premise similarity is independent of title text, so a prior with a
+    // blank title can still cross PREMISE_BLOCK_THRESHOLD -- exactly the case
+    // a title-less "top candidate" needs graceful wording for.
+    const result = scoreNovelty({
+      candidate: candidate(),
+      priors: [
+        prior({
+          title: '   ',
+          premise:
+            'A curious child discovers an old brass lantern in a flooded cellar and learns that it burns brighter whenever someone nearby tells the truth about something difficult.',
+        }),
+      ],
+    });
+    expect(result.verdict).toBe('block');
+    const combined = result.reasons.join(' ');
+    expect(combined).toContain('an existing story');
+    expect(combined).not.toContain('""');
+    expect(combined).not.toContain('undefined');
+  });
+});
+
+describe('sanitizeNoveltyTitleForDisplay', () => {
+  it('collapses whitespace and truncates a pathological title', () => {
+    const pathological = `Line one\n\n\nLine   two${' '.repeat(50)}Line three keeps going and going past the display limit for sure`;
+    const result = sanitizeNoveltyTitleForDisplay(pathological);
+    expect(result.length).toBeLessThanOrEqual(NOVELTY_REASON_TITLE_MAX_CHARS + 1); // +1 for the trailing ellipsis
+    expect(result).not.toMatch(/\s{2,}/);
+    expect(result.endsWith('…')).toBe(true);
+  });
+
+  it('returns an empty string for absent or blank input, never the word undefined', () => {
+    expect(sanitizeNoveltyTitleForDisplay(undefined)).toBe('');
+    expect(sanitizeNoveltyTitleForDisplay(null)).toBe('');
+    expect(sanitizeNoveltyTitleForDisplay('   ')).toBe('');
+  });
+
+  it('leaves a short, clean title untouched', () => {
+    expect(sanitizeNoveltyTitleForDisplay('The Clockwork Sparrow')).toBe('The Clockwork Sparrow');
   });
 });
 

@@ -129,6 +129,58 @@ export interface ScoreNoveltyInput {
   seriesContext?: { seriesId: string | null };
 }
 
+// ── Reason text formatting ───────────────────────────────────────────────
+// Prior titles are untrusted-ish free text: they come from a persona's own
+// generated brief, stored verbatim in agent_story_memory. A reason string
+// naming one ends up in agent_run_events.message and the admin timeline, so
+// one pathological title (a wall of whitespace, embedded newlines, absurd
+// length) must never be interpolated raw into an operator-facing string.
+
+/** Bound on a prior title once it is interpolated into a reason or event message. */
+export const NOVELTY_REASON_TITLE_MAX_CHARS = 60;
+
+/**
+ * Collapses whitespace/newlines and bounds length on a prior title before it
+ * is named in a novelty reason or an agent_run_events message. Returns '' for
+ * absent/blank input so callers render their own fallback wording instead of
+ * an empty quote or the literal word "undefined".
+ */
+export function sanitizeNoveltyTitleForDisplay(
+  title: string | null | undefined,
+  maxChars: number = NOVELTY_REASON_TITLE_MAX_CHARS
+): string {
+  const collapsed = (title ?? '').replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '';
+  return collapsed.length > maxChars ? `${collapsed.slice(0, maxChars).trimEnd()}…` : collapsed;
+}
+
+/**
+ * Finds, among `topCandidates`, the entry for `signal` whose score equals the
+ * running top score for that signal -- i.e. the specific prior that IS the
+ * top score a reason is about to quote. `score` is always the exact value
+ * that was pushed into `topCandidates` for the prior that set it (see the
+ * scoring loop below), so an exact match always succeeds when the caller's
+ * threshold was actually crossed; a mismatch degrades to "no named prior"
+ * rather than guessing.
+ */
+function bestCandidateForSignal(
+  topCandidates: NoveltyTopCandidate[],
+  signal: NoveltyTopCandidate['signal'],
+  score: number
+): NoveltyTopCandidate | undefined {
+  return topCandidates.find((entry) => entry.signal === signal && entry.score === score);
+}
+
+/**
+ * Renders "an existing story" (or `fallbackNoun`) alone when no usable prior
+ * title is available, or "an existing story ("The Real Title")" when one is.
+ * Never renders an empty quote.
+ */
+function describePrior(title: string | null | undefined, fallbackNoun: string): string {
+  const clean = sanitizeNoveltyTitleForDisplay(title);
+  return clean ? `${fallbackNoun} ("${clean}")` : fallbackNoun;
+}
+
 // ── pg_trgm-compatible trigram similarity ──────────────────────────────
 
 /**
@@ -276,18 +328,22 @@ export function scoreNovelty({ candidate, priors, seriesContext }: ScoreNoveltyI
 
   if (titleTop >= TITLE_BLOCK_THRESHOLD) {
     raise('block');
-    reasons.push(`Title is ${(titleTop * 100).toFixed(0)}% similar to an existing story (block at ${TITLE_BLOCK_THRESHOLD * 100}%).`);
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'title', titleTop)?.title, 'an existing story');
+    reasons.push(`Title is ${(titleTop * 100).toFixed(0)}% similar to ${ref} (block at ${TITLE_BLOCK_THRESHOLD * 100}%).`);
   } else if (titleTop >= TITLE_WARN_THRESHOLD) {
     raise('warn');
-    reasons.push(`Title is ${(titleTop * 100).toFixed(0)}% similar to an existing story.`);
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'title', titleTop)?.title, 'an existing story');
+    reasons.push(`Title is ${(titleTop * 100).toFixed(0)}% similar to ${ref}.`);
   }
 
   if (premiseTop >= PREMISE_BLOCK_THRESHOLD) {
     raise('block');
-    reasons.push(`Premise overlaps an existing story by ${(premiseTop * 100).toFixed(0)}% (block at ${PREMISE_BLOCK_THRESHOLD * 100}%).`);
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'premise', premiseTop)?.title, 'an existing story');
+    reasons.push(`Premise overlaps ${ref} by ${(premiseTop * 100).toFixed(0)}% (block at ${PREMISE_BLOCK_THRESHOLD * 100}%).`);
   } else if (premiseTop >= PREMISE_WARN_THRESHOLD) {
     raise('warn');
-    reasons.push(`Premise overlaps an existing story by ${(premiseTop * 100).toFixed(0)}%.`);
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'premise', premiseTop)?.title, 'an existing story');
+    reasons.push(`Premise overlaps ${ref} by ${(premiseTop * 100).toFixed(0)}%.`);
   }
 
   if (reuseCount >= CHARACTER_REUSE_BLOCK_COUNT) {
@@ -300,7 +356,8 @@ export function scoreNovelty({ candidate, priors, seriesContext }: ScoreNoveltyI
 
   if (settingTop >= SETTING_WARN_THRESHOLD) {
     raise('warn');
-    reasons.push(`Setting repeats an unrelated story by ${(settingTop * 100).toFixed(0)}%.`);
+    const ref = describePrior(bestCandidateForSignal(topCandidates, 'setting', settingTop)?.title, 'an unrelated story');
+    reasons.push(`Setting repeats ${ref} by ${(settingTop * 100).toFixed(0)}%.`);
   }
 
   if (saturatedCount >= THEME_SATURATION_WARN_COUNT) {
