@@ -101,8 +101,24 @@ whole feature can be reverted as a unit.
 
 ## Planning and execution
 
-The owner **plans with one model and executes the plan on Opus**, switching models after approving the plan.
+**Opus plans, audits and reviews; Sonnet subagents execute.** Exploration, per-phase implementation and
+gate runs are dispatched to Sonnet; architecture, migration design, reviewing what came back and writing the
+handoff stay on Opus. The owner is told at each phase boundary whether to switch models. The reason is token
+economy: judgment is worth Opus, producing components and running gates is not.
+
 Each execution session therefore starts cold, with none of the planning session's exploration in context.
+
+Delegation has its own rules, learned after a subagent died at its session limit and took its whole context
+with it:
+
+- **Stop delegating at 90% of the 5-hour session window.** Below that, delegate freely.
+- **Poll running subagents** instead of waiting on a completion notification, and require them to land work
+  on disk — files, commits — as they go rather than holding it in context.
+- **Scope each delegation to one committable unit**, and have the agent commit before it reports.
+- **Review delegated work by reading the diff, not the agent's report.** Every agentic phase so far has had
+  defects the full suite passed over, and most were the record asserting something untrue.
+- **Keep the handoff current** so a fresh session starts without compaction — judged at roughly 75% context,
+  not mechanically after every phase.
 
 **Implementation plans must be self-contained handover documents.** A plan is finished when a fresh session
 could execute it without re-deriving discovery:
