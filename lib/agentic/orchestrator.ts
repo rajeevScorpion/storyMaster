@@ -707,6 +707,12 @@ async function returnRunToPending(admin: AdminClient, run: AgentRun): Promise<vo
 async function handleStageFailure(
   admin: AdminClient,
   run: AgentRun,
+  // The stage that was actually EXECUTING when this failure happened -- NOT
+  // necessarily run.stage. A run's `stage` column is the last stage it successfully
+  // checkpointed; the executor is always working on the stage AFTER that. Named
+  // `failedStage` rather than reusing `stage` so it can never be confused with
+  // run.stage at a call site.
+  failedStage: AgentRunStage,
   message: string,
   metadata: Record<string, unknown> | undefined,
   rawError: unknown
@@ -720,9 +726,16 @@ async function handleStageFailure(
       .update({ status: 'pending', claimed_at: null, error_category: category, error_detail: truncatedDetail })
       .eq('id', run.id)
       .eq('status', 'processing');
+    // Logged against `failedStage`, not `run.stage` -- the same class of bug already
+    // fixed for the 'deferred' branch above (see that comment). run.stage is the
+    // stage the run last CHECKPOINTED, not the one the executor was running when it
+    // failed. Observed live: two consecutive 'Seed source response exceeds the
+    // 500-word cap' warnings -- unmistakably story_generated work -- were filed
+    // under novelty_checked in the run timeline, because this call used to pass
+    // run.stage here.
     await appendRunEvent(
       run.id,
-      run.stage,
+      failedStage,
       'warn',
       `Stage failed (attempt ${run.attemptCount}/${run.maxAttempts}), will retry: ${truncatedDetail}`,
       metadata
@@ -741,7 +754,13 @@ async function handleStageFailure(
     })
     .eq('id', run.id)
     .eq('status', 'processing');
-  await appendRunEvent(run.id, 'failed', 'error', `Run failed permanently after ${run.attemptCount} attempt(s): ${truncatedDetail}`, metadata);
+  await appendRunEvent(
+    run.id,
+    'failed',
+    'error',
+    `Run failed permanently after ${run.attemptCount} attempt(s) at stage '${failedStage}': ${truncatedDetail}`,
+    metadata
+  );
   // Only the PERMANENT-failure branch flips the task -- the will-retry branch above
   // returns early and leaves the task exactly as it was, since the run itself hasn't
   // given up yet and may still succeed on the next attempt.
@@ -815,7 +834,7 @@ async function advanceRun(
     try {
       outcome = await executor(run, target);
     } catch (error) {
-      await handleStageFailure(admin, run, error instanceof Error ? error.message : 'Unknown stage executor error.', undefined, error);
+      await handleStageFailure(admin, run, target, error instanceof Error ? error.message : 'Unknown stage executor error.', undefined, error);
       return;
     }
 
@@ -855,7 +874,7 @@ async function advanceRun(
     }
 
     // outcome.kind === 'failed'
-    await handleStageFailure(admin, run, outcome.message, outcome.metadata, outcome.error);
+    await handleStageFailure(admin, run, target, outcome.message, outcome.metadata, outcome.error);
     return;
   }
 }
@@ -945,9 +964,16 @@ export async function executeRunNow(
     await advanceRun(admin, run, executor, options?.stopAfterStage);
   } catch (error) {
     console.error(`Agent run ${run.id} threw while advancing (executeRunNow):`, error instanceof Error ? error.stack ?? error.message : error);
+    // This catch wraps the WHOLE advanceRun call, which may have walked the run
+    // through several stages (each applied "for free" from checkpoint) before the
+    // failure -- there is no single `target` in scope here the way there is inside
+    // advanceRun itself. run.stage is the best available approximation (the stage at
+    // claim time) and is what this call site used before the failedStage parameter
+    // existed, so it is passed through unchanged rather than guessed at.
     await handleStageFailure(
       admin,
       run,
+      run.stage,
       error instanceof Error ? error.message : 'Unknown orchestrator error.',
       undefined,
       error
@@ -1101,9 +1127,14 @@ export async function drainAgentRuns(
       await advanceRun(admin, run, activeExecutor);
     } catch (error) {
       console.error(`Agent run ${run.id} threw while advancing:`, error instanceof Error ? error.stack ?? error.message : error);
+      // Same reasoning as executeRunNow's identical catch above: this wraps the whole
+      // advanceRun call, so there is no single `target` in scope, and run.stage (the
+      // stage at claim time) is the same approximation this call site used before
+      // failedStage existed.
       await handleStageFailure(
         admin,
         run,
+        run.stage,
         error instanceof Error ? error.message : 'Unknown orchestrator error.',
         undefined,
         error
