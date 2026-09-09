@@ -138,12 +138,11 @@ async function resolveReviewerForUser(userId: string): Promise<AgentReviewer | n
  * Verify the current session belongs to an active reviewer. Throws if not -- mirrors
  * verifyAdmin() (lib/supabase/admin.ts) exactly: 'Not authenticated' when there is no
  * session, 'Forbidden' when the signed-in user is neither ADMIN_USER_ID nor an active
- * row in agent_reviewers. On success `reviewer` is always a non-null, active
- * AgentReviewer (the fetched row, or the synthetic admin one) -- callers still get the
- * `| null` in the type because that is the honest shape of "a reviewer row for a user"
- * everywhere else this type is used, not because a successful call here can produce it.
+ * row in agent_reviewers. On success `reviewer` is a non-null, active AgentReviewer --
+ * either the fetched row or the synthetic admin one -- so a caller can read
+ * canPublish()/canTriggerMedia() off it without re-checking for null.
  */
-export async function requireReviewer(): Promise<{ userId: string; reviewer: AgentReviewer | null }> {
+export async function requireReviewer(): Promise<{ userId: string; reviewer: AgentReviewer }> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -178,11 +177,13 @@ export async function requireReviewer(): Promise<{ userId: string; reviewer: Age
  * reviewers.shared.ts against it. Unit 9a's job is this one shared ownership boundary,
  * not every capability-specific call site.
  *
- * Selects `*`: different call sites need different columns (story_map, story_config,
- * genre, tone, target_age, ...) and this helper has no way to know which columns a
- * future 9b guard will need, so it returns the whole row rather than guessing a subset
- * and forcing every caller into a second query. `EditableStoryRow` types only the three
- * columns this function's own logic depends on.
+ * Column selection: pass `columns` to fetch exactly what the call site needs, and `id`,
+ * `user_id` and `agent_persona_id` are unioned in regardless -- this function's own
+ * authorization logic reads them, and a caller omitting `user_id` would otherwise
+ * silently authorize everyone. Omit `columns` and it selects `*`. Prefer passing them:
+ * `stories.story_map` is the whole branching tree, and the guards this replaces
+ * deliberately fetched narrow lists rather than dragging it through every ownership
+ * check. `EditableStoryRow` types only the three columns this function itself depends on.
  */
 export interface EditableStoryRow {
   id: string;
@@ -191,11 +192,21 @@ export interface EditableStoryRow {
   [key: string]: unknown;
 }
 
-export async function assertCanEditStory(storyId: string, userId: string): Promise<EditableStoryRow> {
+export async function assertCanEditStory(
+  storyId: string,
+  userId: string,
+  columns?: readonly string[]
+): Promise<EditableStoryRow> {
+  // The three columns this function's own logic reads are always fetched, whatever the
+  // caller asked for -- a guard that omitted user_id would silently authorize everyone.
+  const select = columns?.length
+    ? Array.from(new Set(['id', 'user_id', 'agent_persona_id', ...columns])).join(', ')
+    : '*';
+
   const admin = createAdminClient();
   const { data: story, error } = await admin
     .from('stories')
-    .select('*')
+    .select(select)
     .eq('id', storyId)
     .single();
 
@@ -203,7 +214,10 @@ export async function assertCanEditStory(storyId: string, userId: string): Promi
     throw new Error('Story not found.');
   }
 
-  const row = story as EditableStoryRow;
+  // Double cast: `select()` takes a runtime-built string, so supabase-js cannot infer a
+  // row shape and widens to GenericStringError. The column union above guarantees the
+  // three fields EditableStoryRow declares are present.
+  const row = story as unknown as EditableStoryRow;
   if (row.user_id === userId) {
     return row;
   }

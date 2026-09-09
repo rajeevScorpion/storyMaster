@@ -34,19 +34,26 @@ export interface AgentReviewer {
  * keeps whichever booleans it had before it was suspended". `null`/`undefined` (no row, or
  * a caller who was never a reviewer) is not active either -- this is also the fail-closed
  * return value when the schema itself is missing (see isMissingReviewerSchemaError below).
+ *
+ * Declared as a type predicate so a caller that has thrown on the false branch is left
+ * holding a non-null AgentReviewer. That is what lets requireReviewer() promise a real
+ * reviewer rather than a nullable one, and what removes the non-null assertions the two
+ * capability predicates below would otherwise need.
  */
-export function isActiveReviewer(reviewer: AgentReviewer | null | undefined): boolean {
+export function isActiveReviewer(
+  reviewer: AgentReviewer | null | undefined
+): reviewer is AgentReviewer {
   return reviewer != null && reviewer.status === 'active';
 }
 
 /** True when `reviewer` is active AND carries can_publish. Combines both checks so a caller never has to remember to test status separately. */
 export function canPublish(reviewer: AgentReviewer | null | undefined): boolean {
-  return isActiveReviewer(reviewer) && reviewer!.canPublish;
+  return isActiveReviewer(reviewer) && reviewer.canPublish;
 }
 
 /** True when `reviewer` is active AND carries can_trigger_media (gates narration/image submits on an agent draft -- Unit 9b). */
 export function canTriggerMedia(reviewer: AgentReviewer | null | undefined): boolean {
-  return isActiveReviewer(reviewer) && reviewer!.canTriggerMedia;
+  return isActiveReviewer(reviewer) && reviewer.canTriggerMedia;
 }
 
 /**
