@@ -50,12 +50,14 @@ import {
   RUN_TIME_BUDGET_MS,
   AgentModelCallError,
   AgentValidationError,
+  shouldRetry,
   type AgentRunCheckpoint,
 } from '@/lib/agentic/orchestrator.shared';
 import {
   AGENTIC_SOURCE_FIDELITY,
   buildSeededStoryMap,
   getSeedBeatByIndex,
+  mergeNoveltyAvoidTitles,
   nextBeatIndexToGenerate,
   SeededStoryMapError,
   type SeedGenerationProgress,
@@ -70,8 +72,8 @@ import {
 } from '@/lib/agentic/personas.shared';
 import { getAgentTask, type AgentTask } from '@/lib/agentic/supervisor';
 import { runNoveltyCheck, recordStoryMemory, updatePersonaMemory, loadPersonaMemory } from '@/lib/agentic/memory';
-import { formatPersonaMemoryForBrief } from '@/lib/agentic/memory.shared';
-import type { NoveltyCandidate, NoveltyVerdict } from '@/lib/agentic/memory.shared';
+import { formatPersonaMemoryForBrief, sanitizeNoveltyTitleForDisplay } from '@/lib/agentic/memory.shared';
+import type { NoveltyCandidate, NoveltyTopCandidate, NoveltyVerdict } from '@/lib/agentic/memory.shared';
 import { evaluateAndRecord, getPipelineEvaluationForRun } from '@/lib/agentic/evaluation';
 import { toEvaluatedBeats, type DeterministicEvaluationInput } from '@/lib/agentic/evaluation.shared';
 import { generateSeedPlanPreview, materializeSeededBeat } from '@/lib/ai/seed-authoring';
@@ -149,14 +151,30 @@ export interface StoryBrief {
  * check on the theory that this prompt block makes it redundant -- a missing
  * or empty memoryBlock only costs one extra chance of a collision, which the
  * novelty check still catches downstream.
+ *
+ * `avoidTitles` is a DIFFERENT, SHARPER signal than memoryBlock and is
+ * rendered as its own labelled instruction rather than folded into it.
+ * memoryBlock is "this persona's general recent output, spread over many past
+ * stories" -- a soft nudge against staleness. avoidTitles is "these specific
+ * titles were just rejected THIS run, this attempt" -- see runNoveltyStage's
+ * re-brief path -- and deserves to read as a hard instruction, not diluted
+ * into the same paragraph as a much softer one.
  */
-function buildStoryBriefPrompt(persona: AgentPersona, task: AgentTask, memoryBlock: string): string {
+function buildStoryBriefPrompt(
+  persona: AgentPersona,
+  task: AgentTask,
+  memoryBlock: string,
+  avoidTitles: string[] = []
+): string {
   const restricted = persona.restrictedThemes.length
     ? `Restricted themes -- never use these: ${persona.restrictedThemes.join(', ')}.`
     : '';
   const constraintKeys = task.constraints && typeof task.constraints === 'object' ? Object.keys(task.constraints) : [];
   const constraints = constraintKeys.length
     ? `Additional commissioning constraints (JSON): ${JSON.stringify(task.constraints)}.`
+    : '';
+  const avoidBlock = avoidTitles.length
+    ? `A previous attempt at this exact commission was rejected as too similar to existing catalogue content. Do NOT reuse, or write a close variant of, any of these titles or the stories they name -- write a clearly different working title, premise, principal cast and setting: ${avoidTitles.join(' | ')}`
     : '';
 
   return [
@@ -173,6 +191,7 @@ function buildStoryBriefPrompt(persona: AgentPersona, task: AgentTask, memoryBlo
     '',
     `Audience: ${persona.ageGroup}. Language: ${persona.language}.`,
     memoryBlock,
+    avoidBlock,
     '',
     'Respond with ONLY a JSON object of this exact shape -- no markdown fences, no commentary:',
     '{',
@@ -506,24 +525,33 @@ async function loadPersonaMemoryBlockForBrief(personaId: string): Promise<string
   }
 }
 
-async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPersona): Promise<StageExecutionOutcome> {
-  const idempotencyKey = `agentic_run:${run.id}:brief_ready`;
-  let authorization: AgenticAuthorization;
-  try {
-    authorization = await authorizeAgenticSpend('preview_seed_plan', idempotencyKey, {
-      runId: run.id,
-      taskId: task.id,
-      personaId: persona.id,
-      stage: 'brief_ready',
-    });
-  } catch (error) {
-    return toFailure(error, { stage: 'brief_ready' });
-  }
+/**
+ * Builds, pays for and parses one story brief. Shared by runBriefStage's
+ * initial call (the only stage the orchestrator's own forward walk ever
+ * dispatches to 'brief_ready' for -- see runNoveltyStage's header comment on
+ * why every SUBSEQUENT brief, after a novelty block, is generated from
+ * inside 'novelty_checked' instead) and that re-brief path, so both pay for
+ * and validate a brief exactly the same way. Throws on any failure; the
+ * caller owns authorize/release bookkeeping around the throw.
+ */
+async function generateStoryBrief(
+  run: AgentRun,
+  task: AgentTask,
+  persona: AgentPersona,
+  avoidTitles: string[],
+  idempotencyKey: string
+): Promise<StoryBrief> {
+  const authorization = await authorizeAgenticSpend('preview_seed_plan', idempotencyKey, {
+    runId: run.id,
+    taskId: task.id,
+    personaId: persona.id,
+    stage: 'brief_ready',
+  });
 
   try {
     const config = await getModelConfig('agent_story_brief');
     const memoryBlock = await loadPersonaMemoryBlockForBrief(persona.id);
-    const prompt = buildStoryBriefPrompt(persona, task, memoryBlock);
+    const prompt = buildStoryBriefPrompt(persona, task, memoryBlock, avoidTitles);
     const raw = await callGeminiAgenticJson({
       task: 'agent_story_brief',
       model: config.model,
@@ -533,6 +561,16 @@ async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPerso
     });
     const brief = parseStoryBrief(raw);
     await finalizeAgenticSpend(authorization.reservationId);
+    return brief;
+  } catch (error) {
+    await releaseAgenticSpend(authorization.reservationId, 'brief_generation_failed');
+    throw error;
+  }
+}
+
+async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPersona): Promise<StageExecutionOutcome> {
+  try {
+    const brief = await generateStoryBrief(run, task, persona, [], `agentic_run:${run.id}:brief_ready`);
     await appendRunEvent(
       run.id,
       'brief_ready',
@@ -541,7 +579,6 @@ async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPerso
     );
     return { kind: 'advanced', checkpointPayload: brief };
   } catch (error) {
-    await releaseAgenticSpend(authorization.reservationId, 'brief_generation_failed');
     return toFailure(error, { stage: 'brief_ready' });
   }
 }
@@ -559,6 +596,17 @@ async function runBriefStage(run: AgentRun, task: AgentTask, persona: AgentPerso
  * so it is DECIDED once, not so the stage is SKIPPED.
  */
 const NOVELTY_VERDICT_CHECKPOINT_KEY = 'novelty_checked_verdict';
+
+/**
+ * Key the accumulated re-brief avoid-list is carried under -- again inside the
+ * shared checkpoint object, again never a stage name (resumeStageFromCheckpoint
+ * in orchestrator.shared.ts iterates STAGE_SEQUENCE, not this object's own
+ * keys, precisely so side-channel keys like this one and
+ * STORY_PROGRESS_CHECKPOINT_KEY are never mistaken for a stage). See
+ * mergeNoveltyAvoidTitles (story-assembly.shared.ts) for why this ACCUMULATES
+ * across attempts rather than being overwritten by each one.
+ */
+const NOVELTY_AVOID_TITLES_CHECKPOINT_KEY = 'novelty_checked_avoid_titles';
 
 interface CachedNoveltyVerdict {
   verdict: string;
@@ -596,10 +644,141 @@ async function persistNoveltyVerdict(run: AgentRun, cached: CachedNoveltyVerdict
   }
 }
 
+/**
+ * On a 'block' verdict, clears checkpoint.brief_ready and the cached verdict so
+ * the NEXT attempt regenerates a fresh brief instead of adjudicating the same
+ * rejected one again, and records what to avoid on that fresh brief.
+ *
+ * MIRRORS persistNoveltyVerdict's mechanism exactly: a targeted UPDATE guarded
+ * on this run still owning the claim (`status = 'processing'`), never a blind
+ * read-modify-write of the whole checkpoint object -- the class of hazard
+ * commit 3455430 fixed for the Test Lab's own checkpoint write. That fix
+ * additionally re-read the row immediately before merging, because ITS code
+ * path runs from OUTSIDE the run's claim and can race a concurrent executor.
+ * This function runs from INSIDE the executor call that already exclusively
+ * owns the row while status='processing' -- the same position
+ * persistNoveltyVerdict and persistStoryGenerationProgress are already in --
+ * so `run.checkpoint` is this run's only writer's own up-to-date view and a
+ * re-read would buy nothing real.
+ *
+ * REMOVES KEYS, which nothing else in this codebase does -- recordCheckpoint
+ * only ever adds. Deleting brief_ready is what makes runNoveltyStage's own
+ * "no cached brief" branch fire on the next attempt and regenerate one; see
+ * that function's header for why the row's `stage` column is deliberately
+ * left untouched here (handleStageFailure owns that transition, and it never
+ * needs to move for this mechanism to work: this run resolves to
+ * novelty_checked's executor on every attempt regardless).
+ *
+ * BEST-EFFORT AND FAIL-SOFT, DELIBERATELY: if this UPDATE does not land,
+ * run.checkpoint is left exactly as it was, so the next attempt replays the
+ * still-cached block exactly as it would have before this feature existed --
+ * today's known-safe behaviour -- rather than throwing and failing a run for a
+ * reason unrelated to novelty.
+ */
+async function clearBriefForRebrief(
+  run: AgentRun,
+  rejectedTitle: string,
+  collidingTitles: string[]
+): Promise<boolean> {
+  const priorAvoidList = (run.checkpoint[NOVELTY_AVOID_TITLES_CHECKPOINT_KEY] as string[] | undefined) ?? [];
+  const nextAvoidList = mergeNoveltyAvoidTitles(priorAvoidList, [rejectedTitle, ...collidingTitles]);
+
+  const nextCheckpoint: AgentRunCheckpoint = { ...run.checkpoint };
+  delete nextCheckpoint.brief_ready;
+  delete nextCheckpoint[NOVELTY_VERDICT_CHECKPOINT_KEY];
+  nextCheckpoint[NOVELTY_AVOID_TITLES_CHECKPOINT_KEY] = nextAvoidList;
+
+  try {
+    const admin = createAdminClient();
+    const { error } = await admin
+      .from('agent_runs')
+      .update({ checkpoint: nextCheckpoint })
+      .eq('id', run.id)
+      .eq('status', 'processing');
+    if (error) {
+      console.error(
+        '[agentic-story-assembly] failed to clear brief for re-brief; next attempt will replay the cached block:',
+        error.message
+      );
+      return false;
+    }
+    run.checkpoint = nextCheckpoint;
+    return true;
+  } catch (error) {
+    console.error(
+      '[agentic-story-assembly] failed to clear brief for re-brief; next attempt will replay the cached block:',
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
+/**
+ * novelty_checked -- and, after the first attempt, THE ONLY PLACE A BRIEF IS
+ * EVER (RE-)GENERATED.
+ *
+ * A run's `stage` column only ever advances forward (persistStageAdvance), and
+ * a retryable failure leaves it exactly where it was -- at 'brief_ready',
+ * novelty_checked's predecessor -- for as long as this run exists;
+ * handleStageFailure's retry branch (orchestrator.ts) touches `status` and the
+ * error columns only, never `stage`. So on every attempt after the very
+ * first, advanceRun computes nextStage('brief_ready') as 'novelty_checked'
+ * again and dispatches back to THIS function, never to runBriefStage. If a
+ * block is ever going to be corrected with a different brief, generating that
+ * brief has to happen here: clearBriefForRebrief (above) deletes
+ * checkpoint.brief_ready on a block, and the branch immediately below
+ * regenerates one -- right here, before doing the actual novelty check --
+ * whenever it finds that key missing.
+ */
 async function runNoveltyStage(run: AgentRun, task: AgentTask, persona: AgentPersona): Promise<StageExecutionOutcome> {
-  const brief = run.checkpoint.brief_ready as StoryBrief | undefined;
+  let brief = run.checkpoint.brief_ready as StoryBrief | undefined;
+
   if (!brief) {
-    return { kind: 'failed', message: 'novelty_checked reached with no brief_ready checkpoint present.' };
+    // No cached brief. In practice this means a prior attempt's block just
+    // cleared it (clearBriefForRebrief) -- generate a fresh one, steered away
+    // from whatever this run has learned to avoid so far, before checking
+    // novelty again.
+    const avoidTitles = (run.checkpoint[NOVELTY_AVOID_TITLES_CHECKPOINT_KEY] as string[] | undefined) ?? [];
+
+    let freshBrief: StoryBrief;
+    try {
+      freshBrief = await generateStoryBrief(
+        run,
+        task,
+        persona,
+        avoidTitles,
+        `agentic_run:${run.id}:brief_ready:rebrief:${run.attemptCount}`
+      );
+    } catch (error) {
+      return toFailure(error, { stage: 'novelty_checked', part: 'rebrief' });
+    }
+
+    // Persisted with the SAME targeted-UPDATE-plus-in-place-mutation pattern as
+    // persistNoveltyVerdict/persistStoryGenerationProgress above: story_generated
+    // and draft_created both read checkpoint.brief_ready later in the pipeline,
+    // so the fresh brief must actually land in the row, not just live in this
+    // function's local variable.
+    const nextCheckpoint: AgentRunCheckpoint = { ...run.checkpoint, brief_ready: freshBrief };
+    try {
+      const admin = createAdminClient();
+      const { error } = await admin
+        .from('agent_runs')
+        .update({ checkpoint: nextCheckpoint })
+        .eq('id', run.id)
+        .eq('status', 'processing');
+      if (error) throw new Error(error.message);
+      run.checkpoint = nextCheckpoint;
+    } catch (error) {
+      return toFailure(error, { stage: 'novelty_checked', part: 'persist_rebrief' });
+    }
+
+    brief = freshBrief;
+    await appendRunEvent(
+      run.id,
+      'novelty_checked',
+      'info',
+      `Brief regenerated after a prior collision (${brief.themes.length} themes, ${brief.characters.length} characters, avoiding ${avoidTitles.length} prior title(s)).`
+    );
   }
 
   // ADJUDICATE ONCE PER RUN, NOT ONCE PER ATTEMPT. A 'block' fails this stage,
@@ -612,12 +791,24 @@ async function runNoveltyStage(run: AgentRun, task: AgentTask, persona: AgentPer
   // MAX_RUN_ATTEMPTS coin flips disagrees" -- a lottery, not a gate. Caching
   // the verdict makes the run's answer the same on every attempt, so a block
   // stays blocked and a clear stays clear.
+  //
+  // A block now clears BOTH this cache and brief_ready (clearBriefForRebrief)
+  // before the run is retried, precisely so this cache is never asked to
+  // answer for a brief that no longer exists -- see this function's header.
+  // A `cached` block found here therefore only ever means that clearing write
+  // failed (logged in clearBriefForRebrief) and this attempt is replaying it,
+  // exactly as it would have before this feature existed.
   const cached = run.checkpoint[NOVELTY_VERDICT_CHECKPOINT_KEY] as CachedNoveltyVerdict | undefined;
 
   let verdict: string;
   let score: number;
   let adjudicated: boolean;
   let reason: string;
+  // Only ever populated on a freshly-computed (non-cached) verdict -- see the
+  // `cached` branch below. Drives the avoid-list and the collision name in
+  // the block event; a cached-replay has neither available and degrades to
+  // naming only the persona's own rejected title.
+  let topCandidates: NoveltyTopCandidate[] = [];
 
   if (cached) {
     ({ verdict, score, adjudicated, reason } = cached);
@@ -643,15 +834,35 @@ async function runNoveltyStage(run: AgentRun, task: AgentTask, persona: AgentPer
     score = result.score;
     adjudicated = result.adjudicated;
     reason = (result.reasons[0] ?? 'Flagged as derivative of existing catalogue content.').slice(0, 240);
+    topCandidates = result.topCandidates;
     await persistNoveltyVerdict(run, { verdict, score, adjudicated, reason });
   }
 
   if (verdict === 'block') {
+    // Legible to an unattended operator: which prior it collided with, and
+    // whether this run will correct itself or is done trying. Short and
+    // factual throughout, per this module's no-prose rule -- a title, a
+    // count, never a model's reasoning verbatim.
+    const collidingTitles = topCandidates.map((entry) => entry.title);
+    const namedCollision = sanitizeNoveltyTitleForDisplay(collidingTitles[0]);
+    const collisionNote = namedCollision ? ` Collided with "${namedCollision}".` : '';
+    const willRetry = shouldRetry({ attemptCount: run.attemptCount, maxAttempts: run.maxAttempts });
+
+    let outcomeNote: string;
+    if (willRetry) {
+      const cleared = await clearBriefForRebrief(run, brief.workingTitle, collidingTitles);
+      outcomeNote = cleared
+        ? ' Regenerating the brief before the next attempt.'
+        : ' Could not clear the brief for a retry; the next attempt will replay this verdict.';
+    } else {
+      outcomeNote = ' No attempts remain; this run will fail.';
+    }
+
     await appendRunEvent(
       run.id,
       'novelty_checked',
       'warn',
-      `Novelty check blocked generation${cached ? ' (verdict decided on the first attempt)' : ''}: ${reason}`
+      `Novelty check blocked generation${cached ? ' (verdict decided on the first attempt)' : ''}: ${reason}${collisionNote}${outcomeNote}`
     );
     return { kind: 'failed', message: `Novelty check blocked this story: ${reason}` };
   }

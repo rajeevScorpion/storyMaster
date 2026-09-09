@@ -100,6 +100,54 @@ export function getSeedBeatByIndex(seedPlan: SeedPlan | undefined, beatIndex: nu
   return seedPlan?.beats.find((beat) => beat.beatIndex === beatIndex);
 }
 
+// ── Novelty re-brief: what to avoid on the next attempt ─────────────────
+//
+// A pre-generation novelty 'block' (story-assembly.ts's runNoveltyStage) clears
+// the run's cached brief and re-generates one rather than replaying a verdict
+// that cannot change (see that file's header). Each re-brief needs to know
+// what already collided -- its OWN just-rejected title, plus the prior
+// stories it collided with -- so the model has an actual chance of writing
+// something different next time, and that list must ACCUMULATE across
+// attempts: attempt 3 must avoid what attempts 1 *and* 2 produced, not just
+// the most recent one.
+
+/**
+ * Cap on the accumulated avoid-list carried in a run's checkpoint across its
+ * re-brief attempts. MAX_RUN_ATTEMPTS (3) means at most two re-briefs, each
+ * contributing its own rejected title plus however many colliding priors
+ * scoreNovelty's topCandidates reported (that array is already capped at 5) --
+ * so two attempts could in principle offer up to 12 titles. This bound exists
+ * purely so the list actually handed to a prompt stays small and predictable
+ * regardless of that, rather than trusting an upstream cap never to change.
+ */
+export const NOVELTY_AVOID_LIST_MAX_ENTRIES = 8;
+
+/**
+ * Merges newly-rejected titles into an accumulated avoid-list: dedupes
+ * case-insensitively (the same story should not be named twice because its
+ * title was reported with different casing on two attempts) and caps the
+ * result at NOVELTY_AVOID_LIST_MAX_ENTRIES.
+ *
+ * `additions` are placed BEFORE `existing` -- the freshest collision is the
+ * most specific, most actionable signal for the very next brief, so if the
+ * cap ever has to drop something, it drops the oldest entry first rather than
+ * the one just learned. Blank/whitespace-only titles are filtered out rather
+ * than surfaced as empty avoid-list entries.
+ */
+export function mergeNoveltyAvoidTitles(existing: string[], additions: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const title of [...additions, ...existing]) {
+    const trimmed = typeof title === 'string' ? title.trim() : '';
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(trimmed);
+  }
+  return merged.slice(0, NOVELTY_AVOID_LIST_MAX_ENTRIES);
+}
+
 /**
  * Intra-stage progress for the story_generated stage, persisted into
  * agent_runs.checkpoint after every completed beat.

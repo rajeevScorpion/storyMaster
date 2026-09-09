@@ -131,6 +131,10 @@ export function recordCheckpoint(checkpoint: AgentRunCheckpoint, stage: AgentRun
  * object" (or "last key inserted") would treat that key as if it were a
  * stage and misresolve the resume point; this is not hypothetical; it is
  * exactly the shape of the checkpoint that hid this bug on run b7ac6093.
+ * Same reasoning covers story-assembly.ts's two novelty_checked_verdict /
+ * novelty_checked_avoid_titles side-channels (the cached pre-generation
+ * verdict and its re-brief avoid-list) -- also written into this object,
+ * also never a stage name.
  */
 export function resumeStageFromCheckpoint(checkpoint: AgentRunCheckpoint): AgentRunStage {
   let resumeStage: AgentRunStage = 'queued';

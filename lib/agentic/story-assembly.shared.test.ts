@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { StoryBeat, StoryNode, SeedPlan } from '@/lib/types/story';
 import {
+  NOVELTY_AVOID_LIST_MAX_ENTRIES,
   SeededStoryMapError,
   buildSeededStoryMap,
   getSeedBeatByIndex,
+  mergeNoveltyAvoidTitles,
   nextBeatIndexToGenerate,
 } from './story-assembly.shared';
 
@@ -131,5 +133,38 @@ describe('nextBeatIndexToGenerate', () => {
   it('reports completion once every planned beat is done', () => {
     const progress = { completedBeats: [beat(1), beat(2)] };
     expect(nextBeatIndexToGenerate(progress, 2)).toBeUndefined();
+  });
+});
+
+describe('mergeNoveltyAvoidTitles', () => {
+  it('accumulates across attempts rather than replacing', () => {
+    const afterAttemptOne = mergeNoveltyAvoidTitles([], ['Rejected Title One', 'Colliding Prior A']);
+    const afterAttemptTwo = mergeNoveltyAvoidTitles(afterAttemptOne, ['Rejected Title Two', 'Colliding Prior B']);
+    expect(afterAttemptTwo).toEqual(
+      expect.arrayContaining(['Rejected Title One', 'Colliding Prior A', 'Rejected Title Two', 'Colliding Prior B'])
+    );
+  });
+
+  it('dedupes case-insensitively', () => {
+    const result = mergeNoveltyAvoidTitles(['The Clockwork Sparrow'], ['the clockwork sparrow', 'A New Title']);
+    expect(result.filter((title) => title.toLowerCase() === 'the clockwork sparrow')).toHaveLength(1);
+    expect(result).toContain('A New Title');
+  });
+
+  it('filters out blank/whitespace-only titles', () => {
+    expect(mergeNoveltyAvoidTitles([], ['   ', '', 'Real Title'])).toEqual(['Real Title']);
+  });
+
+  it('caps the accumulated list, keeping the freshest additions over the oldest entries', () => {
+    const existing = Array.from({ length: NOVELTY_AVOID_LIST_MAX_ENTRIES }, (_unused, i) => `Existing ${i}`);
+    const result = mergeNoveltyAvoidTitles(existing, ['Freshest Addition']);
+    expect(result).toHaveLength(NOVELTY_AVOID_LIST_MAX_ENTRIES);
+    expect(result[0]).toBe('Freshest Addition');
+    expect(result).not.toContain(`Existing ${NOVELTY_AVOID_LIST_MAX_ENTRIES - 1}`);
+  });
+
+  it('never grows past the cap regardless of how many additions arrive at once', () => {
+    const additions = Array.from({ length: 20 }, (_unused, i) => `Title ${i}`);
+    expect(mergeNoveltyAvoidTitles([], additions)).toHaveLength(NOVELTY_AVOID_LIST_MAX_ENTRIES);
   });
 });
