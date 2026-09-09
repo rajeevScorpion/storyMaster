@@ -32,6 +32,7 @@ import {
   ScrollText,
   SlidersHorizontal,
   Sparkles,
+  UserCheck,
   UserRound,
   UsersRound,
   Users,
@@ -395,6 +396,41 @@ const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
   },
 ];
 
+// Phase 9's reviewer surface: a human review queue for agent-authored drafts
+// sitting at stage 'awaiting_review', plus a read-only roster of who can
+// review them (public.agent_reviewers, migration 111). Deliberately a SIBLING
+// of Agents within the same `agentic` group below, not nested under
+// /admin/agents -- both agentic_reviewer_workflow_enabled's own doc comment
+// (lib/agentic/flags.ts) and the architecture doc name /admin/authors as its
+// own destination. Icons follow the same pattern Agents itself uses: the
+// top-level item and its own "overview" child deliberately do NOT share an
+// icon (Agents/Workflow vs. Agents>Overview/LayoutGrid), so Authors/UserCheck
+// and Authors>Review queue/LayoutGrid follow suit.
+const AUTHORS_CHILD_GROUPS: AdminNavChildGroup[] = [
+  {
+    id: 'general',
+    label: null,
+    items: [
+      {
+        id: 'review-queue',
+        label: 'Review queue',
+        href: '/admin/authors',
+        icon: LayoutGrid,
+        description: 'Agent drafts waiting on a human: story, latest evaluation, and review readiness for every run at awaiting_review.',
+        staticSummary: 'Agent drafts awaiting human review',
+      },
+      {
+        id: 'reviewers',
+        label: 'Reviewers',
+        href: '/admin/authors/reviewers',
+        icon: Users,
+        description: 'Read-only roster of accounts with reviewer standing on agent-authored drafts.',
+        staticSummary: 'Who can review agent-authored drafts',
+      },
+    ],
+  },
+];
+
 export const ADMIN_NAV: AdminNavGroup[] = [
   {
     id: 'operations',
@@ -436,6 +472,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     label: 'Agentic',
     items: [
       { label: 'Agents', href: '/admin/agents', icon: Workflow, childGroups: AGENTS_CHILD_GROUPS },
+      { label: 'Authors', href: '/admin/authors', icon: UserCheck, childGroups: AUTHORS_CHILD_GROUPS },
     ],
   },
   {

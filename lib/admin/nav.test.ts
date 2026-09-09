@@ -57,11 +57,12 @@ function collectAllHrefs(): string[] {
 
 describe('admin nav config', () => {
   it('has no duplicate hrefs across the whole tree (ignoring hub self-links)', () => {
-    // Parent hub items (Global Settings, Pricing and offers, Agents)
+    // Parent hub items (Global Settings, Pricing and offers, Agents, Authors)
     // intentionally share an href with their overview child, so dedupe those
     // before checking.
     const hrefs = collectAllHrefs().filter(
-      (href) => href !== '/admin/settings' && href !== '/admin/pricing' && href !== '/admin/agents'
+      (href) =>
+        href !== '/admin/settings' && href !== '/admin/pricing' && href !== '/admin/agents' && href !== '/admin/authors'
     );
     expect(new Set(hrefs).size).toBe(hrefs.length);
   });
@@ -135,6 +136,17 @@ describe('admin nav config', () => {
 
     expect(childItems.find((item) => item.id === 'runs')?.href).toBe('/admin/agents/runs');
     expect(childItems.find((item) => item.id === 'routing')?.href).toBe('/admin/agents/routing');
+  });
+
+  it('includes Authors as an Agentic sibling of Agents, with its own reviewer roster child', () => {
+    const agentic = ADMIN_NAV.find((group) => group.id === 'agentic');
+    const authors = agentic?.items.find((item) => item.href === '/admin/authors');
+    expect(authors).toBeDefined();
+    expect(authors?.childGroups).not.toBe(agentic?.items.find((item) => item.href === '/admin/agents')?.childGroups);
+
+    const childItems = authors?.childGroups?.flatMap((group) => group.items) ?? [];
+    expect(childItems.find((item) => item.id === 'review-queue')?.href).toBe('/admin/authors');
+    expect(childItems.find((item) => item.id === 'reviewers')?.href).toBe('/admin/authors/reviewers');
   });
 
   it('resolves items by id', () => {
