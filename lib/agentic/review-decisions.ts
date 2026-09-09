@@ -1,20 +1,23 @@
 import 'server-only';
 
-// ── Agentic Creator System: Phase 9 reviewer decisions, server half (Unit 9e-i) ─────
+// ── Agentic Creator System: Phase 9 reviewer decisions, server half (Units 9e-i, 9e-ii) ──
 //
 // Reads/writes agent_review_decisions (migration 112). Records a reviewer's verdict on a
-// run at 'awaiting_review' -- approve, reject, or request a rewrite -- and applies the
-// run/agent_tasks state transition decideReviewTransition (review-decisions.shared.ts)
-// says that verdict produces. All the logic that decides WHAT each decision does to run/
-// task state lives in that pure sibling; this file only fetches the run, applies the
-// transition, and persists the decision row.
+// run at 'awaiting_review' -- approve, reject, request a rewrite, or (9e-ii, D15) publish
+// -- and applies the run/agent_tasks state transition decideReviewTransition
+// (review-decisions.shared.ts) says that verdict produces. All the logic that decides WHAT
+// each decision does to run/task state lives in that pure sibling; this file only fetches
+// the run, applies the transition, and persists the decision row.
 //
-// PUBLISH IS NOT HERE. Unit 9e-ii is a separate commit (D15, docs/agentic-creator-
-// decisions.md) and this file exports nothing for it -- no publish function, no storyline
-// write. The 'published' value migration 112 permits in its CHECK constraint is read-only
-// from this file's point of view: rowToDecision can represent one if it ever appears, but
-// recordReviewDecision below can never write one (its `decision` parameter is typed
-// ReviewDecisionKind, which excludes it).
+// THE STORYLINE WRITE ITSELF IS NOT HERE. Building the `storylines` row for a 'published'
+// decision is lib/agentic/review-publish.ts's job (publishReviewedStoryline) -- this file
+// only records that a publish happened, against a storyline_id its caller
+// (app/actions/agentic-review.ts's publishRunAction) already has by the time it calls
+// recordReviewDecision below. recordReviewDecision itself is otherwise unaware that
+// 'published' is different from any other decision: the run/task transition machinery was
+// already generic over ReviewRunTransition/ReviewTaskStatusTransition before 9e-ii, so
+// widening ReviewDecisionKind (review-decisions.shared.ts) to include 'published' is the
+// only change this file needed beyond accepting and storing storylineId.
 //
 // FAILS CLOSED for its own migration group (112): while agent_review_decisions is
 // unapplied, listReviewDecisionsForRun degrades to [] and recordReviewDecision throws a
@@ -153,39 +156,53 @@ async function recordDecisionEvent(
   runId: string,
   stage: string,
   decision: ReviewDecisionKind,
-  reviewerLabel: string | null
+  reviewerLabel: string | null,
+  storylineId?: string | null
 ): Promise<void> {
   const who = reviewerLabel ? ` by ${reviewerLabel}` : '';
   const messages: Record<ReviewDecisionKind, string> = {
     approved: `Reviewer decision: approved${who}. The run stays at 'awaiting_review' — publishing is a separate step.`,
     rewrite_requested: `Reviewer decision: rewrite requested${who}. No state changed; the redo is a separate commission.`,
     rejected: `Reviewer decision: rejected${who}. Run cancelled.`,
+    published: `Reviewer decision: published${who}.${storylineId ? ` storyline_id=${storylineId}.` : ''} Run complete.`,
   };
-  const level = decision === 'approved' ? 'info' : 'warn';
+  const level = decision === 'approved' || decision === 'published' ? 'info' : 'warn';
   await appendRunEvent(runId, stage, level, messages[decision]);
 }
 
 /**
  * Records one reviewer decision and applies the run/agent_tasks transition
- * decideReviewTransition says it produces. This is the ONLY write path in Unit 9e-i --
- * app/actions/agentic-review.ts's mutations all funnel through this function.
+ * decideReviewTransition says it produces. This is the ONLY write path for a review
+ * decision -- app/actions/agentic-review.ts's mutations, including 9e-ii's
+ * publishRunAction, all funnel through this function. publishRunAction calls it AFTER
+ * lib/agentic/review-publish.ts's publishReviewedStoryline has already created (or found,
+ * per that file's Trap #5 handling) the storyline, passing its id as `storylineId` below --
+ * this function never creates a storyline itself.
  *
- * Order of operations, and why: the run-side transition (agent_runs, 'rejected' only) is
- * applied FIRST, then the best-effort agent_tasks.status write, and the
- * agent_review_decisions row is inserted LAST. This is deliberately the opposite of
- * "record the decision, then act on it" -- if the decision row were written first and the
- * run update then failed, the database would show a 'rejected' decision against a run that
- * never actually left 'awaiting_review', which is a worse lie than the reverse: applying
- * the transition first and then failing to record it at least leaves an accurate
- * agent_runs/agent_tasks state, just an under-documented one, recoverable by re-submitting
- * the same decision (this function is safe to call twice with the same arguments -- there
- * is no unique constraint stopping it, by design, see the migration 112 header).
+ * Order of operations, and why: the run-side transition (agent_runs -- 'rejected' and,
+ * since 9e-ii, 'published') is applied FIRST, then the best-effort agent_tasks.status
+ * write, and the agent_review_decisions row is inserted LAST. This is deliberately the
+ * opposite of "record the decision, then act on it" -- if the decision row were written
+ * first and the run update then failed, the database would show a 'rejected'/'published'
+ * decision against a run that never actually left 'awaiting_review', which is a worse lie
+ * than the reverse: applying the transition first and then failing to record it at least
+ * leaves an accurate agent_runs/agent_tasks state, just an under-documented one,
+ * recoverable by re-submitting the same decision (this function is safe to call twice with
+ * the same arguments -- there is no unique constraint stopping it, by design, see the
+ * migration 112 header; for 'published' specifically, a second call would reuse the same
+ * storylineId the caller already resolved, since publishReviewedStoryline is itself
+ * idempotent on path_hash).
  *
  * Does NOT itself re-validate that the run is at 'awaiting_review' -- the review queue
  * (Unit 9c, listReviewQueueAction) already filters to that stage, and a decision is
  * meaningful to record even against a run that has since moved (e.g. a duplicate click
  * racing a first one). What this function guarantees is only the STATE TRANSITION table in
- * review-decisions.shared.ts, not queue membership.
+ * review-decisions.shared.ts, not queue membership. For 'published' this re-validation
+ * matters more than for the other three, because by the time this function is called the
+ * expensive, hard-to-undo side effect (the storyline row) already exists -- see
+ * publishRunAction's own pre-check in agentic-review.ts, which exists precisely because
+ * this function's guard alone is too late to prevent that write, only to prevent
+ * mis-recording it.
  */
 export async function recordReviewDecision(params: {
   runId: string;
@@ -193,6 +210,8 @@ export async function recordReviewDecision(params: {
   reviewerId: string;
   reviewerLabel: string | null;
   notes?: string | null;
+  /** Only meaningful for decision: 'published' (9e-ii) -- ignored otherwise. */
+  storylineId?: string | null;
 }): Promise<AgentReviewDecision> {
   if (reviewDecisionSchemaUnavailable) throw new Error(REVIEW_DECISION_SCHEMA_UNAVAILABLE_MESSAGE);
 
@@ -218,13 +237,14 @@ export async function recordReviewDecision(params: {
   const admin: AdminClient = createAdminClient();
   let resultingStage: string = run.stage;
 
-  // The only branch that touches agent_runs at all is 'rejected'. Deliberately NOT a call
-  // to orchestrator.ts's own cancelRun(): cancelRun sets agent_tasks.status to 'cancelled',
-  // and a reviewer's editorial rejection must write 'rejected' instead (see
+  // The two branches that touch agent_runs at all are 'rejected' and (since 9e-ii)
+  // 'published' -- both terminal, per decideReviewTransition's own doc comment. Neither is
+  // a call to orchestrator.ts's own cancelRun(): cancelRun sets agent_tasks.status to
+  // 'cancelled', and a reviewer's editorial rejection must write 'rejected' instead (see
   // review-decisions.shared.ts's decideReviewTransition doc comment for why those are
-  // different words for a different reason). The patch shape below -- stage/status both
-  // 'cancelled', plus finished_at -- is copied from cancelRun's own update for exactly that
-  // reason: same run-side effect, different task-side effect.
+  // different words for a different reason). The patch shape below -- stage/status set
+  // together, plus finished_at -- is copied from cancelRun's own update for exactly that
+  // reason: same run-side effect (a terminal stage), different task-side effect.
   if (transition.run) {
     const { error: runUpdateError } = await admin
       .from('agent_runs')
@@ -244,7 +264,7 @@ export async function recordReviewDecision(params: {
     await setTaskStatus(admin, run.taskId, transition.taskStatus, 'recordReviewDecision');
   }
 
-  await recordDecisionEvent(run.id, resultingStage, params.decision, params.reviewerLabel);
+  await recordDecisionEvent(run.id, resultingStage, params.decision, params.reviewerLabel, params.storylineId);
 
   const { data, error } = await admin
     .from('agent_review_decisions')
@@ -254,6 +274,7 @@ export async function recordReviewDecision(params: {
       reviewer_id: params.reviewerId,
       reviewer_label: params.reviewerLabel,
       decision: params.decision,
+      storyline_id: params.storylineId ?? null,
       notes: params.notes ?? null,
     })
     .select('*')

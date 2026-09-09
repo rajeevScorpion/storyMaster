@@ -14,30 +14,46 @@
 // PostgREST codes and are told apart only by which table the failing query touched).
 
 /**
- * The three decisions Unit 9e-i's queue can record. 'published' is a fourth value migration
- * 112's CHECK constraint permits (so Unit 9e-ii needs no migration of its own), but it is
- * NOT part of this unit's decision surface -- decideReviewTransition below never accepts or
- * produces it. See the migration's header for why the column allows it early.
+ * The four decisions the review queue can record. Through Unit 9e-i this was three values
+ * ('approved' | 'rejected' | 'rewrite_requested'); Unit 9e-ii (D15,
+ * docs/agentic-creator-decisions.md) widens it to include 'published' -- migration 112's
+ * CHECK constraint has permitted the value since it shipped (see the migration's header),
+ * so this widening needs no migration of its own. The three pre-existing decisions' behavior
+ * is unchanged: decideReviewTransition's three original branches are untouched below, and
+ * canRecordDecisionForStage still gates all four identically.
  */
-export type ReviewDecisionKind = 'approved' | 'rejected' | 'rewrite_requested';
+export type ReviewDecisionKind = 'approved' | 'rejected' | 'rewrite_requested' | 'published';
 
 /**
- * Every value migration 112's CHECK constraint allows, including 'published'. Only useful
- * for typing a raw stored row read back from the table -- a caller reading history must be
- * able to represent a 'published' row if 9e-ii ever writes one, even though nothing in this
- * unit ever produces that value itself.
+ * Every value migration 112's CHECK constraint allows. Before Unit 9e-ii this was strictly
+ * wider than ReviewDecisionKind (it also covered 'published', which nothing could yet
+ * write); now that ReviewDecisionKind includes 'published' too, the two types are
+ * identical. Kept as a separate name rather than deleted -- both agentic-review.ts and
+ * ReviewQueue.tsx already reference stored rows by this name, and the distinction it drew
+ * ("a value a stored row can carry" vs. "a value this action can produce") is worth keeping
+ * nameable even though nothing separates the two sets today.
  */
-export type StoredReviewDecisionValue = ReviewDecisionKind | 'published';
+export type StoredReviewDecisionValue = ReviewDecisionKind;
 
-/** What a decision does to the run row. `null` means "leave agent_runs entirely untouched". */
-export type ReviewRunTransition = { stage: 'cancelled'; status: 'cancelled' } | null;
+/**
+ * What a decision does to the run row. `null` means "leave agent_runs entirely untouched".
+ * 'published' -> { stage: 'complete', status: 'succeeded' } per the Phase 9 plan's Unit 9e
+ * table: publishing is the run's real terminal success state, distinct from 'rejected''s
+ * { stage: 'cancelled', status: 'cancelled' } for the same reason 'rejected'/'cancelled'
+ * task statuses are kept distinct below -- "a reviewer looked at this and it succeeded" is
+ * not the same fact as "an operator abandoned it" or "a reviewer turned it down".
+ */
+export type ReviewRunTransition =
+  | { stage: 'cancelled'; status: 'cancelled' }
+  | { stage: 'complete'; status: 'succeeded' }
+  | null;
 
 /**
  * The agent_tasks.status write a decision produces. `null` means "leave agent_tasks
  * entirely untouched" -- distinct from writing a status, and load-bearing for
  * 'rewrite_requested' below, which must change no state at all.
  */
-export type ReviewTaskStatusTransition = 'approved' | 'rejected' | null;
+export type ReviewTaskStatusTransition = 'approved' | 'rejected' | 'published' | null;
 
 export interface ReviewDecisionTransition {
   run: ReviewRunTransition;
@@ -46,13 +62,13 @@ export interface ReviewDecisionTransition {
 
 /**
  * The single function mapping a reviewer decision to its run/task state transition. This
- * is the WHOLE state machine Unit 9e-i implements -- see
- * docs/agentic-creator-phase9-plan.md's Unit 9e table, reproduced in the migration 112
- * header. Every branch is deliberate and none is a placeholder:
+ * was the WHOLE state machine Unit 9e-i implemented, and Unit 9e-ii (D15) adds exactly one
+ * more branch to it -- see docs/agentic-creator-phase9-plan.md's Unit 9e table, reproduced
+ * in the migration 112 header. Every branch is deliberate and none is a placeholder:
  *
  * - 'approved' does NOT advance the run's stage. It stays at 'awaiting_review' because
- *   publishing (Unit 9e-ii) is what actually completes it -- an approval alone has produced
- *   no storyline yet, so moving the run past 'awaiting_review' here would be premature and
+ *   publishing (9e-ii) is what actually completes it -- an approval alone has produced no
+ *   storyline yet, so moving the run past 'awaiting_review' here would be premature and
  *   would also require landing on some stage with a real consumer, which 'media_pending'
  *   (verified to have none, see the migration header) is not.
  * - 'rewrite_requested' changes NO state at all -- not the run, not the task. It is a
@@ -62,19 +78,33 @@ export interface ReviewDecisionTransition {
  *   draft rather than producing a genuinely different one. The redo is a separate
  *   commission a supervisor or admin issues later, entirely outside this function's
  *   concern.
- * - 'rejected' is the only terminal outcome: the run is cancelled (mirroring what
- *   cancelRun's own patch shape does to agent_runs -- stage/status both 'cancelled', plus
- *   finished_at, set by the caller), and the task is marked 'rejected' rather than
- *   'cancelled'. Those are deliberately different words for a deliberately different
- *   reason: 'cancelled' (via cancelAgentTask / cancelRun) means an operator abandoned the
- *   run outright: 'rejected' means a reviewer looked at a finished draft and turned it down
- *   on its merits. Collapsing the two would make agent_tasks.status unable to tell "nobody
- *   reviewed this" apart from "a reviewer said no".
+ * - 'rejected' is a terminal outcome: the run is cancelled (mirroring what cancelRun's own
+ *   patch shape does to agent_runs -- stage/status both 'cancelled', plus finished_at, set
+ *   by the caller), and the task is marked 'rejected' rather than 'cancelled'. Those are
+ *   deliberately different words for a deliberately different reason: 'cancelled' (via
+ *   cancelAgentTask / cancelRun) means an operator abandoned the run outright: 'rejected'
+ *   means a reviewer looked at a finished draft and turned it down on its merits. Collapsing
+ *   the two would make agent_tasks.status unable to tell "nobody reviewed this" apart from
+ *   "a reviewer said no".
+ * - 'published' (9e-ii) is the OTHER terminal outcome, and the only one meaning success: the
+ *   run's stage/status become 'complete'/'succeeded', and the task is marked 'published' --
+ *   a fifth agent_tasks.status word, distinct from 'approved' for the same reason 'rejected'
+ *   is distinct from 'cancelled': "a reviewer approved this" and "this is now a public
+ *   storyline" are different facts, and collapsing them would make agent_tasks.status unable
+ *   to tell "approved but not yet published" apart from "published". Publishing does NOT
+ *   require a prior 'approved' decision row to exist -- pressing Publish is itself the
+ *   approval. There is no code anywhere that checks for a prior 'approved' row before
+ *   allowing 'published', and none should be added: requiring one would be a silent gate
+ *   this state machine was never designed to have, since 'approved' already leaves the run
+ *   exactly where 'published' finds it (still 'awaiting_review'), with nothing in between
+ *   that a missing approval could have protected.
  */
 export function decideReviewTransition(decision: ReviewDecisionKind): ReviewDecisionTransition {
   switch (decision) {
     case 'approved':
       return { run: null, taskStatus: 'approved' };
+    case 'published':
+      return { run: { stage: 'complete', status: 'succeeded' }, taskStatus: 'published' };
     case 'rewrite_requested':
       return { run: null, taskStatus: null };
     case 'rejected':
@@ -91,8 +121,11 @@ export function decideReviewTransition(decision: ReviewDecisionKind): ReviewDeci
  * -- 'rewrite_requested' and 'approved' -- leave the run exactly where it was (see
  * decideReviewTransition: their `run` transition is null), so a run can be
  * rewrite-requested and later approved with this guard in place, which is the sequence the
- * unit is required to support. Only 'rejected' moves the stage, and after it there is
- * genuinely nothing further to decide.
+ * unit is required to support. 'rejected' and 'published' (9e-ii) are the two decisions
+ * that move the stage away from 'awaiting_review', and after either there is genuinely
+ * nothing further to decide -- this guard is what stops a run from being published twice
+ * under a race exactly like the two-reviewer one described below, not just from being
+ * rejected twice.
  *
  * The defect this closes is a real two-reviewer race, not a hypothetical: A and B both
  * have the queue open, A rejects the run (run stage/status -> 'cancelled',

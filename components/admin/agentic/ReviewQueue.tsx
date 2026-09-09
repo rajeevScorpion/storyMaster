@@ -10,6 +10,7 @@ import {
   ClipboardCheck,
   Loader2,
   RefreshCcw,
+  Rocket,
   RotateCcw,
   ShieldAlert,
 } from 'lucide-react';
@@ -19,6 +20,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
   approveRunAction,
   listReviewQueueAction,
+  publishRunAction,
   rejectRunAction,
   requestRunRewriteAction,
   type ReviewDecisionKind,
@@ -35,38 +37,47 @@ import {
   EvaluationEntry,
 } from '@/components/admin/agentic/run-presentation';
 
-// ── Agentic Creator System: Phase 9 review queue (Units 9c + 9e-i) ────────
+// ── Agentic Creator System: Phase 9 review queue (Units 9c, 9e-i, 9e-ii) ────────
 //
 // Unit 9c made the queue VISIBLE: every run at stage 'awaiting_review', its story,
 // and its latest evaluation, in one place, filterable by review readiness. Unit
-// 9e-i adds the three reviewer decisions -- approve, reject, request rewrite --
-// as row actions. PUBLISH IS STILL NOT HERE: there is no publish button anywhere
-// in this file, on purpose -- Unit 9e-ii is a separate commit (D15,
-// docs/agentic-creator-decisions.md).
+// 9e-i added three reviewer decisions -- approve, reject, request rewrite -- as
+// row actions. Unit 9e-ii (D15, docs/agentic-creator-decisions.md) adds the
+// fourth: Publish, gated on the current reviewer's own can_publish (the
+// `canPublish` prop, resolved server-side by app/admin/authors/page.tsx via
+// requireReviewer() -- this component has no session of its own to check it
+// with). A reviewer without can_publish still sees the row, still sees every
+// other action, but the Publish item renders disabled.
 //
 // 9c deliberately used a plain chevron for the expand toggle because there were
 // no mutating actions yet. Now there are, so the expand toggle stays a bare
 // chevron cell (still just a UI affordance, not an action) and a separate
-// RowActionsMenu column carries Approve / Request rewrite / Reject, exactly the
-// pattern RunMonitor.tsx already uses for Retry / Cancel.
+// RowActionsMenu column carries Approve / Request rewrite / Reject / Publish,
+// exactly the pattern RunMonitor.tsx already uses for Retry / Cancel.
 //
 // WHAT EACH DECISION DOES TO THE ROW, so the optimistic local update below reads
 // as intentional rather than guessed (full state machine:
 // lib/agentic/review-decisions.shared.ts's decideReviewTransition):
 //   - Approve / Request rewrite: the run stays at 'awaiting_review' (approving
-//     does NOT publish -- that is 9e-ii), so the row stays in this list. Only its
-//     `latestDecision` badge changes.
-//   - Reject: the run moves to stage 'cancelled', so it no longer belongs in a
-//     list filtered to 'awaiting_review' -- the row is removed locally rather
-//     than left showing a stage the next real reload would never return.
+//     does NOT publish -- Publish is a separate action a reviewer takes on its
+//     own), so the row stays in this list. Only its `latestDecision` badge
+//     changes.
+//   - Reject / Publish: the run moves to a terminal stage ('cancelled' /
+//     'complete' respectively), so it no longer belongs in a list filtered to
+//     'awaiting_review' -- the row is removed locally rather than left showing a
+//     stage the next real reload would never return.
 //
 // This component assumes the reviewer-workflow flag is already ON. The flag-off
 // state (D8) is rendered by app/admin/authors/page.tsx BEFORE this component is
 // ever mounted -- that is what makes "does not fetch while off" literally true,
-// rather than this component fetching and then hiding the result. The three
+// rather than this component fetching and then hiding the result. All four
 // decision actions ALSO re-check the flag server-side (agentic-review.ts's
 // requireReviewerWorkflowEnabled) -- this component does not duplicate that
-// check, it just surfaces whatever error a disabled flag throws back.
+// check, it just surfaces whatever error a disabled flag throws back. Publish
+// additionally re-checks can_publish server-side (canPublish(reviewer) inside
+// publishRunAction) -- the `canPublish` prop below is a UX convenience (an
+// honest disabled affordance), never the write's actual security boundary,
+// exactly as the server action file's own header explains for the flag check.
 //
 // Four distinguishable empty states, the same discipline RunMonitor.tsx's own
 // doc comment describes for its run list:
@@ -105,9 +116,7 @@ const QUEUE_READINESS_LABELS: Record<ReviewQueueReadiness, string> = {
 };
 
 // Covers every value migration 112's CHECK constraint allows (StoredReviewDecisionValue),
-// including 'published' -- Unit 9e-ii's value, which nothing in this file ever writes but
-// which a stored row could in principle carry once that unit ships. Keeping the table
-// exhaustive now means 9e-ii adds no new badge styling here later.
+// including 'published' -- the value publishRunAction (Unit 9e-ii) now writes.
 const DECISION_LABELS: Record<StoredReviewDecisionValue, string> = {
   approved: 'Approved',
   rewrite_requested: 'Rewrite requested',
@@ -122,7 +131,7 @@ const DECISION_STYLES: Record<StoredReviewDecisionValue, string> = {
   published: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-300',
 };
 
-/** One row's confirm-dialog target: which run, and which of the three decisions it's for. */
+/** One row's confirm-dialog target: which run, and which of the four decisions it's for. */
 interface DecisionTarget {
   row: ReviewQueueRow;
   kind: ReviewDecisionKind;
@@ -136,7 +145,7 @@ const DECISION_DIALOG_COPY: Record<
     title: 'Approve this draft?',
     confirmLabel: 'Approve',
     tone: 'default',
-    body: 'Records your approval. The run stays at "awaiting review" -- publishing is a separate step, not built yet.',
+    body: 'Records your approval. The run stays at "awaiting review" -- publishing is a separate step you take on your own.',
   },
   rewrite_requested: {
     title: 'Request a rewrite?',
@@ -150,14 +159,40 @@ const DECISION_DIALOG_COPY: Record<
     tone: 'danger',
     body: 'Cancels the run and marks its task rejected. This is terminal -- the row drops out of this queue once rejected.',
   },
+  published: {
+    title: 'Publish this draft?',
+    confirmLabel: 'Publish',
+    tone: 'default',
+    body: 'Creates a public storyline from this draft, owned by the agentic system account and credited to the persona -- not to you. This does not require a prior approval, and it is terminal: the row drops out of this queue once published.',
+  },
+};
+
+// Exhaustive over ReviewDecisionKind on purpose -- a ternary chain with a trailing default
+// (as this used to be, defaulting anything unmatched to rejectRunAction) would have
+// silently sent 'published' to rejectRunAction the moment that value was added to the
+// type, since it was never explicitly matched. A missing case here is now a compile error
+// instead of a live incident.
+const DECISION_ACTIONS: Record<ReviewDecisionKind, typeof approveRunAction> = {
+  approved: approveRunAction,
+  rewrite_requested: requestRunRewriteAction,
+  rejected: rejectRunAction,
+  published: publishRunAction,
 };
 
 export default function ReviewQueue({
   initialRows,
   schemaApplied,
+  canPublish,
 }: {
   initialRows: ReviewQueueRow[];
   schemaApplied: boolean;
+  /**
+   * Whether the CURRENT reviewer (resolved server-side by app/admin/authors/page.tsx via
+   * requireReviewer()) may publish. A UX convenience only -- publishRunAction re-checks
+   * canPublish(reviewer) itself, so a stale or falsified prop cannot grant a write it
+   * would otherwise refuse. See this file's header.
+   */
+  canPublish: boolean;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [readinessFilter, setReadinessFilter] = useState('all');
@@ -197,18 +232,18 @@ export default function ReviewQueue({
     if (!decisionTarget) return;
     const { row, kind } = decisionTarget;
     const runId = row.run.id;
-    const action =
-      kind === 'approved' ? approveRunAction : kind === 'rewrite_requested' ? requestRunRewriteAction : rejectRunAction;
+    const action = DECISION_ACTIONS[kind];
 
     setBusyRunId(runId);
     setDecisionError(null);
     try {
       const decision = await action(runId, decisionNotes.trim() || undefined);
-      // 'rejected' moves the run to stage 'cancelled' -- it no longer belongs in a list
-      // filtered to 'awaiting_review', so it is removed locally rather than left showing a
-      // stage the next real reload would never return it under. 'approved' and
-      // 'rewrite_requested' leave the run right where it was; only the badge changes.
-      if (kind === 'rejected') {
+      // 'rejected' and 'published' both move the run to a terminal stage ('cancelled' /
+      // 'complete') -- neither belongs in a list filtered to 'awaiting_review' any more, so
+      // the row is removed locally rather than left showing a stage the next real reload
+      // would never return it under. 'approved' and 'rewrite_requested' leave the run right
+      // where it was; only the badge changes.
+      if (kind === 'rejected' || kind === 'published') {
         setRows((current) => current.filter((r) => r.run.id !== runId));
       } else {
         setRows((current) => current.map((r) => (r.run.id === runId ? { ...r, latestDecision: decision } : r)));
@@ -337,6 +372,18 @@ export default function ReviewQueue({
                       icon: Ban,
                       tone: 'danger',
                       onSelect: () => openDecision(row, 'rejected'),
+                    },
+                    {
+                      key: 'publish',
+                      // Disabled rather than hidden: a reviewer without can_publish should
+                      // still see the action exists (and why it's out of reach) instead of
+                      // wondering whether the feature is missing. publishRunAction is the
+                      // actual gate (canPublish(reviewer) inside it) -- this only controls
+                      // whether the click reaches that gate at all.
+                      label: canPublish ? 'Publish' : 'Publish (no permission)',
+                      icon: Rocket,
+                      disabled: !canPublish,
+                      onSelect: () => openDecision(row, 'published'),
                     },
                   ];
                   return (

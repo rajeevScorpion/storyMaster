@@ -1,17 +1,18 @@
 'use server';
 
-// ── Agentic Creator System: Phase 9 review queue (Units 9c + 9e-i) ────────
+// ── Agentic Creator System: Phase 9 review queue (Units 9c, 9e-i, 9e-ii) ────────
 //
-// Reads (listReviewQueueAction, the schema-status probes, listReviewersAction) plus
-// three mutations added in Unit 9e-i: approveRunAction, requestRunRewriteAction,
-// rejectRunAction. PUBLISH IS STILL NOT HERE -- Unit 9e-ii is a separate commit (D15)
-// and this file exports nothing for it. Every export reads/writes agent_runs (107),
+// Reads (listReviewQueueAction, the schema-status probes, listReviewersAction) plus four
+// mutations: approveRunAction, requestRunRewriteAction, rejectRunAction (Unit 9e-i), and
+// publishRunAction (Unit 9e-ii, D15). Every export reads/writes agent_runs (107),
 // agent_tasks (106) and agent_review_decisions (112) through the same plain lib
 // functions the run monitor and Unit 9c already use (lib/agentic/orchestrator.ts's
-// listRuns, lib/agentic/evaluation.ts's listEvaluationsForRun,
-// lib/agentic/review-decisions.ts's recordReviewDecision/listReviewDecisionsForRun)
-// -- none of those functions performs its own auth check, so the gate below is
-// entirely this file's to get right.
+// listRuns/getRun, lib/agentic/evaluation.ts's listEvaluationsForRun,
+// lib/agentic/review-decisions.ts's recordReviewDecision/listReviewDecisionsForRun) --
+// none of those functions performs its own auth check, so the gate below is entirely
+// this file's to get right. publishRunAction additionally calls
+// lib/agentic/review-publish.ts's publishReviewedStoryline, which creates the
+// `storylines` row itself and likewise performs no auth check of its own.
 //
 // AUTHORIZATION. Every export gates on requireReviewer() (lib/agentic/reviewers.ts),
 // NOT verifyAdmin(). That is deliberate per D14 (docs/agentic-creator-decisions.md)
@@ -44,9 +45,10 @@
 //     write's security boundary.
 
 import { requireReviewer } from '@/lib/agentic/reviewers';
+import { canPublish } from '@/lib/agentic/reviewers.shared';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
-import { listRuns, type AgentRun } from '@/lib/agentic/orchestrator';
+import { listRuns, getRun, type AgentRun } from '@/lib/agentic/orchestrator';
 import { isMissingRunSchemaError } from '@/lib/agentic/orchestrator.shared';
 import { listEvaluationsForRun, type StoredEvaluation } from '@/lib/agentic/evaluation';
 import { isMissingReviewerSchemaError, type AgentReviewerStatus } from '@/lib/agentic/reviewers.shared';
@@ -55,7 +57,8 @@ import {
   listReviewDecisionsForRun,
   type AgentReviewDecision,
 } from '@/lib/agentic/review-decisions';
-import type { ReviewDecisionKind } from '@/lib/agentic/review-decisions.shared';
+import { canRecordDecisionForStage, type ReviewDecisionKind } from '@/lib/agentic/review-decisions.shared';
+import { publishReviewedStoryline } from '@/lib/agentic/review-publish';
 import type { ReviewReadiness } from '@/lib/agentic/evaluation.shared';
 
 export type { AgentRun, StoredEvaluation, AgentReviewDecision };
@@ -274,12 +277,17 @@ export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
   }));
 }
 
-// ── Reviewer decisions (Unit 9e-i: approve / reject / request rewrite) ────
+// ── Reviewer decisions (approve / reject / request rewrite / publish) ────
 //
-// PUBLISH IS NOT HERE. There is deliberately no approveAndPublishRunAction or similar --
-// Unit 9e-ii is a separate commit (D15) and nothing below produces a 'published' row or
-// touches storylines. 'approved' below leaves the run at 'awaiting_review'; see
-// review-decisions.shared.ts's decideReviewTransition for the full state table.
+// approveRunAction / requestRunRewriteAction / rejectRunAction (Unit 9e-i) share the
+// `decide` helper below and gate on nothing beyond requireReviewer() + the workflow flag --
+// plain review access is enough to record an opinion. publishRunAction (Unit 9e-ii, D15)
+// is deliberately NOT built on `decide`: it additionally requires canPublish(reviewer), and
+// it has a real, hard-to-undo side effect (a public storyline) to perform before a decision
+// row can even be written, which the other three do not. See publishRunAction's own doc
+// comment for why it re-implements the auth/flag/stage checks instead of sharing `decide`.
+// 'approved' below leaves the run at 'awaiting_review'; see review-decisions.shared.ts's
+// decideReviewTransition for the full state table, including 'published'.
 
 /**
  * Throws with a clear, actionable message when agentic_reviewer_workflow_enabled is off.
@@ -320,10 +328,12 @@ async function decide(runId: string, decision: ReviewDecisionKind, notes?: strin
 
 /**
  * Approves the draft. Does NOT publish it and does NOT advance the run past
- * 'awaiting_review' -- publishing is Unit 9e-ii, which does not exist yet. An approved run
- * stays in this queue (still at stage 'awaiting_review') until something publishes it;
- * listReviewQueueAction's latestDecision field is what lets the UI show it as already
- * decided rather than implying nobody has looked at it.
+ * 'awaiting_review' -- publishing is a separate action (publishRunAction) that a reviewer
+ * takes independently, and does not require an 'approved' row to exist first (see
+ * decideReviewTransition's doc comment: pressing Publish is itself the approval). An
+ * approved run stays in this queue (still at stage 'awaiting_review') until something
+ * publishes it; listReviewQueueAction's latestDecision field is what lets the UI show it as
+ * already decided rather than implying nobody has looked at it.
  */
 export async function approveRunAction(runId: string, notes?: string): Promise<AgentReviewDecision> {
   return decide(runId, 'approved', notes);
@@ -349,4 +359,66 @@ export async function requestRunRewriteAction(runId: string, notes?: string): Pr
  */
 export async function rejectRunAction(runId: string, notes?: string): Promise<AgentReviewDecision> {
   return decide(runId, 'rejected', notes);
+}
+
+/**
+ * Publishes an approved (or not -- see below) agent draft as a real storyline, owned by
+ * the agentic system user and authored under the persona's display_name (D15,
+ * docs/agentic-creator-decisions.md). Does NOT use the shared `decide` helper above, for
+ * three reasons stacked in order:
+ *
+ * 1. Authorization is narrower than plain review access: canPublish(reviewer) must hold,
+ *    not just requireReviewer() succeeding. A reviewer who can review but not publish gets
+ *    a clear refusal here rather than a silent no-op.
+ * 2. There is a real side effect -- lib/agentic/review-publish.ts's publishReviewedStoryline
+ *    creates a `storylines` row -- that must happen BEFORE recordReviewDecision can be
+ *    called with a storyline_id to record. `decide` has no such step; every one of its three
+ *    decisions is nothing but the recordReviewDecision call itself.
+ * 3. Because of #2, this function pre-checks the run's stage itself (via getRun +
+ *    canRecordDecisionForStage) BEFORE calling publishReviewedStoryline, in addition to the
+ *    check recordReviewDecision performs internally right before its own writes. Skipping
+ *    the pre-check and relying solely on recordReviewDecision's internal one -- fine for
+ *    approve/reject/rewrite, which have no side effect of their own to guard -- would let a
+ *    run that already left 'awaiting_review' (rejected by another reviewer moments ago, say)
+ *    still get published: the storyline write would already be committed by the time
+ *    recordReviewDecision's own check ran and threw. This does not close the race
+ *    completely -- a run rejected in the window BETWEEN this pre-check and the storyline
+ *    write would still end up published, with recordReviewDecision then throwing on its own
+ *    re-check rather than silently mis-recording it. Closing that fully needs an atomic
+ *    claim/lock step this unit does not add; documented here rather than hidden.
+ *
+ * Publish does NOT require a prior 'approved' decision row -- pressing Publish is itself
+ * the approval (decideReviewTransition's doc comment, review-decisions.shared.ts). This
+ * function does not check listReviewDecisionsForRun at all.
+ */
+export async function publishRunAction(runId: string, notes?: string): Promise<AgentReviewDecision> {
+  const { userId, reviewer } = await requireReviewer();
+  if (!canPublish(reviewer)) {
+    throw new Error('Forbidden: this reviewer is not authorized to publish drafts.');
+  }
+  await requireReviewerWorkflowEnabled();
+
+  const run = await getRun(runId);
+  if (!run) {
+    throw new Error(`Run ${runId} was not found (or migration 107 is not applied on this environment).`);
+  }
+  if (!canRecordDecisionForStage(run.stage)) {
+    throw new Error(
+      `Run ${run.id} is no longer awaiting review (stage '${run.stage}'), so it cannot be published. Refresh the review queue to see its current state.`
+    );
+  }
+  if (!run.storyId) {
+    throw new Error(`Run ${run.id} has no story attached; there is nothing to publish.`);
+  }
+
+  const { storylineId } = await publishReviewedStoryline(run.storyId);
+
+  return recordReviewDecision({
+    runId,
+    decision: 'published',
+    reviewerId: userId,
+    reviewerLabel: reviewer.displayName,
+    notes: notes ?? null,
+    storylineId,
+  });
 }

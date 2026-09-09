@@ -27,21 +27,33 @@ describe('decideReviewTransition', () => {
     });
   });
 
+  // Unit 9e-ii (D15): publishing is the run's real terminal SUCCESS state, distinct from
+  // 'rejected''s cancelled/cancelled pair -- see decideReviewTransition's own doc comment
+  // for why 'published' (not 'approved', not 'cancelled') is the task-side word.
+  it('published: completes the run and marks the task published', () => {
+    expect(decideReviewTransition('published')).toEqual({
+      run: { stage: 'complete', status: 'succeeded' },
+      taskStatus: 'published',
+    });
+  });
+
   // Load-bearing distinction: an operator abandoning a run (cancelAgentTask/cancelRun)
   // writes agent_tasks.status = 'cancelled'; a reviewer's editorial rejection must write
   // 'rejected' instead, never reuse 'cancelled' -- otherwise the two are indistinguishable
-  // in the task history.
+  // in the task history. 'published' is included too: a published run must never be
+  // mistakable for one an operator simply cancelled.
   it('never produces taskStatus "cancelled" for any decision', () => {
-    const kinds = ['approved', 'rewrite_requested', 'rejected'] as const;
+    const kinds = ['approved', 'rewrite_requested', 'rejected', 'published'] as const;
     for (const kind of kinds) {
       expect(decideReviewTransition(kind).taskStatus).not.toBe('cancelled');
     }
   });
 
-  // approved must never advance the run into 'media_pending' or 'complete' -- both are
-  // reserved for the (unbuilt) publish flow, and 'media_pending' has no consumer at all
+  // approved must never advance the run into 'media_pending' or 'complete' -- 'complete' is
+  // reserved for the publish flow (9e-ii), and 'media_pending' has no consumer at all
   // (verified: no worker, no cron drains it). Asserting `run: null` here is what proves
-  // approval never touches agent_runs.stage.
+  // approval never touches agent_runs.stage. Unchanged by 9e-ii: this is the three
+  // pre-existing decisions' behavior staying byte-identical.
   it('approved never advances agent_runs.stage', () => {
     expect(decideReviewTransition('approved').run).toBeNull();
   });
@@ -84,6 +96,16 @@ describe('canRecordDecisionForStage', () => {
     // The two-reviewer race: A rejected the run, B's queue page is stale and still
     // lists it, B clicks approve. Without this guard B's write lands on a dead run.
     expect(canRecordDecisionForStage('cancelled')).toBe(false);
+  });
+
+  // The same race, one decision over: A published the run (stage -> 'complete'), B's page
+  // is stale and still lists it, B clicks Publish too. This is the guard
+  // recordReviewDecision (review-decisions.ts) re-checks right before its own writes --
+  // see that function's doc comment for why publishRunAction ALSO pre-checks this before
+  // creating the storyline, since by the time this function alone could refuse, the
+  // storyline write may already be committed.
+  it('refuses a decision on a run already completed by an earlier publish', () => {
+    expect(canRecordDecisionForStage('complete')).toBe(false);
   });
 
   it('refuses a decision on every other stage in the sequence', () => {
