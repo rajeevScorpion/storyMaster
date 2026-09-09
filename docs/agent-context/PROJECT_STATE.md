@@ -413,6 +413,13 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Agentic Creator (branch `feat/agentic-creator`)**
+- **A reviewer who triggers narration on an agent draft is not recorded on the job row.** Unit 9d (D13)
+  re-stamps `narration_batch_jobs.user_id` with the story owner so the agentic billing bypass can fire,
+  which is correct — but the table has no metadata column (migrations 068 and 069 are its whole schema),
+  so the human who actually pressed the button survives only as a `console.info` line. That is an audit
+  gap on *paid platform spend*, which is exactly the thing worth attributing. The fix is one additive
+  column — `submitted_by_user_id uuid references auth.users(id)` — and a migration, deliberately not
+  invented inside 9d. Belongs with Unit 9c, which is the surface that would display it.
 - **`retryRun` cannot re-brief, so the admin Retry button is weaker than the automatic path.** A
   novelty block now clears `brief_ready` and the cached verdict so the next *automatic* attempt
   regenerates a brief (D12). `retryRun` resets `status`, `attempt_count` and `error_detail` but never

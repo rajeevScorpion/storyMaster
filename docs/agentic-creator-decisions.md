@@ -394,10 +394,22 @@ the reviewer's RLS visibility of their own job, but `userId` is then the reviewe
 condition fails. Making it pass would mean weakening the single check that makes a claimed `actorKind`
 non-forgeable, to save a query the admin client makes anyway.
 
-**Cost.** `narration_batch_jobs` SELECT RLS is `auth.uid() = user_id`, so a re-stamped job leaves the
-submitting reviewer's own visibility. The review queue must read job status through an admin-client server
-action — which it does regardless, since `agent_runs` has RLS enabled with no policies at all. The
-submitting reviewer survives in the job metadata, so "who pressed it" is not lost, only relocated.
+**Cost — corrected after implementation (`57b516b`); the original text of this paragraph was wrong.**
+
+It claimed the submitting reviewer "survives in the job metadata, so 'who pressed it' is not lost, only
+relocated". **There is no metadata column on `narration_batch_jobs`** — migrations 068 and 069 are its
+entire schema and neither adds one. Re-stamping the payer therefore **does** lose the submitter from the
+row; Unit 9d logs them with `console.info` instead, which is discoverable in Vercel logs and nowhere else.
+Recording them properly needs an additive column, which is deferred rather than dropped (see
+PROJECT_STATE). Do not repeat the original claim.
+
+The RLS half of the original cost turned out to be **theoretical, not real**. `narration_batch_jobs` SELECT
+RLS is indeed `auth.uid() = user_id`, so a re-stamped job does leave the submitting reviewer's visibility —
+but nothing reads that table through the session client. Its only two readers, `narration-batch.ts` itself
+and `beat-control.ts`'s timeline-rewrite cancellation, both use the admin client, and the narration
+progress banner polls `beats.audio_status` through `loadStory` rather than the job row (the client never
+even retains the `jobId`). Verified by grep across the repo, not assumed. So no reviewer watches a spinner
+forever, and no queue change was needed to avoid it.
 
 This decision governs narration only. **Images are not covered and their answer is not the same**: both
 image submits gate and bill `user.id`, the caller, and hold one reservation for the whole job where
