@@ -117,6 +117,17 @@ export interface ReviewQueueRow {
 
 export interface ReviewQueueListFilters {
   readiness?: ReviewQueueReadiness | 'all';
+  /**
+   * Unit 9h (docs/agentic-creator-phase9b-plan.md section 4.3): the type this filter
+   * will eventually drive -- "just my assigned drafts" / "the unassigned pool" /
+   * everything. Migration 114 (agent_review_assignments) does NOT exist yet, so
+   * there is nothing to scope against: listReviewQueueAction below accepts this
+   * field but always degrades to 'all' behaviour, whatever value is passed. It
+   * must never silently narrow the queue to zero rows just because the schema it
+   * would need is absent -- see this function's own comment at the filter site.
+   * Unit 9i wires this up for real, joining via run.taskId.
+   */
+  assignment?: 'mine' | 'unassigned' | 'all';
 }
 
 /**
@@ -204,6 +215,12 @@ export async function listReviewQueueAction(filters: ReviewQueueListFilters = {}
       latestDecision: decisionsByRun[index][0] ?? null,
     };
   });
+
+  // filters.assignment (Unit 9h) is intentionally NOT applied here. There is no
+  // agent_review_assignments table yet (migration 114), so 'mine' and
+  // 'unassigned' have no data to mean anything against -- every value degrades
+  // to 'all', returning every row rather than silently filtering to none. Unit
+  // 9i replaces this comment with a real join.
 
   if (!filters.readiness || filters.readiness === 'all') return rows;
   return rows.filter((row) => row.readiness === filters.readiness);

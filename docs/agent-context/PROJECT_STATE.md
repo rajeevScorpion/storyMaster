@@ -481,6 +481,14 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   check before writing to `agent_story_memory`, which avoids the problem at the only current call site.
   The general fix — an `excludeStoryId` threaded through `runNoveltyCheck` — is deferred; any future
   caller comparing an already-recorded story will hit the same self-match.
+- **`/review` (Unit 9h) redirects a signed-out visitor to `/`, not to sign-in with a return URL.**
+  `app/review/layout.tsx`'s `requireReviewer()` gate mirrors `app/admin/layout.tsx`'s
+  `redirect('/')`-on-throw exactly, matching existing admin behaviour rather than inventing a nicer
+  flow for this one route. A sign-in redirect carrying `?next=/review` would be friendlier and is
+  deferred, not forgotten — plan section 4.4. Also still true as of 9h: the assignment filter Unit 9h
+  added to `ReviewQueueListFilters` (`'mine' | 'unassigned' | 'all'`) is wired but inert — migration 114
+  (`agent_review_assignments`) does not exist yet, so `listReviewQueueAction` always degrades to `'all'`.
+  Unit 9i makes it real.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
