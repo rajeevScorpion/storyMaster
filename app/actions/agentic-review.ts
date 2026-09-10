@@ -46,13 +46,14 @@
 
 import { requireReviewer } from '@/lib/agentic/reviewers';
 import { canPublish } from '@/lib/agentic/reviewers.shared';
-import { createAdminClient } from '@/lib/supabase/admin';
+import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { listRuns, getRun, type AgentRun } from '@/lib/agentic/orchestrator';
 import { isMissingRunSchemaError } from '@/lib/agentic/orchestrator.shared';
 import { listEvaluationsForRun, type StoredEvaluation } from '@/lib/agentic/evaluation';
 import {
   isMissingReviewerSchemaError,
+  validateReviewerCoverage,
   type AgentReviewerRole,
   type AgentReviewerStatus,
 } from '@/lib/agentic/reviewers.shared';
@@ -64,6 +65,7 @@ import {
 import { canRecordDecisionForStage, type ReviewDecisionKind } from '@/lib/agentic/review-decisions.shared';
 import { publishReviewedStoryline } from '@/lib/agentic/review-publish';
 import type { ReviewReadiness } from '@/lib/agentic/evaluation.shared';
+import { getAdminUsersPage } from '@/app/actions/admin-users';
 
 export type { AgentRun, StoredEvaluation, AgentReviewDecision };
 export type { ReviewDecisionKind };
@@ -217,6 +219,8 @@ export interface ReviewerRosterRow {
   languages: string[];
   genres: string[];
   displayName: string | null;
+  /** Internal note for other admins -- never shown to the reviewer. Carried here (Unit 9g) so the edit drawer can prefill it. */
+  notes: string | null;
   createdAt: string;
 }
 
@@ -228,7 +232,32 @@ interface AgentReviewerRosterQueryRow {
   languages: string[] | null;
   genres: string[] | null;
   display_name: string | null;
+  notes: string | null;
   created_at: string;
+}
+
+const REVIEWER_ROSTER_SELECT =
+  'user_id, status, role, age_groups, languages, genres, display_name, notes, created_at';
+
+/**
+ * Single row->camelCase mapping for the roster shape, shared by the read
+ * (listReviewersAction) and all three Unit 9g write actions below -- every one
+ * of them does a Postgres UPDATE/INSERT ... RETURNING and needs to hand the UI
+ * back a fresh ReviewerRosterRow. Keeping one mapper avoids the "two copies
+ * that drift" trap GOTCHAS warns about for exactly this kind of row-shaping code.
+ */
+function rosterRowFromQuery(row: AgentReviewerRosterQueryRow): ReviewerRosterRow {
+  return {
+    userId: row.user_id,
+    status: row.status,
+    role: row.role,
+    ageGroups: row.age_groups ?? [],
+    languages: row.languages ?? [],
+    genres: row.genres ?? [],
+    displayName: row.display_name,
+    notes: row.notes,
+    createdAt: row.created_at,
+  };
 }
 
 /**
@@ -254,12 +283,13 @@ export async function getReviewerRosterSchemaStatusAction(): Promise<{ schemaApp
 }
 
 /**
- * Every row in agent_reviewers, most recently created first. Read-only -- there
- * is no create/suspend/edit action here yet. Migration 111 seeds no rows, and
- * it is verified empty on dev (Phase 9 plan 1.7), so this returning [] on a
- * schema-applied database is the honest common case today, not a bug: reviewer
- * standing so far is carried entirely by the process.env.ADMIN_USER_ID
- * short-circuit in requireReviewer(), which never writes a row here.
+ * Every row in agent_reviewers, most recently created first. Migration 111
+ * seeds no rows, and it was verified empty on dev before Unit 9g (Phase 9 plan
+ * 1.7), so this returning [] on a schema-applied database can still be the
+ * honest "nobody has been granted yet" state -- not necessarily a bug -- until
+ * an admin uses grantReviewerAction (below) to add the first real row. Reviewer
+ * standing before that point is carried entirely by the process.env.ADMIN_USER_ID
+ * short-circuit in requireReviewer().
  */
 export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
   await requireReviewer();
@@ -267,7 +297,7 @@ export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('agent_reviewers')
-    .select('user_id, status, role, age_groups, languages, genres, display_name, created_at')
+    .select(REVIEWER_ROSTER_SELECT)
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -275,16 +305,224 @@ export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
     throw new Error(`Failed to list agent_reviewers: ${error.message}`);
   }
 
-  return ((data ?? []) as AgentReviewerRosterQueryRow[]).map((row) => ({
-    userId: row.user_id,
-    status: row.status,
-    role: row.role,
-    ageGroups: row.age_groups ?? [],
-    languages: row.languages ?? [],
-    genres: row.genres ?? [],
-    displayName: row.display_name,
-    createdAt: row.created_at,
+  return ((data ?? []) as AgentReviewerRosterQueryRow[]).map(rosterRowFromQuery);
+}
+
+// ── Reviewer roster management: grant / edit / suspend (Unit 9g) — ADMIN ONLY ──
+//
+// Every export below gates on verifyAdmin() (lib/supabase/admin.ts), NOT
+// requireReviewer() -- a deliberate departure from this file's own header rule
+// (see AUTHORIZATION at the top of this file). Granting or editing reviewer
+// STANDING is an admin act, not a reviewer one: even an editor-role reviewer
+// (canAssignWork(reviewer) === true) has no business creating other reviewers or
+// changing their coverage -- that would let a reviewer promote themselves or a
+// friend to editor with no admin in the loop. Only process.env.ADMIN_USER_ID
+// (verifyAdmin's single-person env check) may call any of the four functions
+// below. This is also why granting stays under /admin/authors/reviewers instead
+// of moving to /review with the rest of this file's reviewer-facing surface in
+// Unit 9h -- see docs/agentic-creator-phase9b-plan.md section 3.
+//
+// FAIL CLOSED, same latch as every read above: a write against a column 113
+// hasn't created yet surfaces as isMissingReviewerSchemaError (42703), and each
+// action below turns that into one clear, actionable message instead of a raw
+// Postgres error. No second latch is added -- these columns live on the same
+// agent_reviewers table 111 already created, per GOTCHAS's "one latch per
+// migration group" rule, so the existing classifier already covers them.
+
+/** What searchGrantableUsersAction hands the picker -- just enough to identify an account and grant it. */
+export interface GrantableUserOption {
+  userId: string;
+  email: string | null;
+  displayName: string;
+}
+
+/**
+ * Backs the "search for a user to grant" box in ReviewerRosterEditor. Delegates
+ * entirely to getAdminUsersPage (app/actions/admin-users.ts), which already
+ * wraps the admin_list_users RPC (lower(email) OR display name, migration 083)
+ * -- re-implementing that query here would be a second copy of a search that
+ * already exists and is already admin-gated. Note: getAdminUsersPage's own
+ * normalizeAdminUserListInput clamps pageSize to one of [25, 50, 100]
+ * (lib/admin/user-management.shared.ts), so the `10` passed here is rounded up
+ * to 25 results, not truncated to 10 -- harmless for a search-as-you-type list,
+ * but worth knowing if a caller ever expects an exact count.
+ *
+ * Returns [] for a blank query rather than the newest 25 accounts -- there is
+ * no "browse everyone" use case here, only "find the person I mean to grant".
+ */
+export async function searchGrantableUsersAction(query: string): Promise<GrantableUserOption[]> {
+  await verifyAdmin();
+
+  const search = query.trim();
+  if (!search) return [];
+
+  const page = await getAdminUsersPage({ search, pageSize: 10 });
+  return page.users.map((user) => ({
+    userId: user.userId,
+    email: user.email,
+    displayName: user.displayName,
   }));
+}
+
+/** Shared input shape for grant/update -- everything validateReviewerCoverage needs, plus the identity/free-text fields it doesn't check. */
+interface ReviewerWriteInput {
+  role: AgentReviewerRole;
+  ageGroups: string[];
+  languages: string[];
+  genres: string[];
+  displayName?: string | null;
+  notes?: string | null;
+}
+
+/** Throws a validation error whose message is the joined list from validateReviewerCoverage -- shared by grant and update so the two can't drift on how they report a bad taxonomy value. */
+function assertValidCoverage(input: ReviewerWriteInput, action: string): void {
+  const validation = validateReviewerCoverage(input);
+  if (!validation.ok) {
+    throw new Error(`Cannot ${action}: ${validation.errors.join(' ')}`);
+  }
+}
+
+/** True for the Postgres unique_violation code -- what agent_reviewers' primary key (user_id) throws when grantReviewerAction targets someone already in the roster. */
+function isUniqueViolation(error: { code?: string } | null | undefined): boolean {
+  return error?.code === '23505';
+}
+
+export interface GrantReviewerInput extends ReviewerWriteInput {
+  userId: string;
+}
+
+/**
+ * Creates a brand-new agent_reviewers row for `userId`, always starting
+ * `status: 'active'` -- reinstating a suspended reviewer is setReviewerStatusAction's
+ * job, not this one's. Deliberately a plain INSERT (never upsert): a conflict on
+ * the primary key means this user already has a row, and the right fix for that
+ * is Edit (updateReviewerAction), not a silent overwrite that would also clobber
+ * their original created_by. `created_by` and `updated_by` are both stamped with
+ * the granting admin's id -- the same id for both, since this is the row's first
+ * write.
+ */
+export async function grantReviewerAction(input: GrantReviewerInput): Promise<ReviewerRosterRow> {
+  const { user } = await verifyAdmin();
+  assertValidCoverage(input, 'grant reviewer standing');
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('agent_reviewers')
+    .insert({
+      user_id: input.userId,
+      status: 'active',
+      role: input.role,
+      age_groups: input.ageGroups,
+      languages: input.languages,
+      genres: input.genres,
+      display_name: input.displayName?.trim() || null,
+      notes: input.notes?.trim() || null,
+      created_by: user.id,
+      updated_by: user.id,
+    })
+    .select(REVIEWER_ROSTER_SELECT)
+    .single();
+
+  if (error) {
+    if (isMissingReviewerSchemaError(error)) {
+      throw new Error(
+        'Migration 113 is not applied on this environment yet -- agent_reviewers has no role/coverage columns to write. Apply 113_agent_reviewer_roles.sql before granting reviewer standing.'
+      );
+    }
+    if (isUniqueViolation(error)) {
+      throw new Error('This user is already a reviewer. Use Edit to change their role or coverage instead.');
+    }
+    throw new Error(`Failed to grant reviewer standing: ${error.message}`);
+  }
+
+  return rosterRowFromQuery(data as AgentReviewerRosterQueryRow);
+}
+
+export interface UpdateReviewerInput extends ReviewerWriteInput {
+  userId: string;
+}
+
+/**
+ * Edits role/coverage/display name/notes on an EXISTING reviewer row. Plain
+ * UPDATE ... WHERE user_id = ... (never upsert, mirroring grantReviewerAction's
+ * own reasoning in reverse): if no row matches, `.single()` throws PGRST116,
+ * which is reported back as "grant them first" rather than silently creating a
+ * row through the wrong action. Does not touch `status` -- suspend/reinstate is
+ * setReviewerStatusAction's job, kept separate so a reviewer's coverage isn't
+ * accidentally rewritten by a status-only click.
+ */
+export async function updateReviewerAction(input: UpdateReviewerInput): Promise<ReviewerRosterRow> {
+  const { user } = await verifyAdmin();
+  assertValidCoverage(input, 'update reviewer');
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('agent_reviewers')
+    .update({
+      role: input.role,
+      age_groups: input.ageGroups,
+      languages: input.languages,
+      genres: input.genres,
+      display_name: input.displayName?.trim() || null,
+      notes: input.notes?.trim() || null,
+      updated_by: user.id,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('user_id', input.userId)
+    .select(REVIEWER_ROSTER_SELECT)
+    .single();
+
+  if (error) {
+    if (isMissingReviewerSchemaError(error)) {
+      throw new Error(
+        'Migration 113 is not applied on this environment yet -- agent_reviewers has no role/coverage columns to write. Apply 113_agent_reviewer_roles.sql before editing a reviewer.'
+      );
+    }
+    if (error.code === 'PGRST116') {
+      throw new Error('This user has no reviewer row yet. Grant reviewer standing first.');
+    }
+    throw new Error(`Failed to update reviewer: ${error.message}`);
+  }
+
+  return rosterRowFromQuery(data as AgentReviewerRosterQueryRow);
+}
+
+/**
+ * Suspends or reinstates a reviewer. Touches only `status` (plus the
+ * `updated_by`/`updated_at` audit pair) -- role and coverage are left exactly as
+ * they were, so reinstating someone returns them to the same routing pool they
+ * left rather than resetting them to defaults.
+ */
+export async function setReviewerStatusAction(
+  userId: string,
+  status: AgentReviewerStatus
+): Promise<ReviewerRosterRow> {
+  const { user } = await verifyAdmin();
+  if (status !== 'active' && status !== 'suspended') {
+    throw new Error(`Unsupported reviewer status '${status}'.`);
+  }
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('agent_reviewers')
+    .update({ status, updated_by: user.id, updated_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .select(REVIEWER_ROSTER_SELECT)
+    .single();
+
+  if (error) {
+    if (isMissingReviewerSchemaError(error)) {
+      throw new Error(
+        'Migration 113 is not applied on this environment yet -- agent_reviewers has no updated_by column to write. Apply 113_agent_reviewer_roles.sql before changing reviewer status.'
+      );
+    }
+    if (error.code === 'PGRST116') {
+      throw new Error('This user has no reviewer row yet. Grant reviewer standing first.');
+    }
+    throw new Error(`Failed to update reviewer status: ${error.message}`);
+  }
+
+  return rosterRowFromQuery(data as AgentReviewerRosterQueryRow);
 }
 
 // ── Reviewer decisions (approve / reject / request rewrite / publish) ────
