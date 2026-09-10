@@ -368,7 +368,12 @@ function rosterRowFromQuery(row: AgentReviewerRosterQueryRow): ReviewerRosterRow
  * query actually touched.
  */
 export async function getReviewerRosterSchemaStatusAction(): Promise<{ schemaApplied: boolean }> {
-  await requireReviewer();
+  // verifyAdmin() for the same reason as listReviewersAction below, which is
+  // this probe's only companion caller: both exist solely to render
+  // /admin/authors/reviewers. The boolean it returns is not itself sensitive --
+  // the point is that the pair share one gate, so neither reads as the one
+  // somebody forgot to think about.
+  await verifyAdmin();
 
   const admin = createAdminClient();
   const { error } = await admin.from('agent_reviewers').select('user_id').limit(1);
@@ -390,7 +395,18 @@ export async function getReviewerRosterSchemaStatusAction(): Promise<{ schemaApp
  * short-circuit in requireReviewer().
  */
 export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
-  await requireReviewer();
+  // verifyAdmin(), NOT requireReviewer(): this row carries `notes`, which is
+  // admin-only commentary ABOUT a reviewer (see ReviewerRosterRow.notes, whose
+  // own doc says "never shown to the reviewer"). Unit 9g widened this payload to
+  // include notes so the edit drawer could prefill it, but left the gate at
+  // requireReviewer() -- which would have handed every active reviewer the
+  // internal notes written about every other reviewer the moment the first real
+  // row was granted. A server action is directly invocable, so the verifyAdmin()
+  // on app/admin/authors/reviewers/page.tsx's parent layout was never protection
+  // here. That admin page is this action's only caller, so the stricter gate
+  // costs nothing. See listAssignableReviewersAction below for the reviewer-safe
+  // projection an editor's assignment picker uses instead.
+  await verifyAdmin();
 
   const admin = createAdminClient();
   const { data, error } = await admin
