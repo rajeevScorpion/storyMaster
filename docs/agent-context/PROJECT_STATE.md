@@ -85,12 +85,14 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**102-108, 110, 111 and 112 applied to dev.** 102-107 verified against
+**102-108, 110, 111, 112 and 113 applied to dev.** 102-107 verified against
 `schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against the schema
 itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT,
 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112 applied
-2026-09-09**, both verified against the schema rather than only their ledger rows (see their rows below).
-**Production has none of them.**
+2026-09-09** and **113 applied 2026-09-10**, all three verified against the schema rather than only their
+ledger rows (see their rows below). **Production has none of them** — the prod ledger returns zero rows for
+`migration_number >= 103`, so the entire agentic schema is dev-only and prod will need 103-onward applied in
+order whenever it is promoted.
 
 **There is no migration 109, and there will not be one.** Phase 8 planned an
 `agentic_narration_enabled` flag to sit above each persona's `allow_narration`, mirroring
@@ -110,8 +112,9 @@ for what has actually run.
 | 107 | `agent_runs` | tables `agent_runs`, `agent_run_events`, `agent_schedules` + the partial unique dedup index | **Applied** 2026-09-07, all three empty | Not applied |
 | 108 | `agent_evaluations` | table `agent_evaluations` + a PARTIAL unique index on `(run_id) WHERE trigger_source = 'pipeline'` | **Applied** 2026-09-08. Schema verified directly, not just the ledger row: 12 columns, RLS on, `anon`/`authenticated` denied SELECT, 0 rows, and the index confirmed UNIQUE *and* partial | Not applied |
 | 110 | `riya_sen_narration_voice` | data-only: moves `riya-sen`'s `preferred_voice` from `Leda` to `Callirrhoe`, resolving the one same-language voice collision among the seeds (both it and `madhurima-bose` are Bangla) | **Applied** 2026-09-08. Verified against the data, not only the ledger: `riya-sen` now holds `Callirrhoe`, and a group-by over `(preferred_voice, language)` returns **zero** personas sharing a voice within a language, with all 15 voices inside the exposed 12 | Not applied (depends on 103 + 104, not on a contiguous run below it) |
-| 111 | `agent_reviewers` | table `agent_reviewers` — Phase 9's reviewer authorization, read only through `requireReviewer()` (D6, D14) | **Applied** 2026-09-09 16:20:41+00. **0 rows**, and that matters: with the table empty, the only account that passes `requireReviewer()` is `ADMIN_USER_ID`, through the implicit short-circuit that never touches the table. Insert a row to exercise the `can_publish` / `can_trigger_media` capability columns at all | Not applied |
+| 111 | `agent_reviewers` | table `agent_reviewers` — Phase 9's reviewer authorization, read only through `requireReviewer()` (D6, D14) | **Applied** 2026-09-09 16:20:41+00. **0 rows**, and that matters: with the table empty, the only account that passes `requireReviewer()` is `ADMIN_USER_ID`, through the implicit short-circuit that never touches the table. Insert a row to exercise reviewer capability at all. **Superseded in part by 113**, which dropped `can_publish` / `can_trigger_media` in favour of a single `role` column | Not applied |
 | 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
+| 113 | `agent_reviewer_roles` | `agent_reviewers` gains `role` (`reviewer`\|`editor`, CHECK-constrained), the `age_groups`/`languages`/`genres` coverage arrays, and `updated_by`; **drops `can_publish` and `can_trigger_media`** — Phase 9b's D17, capability derived from role by pure functions rather than stored twice | **Applied** 2026-09-10 03:07:27+00. Schema verified directly, not just the ledger row: 12 columns, `role` NOT NULL DEFAULT `'reviewer'` with CHECK `('reviewer','editor')`, the three arrays NOT NULL DEFAULT `'{}'`, `updated_by` FK SET NULL, both booleans confirmed **gone**, **0 rows**. Dropping the booleans was only safe because the table was empty and prod has no agentic schema at all | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
