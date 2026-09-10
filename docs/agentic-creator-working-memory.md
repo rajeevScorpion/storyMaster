@@ -6,6 +6,86 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-10 (Phase 9b shipped; 9L/9M/9J planned, not started)
+
+**Read this section first. Everything below it is older and describes a world before roles existed.**
+
+### Start here
+
+`docs/agentic-creator-phase9c-plan.md` is the next session's brief. It plans **9M, 9L and 9J in that
+order** and carries its own verified-facts section. The order is deliberate: 9M can invalidate the
+other two, so it goes first.
+
+### What landed this session
+
+| SHA | What |
+|---|---|
+| `3a69bbb` | Phase 9b plan — roles, coverage, routing (D16/D17/D18), with complete SQL for 113 and 114 |
+| `f942aa8` | **9f** — `role` replaces `can_publish`/`can_trigger_media`; canonical age-group taxonomy; migration 113 |
+| `8bc991e` | **9g** — grant / edit / revoke reviewers by email (admin only) |
+| `64150ce` | PROJECT_STATE: 113 applied; 111's row corrected |
+| `512a567` | **9h** — `/review`, gated by `requireReviewer()`, outside `/admin` |
+| `116abcf` | **9i** — migration 114, manual task-level assignment (D18) |
+| `245588e` | **Security fix** — the reviewer roster leaked admin-only `notes` to every reviewer |
+
+Gate re-run independently at each unit, never taken on report. At `245588e`: **tsc 0, lint clean,
+101 files / 952 tests, build green, e2e 17/17.** `test:e2e` DID run this session — first time in four.
+
+### Live database state (verified 2026-09-10, not inferred)
+
+- **113 applied** 03:07:27+00, **114 applied** 08:07:22+00 — both checked against the schema itself.
+- `agent_review_assignments_one_active_idx` is **UNIQUE and partial**. That index is what makes
+  auto-assignment idempotent; if it is ever recreated, keep both properties.
+- **A real reviewer now exists**: `testuser`, role `reviewer`, active, `[english, hindi]`, all five
+  concrete age groups, `genres = []`. One draft is assigned to them.
+- `agentic_reviewer_workflow_enabled` is **true**.
+- **Production still has NO agentic schema.** The prod ledger is empty for `migration_number >= 103`.
+  Promotion will need 103→114 applied in order.
+
+### 113 and 114 are FROZEN
+
+Both are applied. Any further change to reviewer or assignment schema ships as **115**. Do not edit
+either file — the repo would silently diverge from the owner's database.
+
+### The scope changed on 2026-09-10, and it matters
+
+The owner restated what a reviewer is: not a decision-maker with four buttons, but the **finisher**.
+Read the whole story beat by beat → approve → enter creation mode → edit → narrate all beats →
+generate images → publish **under the agent persona's name only**. Recorded as **D19** (hand off to
+the existing `/story/[id]` authoring UI, do not build a second editor) and **D20** (reviewer standing
+rides the pricing-runtime payload — never its own per-page request).
+
+Most of the capability already exists: 9b made `saveBeat`, beat editing, `submitStoryNarrationBatch`
+and `submitStoryImageBatch` reviewer-aware, and D15's publish-as-persona shipped in 9e-ii. What is
+missing is the *workspace*, not the permissions.
+
+### Sharp edges the next session must not rediscover
+
+- **`saveStory` is NOT reviewer-aware** — only `saveBeat` is. If `StoryScreen` reaches it, a reviewer
+  gets `Forbidden.` This is 9M's first investigation, before any code.
+- **`PublishDialog` calls `publishStoryline`**, which is owner-only and would attribute the storyline
+  to the **reviewer**, breaking D15. A reviewer must reach `publishReviewedStoryline` instead.
+- **Image billing for agent drafts is unpriced.** Narration already bills the system user
+  (`57b516b`); images are an open question and are now load-bearing, because a reviewer generating
+  them spends someone's money.
+- **A hydration error on `/review` is reported but NOT diagnosed.** Prime suspect is `formatDateTime`'s
+  `toLocaleString` during SSR. Reproduce it in a browser before fixing; do not guess. If real, it is
+  pre-existing and also affects `/admin/authors`.
+- The queue table is **11 columns at `min-w-[1180px]`** and scrolls horizontally. That is a design
+  problem, not a CSS one.
+- Reviewer credentials for local browser testing belong in **`.env.local`** as
+  `E2E_REVIEWER_EMAIL` / `E2E_REVIEWER_PASSWORD`, following the existing `E2E_ADMIN_*` pattern.
+  Never commit them.
+
+### The pattern, now across five phases
+
+**Seven plan-level errors in Phase 9b against one code defect** — and that defect (`245588e`) was
+itself caused by a plan error of mine. Every one was found by reading a diff or checking a claim,
+never by the test suite. Subagents that stopped to verify a claim in their own brief are the reason
+three of them were caught. **If the written record contradicts the code, the code is right.**
+
+---
+
 ## Session handoff — 2026-09-09 late (9c and 9e-i landed; 9e-ii was in flight at the stop)
 
 **Read this section first; the one below it is the previous stop and is still accurate for 9a/9b/9d.**

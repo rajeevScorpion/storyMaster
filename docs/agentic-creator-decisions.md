@@ -500,3 +500,94 @@ discovery (`age_group`, `genre`, `visibility`, `moderation_status`, `path_hash`)
 maintenance cost and is accepted deliberately: the alternative was impersonation in the shared path.
 Publishing also becomes a service-role write, so `canPublish()` is load-bearing security on the same
 terms `requireReviewer()` already is.
+
+---
+
+## D16 — `all_ages` is never auto-routed; it goes to the unassigned pool
+
+**Decision.** `all_ages` sits in the same enum as the five concrete age groups but is not a wildcard.
+Reviewers declare coverage over the five concrete groups only; an `all_ages` task matches nobody and
+lands in the **unassigned pool**, claimable by any reviewer whose language matches.
+
+**Rejected.** Treating it as a wildcard (hands a kids-3-5 specialist adult-leaning work). Plain
+set-membership with no special case — which routes it to nobody **silently**, and that silent
+starvation is the precise defect this decision exists to prevent.
+
+**Cost.** One branch in the matcher and one excluded checkbox in the grant UI
+(`ROUTABLE_AGE_GROUPS`), plus a validator that rejects `all_ages` as coverage.
+
+---
+
+## D17 — role is the only stored capability
+
+**Decision.** `agent_reviewers.role` (`reviewer` | `editor`) is the single source of truth for what a
+reviewer may do. Migration 113 **dropped** `can_publish` and `can_trigger_media`; capability is derived
+by pure functions in `reviewers.shared.ts`.
+
+| role | review | publish | trigger media | assign work |
+|---|---|---|---|---|
+| `reviewer` | yes | no | yes | no |
+| `editor` | yes | yes | yes | yes |
+
+Named **editor**, not "supervisor": `lib/agentic/supervisor.ts` is the AI Editorial Supervisor and
+`agent_tasks.origin = 'supervisor'` already means "the AI commissioned this".
+
+**Rejected.** Role plus booleans as per-person overrides — two sources of truth for one fact, and
+nothing would keep them in sync. Deferred rather than refused: add a `capability_overrides` jsonb if a
+real exception appears.
+
+**Cost.** Dropping the columns was only safe because `agent_reviewers` was empty and production has no
+agentic schema at all. Note the consequence: `canTriggerMedia` moved from **opt-in** (`DEFAULT false`)
+to automatic for every active reviewer, so granting standing now also grants the ability to spend money
+on narration and images.
+
+---
+
+## D18 — assignment is task-level and advisory
+
+**Decision.** Assignment attaches to `agent_tasks`, not `agent_runs` — a task can produce several runs
+via retry and the assignment must survive one. It is **advisory**: it drives a default filter and the
+workload view, and never gates a decision. Any active reviewer may still act on any draft.
+
+**Rejected.** Enforced assignment. With auto-routing, a taxonomy typo would lock a draft with no error,
+and this system already has one stage (`media_pending`) that nothing consumes.
+
+**Cost.** A partial unique index (`task_id` WHERE `status='active'`) is load-bearing — it is what makes
+auto-assignment idempotent and stops two concurrent assignments both landing.
+
+---
+
+## D19 — the reviewer finishes the story in `/story/[id]`, not in a second editor
+
+**Decision.** A reviewer who approves a draft is handed off to the **existing authoring UI** with
+reviewer permissions, rather than editing inside `/review`. The reviewer is the finisher: read beat by
+beat, approve, edit, narrate every beat, generate images, publish — always under the agent persona's
+name (D15), never their own.
+
+**Why.** The authoring UI is already where beat editing, narration batches, image batches and the media
+pipeline live, and Unit 9b already made all four reviewer-aware through `assertCanEditStory`. A second
+editor would duplicate `StoryScreen` and then drift from it.
+
+**Rejected.** A dedicated reviewer editor inside `/review` — cleaner boundary, far more code, two
+authoring surfaces to keep in sync forever.
+
+**Cost.** `StoryScreen` was written for an owner, so owner assumptions have to be found and handled.
+Two are known: `saveStory` is not reviewer-aware (only `saveBeat` is), and `PublishDialog` calls the
+owner-only `publishStoryline`, which would attribute the storyline to the reviewer and break D15.
+
+---
+
+## D20 — reviewer standing rides the pricing-runtime payload; it never gets its own request
+
+**Decision.** The profile badge and the `/review` link need "is the current user a reviewer, and what
+role". That answer is added to `getPricingRuntimeContext()`, already fetched once per session by an
+app-wide cached provider. **Zero additional requests.**
+
+**Rejected.** A dedicated `getMyReviewerStanding()` called from `UserMenu` — one extra round trip per
+page for every signed-in user on the site, almost none of whom are reviewers. A Supabase JWT custom
+claim — also zero-cost, but adds an auth hook and goes stale until token refresh, so a revoked reviewer
+keeps their badge for up to an hour.
+
+**Cost.** A pricing-shaped payload now carries an authorization fact. The constraint that keeps this
+safe: it carries only `{ role } | null` for the **current user** — never another account's standing and
+never `notes`. See `245588e` for the disclosure that shape prevents.
