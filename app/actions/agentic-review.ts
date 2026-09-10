@@ -45,7 +45,7 @@
 //     write's security boundary.
 
 import { requireReviewer } from '@/lib/agentic/reviewers';
-import { canPublish } from '@/lib/agentic/reviewers.shared';
+import { canAssignWork, canPublish } from '@/lib/agentic/reviewers.shared';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { listRuns, getRun, type AgentRun } from '@/lib/agentic/orchestrator';
@@ -66,10 +66,17 @@ import { canRecordDecisionForStage, type ReviewDecisionKind } from '@/lib/agenti
 import { publishReviewedStoryline } from '@/lib/agentic/review-publish';
 import type { ReviewReadiness } from '@/lib/agentic/evaluation.shared';
 import { getAdminUsersPage } from '@/app/actions/admin-users';
+import {
+  assignTask,
+  listAssignmentsForTasks,
+  releaseAssignment,
+} from '@/lib/agentic/review-routing';
+import type { ReviewAssignment } from '@/lib/agentic/review-routing.shared';
 
 export type { AgentRun, StoredEvaluation, AgentReviewDecision };
 export type { ReviewDecisionKind };
 export type { StoredReviewDecisionValue } from '@/lib/agentic/review-decisions.shared';
+export type { ReviewAssignment } from '@/lib/agentic/review-routing.shared';
 
 /**
  * One story column this queue needs -- title plus the two audience fields shown
@@ -113,19 +120,40 @@ export interface ReviewQueueRow {
    * fetched into this list again.
    */
   latestDecision: AgentReviewDecision | null;
+  /**
+   * The task's current ACTIVE assignment (Unit 9i, migration 114, D18), or `null`
+   * when none exists. Joined via `run.taskId`, not `run.id` -- assignment is
+   * task-level so it survives a retry producing a new run for the same task (see
+   * the migration header). A non-null value may still carry `reviewerId: null`
+   * (the FK's ON DELETE SET NULL) -- callers MUST treat that the same as `null`
+   * here: "unassigned", never "assigned to nobody in particular".
+   */
+  assignment: ReviewAssignment | null;
+  /**
+   * Display name for `assignment.reviewerId`, resolved server-side against
+   * agent_reviewers so the queue can show a name without a client-side lookup
+   * that only an editor could make (listAssignableReviewersAction is
+   * canAssignWork()-gated; a plain reviewer must still be able to SEE who a
+   * draft is assigned to). `null` whenever `assignment` is null/unassigned, and
+   * also `null` if the reviewer row itself has no display_name set -- callers
+   * fall back to a short id in that case.
+   */
+  assigneeDisplayName: string | null;
 }
 
 export interface ReviewQueueListFilters {
   readiness?: ReviewQueueReadiness | 'all';
   /**
-   * Unit 9h (docs/agentic-creator-phase9b-plan.md section 4.3): the type this filter
-   * will eventually drive -- "just my assigned drafts" / "the unassigned pool" /
-   * everything. Migration 114 (agent_review_assignments) does NOT exist yet, so
-   * there is nothing to scope against: listReviewQueueAction below accepts this
-   * field but always degrades to 'all' behaviour, whatever value is passed. It
-   * must never silently narrow the queue to zero rows just because the schema it
-   * would need is absent -- see this function's own comment at the filter site.
-   * Unit 9i wires this up for real, joining via run.taskId.
+   * "Just my assigned drafts" / "the unassigned pool" / everything (Unit 9i,
+   * migration 114, D18). 'mine' matches rows whose assignment.reviewerId equals the
+   * CALLING reviewer's own id (resolved server-side inside listReviewQueueAction,
+   * never trusted from the caller). 'unassigned' matches rows with no active
+   * assignment row AND rows whose active assignment has reviewerId === null (the
+   * FK's ON DELETE SET NULL state) -- both read as "nobody is on this" per D18.
+   * While migration 114 is unapplied, listAssignmentsForTasks degrades to an empty
+   * Map, so every row's `assignment` is `null` and 'unassigned' returns everything
+   * -- an honest reflection of "nothing is assigned because there is nowhere to
+   * record an assignment yet", not a silent narrowing to zero rows.
    */
   assignment?: 'mine' | 'unassigned' | 'all';
 }
@@ -182,7 +210,7 @@ export async function getReviewQueueSchemaStatusAction(): Promise<{ schemaApplie
  * need revisiting at a queue size this surface is not expected to reach.
  */
 export async function listReviewQueueAction(filters: ReviewQueueListFilters = {}): Promise<ReviewQueueRow[]> {
-  await requireReviewer();
+  const { userId } = await requireReviewer();
 
   const runs = await listRuns({ stage: 'awaiting_review' });
   if (runs.length === 0) return [];
@@ -205,25 +233,78 @@ export async function listReviewQueueAction(filters: ReviewQueueListFilters = {}
   const evaluationsByRun = await Promise.all(runs.map((run) => listEvaluationsForRun(run.id)));
   const decisionsByRun = await Promise.all(runs.map((run) => listReviewDecisionsForRun(run.id)));
 
+  // Unit 9i (D18): joined via run.taskId, NOT run.id -- assignment is task-level so
+  // it survives a retry producing a new run for the same task (migration 114
+  // header). listAssignmentsForTasks fails closed to an empty Map while migration
+  // 114 is unapplied, so this join costs nothing on a database that doesn't have it
+  // yet: every row's assignment is simply null.
+  const taskIds = [...new Set(runs.map((run) => run.taskId))];
+  const assignmentByTask = await listAssignmentsForTasks(admin, taskIds);
+
+  // Resolve assignee display names against agent_reviewers directly, rather than
+  // routing the client through listAssignableReviewersAction -- that action is
+  // canAssignWork()-gated (Unit 9i's reviewer-picker gap), but a PLAIN reviewer
+  // must still be able to see who a draft is assigned to. Deliberately not
+  // filtered to status = 'active': an assignment can point at a reviewer who was
+  // since suspended, and the name should still resolve for display.
+  const assignedReviewerIds = [
+    ...new Set(
+      [...assignmentByTask.values()]
+        .map((assignment) => assignment.reviewerId)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  const displayNameByReviewerId = new Map<string, string | null>();
+  if (assignedReviewerIds.length > 0) {
+    const { data: reviewerRows, error: reviewerError } = await admin
+      .from('agent_reviewers')
+      .select('user_id, display_name')
+      .in('user_id', assignedReviewerIds);
+    if (reviewerError) {
+      if (!isMissingReviewerSchemaError(reviewerError)) {
+        throw new Error(`Failed to resolve assignee names for the review queue: ${reviewerError.message}`);
+      }
+      // Migration 111/113 unapplied: fall through with an empty name map -- the UI
+      // falls back to a short id, it does not lose the assignment itself.
+    } else {
+      for (const row of (reviewerRows ?? []) as { user_id: string; display_name: string | null }[]) {
+        displayNameByReviewerId.set(row.user_id, row.display_name);
+      }
+    }
+  }
+
   const rows: ReviewQueueRow[] = runs.map((run, index) => {
     const latestEvaluation = evaluationsByRun[index][0] ?? null;
+    const assignment = assignmentByTask.get(run.taskId) ?? null;
     return {
       run,
       story: run.storyId ? storyById.get(run.storyId) ?? null : null,
       latestEvaluation,
       readiness: readinessOf(latestEvaluation),
       latestDecision: decisionsByRun[index][0] ?? null,
+      assignment,
+      assigneeDisplayName: assignment?.reviewerId ? displayNameByReviewerId.get(assignment.reviewerId) ?? null : null,
     };
   });
 
-  // filters.assignment (Unit 9h) is intentionally NOT applied here. There is no
-  // agent_review_assignments table yet (migration 114), so 'mine' and
-  // 'unassigned' have no data to mean anything against -- every value degrades
-  // to 'all', returning every row rather than silently filtering to none. Unit
-  // 9i replaces this comment with a real join.
+  let filtered = rows;
 
-  if (!filters.readiness || filters.readiness === 'all') return rows;
-  return rows.filter((row) => row.readiness === filters.readiness);
+  if (filters.readiness && filters.readiness !== 'all') {
+    filtered = filtered.filter((row) => row.readiness === filters.readiness);
+  }
+
+  // D18: a row reads as "unassigned" both when no active assignment row exists AT
+  // ALL and when one exists with reviewerId === null (the FK's ON DELETE SET
+  // NULL) -- never as "assigned to nobody in particular". 'mine' is resolved
+  // against THIS call's own authenticated userId, never a value the caller could
+  // pass in.
+  if (filters.assignment === 'unassigned') {
+    filtered = filtered.filter((row) => !row.assignment?.reviewerId);
+  } else if (filters.assignment === 'mine') {
+    filtered = filtered.filter((row) => row.assignment?.reviewerId === userId);
+  }
+
+  return filtered;
 }
 
 // ── Reviewer roster (read-only) ───────────────────────────────────────────
@@ -686,4 +767,121 @@ export async function publishRunAction(runId: string, notes?: string): Promise<A
     notes: notes ?? null,
     storylineId,
   });
+}
+
+// ── Review assignment (Unit 9i, migration 114, D18) ───────────────────────
+//
+// assignTaskAction / releaseAssignmentAction are gated on requireReviewer() AND
+// canAssignWork(reviewer) -- plain review access is not enough, per D17's
+// capability matrix: only an editor (or the implicit ADMIN_USER_ID) may assign
+// work. Both re-check the reviewer-workflow flag exactly like the four decision
+// actions above, for the same reason (this file's FLAG GATING header) -- a server
+// action is directly invocable regardless of what any page rendered.
+//
+// THE REVIEWER-PICKER GAP. Section 5.3 of the Phase 9b plan does not say where
+// the "Assign to..." picker gets its list of reviewers from. listReviewersAction
+// (above) is the obvious candidate but is wrong for this: it returns every
+// ReviewerRosterRow field -- including `notes`, which is admin-only commentary
+// about the reviewer that must never reach a peer's assignment picker -- and is
+// NOT filtered to active reviewers, so a suspended account would appear as a
+// selectable target. listAssignableReviewersAction below is a separate, narrower
+// action: gated the same way as the two mutations (requireReviewer() +
+// canAssignWork()), filtered to status = 'active', and projected down to exactly
+// what a picker needs -- id, display name, and coverage. No email, no notes, no
+// other account field. Never verifyAdmin(): an editor who is not ADMIN_USER_ID
+// must be able to call this at all.
+
+export interface AssignableReviewerOption {
+  userId: string;
+  displayName: string | null;
+  ageGroups: string[];
+  languages: string[];
+  genres: string[];
+}
+
+interface AssignableReviewerQueryRow {
+  user_id: string;
+  display_name: string | null;
+  age_groups: string[] | null;
+  languages: string[] | null;
+  genres: string[] | null;
+}
+
+/**
+ * The reviewer-safe roster for the "Assign to..." picker -- see this section's
+ * header for why this is a separate action from listReviewersAction rather than
+ * a reuse of it. Returns only ACTIVE reviewers: a suspended account has no
+ * business being offered as a new assignment target, even though its historical
+ * agent_review_assignments rows (already assigned before suspension) are left
+ * alone -- this action only affects who a picker can choose GOING FORWARD.
+ *
+ * Fails closed to [] when migration 111/113 is unapplied, exactly like
+ * listReviewersAction -- an empty picker is an honest reflection of "no coverage
+ * data exists yet", not a crash.
+ */
+export async function listAssignableReviewersAction(): Promise<AssignableReviewerOption[]> {
+  const { reviewer } = await requireReviewer();
+  if (!canAssignWork(reviewer)) {
+    throw new Error('Forbidden: only an editor may assign review work.');
+  }
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from('agent_reviewers')
+    .select('user_id, display_name, age_groups, languages, genres')
+    .eq('status', 'active')
+    .order('display_name', { ascending: true });
+
+  if (error) {
+    if (isMissingReviewerSchemaError(error)) return [];
+    throw new Error(`Failed to list assignable reviewers: ${error.message}`);
+  }
+
+  return ((data ?? []) as AssignableReviewerQueryRow[]).map((row) => ({
+    userId: row.user_id,
+    displayName: row.display_name,
+    ageGroups: row.age_groups ?? [],
+    languages: row.languages ?? [],
+    genres: row.genres ?? [],
+  }));
+}
+
+/**
+ * Assigns `taskId` to `reviewerId` (source: 'manual', assigned_by: the calling
+ * editor). Delegates the actual supersede-then-insert and the concurrent-conflict
+ * handling entirely to review-routing.ts's assignTask -- see that function's own
+ * doc comment for why a racing second assign returns the winning row instead of
+ * throwing.
+ */
+export async function assignTaskAction(taskId: string, reviewerId: string): Promise<ReviewAssignment> {
+  const { userId, reviewer } = await requireReviewer();
+  if (!canAssignWork(reviewer)) {
+    throw new Error('Forbidden: only an editor may assign review work.');
+  }
+  await requireReviewerWorkflowEnabled();
+
+  const admin = createAdminClient();
+  return assignTask(admin, {
+    taskId,
+    reviewerId,
+    assignedBy: userId,
+    source: 'manual',
+  });
+}
+
+/**
+ * Releases `taskId`'s current active assignment, returning it to the unassigned
+ * pool. A no-op (returns `null`) when the task has no active assignment to
+ * release -- see review-routing.ts's releaseAssignment for why `actorId` is
+ * logged rather than persisted (migration 114 has no "released_by" column).
+ */
+export async function releaseAssignmentAction(taskId: string): Promise<ReviewAssignment | null> {
+  const { userId, reviewer } = await requireReviewer();
+  if (!canAssignWork(reviewer)) {
+    throw new Error('Forbidden: only an editor may release a review assignment.');
+  }
+  await requireReviewerWorkflowEnabled();
+
+  const admin = createAdminClient();
+  return releaseAssignment(admin, taskId, userId);
 }

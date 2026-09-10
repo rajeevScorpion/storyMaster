@@ -85,12 +85,15 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**102-108, 110, 111, 112 and 113 applied to dev.** 102-107 verified against
-`schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against the schema
-itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied SELECT,
-0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112 applied
-2026-09-09** and **113 applied 2026-09-10**, all three verified against the schema rather than only their
-ledger rows (see their rows below). **Production has none of them** — the prod ledger returns zero rows for
+**102-108, 110, 111, 112 and 113 applied to dev; 114 written but NOT applied anywhere.** 102-107
+verified against `schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against
+the schema itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied
+SELECT, 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112
+applied 2026-09-09** and **113 applied 2026-09-10**, all three verified against the schema rather than only
+their ledger rows (see their rows below). **114 (`agent_review_assignments`, Unit 9i) is written and
+committed but deliberately unapplied** — per WORKING_AGREEMENTS, the agent producing it never applies a
+migration; the owner runs it by hand. Every write path in `lib/agentic/review-routing.ts` fails closed
+until then (see that row below). **Production has none of them** — the prod ledger returns zero rows for
 `migration_number >= 103`, so the entire agentic schema is dev-only and prod will need 103-onward applied in
 order whenever it is promoted.
 
@@ -115,6 +118,7 @@ for what has actually run.
 | 111 | `agent_reviewers` | table `agent_reviewers` — Phase 9's reviewer authorization, read only through `requireReviewer()` (D6, D14) | **Applied** 2026-09-09 16:20:41+00. **0 rows**, and that matters: with the table empty, the only account that passes `requireReviewer()` is `ADMIN_USER_ID`, through the implicit short-circuit that never touches the table. Insert a row to exercise reviewer capability at all. **Superseded in part by 113**, which dropped `can_publish` / `can_trigger_media` in favour of a single `role` column | Not applied |
 | 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
 | 113 | `agent_reviewer_roles` | `agent_reviewers` gains `role` (`reviewer`\|`editor`, CHECK-constrained), the `age_groups`/`languages`/`genres` coverage arrays, and `updated_by`; **drops `can_publish` and `can_trigger_media`** — Phase 9b's D17, capability derived from role by pure functions rather than stored twice | **Applied** 2026-09-10 03:07:27+00. Schema verified directly, not just the ledger row: 12 columns, `role` NOT NULL DEFAULT `'reviewer'` with CHECK `('reviewer','editor')`, the three arrays NOT NULL DEFAULT `'{}'`, `updated_by` FK SET NULL, both booleans confirmed **gone**, **0 rows**. Dropping the booleans was only safe because the table was empty and prod has no agentic schema at all | Not applied |
+| 114 | `agent_review_assignments` | table `agent_review_assignments` — Phase 9b's D18, TASK-level manual reviewer assignment (Unit 9i). `source` (`manual`\|`auto`) and `status` (`active`\|`released`\|`superseded`) CHECK-constrained, a partial UNIQUE index enforcing at most one `active` row per task, `reviewer_id`/`assigned_by` both `ON DELETE SET NULL` | **Not applied.** Written and committed 2026-09-10 as part of Unit 9i; `lib/agentic/review-routing.ts` fails closed until an admin applies it by hand (reads degrade to an empty Map, writes throw) | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
@@ -485,10 +489,23 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   `app/review/layout.tsx`'s `requireReviewer()` gate mirrors `app/admin/layout.tsx`'s
   `redirect('/')`-on-throw exactly, matching existing admin behaviour rather than inventing a nicer
   flow for this one route. A sign-in redirect carrying `?next=/review` would be friendlier and is
-  deferred, not forgotten — plan section 4.4. Also still true as of 9h: the assignment filter Unit 9h
-  added to `ReviewQueueListFilters` (`'mine' | 'unassigned' | 'all'`) is wired but inert — migration 114
-  (`agent_review_assignments`) does not exist yet, so `listReviewQueueAction` always degrades to `'all'`.
-  Unit 9i makes it real.
+  deferred, not forgotten — plan section 4.4.
+- **Unit 9i (manual assignment) is code-complete but unproven live** — migration 114 is written
+  (`supabase/migrations/114_agent_review_assignments.sql`) but, per WORKING_AGREEMENTS, not applied by
+  the agent that wrote it. `ReviewQueueListFilters.assignment` (`'mine' | 'unassigned' | 'all'`) is now
+  wired for real in `listReviewQueueAction`, and `ReviewQueue.tsx` has an assignee pill plus
+  Assign-to-.../Reassign.../Release-assignment row actions gated on `canAssignWork` (editor role, D17).
+  Until an admin applies 114, every read degrades to "everyone unassigned" and every write throws a
+  clear "migration 114 is not applied yet" error rather than a raw Postgres one — none of this has been
+  exercised against a real assignment row yet. **The reviewer-picker gap** (plan section 5.3 does not
+  say where the "Assign to..." dropdown's reviewer list comes from): `listReviewersAction` returns the
+  full admin roster row (including `notes`, admin-only commentary, and un-filtered by status), so a new
+  `listAssignableReviewersAction` was added instead — gated on `requireReviewer()` + `canAssignWork()`
+  (not `verifyAdmin()`), filtered to `status = 'active'`, and projected to just `userId`/`displayName`/
+  the three coverage arrays. The assignee pill itself resolves a display name through a separate,
+  un-gated join inside `listReviewQueueAction` (against `agent_reviewers` directly, not through that
+  action) so a plain reviewer — who cannot call the editor-gated picker — can still see who a draft is
+  assigned to, including a since-suspended reviewer's name.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.

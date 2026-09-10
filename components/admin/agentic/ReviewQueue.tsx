@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useState, useTransition } from 'react';
+import { Fragment, useEffect, useState, useTransition } from 'react';
 import {
   AlertTriangle,
   Ban,
@@ -13,17 +13,24 @@ import {
   Rocket,
   RotateCcw,
   ShieldAlert,
+  UserMinus,
+  UserPlus,
 } from 'lucide-react';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import RowActionsMenu, { type RowAction } from '@/components/ui/RowActionsMenu';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
   approveRunAction,
+  assignTaskAction,
+  listAssignableReviewersAction,
   listReviewQueueAction,
   publishRunAction,
   rejectRunAction,
+  releaseAssignmentAction,
   requestRunRewriteAction,
+  type AssignableReviewerOption,
   type ReviewDecisionKind,
+  type ReviewQueueListFilters,
   type ReviewQueueReadiness,
   type ReviewQueueRow,
   type StoredReviewDecisionValue,
@@ -96,6 +103,17 @@ const READINESS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: 'ready_for_review', label: REVIEW_READINESS_LABELS.ready_for_review },
   { value: 'needs_rewrite', label: REVIEW_READINESS_LABELS.needs_rewrite },
   { value: 'unscored', label: 'Not yet evaluated' },
+];
+
+// Unit 9i (D18): 'mine' and 'unassigned' are only meaningful once migration 114 is
+// applied, but the dropdown is shown unconditionally -- degrading gracefully is
+// listReviewQueueAction's job (see that action's own doc comment), not this
+// component's; hiding the control here would just be a second, drifting copy of
+// that same "is 114 applied" question.
+const ASSIGNMENT_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'all', label: 'Everyone' },
+  { value: 'mine', label: 'Assigned to me' },
+  { value: 'unassigned', label: 'Unassigned' },
 ];
 
 // REVIEW_READINESS_LABELS (run-presentation.tsx) only covers the two values
@@ -183,6 +201,7 @@ export default function ReviewQueue({
   initialRows,
   schemaApplied,
   canPublish,
+  canAssignWork,
 }: {
   initialRows: ReviewQueueRow[];
   schemaApplied: boolean;
@@ -193,9 +212,20 @@ export default function ReviewQueue({
    * would otherwise refuse. See this file's header.
    */
   canPublish: boolean;
+  /**
+   * Whether the CURRENT reviewer may assign/release review work (Unit 9i, D17:
+   * canAssignWork(reviewer) -- editor role or the implicit admin). Unlike `canPublish`
+   * above, this gates VISIBILITY, not just enablement: "Assign to..." and "Release
+   * assignment" are only offered to editors at all, per the Phase 9b plan section 5.3
+   * ("shown only to editors"). assignTaskAction/releaseAssignmentAction re-check
+   * canAssignWork(reviewer) server-side regardless, so a falsified prop still cannot
+   * grant a write it would otherwise refuse.
+   */
+  canAssignWork: boolean;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [readinessFilter, setReadinessFilter] = useState('all');
+  const [assignmentFilter, setAssignmentFilter] = useState('all');
   const [isPending, startTransition] = useTransition();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -206,15 +236,60 @@ export default function ReviewQueue({
   const [busyRunId, setBusyRunId] = useState<string | null>(null);
   const [decisionError, setDecisionError] = useState<string | null>(null);
 
-  const filterActive = readinessFilter !== 'all';
+  // ── Review assignment (Unit 9i) ──────────────────────────────────
+  const [assignableReviewers, setAssignableReviewers] = useState<AssignableReviewerOption[] | null>(null);
+  const [assignableError, setAssignableError] = useState<string | null>(null);
+  const [assignTarget, setAssignTarget] = useState<ReviewQueueRow | null>(null);
+  const [selectedReviewerId, setSelectedReviewerId] = useState('');
+  const [releaseTarget, setReleaseTarget] = useState<ReviewQueueRow | null>(null);
+  const [assignBusyTaskId, setAssignBusyTaskId] = useState<string | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
-  function reload(nextReadiness: string = readinessFilter) {
+  // Fetched once, lazily, the first time an editor opens the assign dialog -- never
+  // for a plain reviewer, since listAssignableReviewersAction is itself
+  // canAssignWork()-gated and would just throw Forbidden for them (see that
+  // action's own doc comment in agentic-review.ts for why it exists separately
+  // from listReviewersAction).
+  useEffect(() => {
+    if (!canAssignWork || assignableReviewers !== null) return;
+    let cancelled = false;
+    listAssignableReviewersAction()
+      .then((result) => {
+        if (!cancelled) setAssignableReviewers(result);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAssignableError(error instanceof Error ? error.message : 'Unable to load reviewers.');
+          setAssignableReviewers([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canAssignWork, assignableReviewers]);
+
+  // FilterDropdown always renders SOME label (falling back to its first option's
+  // when `value` matches nothing) -- so once the roster loads, default the
+  // selection to that same first option rather than leaving `selectedReviewerId`
+  // empty while the dropdown visually shows a reviewer as if already chosen.
+  // Runs for a genuinely new assignment only: openAssign already seeds
+  // `selectedReviewerId` from the row's existing assignee when reassigning.
+  useEffect(() => {
+    if (assignTarget && assignableReviewers && assignableReviewers.length > 0 && !selectedReviewerId) {
+      setSelectedReviewerId(assignableReviewers[0].userId);
+    }
+  }, [assignTarget, assignableReviewers, selectedReviewerId]);
+
+  const filterActive = readinessFilter !== 'all' || assignmentFilter !== 'all';
+
+  function reload(nextReadiness: string = readinessFilter, nextAssignment: string = assignmentFilter) {
     setLoadError(null);
     startTransition(async () => {
       try {
-        const result = await listReviewQueueAction(
-          nextReadiness === 'all' ? {} : { readiness: nextReadiness as ReviewQueueReadiness }
-        );
+        const filters: ReviewQueueListFilters = {};
+        if (nextReadiness !== 'all') filters.readiness = nextReadiness as ReviewQueueReadiness;
+        if (nextAssignment !== 'all') filters.assignment = nextAssignment as 'mine' | 'unassigned';
+        const result = await listReviewQueueAction(filters);
         setRows(result);
       } catch (error) {
         setLoadError(error instanceof Error ? error.message : 'Unable to load the review queue.');
@@ -257,6 +332,59 @@ export default function ReviewQueue({
     }
   }
 
+  // ── Review assignment (Unit 9i) ──────────────────────────────────
+
+  function openAssign(row: ReviewQueueRow) {
+    setAssignError(null);
+    setSelectedReviewerId(row.assignment?.reviewerId ?? '');
+    setAssignTarget(row);
+  }
+
+  async function confirmAssign() {
+    if (!assignTarget || !selectedReviewerId) return;
+    const taskId = assignTarget.run.taskId;
+
+    setAssignBusyTaskId(taskId);
+    setAssignError(null);
+    try {
+      const assignment = await assignTaskAction(taskId, selectedReviewerId);
+      const displayName = assignableReviewers?.find((r) => r.userId === selectedReviewerId)?.displayName ?? null;
+      setRows((current) =>
+        current.map((r) => (r.run.taskId === taskId ? { ...r, assignment, assigneeDisplayName: displayName } : r))
+      );
+      setAssignTarget(null);
+      setSelectedReviewerId('');
+    } catch (error) {
+      setAssignError(error instanceof Error ? error.message : 'Unable to assign this task.');
+    } finally {
+      setAssignBusyTaskId(null);
+    }
+  }
+
+  function openRelease(row: ReviewQueueRow) {
+    setAssignError(null);
+    setReleaseTarget(row);
+  }
+
+  async function confirmRelease() {
+    if (!releaseTarget) return;
+    const taskId = releaseTarget.run.taskId;
+
+    setAssignBusyTaskId(taskId);
+    setAssignError(null);
+    try {
+      await releaseAssignmentAction(taskId);
+      setRows((current) =>
+        current.map((r) => (r.run.taskId === taskId ? { ...r, assignment: null, assigneeDisplayName: null } : r))
+      );
+      setReleaseTarget(null);
+    } catch (error) {
+      setAssignError(error instanceof Error ? error.message : 'Unable to release this assignment.');
+    } finally {
+      setAssignBusyTaskId(null);
+    }
+  }
+
   function emptyReason(): { title: string; body: string } {
     if (!schemaApplied) {
       return {
@@ -265,7 +393,7 @@ export default function ReviewQueue({
       };
     }
     if (filterActive) {
-      return { title: 'No drafts match this filter.', body: 'Clear the readiness filter to see the rest of the queue.' };
+      return { title: 'No drafts match these filters.', body: 'Clear the readiness or assignment filter to see the rest of the queue.' };
     }
     return {
       title: 'Nothing is waiting on review right now.',
@@ -316,7 +444,16 @@ export default function ReviewQueue({
               ariaLabel="Filter by review readiness"
               onChange={(value) => {
                 setReadinessFilter(value);
-                reload(value);
+                reload(value, assignmentFilter);
+              }}
+            />
+            <FilterDropdown
+              value={assignmentFilter}
+              options={ASSIGNMENT_FILTER_OPTIONS}
+              ariaLabel="Filter by assignment"
+              onChange={(value) => {
+                setAssignmentFilter(value);
+                reload(readinessFilter, value);
               }}
             />
           </div>
@@ -325,6 +462,20 @@ export default function ReviewQueue({
             <div className="flex items-center gap-2 border-b border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-200">
               <AlertTriangle size={16} className="shrink-0" />
               {loadError}
+            </div>
+          )}
+
+          {assignError && (
+            <div className="flex items-center gap-2 border-b border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-200">
+              <AlertTriangle size={16} className="shrink-0" />
+              {assignError}
+            </div>
+          )}
+
+          {assignableError && (
+            <div className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-200">
+              <AlertTriangle size={16} className="shrink-0" />
+              {assignableError}
             </div>
           )}
 
@@ -345,6 +496,7 @@ export default function ReviewQueue({
                   <th className="px-4 py-3 font-medium">Readiness</th>
                   <th className="px-4 py-3 font-medium">Latest verdict</th>
                   <th className="px-4 py-3 font-medium">Decision</th>
+                  <th className="px-4 py-3 font-medium">Assignee</th>
                   <th className="px-4 py-3 font-medium">Entered review</th>
                   <th className="px-4 py-3 font-medium">Run</th>
                   <th className="px-4 py-3 font-medium" aria-label="Row actions" />
@@ -353,6 +505,7 @@ export default function ReviewQueue({
               <tbody>
                 {rows.map((row) => {
                   const isExpanded = expandedId === row.run.id;
+                  const isAssigned = Boolean(row.assignment?.reviewerId);
                   const actions: RowAction[] = [
                     {
                       key: 'approve',
@@ -385,6 +538,28 @@ export default function ReviewQueue({
                       disabled: !canPublish,
                       onSelect: () => openDecision(row, 'published'),
                     },
+                    // Unit 9i (D18): shown only to editors (canAssignWork), not merely
+                    // disabled for everyone else -- unlike Publish above, a plain reviewer
+                    // has no reason to even see that assignment is a thing they could ask
+                    // for. assignTaskAction/releaseAssignmentAction re-check
+                    // canAssignWork(reviewer) server-side regardless.
+                    ...(canAssignWork
+                      ? [
+                          {
+                            key: 'assign',
+                            label: isAssigned ? 'Reassign…' : 'Assign to…',
+                            icon: UserPlus,
+                            onSelect: () => openAssign(row),
+                          },
+                          {
+                            key: 'release',
+                            label: 'Release assignment',
+                            icon: UserMinus,
+                            disabled: !isAssigned,
+                            onSelect: () => openRelease(row),
+                          },
+                        ]
+                      : []),
                   ];
                   return (
                     <Fragment key={row.run.id}>
@@ -434,6 +609,18 @@ export default function ReviewQueue({
                             <span className="text-neutral-600">Undecided</span>
                           )}
                         </td>
+                        <td className="px-4 py-4">
+                          {isAssigned ? (
+                            <span
+                              className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-1 text-xs font-medium text-indigo-300"
+                              title={row.assignment?.reviewerId ?? undefined}
+                            >
+                              {row.assigneeDisplayName ?? shortId(row.assignment?.reviewerId ?? null)}
+                            </span>
+                          ) : (
+                            <span className="text-neutral-600">Unassigned</span>
+                          )}
+                        </td>
                         <td className="px-4 py-4 text-neutral-500">{formatDateTime(row.run.finishedAt)}</td>
                         <td className="px-4 py-4 font-mono text-xs text-neutral-500" title={row.run.id}>
                           {shortId(row.run.id)}
@@ -449,7 +636,7 @@ export default function ReviewQueue({
                       </tr>
                       {isExpanded && (
                         <tr className="border-b border-white/5 bg-white/[0.02]">
-                          <td colSpan={9} className="px-6 py-5">
+                          <td colSpan={10} className="px-6 py-5">
                             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                               Evaluation
                             </h4>
@@ -513,6 +700,68 @@ export default function ReviewQueue({
             rows={3}
             className="w-full rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:border-emerald-400/40 focus:outline-none"
           />
+        </div>
+      }
+    />
+
+    <ConfirmDialog
+      open={Boolean(assignTarget)}
+      title={assignTarget?.assignment?.reviewerId ? 'Reassign this draft?' : 'Assign this draft?'}
+      confirmLabel={assignTarget?.assignment?.reviewerId ? 'Reassign' : 'Assign'}
+      busy={Boolean(assignTarget) && assignBusyTaskId === assignTarget?.run.taskId}
+      onCancel={() => {
+        setAssignTarget(null);
+        setSelectedReviewerId('');
+      }}
+      onConfirm={confirmAssign}
+      message={
+        <div className="space-y-3">
+          <p>
+            Advisory only (D18) -- assignment scopes the default queue filter, it does not stop
+            any other active reviewer from acting on this draft.
+          </p>
+          <p className="text-neutral-500">
+            {assignTarget?.story?.title ?? 'Untitled'} · {assignTarget ? shortId(assignTarget.run.id) : ''}
+          </p>
+          {assignableReviewers === null ? (
+            <p className="flex items-center gap-2 text-neutral-500">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading reviewers…
+            </p>
+          ) : assignableReviewers.length === 0 ? (
+            <p className="text-neutral-500">
+              No active reviewers are available to assign. Grant reviewer standing first (Admin &gt;
+              Authors &gt; Reviewers).
+            </p>
+          ) : (
+            <FilterDropdown
+              value={selectedReviewerId}
+              options={assignableReviewers.map((option) => ({
+                value: option.userId,
+                label: option.displayName ?? shortId(option.userId),
+              }))}
+              ariaLabel="Choose a reviewer to assign"
+              fullWidth
+              size="form"
+              onChange={(value) => setSelectedReviewerId(value)}
+            />
+          )}
+        </div>
+      }
+    />
+
+    <ConfirmDialog
+      open={Boolean(releaseTarget)}
+      title="Release this assignment?"
+      confirmLabel="Release"
+      busy={Boolean(releaseTarget) && assignBusyTaskId === releaseTarget?.run.taskId}
+      onCancel={() => setReleaseTarget(null)}
+      onConfirm={confirmRelease}
+      message={
+        <div className="space-y-3">
+          <p>Returns this task to the unassigned pool. Nothing about the draft itself changes.</p>
+          <p className="text-neutral-500">
+            {releaseTarget?.story?.title ?? 'Untitled'} · {releaseTarget ? shortId(releaseTarget.run.id) : ''}
+          </p>
         </div>
       }
     />

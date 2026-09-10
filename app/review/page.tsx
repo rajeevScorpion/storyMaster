@@ -3,7 +3,7 @@ import ReviewQueue from '@/components/admin/agentic/ReviewQueue';
 import { getReviewQueueSchemaStatusAction, listReviewQueueAction } from '@/app/actions/agentic-review';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { requireReviewer } from '@/lib/agentic/reviewers';
-import { canPublish } from '@/lib/agentic/reviewers.shared';
+import { canAssignWork, canPublish } from '@/lib/agentic/reviewers.shared';
 import { Info } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
@@ -64,11 +64,14 @@ export default async function ReviewQueuePage() {
   // throw for anyone who reached this page today, but a thrown error here must still fail
   // closed (no Publish button) rather than 500 the whole queue.
   let canPublishDrafts = false;
+  let canAssign = false;
   try {
     const { reviewer } = await requireReviewer();
     canPublishDrafts = canPublish(reviewer);
+    canAssign = canAssignWork(reviewer);
   } catch {
     canPublishDrafts = false;
+    canAssign = false;
   }
 
   return (
@@ -77,7 +80,12 @@ export default async function ReviewQueuePage() {
         title="Review queue"
         description="Every agent run sitting at stage 'awaiting_review', joined to its story, its latest evaluation, and any reviewer decision. Approve, reject, request-rewrite, and publish are all available below."
       />
-      <ReviewQueue initialRows={initialRows} schemaApplied={schemaStatus.schemaApplied} canPublish={canPublishDrafts} />
+      <ReviewQueue
+        initialRows={initialRows}
+        schemaApplied={schemaStatus.schemaApplied}
+        canPublish={canPublishDrafts}
+        canAssignWork={canAssign}
+      />
     </div>
   );
 }
