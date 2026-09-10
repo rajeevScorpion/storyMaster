@@ -31,48 +31,64 @@ import {
   isActiveReviewer,
   isMissingReviewerSchemaError,
   type AgentReviewer,
+  type AgentReviewerRole,
   type AgentReviewerStatus,
 } from '@/lib/agentic/reviewers.shared';
 
 interface AgentReviewerRow {
   user_id: string;
   status: AgentReviewerStatus;
-  can_publish: boolean;
-  can_trigger_media: boolean;
+  role: AgentReviewerRole;
+  age_groups: string[] | null;
+  languages: string[] | null;
+  genres: string[] | null;
   display_name: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
+  updated_by: string | null;
 }
 
 function rowToReviewer(row: AgentReviewerRow): AgentReviewer {
   return {
     userId: row.user_id,
     status: row.status,
-    canPublish: row.can_publish,
-    canTriggerMedia: row.can_trigger_media,
+    role: row.role,
+    ageGroups: row.age_groups ?? [],
+    languages: row.languages ?? [],
+    genres: row.genres ?? [],
     displayName: row.display_name,
     notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by,
+    updatedBy: row.updated_by,
   };
 }
 
-/** Synthetic row for process.env.ADMIN_USER_ID -- never persisted, never read back. */
+/**
+ * Synthetic row for process.env.ADMIN_USER_ID -- never persisted, never read back.
+ * All three coverage arrays are empty ON PURPOSE: the implicit admin is not in the
+ * routing pool and must never be auto-assigned work by Unit 9j's matcher (which
+ * only considers a reviewer's declared coverage) -- they already reach every draft
+ * through /admin/authors regardless of routing.
+ */
 function buildImplicitAdminReviewer(userId: string): AgentReviewer {
   const now = new Date().toISOString();
   return {
     userId,
     status: 'active',
-    canPublish: true,
-    canTriggerMedia: true,
+    role: 'editor',
+    ageGroups: [],
+    languages: [],
+    genres: [],
     displayName: 'Admin (implicit reviewer)',
     notes: null,
     createdAt: now,
     updatedAt: now,
     createdBy: null,
+    updatedBy: null,
   };
 }
 
@@ -102,7 +118,7 @@ async function fetchReviewerRow(userId: string): Promise<AgentReviewer | null> {
     const admin = createAdminClient();
     const { data, error } = await admin
       .from('agent_reviewers')
-      .select('user_id, status, can_publish, can_trigger_media, display_name, notes, created_at, updated_at, created_by')
+      .select('user_id, status, role, age_groups, languages, genres, display_name, notes, created_at, updated_at, created_by, updated_by')
       .eq('user_id', userId)
       .maybeSingle();
 

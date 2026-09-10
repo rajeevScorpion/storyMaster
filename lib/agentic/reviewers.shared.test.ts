@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canAssignWork,
   canPublish,
   canTriggerMedia,
   canTriggerMediaForEditAccess,
   decideStoryEditAccess,
   isActiveReviewer,
   isMissingReviewerSchemaError,
+  validateReviewerCoverage,
   type AgentReviewer,
 } from './reviewers.shared';
 
@@ -13,13 +15,16 @@ function reviewer(overrides: Partial<AgentReviewer> = {}): AgentReviewer {
   return {
     userId: 'reviewer-1',
     status: 'active',
-    canPublish: false,
-    canTriggerMedia: false,
+    role: 'reviewer',
+    ageGroups: [],
+    languages: [],
+    genres: [],
     displayName: 'Test Reviewer',
     notes: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     createdBy: null,
+    updatedBy: null,
     ...overrides,
   };
 }
@@ -39,19 +44,22 @@ describe('isActiveReviewer', () => {
   });
 });
 
+// D17: role is the only stored capability. can_publish / can_trigger_media are gone --
+// these four describe blocks are the capability matrix from the migration 113 header,
+// each one a row of: role x reviewer/editor x status active/suspended.
 describe('canPublish', () => {
-  it('is true only when active AND can_publish', () => {
-    expect(canPublish(reviewer({ status: 'active', canPublish: true }))).toBe(true);
+  it('is true for an active editor', () => {
+    expect(canPublish(reviewer({ status: 'active', role: 'editor' }))).toBe(true);
   });
 
-  it('is false when active but can_publish is false', () => {
-    expect(canPublish(reviewer({ status: 'active', canPublish: false }))).toBe(false);
+  it('is false for an active reviewer (not an editor)', () => {
+    expect(canPublish(reviewer({ status: 'active', role: 'reviewer' }))).toBe(false);
   });
 
-  // The load-bearing case: suspension must win over a true capability column --
-  // suspending a reviewer must never leave their publish right silently active.
-  it('is false when suspended even though can_publish is true', () => {
-    expect(canPublish(reviewer({ status: 'suspended', canPublish: true }))).toBe(false);
+  // The load-bearing case: suspension must win over role -- suspending an editor
+  // must never leave their publish right silently active.
+  it('is false when suspended even though role is editor', () => {
+    expect(canPublish(reviewer({ status: 'suspended', role: 'editor' }))).toBe(false);
   });
 
   it('is false for null and undefined (no row)', () => {
@@ -61,21 +69,109 @@ describe('canPublish', () => {
 });
 
 describe('canTriggerMedia', () => {
-  it('is true only when active AND can_trigger_media', () => {
-    expect(canTriggerMedia(reviewer({ status: 'active', canTriggerMedia: true }))).toBe(true);
+  it('is true for an active reviewer', () => {
+    expect(canTriggerMedia(reviewer({ status: 'active', role: 'reviewer' }))).toBe(true);
   });
 
-  it('is false when active but can_trigger_media is false', () => {
-    expect(canTriggerMedia(reviewer({ status: 'active', canTriggerMedia: false }))).toBe(false);
+  it('is true for an active editor', () => {
+    expect(canTriggerMedia(reviewer({ status: 'active', role: 'editor' }))).toBe(true);
   });
 
-  it('is false when suspended even though can_trigger_media is true', () => {
-    expect(canTriggerMedia(reviewer({ status: 'suspended', canTriggerMedia: true }))).toBe(false);
+  it('is false when suspended, regardless of role', () => {
+    expect(canTriggerMedia(reviewer({ status: 'suspended', role: 'editor' }))).toBe(false);
+    expect(canTriggerMedia(reviewer({ status: 'suspended', role: 'reviewer' }))).toBe(false);
   });
 
   it('is false for null and undefined (no row)', () => {
     expect(canTriggerMedia(null)).toBe(false);
     expect(canTriggerMedia(undefined)).toBe(false);
+  });
+});
+
+describe('canAssignWork', () => {
+  it('is true for an active editor', () => {
+    expect(canAssignWork(reviewer({ status: 'active', role: 'editor' }))).toBe(true);
+  });
+
+  it('is false for an active reviewer (not an editor)', () => {
+    expect(canAssignWork(reviewer({ status: 'active', role: 'reviewer' }))).toBe(false);
+  });
+
+  it('is false when suspended even though role is editor', () => {
+    expect(canAssignWork(reviewer({ status: 'suspended', role: 'editor' }))).toBe(false);
+  });
+
+  it('is false for null and undefined (no row)', () => {
+    expect(canAssignWork(null)).toBe(false);
+    expect(canAssignWork(undefined)).toBe(false);
+  });
+});
+
+// Unit 9g's write guard, specified in the Unit 9f plan section 3.1 and built here
+// because it is pure and belongs beside the type it validates.
+describe('validateReviewerCoverage', () => {
+  it('accepts a fully empty input (no preference declared yet)', () => {
+    expect(validateReviewerCoverage({ ageGroups: [], languages: [], genres: [] })).toEqual({ ok: true });
+  });
+
+  it('accepts a valid combination of concrete age groups, languages, and genres', () => {
+    expect(
+      validateReviewerCoverage({
+        ageGroups: ['kids_5_8', 'teens'],
+        languages: ['english', 'hindi'],
+        genres: ['sci-fi', 'mystery'],
+      })
+    ).toEqual({ ok: true });
+  });
+
+  // D16: an all_ages task is never auto-routed to a reviewer, so a reviewer must
+  // never be able to declare coverage of it -- that would silently defeat routing.
+  it("rejects 'all_ages' as a coverage value even though it is a real AgeGroup", () => {
+    const result = validateReviewerCoverage({ ageGroups: ['all_ages'], languages: [], genres: [] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('all_ages'))).toBe(true);
+    }
+  });
+
+  it('rejects an unrecognized age group', () => {
+    const result = validateReviewerCoverage({ ageGroups: ['toddlers'], languages: [], genres: [] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('toddlers'))).toBe(true);
+    }
+  });
+
+  it('rejects an unrecognized language', () => {
+    const result = validateReviewerCoverage({ ageGroups: [], languages: ['klingon'], genres: [] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('klingon'))).toBe(true);
+    }
+  });
+
+  it('rejects an unrecognized genre', () => {
+    const result = validateReviewerCoverage({ ageGroups: [], languages: [], genres: ['noir'] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes('noir'))).toBe(true);
+    }
+  });
+
+  it('collects every problem at once rather than stopping at the first', () => {
+    const result = validateReviewerCoverage({
+      ageGroups: ['all_ages', 'toddlers'],
+      languages: ['klingon'],
+      genres: ['noir'],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.length).toBe(4);
+    }
+  });
+
+  it('an empty genres array is valid (no preference, never a rejection)', () => {
+    expect(validateReviewerCoverage({ ageGroups: ['adults'], languages: ['english'], genres: [] })).toEqual({ ok: true });
   });
 });
 
@@ -112,64 +208,34 @@ describe('decideStoryEditAccess', () => {
   });
 
   it('grants an active reviewer access to an agent-owned story they do not own', () => {
-    const reviewer: AgentReviewer = {
-      userId: OTHER_USER,
-      status: 'active',
-      canPublish: false,
-      canTriggerMedia: true,
-      displayName: null,
-      notes: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      createdBy: null,
-    };
+    const activeReviewer = reviewer({ userId: OTHER_USER, status: 'active', role: 'reviewer' });
     const grant = decideStoryEditAccess({
       userId: OTHER_USER,
       storyUserId: OWNER,
       agentPersonaId: 'persona-1',
-      reviewer,
+      reviewer: activeReviewer,
     });
-    expect(grant).toEqual({ granted: true, via: 'reviewer', reviewer });
+    expect(grant).toEqual({ granted: true, via: 'reviewer', reviewer: activeReviewer });
   });
 
   it('denies a reviewer with no standing over an ordinary (non-agent) story', () => {
-    const reviewer: AgentReviewer = {
-      userId: OTHER_USER,
-      status: 'active',
-      canPublish: true,
-      canTriggerMedia: true,
-      displayName: null,
-      notes: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      createdBy: null,
-    };
+    const activeReviewer = reviewer({ userId: OTHER_USER, status: 'active', role: 'editor' });
     const grant = decideStoryEditAccess({
       userId: OTHER_USER,
       storyUserId: OWNER,
       agentPersonaId: null,
-      reviewer,
+      reviewer: activeReviewer,
     });
     expect(grant).toEqual({ granted: false });
   });
 
   it('denies a suspended reviewer on an agent-owned story', () => {
-    const reviewer: AgentReviewer = {
-      userId: OTHER_USER,
-      status: 'suspended',
-      canPublish: true,
-      canTriggerMedia: true,
-      displayName: null,
-      notes: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      createdBy: null,
-    };
+    const suspendedReviewer = reviewer({ userId: OTHER_USER, status: 'suspended', role: 'editor' });
     const grant = decideStoryEditAccess({
       userId: OTHER_USER,
       storyUserId: OWNER,
       agentPersonaId: 'persona-1',
-      reviewer,
+      reviewer: suspendedReviewer,
     });
     expect(grant).toEqual({ granted: false });
   });
@@ -207,49 +273,13 @@ describe('canTriggerMediaForEditAccess', () => {
     expect(canTriggerMediaForEditAccess(null)).toBe(true);
   });
 
-  it('is true for an active reviewer with can_trigger_media', () => {
-    const reviewer: AgentReviewer = {
-      userId: 'reviewer-1',
-      status: 'active',
-      canPublish: false,
-      canTriggerMedia: true,
-      displayName: null,
-      notes: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      createdBy: null,
-    };
-    expect(canTriggerMediaForEditAccess(reviewer)).toBe(true);
+  it('is true for an active reviewer (either role -- both can trigger media)', () => {
+    expect(canTriggerMediaForEditAccess(reviewer({ status: 'active', role: 'reviewer' }))).toBe(true);
+    expect(canTriggerMediaForEditAccess(reviewer({ status: 'active', role: 'editor' }))).toBe(true);
   });
 
-  it('is false for an active reviewer without can_trigger_media', () => {
-    const reviewer: AgentReviewer = {
-      userId: 'reviewer-1',
-      status: 'active',
-      canPublish: true,
-      canTriggerMedia: false,
-      displayName: null,
-      notes: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      createdBy: null,
-    };
-    expect(canTriggerMediaForEditAccess(reviewer)).toBe(false);
-  });
-
-  it('is false for a suspended reviewer even with can_trigger_media true', () => {
-    const reviewer: AgentReviewer = {
-      userId: 'reviewer-1',
-      status: 'suspended',
-      canPublish: false,
-      canTriggerMedia: true,
-      displayName: null,
-      notes: null,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-      createdBy: null,
-    };
-    expect(canTriggerMediaForEditAccess(reviewer)).toBe(false);
+  it('is false for a suspended reviewer', () => {
+    expect(canTriggerMediaForEditAccess(reviewer({ status: 'suspended', role: 'editor' }))).toBe(false);
   });
 });
 

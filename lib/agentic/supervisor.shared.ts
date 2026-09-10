@@ -33,6 +33,7 @@
 import type { AgeGroup, StoryLanguage } from '@/lib/types/story';
 import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import { STORY_GENRES, isStoryGenre, type StoryGenre } from '@/lib/story/genres';
+import { AGE_GROUP_VALUES } from '@/lib/story/age-groups';
 import type { AgentPersona } from './personas.shared';
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -45,17 +46,8 @@ export const RATIONALE_MAX_CHARS = 400;
 /** How many ranked gaps are carried into one planning prompt. */
 export const GAP_SHORTLIST_SIZE = 12;
 
-/**
- * The full AgeGroup taxonomy (lib/types/story.ts:235), hardcoded because no
- * canonical "all age groups" array exists elsewhere in the codebase -- unlike
- * languages (STORY_LANGUAGE_OPTIONS) and genres (STORY_GENRES), which already have
- * one and are reused below rather than duplicated. Never invent a value here that
- * isn't in the AgeGroup union; the `satisfies` clause fails to compile otherwise.
- */
-const ALL_AGE_GROUPS = ['all_ages', 'kids_3_5', 'kids_5_8', 'kids_8_12', 'teens', 'adults'] as const satisfies readonly AgeGroup[];
-
 const ALL_STORY_LANGUAGES: readonly StoryLanguage[] = STORY_LANGUAGE_OPTIONS.map((option) => option.value);
-const AGE_GROUP_SET: ReadonlySet<string> = new Set(ALL_AGE_GROUPS);
+const AGE_GROUP_SET: ReadonlySet<string> = new Set(AGE_GROUP_VALUES);
 const LANGUAGE_SET: ReadonlySet<string> = new Set(ALL_STORY_LANGUAGES);
 
 function isAgeGroupValue(value: string): value is AgeGroup {
@@ -148,7 +140,7 @@ export function buildCoverageMatrix(rows: readonly CoverageRow[], personas: read
   const cellsByKey = new Map<string, CoverageCell>();
 
   for (const language of ALL_STORY_LANGUAGES) {
-    for (const ageGroup of ALL_AGE_GROUPS) {
+    for (const ageGroup of AGE_GROUP_VALUES) {
       for (const genreOption of STORY_GENRES) {
         const genre = genreOption.value;
         if (findServingPersonaIds({ language, ageGroup, genre }, personas).length === 0) continue;

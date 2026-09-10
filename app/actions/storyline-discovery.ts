@@ -9,9 +9,8 @@ import { storylineDiscoveryMetadataSchema } from '@/lib/ai/generation-schemas';
 import { normalizeDiscoveryIntro } from '@/lib/story/discovery-intro';
 import { normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
+import { isAgeGroup } from '@/lib/story/age-groups';
 import type { AgeGroup } from '@/lib/types/story';
-
-const AGE_GROUPS: AgeGroup[] = ['all_ages', 'kids_3_5', 'kids_5_8', 'kids_8_12', 'teens', 'adults'];
 
 const MAX_BEATS_IN_PROMPT = 8;
 const MAX_BEAT_CHARS = 160;
@@ -144,7 +143,7 @@ export async function generateStorylineDiscoveryMetadata(input: {
     return {
       intro,
       genre: normalizeStoredGenre(parsed.genre),
-      ageFit: AGE_GROUPS.includes(ageFit as AgeGroup) ? (ageFit as AgeGroup) : null,
+      ageFit: isAgeGroup(ageFit) ? ageFit : null,
     };
   } catch (error) {
     console.error('Storyline discovery metadata generation failed:', error);

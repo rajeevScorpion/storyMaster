@@ -60,8 +60,8 @@ export default async function ReviewerRosterPage() {
                   <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium">Display name</th>
                   <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Can publish</th>
-                  <th className="px-4 py-3 font-medium">Can trigger media</th>
+                  <th className="px-4 py-3 font-medium">Role</th>
+                  <th className="px-4 py-3 font-medium">Coverage</th>
                   <th className="px-4 py-3 font-medium">Added</th>
                 </tr>
               </thead>
@@ -83,8 +83,12 @@ export default async function ReviewerRosterPage() {
                         {reviewer.status === 'active' ? 'Active' : 'Suspended'}
                       </span>
                     </td>
-                    <td className="px-4 py-4 text-neutral-400">{reviewer.canPublish ? 'Yes' : 'No'}</td>
-                    <td className="px-4 py-4 text-neutral-400">{reviewer.canTriggerMedia ? 'Yes' : 'No'}</td>
+                    <td className="px-4 py-4 text-neutral-400">{reviewer.role === 'editor' ? 'Editor' : 'Reviewer'}</td>
+                    <td className="px-4 py-4 text-neutral-500">
+                      {reviewer.ageGroups.length === 0 && reviewer.languages.length === 0 && reviewer.genres.length === 0
+                        ? '—'
+                        : [...reviewer.languages, ...reviewer.ageGroups].join(', ') || '—'}
+                    </td>
                     <td className="px-4 py-4 text-neutral-500">{formatDateTime(reviewer.createdAt)}</td>
                   </tr>
                 ))}

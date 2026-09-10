@@ -51,7 +51,11 @@ import { getAgenticFlags } from '@/lib/agentic/flags';
 import { listRuns, getRun, type AgentRun } from '@/lib/agentic/orchestrator';
 import { isMissingRunSchemaError } from '@/lib/agentic/orchestrator.shared';
 import { listEvaluationsForRun, type StoredEvaluation } from '@/lib/agentic/evaluation';
-import { isMissingReviewerSchemaError, type AgentReviewerStatus } from '@/lib/agentic/reviewers.shared';
+import {
+  isMissingReviewerSchemaError,
+  type AgentReviewerRole,
+  type AgentReviewerStatus,
+} from '@/lib/agentic/reviewers.shared';
 import {
   recordReviewDecision,
   listReviewDecisionsForRun,
@@ -208,8 +212,10 @@ export async function listReviewQueueAction(filters: ReviewQueueListFilters = {}
 export interface ReviewerRosterRow {
   userId: string;
   status: AgentReviewerStatus;
-  canPublish: boolean;
-  canTriggerMedia: boolean;
+  role: AgentReviewerRole;
+  ageGroups: string[];
+  languages: string[];
+  genres: string[];
   displayName: string | null;
   createdAt: string;
 }
@@ -217,8 +223,10 @@ export interface ReviewerRosterRow {
 interface AgentReviewerRosterQueryRow {
   user_id: string;
   status: AgentReviewerStatus;
-  can_publish: boolean;
-  can_trigger_media: boolean;
+  role: AgentReviewerRole;
+  age_groups: string[] | null;
+  languages: string[] | null;
+  genres: string[] | null;
   display_name: string | null;
   created_at: string;
 }
@@ -259,7 +267,7 @@ export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from('agent_reviewers')
-    .select('user_id, status, can_publish, can_trigger_media, display_name, created_at')
+    .select('user_id, status, role, age_groups, languages, genres, display_name, created_at')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -270,8 +278,10 @@ export async function listReviewersAction(): Promise<ReviewerRosterRow[]> {
   return ((data ?? []) as AgentReviewerRosterQueryRow[]).map((row) => ({
     userId: row.user_id,
     status: row.status,
-    canPublish: row.can_publish,
-    canTriggerMedia: row.can_trigger_media,
+    role: row.role,
+    ageGroups: row.age_groups ?? [],
+    languages: row.languages ?? [],
+    genres: row.genres ?? [],
     displayName: row.display_name,
     createdAt: row.created_at,
   }));
