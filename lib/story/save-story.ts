@@ -446,6 +446,26 @@ export function nodeToBeatRow(
 export interface SaveStoryOptions {
   agentPersonaId?: string | null;
   agentTaskId?: string | null;
+  /**
+   * Read the story's existing beat assets WITHOUT filtering on `generated_by`.
+   *
+   * Default (false/absent) keeps the owner-scoped filter every caller has always
+   * had, and every existing caller leaves it that way -- the human save path and
+   * lib/agentic/story-assembly.ts's agent save alike, both of which pass a userId
+   * that genuinely is the beats' generator.
+   *
+   * The one caller that sets it is app/actions/persistence.ts's saveStory on its
+   * reviewer branch (D14/D19). A reviewer finishing an agent draft saves as the
+   * story's OWNER (the agentic system user), but the beats underneath may have been
+   * stamped `generated_by` = the reviewer by an earlier saveBeat, which takes the
+   * opposite approach to the same mismatch (persistence.ts :769). Filtering on
+   * either id alone would therefore miss real rows, and a missed row means this
+   * function rebuilds the beat from the client's session only -- silently dropping
+   * any image or audio URL the database holds and the client does not. Matching on
+   * story_id alone is correct here precisely because the caller has already proven,
+   * through assertCanEditStory, that it may write every beat of this story.
+   */
+  crossGeneratorBeats?: boolean;
 }
 
 /**
@@ -492,11 +512,16 @@ export async function saveStoryForUser(
     existingStoryCharacters =
       (existingStory?.characters ?? []) as unknown as Character[];
 
-    const { data: existingBeatRows, error: existingBeatRowsError } = await supabase
+    let existingBeatRowsQuery = supabase
       .from('beats')
       .select('node_id, image_url, audio_url, image_synced_at, audio_synced_at')
-      .eq('story_id', session.savedStoryId)
-      .eq('generated_by', userId);
+      .eq('story_id', session.savedStoryId);
+    // Owner-scoped by default, story-scoped on the reviewer branch -- see
+    // SaveStoryOptions.crossGeneratorBeats for why the distinction matters.
+    if (!options?.crossGeneratorBeats) {
+      existingBeatRowsQuery = existingBeatRowsQuery.eq('generated_by', userId);
+    }
+    const { data: existingBeatRows, error: existingBeatRowsError } = await existingBeatRowsQuery;
 
     if (existingBeatRowsError) {
       throw new Error(`Failed to load existing beat assets before save: ${existingBeatRowsError.message}`);

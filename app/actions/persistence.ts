@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server';
 import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/lib/supabase/storage';
 import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, signMixedUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { assertCanEditStory } from '@/lib/agentic/reviewers';
+import { assertCanEditStory, type EditableStoryAccess } from '@/lib/agentic/reviewers';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineShareCoverSource } from '@/lib/types/database';
@@ -485,6 +485,68 @@ export async function saveStory(
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Reviewer writes (D14/D19, Unit 9M). A reviewer finishing an agent draft reaches
+  // the ordinary authoring UI at /story/[id], and NOTHING there held them back: the
+  // one flag every autosave guard checks, session.sourceStoryOwnerId, is set only by
+  // the /explore path (exploration.ts), never by loadStoryFromCloud. So the Save
+  // button rendered, and three autosaves fired without one being pressed.
+  //
+  // What then happened was worse than a refusal. `stories` UPDATE RLS is owner-only,
+  // so saveStoryForUser's `.eq('user_id', userId)` matched zero rows -- and PostgREST
+  // reports no error for an update that matches nothing. The save returned success
+  // having written nothing at all, and the reviewer was shown "saved". The beats half
+  // was separately refused by migration 003's `generated_by = auth.uid()` UPDATE
+  // policy and caught into a `beatsWarning` string rather than thrown. Silent data
+  // loss, top to bottom. See docs/agentic-creator-phase9c-plan.md section 10.1.
+  //
+  // The fix mirrors the shape saveBeat already uses (:757 below) with one deliberate
+  // difference: the identity handed to saveStoryForUser is the story's OWNER, never
+  // the reviewer. That is not a detail. `userId` becomes storyData.user_id, so
+  // passing the reviewer would rewrite `stories.user_id` and hand them ownership of
+  // the agent's story outright -- breaking D15's persona attribution and, on the very
+  // next owner-scoped query, hiding the story from the system user that made it.
+  // Passing the owner writes the value the row already holds. agent_persona_id and
+  // agent_task_id are absent from the options here on purpose: saveStoryForUser omits
+  // those columns entirely unless asked, so the persona link survives the save.
+  //
+  // Three narrowing conditions keep the ordinary creation flow bit-for-bit unchanged:
+  //
+  //   - No savedStoryId means a brand-new story, which has no owner to check yet.
+  //     That is the whole of the create path (and beat-bundle.ts's 'new_story'
+  //     branch), and it skips this block entirely rather than paying for it.
+  //   - assertCanEditStory returns `reviewer: null` for an owner, so an author saving
+  //     their own story takes the same final line it always has, on the same session
+  //     client, with the same user id.
+  //   - A throw is swallowed, exactly as saveBeat swallows it and for the same
+  //     reason: a caller who is neither owner nor reviewer is not necessarily doing
+  //     anything wrong, and must be left on the behaviour they had before this
+  //     existed rather than newly refused.
+  //
+  // The cost on the owner path is one narrow primary-key select (id, user_id,
+  // agent_persona_id) before an operation that already runs two selects, an update
+  // and an upsert. assertCanEditStory touches agent_reviewers only when the caller
+  // is not the owner AND the story is agent-owned, so an author's autosave never
+  // reads that table at all. saveBeat, which runs more often than this does, has
+  // paid the same single query since Unit 9b.
+  if (session.savedStoryId) {
+    let access: EditableStoryAccess | null = null;
+    try {
+      access = await assertCanEditStory(session.savedStoryId, user.id, ['id']);
+    } catch {
+      access = null;
+    }
+    if (access?.reviewer) {
+      return saveStoryForUser(
+        createAdminClient(),
+        access.story.user_id,
+        session,
+        storyMapWithUrls,
+        { crossGeneratorBeats: true }
+      );
+    }
+  }
+
   return saveStoryForUser(supabase, user.id, session, storyMapWithUrls);
 }
 
