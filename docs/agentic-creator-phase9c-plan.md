@@ -383,3 +383,63 @@ History filters on `reviewer_id` with no index. Irrelevant at today's row counts
   2026-09-11, not abandoned: re-drive a run to `awaiting_review` and confirm `agent_review_assignments`
   gains a row with `source='auto'` and a populated `match_reason`. The `all_ages` pooling case still has
   no fixture.
+
+---
+
+## 11. What Unit 9M's blocker fixes shipped — 2026-09-11
+
+All three blockers in section 10 are fixed, each in its own commit, none needing a migration.
+Gate for the set: **tsc clean, lint clean, 971 unit tests (+7), production build green, e2e 19/19.**
+
+| Blocker | Commit | What changed |
+|---|---|---|
+| A — `saveStory` wrote nothing and said it saved | `3347ffb` | `saveStory` resolves access through `assertCanEditStory` and, on the reviewer branch only, saves on the admin client **as the story's owner**. `saveStoryForUser` gains `crossGeneratorBeats` (default off, one caller). |
+| C — image batches billed the reviewer | `a5e9bff` | Both submit paths stamp the payer and pass `actorKind`. Payer logic extracted to `lib/agentic/billing-identity.shared.ts` with 7 tests. |
+| B — the authoring UI published as the reviewer | `4974611` | `assertNotAnotherUsersAgentDraft` guards `publishStoryline` **and** `autoPublishStoryline` server-side; the publish UI stops offering what the server will refuse. |
+
+### 11.1 The three things that differed from this plan
+
+Recorded because the plan has been wrong more often than the code, and these are the specifics:
+
+1. **Blocker A's failure mode.** Predicted `Forbidden.`; actually a silent success writing nothing.
+   The fix therefore had to be about the **identity** passed to `saveStoryForUser`, not just the client:
+   `userId` becomes `storyData.user_id`, so saving as the reviewer would have transferred ownership of the
+   agent's story to them.
+2. **`autoPublishStoryline` was never mentioned.** It is the worse of the two publish paths — fire-and-forget
+   from the store when a story reaches an ending, no dialog, no confirmation. A reviewer continuing an agent
+   draft to its end would have published it under their own name without pressing anything.
+3. **`submitStoryStatefulVisuals` bills exactly like `submitStoryImageBatch`.** The plan named only the
+   latter. Fixing one and not the other would have been worse than leaving both consistently wrong.
+
+### 11.2 Deliberate non-changes, with reasons
+
+- **`assertImageGenerationEntitled` still runs on the caller, not the payer.** It answers "is this feature
+  available to the person using it, and at which model tier" — a different question from whose wallet is
+  charged, and the agentic bypass does not cover it. Verified on dev: the agentic system user has no
+  subscription, no billing customer row and no entitlement override, so it resolves to the **free** plan.
+  Routing that call to it would newly refuse reviewers a submit that works today.
+- **No second publish entry point.** Section 3.5 is explicit — reuse `publishRunAction`, do not write a
+  second transition. A publish from `/story/[id]` would have created the storyline without the decision row
+  and the run transition, or duplicated them. The authoring screen now explains and links to `/review`.
+- **Shared branching is untouched.** The publish guard refuses only an agent-owned story published by a
+  non-owner. Any authenticated user continuing someone else's ordinary story and publishing that branch as
+  themselves is existing intended behaviour of that path.
+- **`saveBeat` was left alone.** It resolves the same `generated_by` mismatch the opposite way (stamps the
+  reviewer, drops the filter) where `saveStory` stamps the owner. That asymmetry is a wart, not a defect —
+  `crossGeneratorBeats` exists precisely so the two cannot miss each other's rows. Changing working code
+  was out of scope.
+
+### 11.3 Found along the way, NOT fixed
+
+- **`beats` INSERT RLS lets any authenticated user insert beats into anyone's non-archived story**
+  (`003_normalize_beats.sql`: `auth.uid() IS NOT NULL AND generated_by = auth.uid() AND` story not
+  archived). Pre-existing, unrelated to reviewers, wider than this unit. Worth its own look.
+- **`publishStoryline` performs no ownership check of its own** beyond the new agent-draft guard, and takes
+  client-supplied `beats`/`choices`/`nodePath`. For shared branching that is the intended shape; it is
+  recorded here so the next person does not mistake the narrow guard for a general one.
+
+### 11.4 Still owed for 9M
+
+The browser run of section 3.1 — none of this has been exercised as `testuser`. In particular: confirm
+`stories.updated_at` now MOVES on a reviewer's save, that the narration and image batches submit, and that
+the publish panel appears instead of the publish buttons.

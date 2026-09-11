@@ -118,7 +118,7 @@ for what has actually run.
 | 111 | `agent_reviewers` | table `agent_reviewers` — Phase 9's reviewer authorization, read only through `requireReviewer()` (D6, D14) | **Applied** 2026-09-09 16:20:41+00. **0 rows**, and that matters: with the table empty, the only account that passes `requireReviewer()` is `ADMIN_USER_ID`, through the implicit short-circuit that never touches the table. Insert a row to exercise reviewer capability at all. **Superseded in part by 113**, which dropped `can_publish` / `can_trigger_media` in favour of a single `role` column | Not applied |
 | 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
 | 113 | `agent_reviewer_roles` | `agent_reviewers` gains `role` (`reviewer`\|`editor`, CHECK-constrained), the `age_groups`/`languages`/`genres` coverage arrays, and `updated_by`; **drops `can_publish` and `can_trigger_media`** — Phase 9b's D17, capability derived from role by pure functions rather than stored twice | **Applied** 2026-09-10 03:07:27+00. Schema verified directly, not just the ledger row: 12 columns, `role` NOT NULL DEFAULT `'reviewer'` with CHECK `('reviewer','editor')`, the three arrays NOT NULL DEFAULT `'{}'`, `updated_by` FK SET NULL, both booleans confirmed **gone**, **0 rows**. Dropping the booleans was only safe because the table was empty and prod has no agentic schema at all | Not applied |
-| 114 | `agent_review_assignments` | table `agent_review_assignments` — Phase 9b's D18, TASK-level manual reviewer assignment (Unit 9i). `source` (`manual`\|`auto`) and `status` (`active`\|`released`\|`superseded`) CHECK-constrained, a partial UNIQUE index enforcing at most one `active` row per task, `reviewer_id`/`assigned_by` both `ON DELETE SET NULL` | **Not applied.** Written and committed 2026-09-10 as part of Unit 9i; `lib/agentic/review-routing.ts` fails closed until an admin applies it by hand (reads degrade to an empty Map, writes throw) | Not applied |
+| 114 | `agent_review_assignments` | table `agent_review_assignments` — Phase 9b's D18, TASK-level manual reviewer assignment (Unit 9i). `source` (`manual`\|`auto`) and `status` (`active`\|`released`\|`superseded`) CHECK-constrained, a partial UNIQUE index enforcing at most one `active` row per task, `reviewer_id`/`assigned_by` both `ON DELETE SET NULL` | **Applied** 2026-09-10 08:07:22+00 (this row said "Not applied" until 2026-09-11 — the ledger and the live schema both disagreed with it). Verified directly, not just the ledger row: `agent_review_assignments_one_active_idx` is UNIQUE and partial (`WHERE status = 'active'`), which is the load-bearing part — it is what makes Unit 9J's auto-assignment idempotent | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
@@ -448,12 +448,16 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 - **Nothing in Phase 8 has been exercised against a live database.** The gate is entirely static
   (tsc, lint, 854 unit tests, build:verify, e2e). Every prior agentic phase found real defects only
   once a run touched Postgres. The verification queries are in the same handoff.
-- **A reviewer cannot edit an agent-generated draft, and Phase 9 assumes they can.** `stories` RLS allows
-  any signed-in user to SELECT a non-archived story but restricts UPDATE to `auth.uid() = user_id`. Agent
-  drafts are owned by `AGENTIC_SYSTEM_USER_ID`, so `/story/[id]` renders for an admin and then refuses every
-  write. Phase 9 plans to "reuse the existing story editor at `/story/[id]`" for reviewers — it needs either
-  a reviewer RLS policy or an admin-client server-action path first. `persistence.ts`'s `serverAuth` escape
-  hatch does not cover this; it is scoped to worker media-state patches.
+- **RESOLVED 2026-09-11 — a reviewer can now edit an agent draft.** The RLS facts below are unchanged and
+  no policy was added: `stories` still allows any signed-in user to SELECT a non-archived story and still
+  restricts UPDATE to `auth.uid() = user_id`. What changed is the route in. Unit 9b (`b7041b2`) made four
+  write paths reviewer-aware through `assertCanEditStory` — `saveBeat`, beat editing, the narration batch
+  and the image batch — and Unit 9M (`3347ffb`) closed the fifth and worst, `saveStory`, which did not throw
+  `Forbidden.` as this entry predicted but reported success and wrote nothing (owner-only UPDATE matching
+  zero rows is not an error in PostgREST). All five run on the admin client with `assertCanEditStory` as the
+  entire boundary (D14) — the "admin-client server-action path" option this entry named, not the RLS one.
+  Still true and still worth knowing: `persistence.ts`'s `serverAuth` escape hatch does NOT cover any of
+  this; it remains scoped to worker media-state patches.
 - **The evaluator's restricted-theme check is effectively English-only against beat text.** All 15 seeded
   personas store `restricted_themes` as ENGLISH phrases ("graphic violence", "self-harm"), including the 12
   that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `` is defined over
