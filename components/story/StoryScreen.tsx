@@ -6,7 +6,7 @@ import { useStoryStore } from '@/lib/store/story-store';
 import { motion, AnimatePresence } from 'motion/react';
 import Image from 'next/image';
 import { createPortal } from 'react-dom';
-import { ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
+import { ArrowLeft, ArrowRight, RefreshCcw, BookOpen, Check, ChevronDown, ChevronUp, Save, Loader2, Share2, ExternalLink, Compass, CloudOff, CloudUpload, CheckCircle2, ImageIcon, ImageOff, AlertTriangle, Copy, Upload, Trash2, X, Layers, Clock3, Volume2, VolumeX, AlignLeft, AlignCenter, AlignRight, Type, Download, Lock, Play, Pause, Square, Blend, Clapperboard, Focus, SlidersHorizontal, Info, BookmarkPlus, BookmarkCheck, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
 import { resolveStoryContinuationDisplayQuote } from '@/lib/pricing/story-continuation.shared';
@@ -21,7 +21,7 @@ import BatchVisualsBanner from './BatchVisualsBanner';
 import ManageStorylineCoverDialog from './ManageStorylineCoverDialog';
 import Timeline from './Timeline';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import NarrationButton from './NarrationButton';
 import AutoScrollButton from './AutoScrollButton';
 import FilterDropdown from '@/components/ui/FilterDropdown';
@@ -1688,6 +1688,20 @@ export default function StoryScreen() {
   const permanentlyDeleteCharacterReferenceSheet = useStoryStore((state) => state.permanentlyDeleteCharacterReferenceSheet);
   const { user } = useAuth();
   const { data: pricing } = usePricingRuntime();
+  // Unit 9M: the way back to the review queue. The marker is read from the URL on
+  // every render on purpose -- lib/store/story-store.ts is a module singleton with
+  // no persistence, so anything stashed there would vanish on the first reload and
+  // strand a reviewer on a screen with no way back.
+  //
+  // Only ever the literal string 'review' is honoured, and the destination below is
+  // the hardcoded '/review'. The query string never supplies a path to navigate to.
+  //
+  // Gated on the viewer's own reviewer standing (pricing.reviewer, D20) for the same
+  // reason the agent-draft panel below gates its link: /review redirects anyone who
+  // is not an active reviewer straight back to '/', so offering it to them would be
+  // a dead end. `reviewer` is null until the pricing runtime resolves, so the link
+  // appears a moment after the screen does.
+  const cameFromReviewQueue = useSearchParams().get('from') === 'review';
   const [isAdminUser, setIsAdminUser] = useState(false);
   const [cycleSettings, setCycleSettings] = useState<StoryRuntimeSettings>({
     cycleOverride: false,
@@ -1873,6 +1887,7 @@ export default function StoryScreen() {
       isAnotherUsersAgentDraft={Boolean(
         session.agentPersonaId && user && session.savedByUserId && session.savedByUserId !== user.id
       )}
+      showReviewQueueReturn={cameFromReviewQueue && Boolean(pricing.reviewer)}
       isAdminUser={isAdminUser}
       continueCoinCost={continueCoinCost}
       continueIncludesImage={continuationQuote.includesImage}
@@ -1930,6 +1945,7 @@ function StoryScreenInner({
   cycleSettings,
   pricing,
   isAnotherUsersAgentDraft,
+  showReviewQueueReturn,
   isAdminUser,
   continueCoinCost,
   continueIncludesImage,
@@ -2027,6 +2043,13 @@ function StoryScreenInner({
    * StoryScreen, which is where useAuth's `user` lives. See where it is consumed below.
    */
   isAnotherUsersAgentDraft: boolean;
+  /**
+   * Unit 9M: the reviewer arrived from the review queue (`/story/[id]?from=review`),
+   * and is a reviewer who can actually get back in. Resolved in the outer StoryScreen
+   * from the URL plus the pricing runtime's `reviewer` standing -- see the comment
+   * there for why neither half can be cached in the store.
+   */
+  showReviewQueueReturn: boolean;
   isAdminUser: boolean;
   continueCoinCost: number;
   continueIncludesImage: boolean;
@@ -6085,6 +6108,22 @@ function StoryScreenInner({
           </h1>
         </div>
         <div className="order-1 flex h-11 items-center justify-end gap-3 pl-32 pr-12 text-sm font-sans uppercase tracking-widest text-neutral-400 md:order-2 md:h-auto md:self-auto md:gap-4 md:p-0">
+          {/* Unit 9M: the way back out. Sits in the header's control group rather than
+              floating over the scene because the two fixed corners of this page are
+              already spoken for -- the Kissago logo top-left, UserMenu top-right (see
+              app/story/[id]/page.tsx). Indigo matches the agent-draft panel further
+              down, so the two reviewer-only affordances read as one thing. Label is
+              hidden below md for the same reason "Beat" is: that row is tight. */}
+          {showReviewQueueReturn && (
+            <Link
+              href="/review"
+              title="Back to the review queue"
+              className="flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1.5 text-xs text-indigo-200 transition-colors hover:bg-indigo-500/20 hover:text-indigo-100 md:px-3"
+            >
+              <ArrowLeft className="h-4 w-4 shrink-0" />
+              <span className="hidden md:inline">Review queue</span>
+            </Link>
+          )}
           <span className="text-xs md:text-sm">
             <span className="hidden md:inline">Beat </span>{currentBeat.beatNumber} / {session.maxBeats}
           </span>

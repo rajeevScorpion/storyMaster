@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Loader2,
+  PenLine,
   RefreshCcw,
   Rocket,
   RotateCcw,
@@ -522,7 +523,28 @@ export default function ReviewQueue({
                 {rows.map((row) => {
                   const isExpanded = expandedId === row.run.id;
                   const isAssigned = Boolean(row.assignment?.reviewerId);
+                  const storyHref = row.story?.id ? `/story/${row.story.id}?from=review` : null;
                   const actions: RowAction[] = [
+                    // Unit 9M: the doorway into the draft. D19 settled that a reviewer edits
+                    // in the existing authoring screen rather than a second editor, so this is
+                    // navigation, not a new surface -- and it lives in the actions menu rather
+                    // than as a column because 9L deliberately narrowed this table to five
+                    // columns to stop it scrolling horizontally.
+                    //
+                    // `?from=review` is the marker StoryScreen reads to offer a way back. It
+                    // is a plain marker, not a return URL: nothing in the authoring screen
+                    // navigates to a path taken from the query string.
+                    //
+                    // A row whose run has no story row (row.story is nullable on this join)
+                    // renders the action disabled rather than hidden -- a queue row with
+                    // nothing to open is a data problem worth seeing, not one to hide.
+                    {
+                      key: 'open',
+                      label: storyHref ? 'Open in authoring' : 'Open in authoring (no story)',
+                      icon: PenLine,
+                      href: storyHref ?? undefined,
+                      disabled: !storyHref,
+                    },
                     {
                       key: 'approve',
                       label: 'Approve',
