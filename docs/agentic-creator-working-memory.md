@@ -6,6 +6,64 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-11 late (Phase 9b COMPLETE; only 9M and 9k remain)
+
+**Read this first.**
+
+### Phase 9b is finished
+
+9f, 9g, 9h, 9i, 9L and 9J are all landed and gated. Migrations 113 and 114 are applied on dev and
+**frozen**. What remains of the whole reviewer effort is **9M** (the finish-and-publish workspace,
+`docs/agentic-creator-phase9c-plan.md` section 3) and **9k** (the workload view, phase9b-plan section 7).
+
+| SHA | What |
+|---|---|
+| `4bc2cf6` | **9L** — hydration fix, reviewer badge + queue link, queue de-scrolled, sidebar |
+| `3ea2b9d` | `.gitattributes` — line endings normalised by git, not by hand |
+| `64a2415` | **9J** — automatic reviewer assignment |
+| `7c1d207` | renormalised the 17 files that had CRLF committed |
+
+Gate at `7c1d207`, run on Opus rather than taken on report: **tsc 0, lint clean, 101 files / 964 tests,
+build green, e2e 19/19.**
+
+### Line endings are solved — delete the ritual from your briefs
+
+The repo had **no `.gitattributes`** and `core.autocrlf=false`, so git committed whatever bytes the
+working tree held. That is why every brief carried `sed -i 's/$//'` and why it kept being forgotten —
+17 files had already been committed with CRLF. `* text=auto eol=lf` now normalises on `git add`, proven
+end to end. **Do not put line-ending instructions in an agent brief again**; see GOTCHAS.
+
+### 9J specifics
+
+- The matcher is pure and lives in `review-routing.shared.ts`; the hook `tryAutoAssignReview` is in
+  `review-routing.ts` and is called from `orchestrator.ts`'s `persistStageAdvance` right after
+  `setTaskStatus`.
+- **The hook never throws.** Every path logs and returns, so a routing defect cannot fail a run.
+- **The import pair is one-directional at runtime and must stay that way.** `review-routing.ts` imports
+  `AdminClient` from `orchestrator.ts` as `import type` (erased); `orchestrator.ts` imports
+  `tryAutoAssignReview` as a value. Changing the first to a value import creates a genuine runtime cycle.
+- The plan said to "use the existing latch" for 113/111. That was **imprecise** — no roster-wide latch
+  existed, only a private single-row one in `reviewers.ts`. 9J added its own, reusing the existing
+  *classifier*. Correct per GOTCHAS, but the plan overstated what was there.
+
+### 9J has NOT been proven live
+
+The matcher has 12 unit tests and the hook has none that touch a database. Auto-assignment has never
+actually run. To prove it: re-drive a run to `awaiting_review` and confirm `agent_review_assignments`
+gains a row with `source='auto'` and a populated `match_reason`.
+
+`testuser` covers `[english, hindi]` × all five concrete age groups with `genres = []`, so they match
+**4 of the 5 waiting drafts**. The `all_ages` pooling case (D16) still has no live fixture — commission
+one such task to prove it.
+
+### 9M's three blocking unknowns are unchanged
+
+From phase9c-plan section 3, none investigated yet: `saveStory` is not reviewer-aware; `PublishDialog`
+would attribute a published storyline to the **reviewer** instead of the persona, breaking D15; and image
+billing for agent drafts is unpriced. The first is an investigation to run before writing any 9M code.
+
+---
+
 ## Session handoff — 2026-09-11 (9L landed; 9J and 9M remain)
 
 **Read this first.** Sections below are earlier stops, still accurate for their own units.
