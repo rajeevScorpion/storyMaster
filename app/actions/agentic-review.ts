@@ -47,6 +47,7 @@
 import { requireReviewer } from '@/lib/agentic/reviewers';
 import { canAssignWork, canPublish } from '@/lib/agentic/reviewers.shared';
 import { createAdminClient, verifyAdmin } from '@/lib/supabase/admin';
+import { invalidatePricingRuntimeCacheForUser } from '@/lib/pricing/runtime-context-cache';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { listRuns, getRun, type AgentRun } from '@/lib/agentic/orchestrator';
 import { isMissingRunSchemaError } from '@/lib/agentic/orchestrator.shared';
@@ -549,6 +550,13 @@ export async function grantReviewerAction(input: GrantReviewerInput): Promise<Re
     throw new Error(`Failed to grant reviewer standing: ${error.message}`);
   }
 
+  // Unit 9L / D20: reviewer standing rides the pricing-runtime payload, which is
+  // cached per user for 30s. Without this, an account granted (or suspended, or
+  // re-roled) here keeps its stale badge and "Review queue" link until that TTL
+  // lapses. Cosmetic only -- requireReviewer() re-checks on every real action, so
+  // a stale badge never grants access -- but a just-granted reviewer seeing no
+  // badge for half a minute reads as a bug.
+  invalidatePricingRuntimeCacheForUser((data as AgentReviewerRosterQueryRow).user_id);
   return rosterRowFromQuery(data as AgentReviewerRosterQueryRow);
 }
 
@@ -598,6 +606,13 @@ export async function updateReviewerAction(input: UpdateReviewerInput): Promise<
     throw new Error(`Failed to update reviewer: ${error.message}`);
   }
 
+  // Unit 9L / D20: reviewer standing rides the pricing-runtime payload, which is
+  // cached per user for 30s. Without this, an account granted (or suspended, or
+  // re-roled) here keeps its stale badge and "Review queue" link until that TTL
+  // lapses. Cosmetic only -- requireReviewer() re-checks on every real action, so
+  // a stale badge never grants access -- but a just-granted reviewer seeing no
+  // badge for half a minute reads as a bug.
+  invalidatePricingRuntimeCacheForUser((data as AgentReviewerRosterQueryRow).user_id);
   return rosterRowFromQuery(data as AgentReviewerRosterQueryRow);
 }
 
@@ -636,6 +651,13 @@ export async function setReviewerStatusAction(
     throw new Error(`Failed to update reviewer status: ${error.message}`);
   }
 
+  // Unit 9L / D20: reviewer standing rides the pricing-runtime payload, which is
+  // cached per user for 30s. Without this, an account granted (or suspended, or
+  // re-roled) here keeps its stale badge and "Review queue" link until that TTL
+  // lapses. Cosmetic only -- requireReviewer() re-checks on every real action, so
+  // a stale badge never grants access -- but a just-granted reviewer seeing no
+  // badge for half a minute reads as a bug.
+  invalidatePricingRuntimeCacheForUser((data as AgentReviewerRosterQueryRow).user_id);
   return rosterRowFromQuery(data as AgentReviewerRosterQueryRow);
 }
 

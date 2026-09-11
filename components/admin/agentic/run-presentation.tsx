@@ -1,3 +1,5 @@
+'use client';
+
 // ── Agentic Creator System: run/evaluation presentation helpers ─────────
 //
 // Extracted verbatim out of RunMonitor.tsx (Unit 9c) so Phase 9's review queue
@@ -10,12 +12,31 @@
 // use them (RunMonitor.tsx still owns those, and still imports STAGE_LABELS from
 // here to build STAGE_FILTER_OPTIONS).
 //
-// No 'use client' directive: EvaluationEntry below carries no hooks and no
-// state (verified at the move -- it is pure JSX over its `evaluation` prop),
-// so this file has no client-only dependency and stays importable from either
-// side of the boundary. It happens to be imported only by client components
-// today (RunMonitor.tsx, ReviewQueue.tsx), but nothing here requires that.
-
+// 'use client' as of Unit 9L: this file was previously isomorphic (no hooks, no
+// state -- EvaluationEntry was pure JSX over its `evaluation` prop) and stayed
+// importable from either side of the boundary, even though every real importer
+// (RunMonitor.tsx, ReviewQueue.tsx) was already a client component. That changed
+// when FormattedDateTime (below) was added to fix a REPRODUCED hydration error on
+// /review: loaded as the reviewer with a browser timezone forced away from the
+// dev server's own (see docs/agentic-creator-phase9c-plan.md section 4.4), the
+// "Entered review" cell threw React's hydration-mismatch error and regenerated
+// the whole tree client-side -- "9 Sept 2026, 4:40 pm" (server, IST) vs.
+// "9 Sept 2026, 4:10 am" (client, forced to America/Los_Angeles). An explicit
+// timeZone on formatDateTime below closes exactly that gap, but the plan
+// deliberately does not stop there: Node's bundled ICU/CLDR data and a visitor's
+// browser can still disagree on the exact bytes of a locale string for the SAME
+// instant and the SAME timeZone (a narrow no-break space vs. a regular one before
+// "am"/"pm" is a real, previously-observed case), which no timeZone option fixes.
+// FormattedDateTime sidesteps that entire class by never letting a locale string
+// reach the DOM during the SSR/hydration pass at all -- it renders a fixed
+// placeholder for that pass and swaps to the real text once the client is known
+// to be live, via useSyncExternalStore's getServerSnapshot/getSnapshot split
+// (React's own recommended tool for "render one value during SSR/hydration, a
+// different one after" -- see useHasMounted below) rather than a useEffect that
+// calls setState, which this repo's react-hooks/set-state-in-effect lint rule
+// rejects as a footgun for the ordinary "sync external state" case it usually
+// guards against. This one is not that case.
+import { useSyncExternalStore } from 'react';
 import type { StoredEvaluation, AgentRunEventLevel, AgentRunStage } from '@/app/actions/agentic-runs';
 import {
   EVALUATION_DIMENSIONS,
@@ -110,7 +131,52 @@ export function shortId(id: string | null): string {
 
 export function formatDateTime(value: string | null): string {
   if (!value) return '—';
-  return new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  // timeZone pinned alongside the locale: every admin/reviewer sees the same wall
+  // clock regardless of their laptop's own timezone, and it closes off a genuine,
+  // reproduced timezone-mismatch hydration error (see the file header). It is not
+  // a complete fix by itself -- an ICU/CLDR version difference between Node and a
+  // browser can still format the same instant, same zone, as different bytes --
+  // which is why every call site this unit touches goes through
+  // FormattedDateTime, not this function directly, during the render that gets
+  // hydrated.
+  return new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
+}
+
+// True once this component is running in the browser, false during SSR and
+// during the hydration render that must match the server's output byte for
+// byte. useSyncExternalStore's third argument (getServerSnapshot) is used
+// EXACTLY for this: it is what the server render AND the first client render
+// both call, and the second argument (getSnapshot) is what every render after
+// that calls -- so the flip from false to true happens automatically, for
+// free, the instant React considers the component "live," with no effect and
+// no setState to trip react-hooks/set-state-in-effect. The subscribe function
+// is a genuine no-op: this value never changes on its own after mount, there
+// is nothing to subscribe to.
+function subscribeNever() {
+  return () => {};
+}
+function useHasMounted(): boolean {
+  return useSyncExternalStore(subscribeNever, () => true, () => false);
+}
+
+/**
+ * Hydration-safe wrapper around formatDateTime(value): renders a fixed '—'
+ * placeholder for the SSR render and the hydration-matching first client
+ * render, then swaps to the real formatted string. React only compares
+ * server-rendered markup against a component's FIRST client render when
+ * deciding whether hydration succeeded -- by construction that first render
+ * here is always '—', identical to what the server sent, so there is nothing
+ * left for the two environments to disagree about. The swap to the real text
+ * happens on the very next render, outside hydration's comparison entirely.
+ *
+ * Use this (not formatDateTime directly) at any call site whose output gets
+ * server-rendered and then hydrated -- i.e. everywhere in this file's actual
+ * importers today. formatDateTime itself stays exported for call sites that
+ * genuinely need a plain string (a `title` attribute, a non-hydrated context).
+ */
+export function FormattedDateTime({ value }: { value: string | null }) {
+  const mounted = useHasMounted();
+  return <>{mounted ? formatDateTime(value) : '—'}</>;
 }
 
 /**
@@ -136,7 +202,7 @@ export function EvaluationEntry({ evaluation }: { evaluation: StoredEvaluation }
           {REVIEW_READINESS_LABELS[evaluation.reviewReadiness]}
         </span>
         <span className="text-neutral-600">
-          {evaluation.triggerSource === 'pipeline' ? 'Pipeline' : 'Manual'} · {formatDateTime(evaluation.createdAt)}
+          {evaluation.triggerSource === 'pipeline' ? 'Pipeline' : 'Manual'} · <FormattedDateTime value={evaluation.createdAt} />
         </span>
       </div>
 

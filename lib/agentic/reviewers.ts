@@ -152,6 +152,41 @@ async function resolveReviewerForUser(userId: string): Promise<AgentReviewer | n
 }
 
 /**
+ * Resolves the CURRENT user's reviewer standing for the pricing-runtime payload
+ * (D20, docs/agentic-creator-phase9c-plan.md section 4.1): `{ role } | null`, never
+ * more. requireReviewer() below throws by design -- a hard authorization gate --
+ * which is exactly wrong for this caller: getPricingRuntimeContext() is fetched
+ * once per session by an app-wide provider on every signed-in page, so a reviewer
+ * lookup here must degrade to `null` for ANY reason (migration 111 unapplied, a
+ * transient query error, or simply "not a reviewer") rather than take the whole
+ * pricing payload down with it. Reuses resolveReviewerForUser() above -- same
+ * fetch, same 111-latch, same ADMIN_USER_ID short-circuit as requireReviewer() --
+ * so this is not a second way of answering "is this user a reviewer".
+ *
+ * Deliberately returns ONLY `{ role }` for the CALLER's own id. Never `notes`,
+ * never `status`, never any other account's standing -- see `245588e`, which fixed
+ * exactly this shape (admin-only `notes`) leaking from a different reviewer action
+ * to every active reviewer. There is no parameter here to pass another user's id.
+ *
+ * Only an ACTIVE reviewer/editor gets a standing back (isActiveReviewer), matching
+ * requireReviewer()'s own gate -- a suspended reviewer must not see a badge or a
+ * queue link that requireReviewer() would then refuse to honor.
+ */
+export async function resolveMyReviewerStanding(
+  userId: string
+): Promise<{ role: AgentReviewerRole } | null> {
+  try {
+    const reviewer = await resolveReviewerForUser(userId);
+    if (!isActiveReviewer(reviewer)) {
+      return null;
+    }
+    return { role: reviewer.role };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Verify the current session belongs to an active reviewer. Throws if not -- mirrors
  * verifyAdmin() (lib/supabase/admin.ts) exactly: 'Not authenticated' when there is no
  * session, 'Forbidden' when the signed-in user is neither ADMIN_USER_ID nor an active

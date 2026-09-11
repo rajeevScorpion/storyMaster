@@ -39,7 +39,7 @@ import {
   EVALUATION_VERDICT_LABELS,
   EVALUATION_VERDICT_STYLES,
   REVIEW_READINESS_LABELS,
-  formatDateTime,
+  FormattedDateTime,
   shortId,
   EvaluationEntry,
 } from '@/components/admin/agentic/run-presentation';
@@ -202,6 +202,7 @@ export default function ReviewQueue({
   schemaApplied,
   canPublish,
   canAssignWork,
+  initialAssignmentFilter,
 }: {
   initialRows: ReviewQueueRow[];
   schemaApplied: boolean;
@@ -222,10 +223,20 @@ export default function ReviewQueue({
    * grant a write it would otherwise refuse.
    */
   canAssignWork: boolean;
+  /**
+   * Seeds the assignment filter dropdown (Unit 9L: app/review/layout.tsx's "My
+   * assignments" sidebar link navigates to `/review?assignment=mine`, and
+   * app/review/page.tsx reads that query param to fetch `initialRows` already
+   * filtered server-side AND to pass it here, so the dropdown reflects what is
+   * actually on screen rather than opening back at "Everyone" every time.
+   * Defaults to 'all' when omitted -- app/admin/authors/page.tsx does not pass
+   * this prop and keeps its existing unfiltered-by-default behavior unchanged.
+   */
+  initialAssignmentFilter?: 'mine' | 'unassigned' | 'all';
 }) {
   const [rows, setRows] = useState(initialRows);
   const [readinessFilter, setReadinessFilter] = useState('all');
-  const [assignmentFilter, setAssignmentFilter] = useState('all');
+  const [assignmentFilter, setAssignmentFilter] = useState<string>(initialAssignmentFilter ?? 'all');
   const [isPending, startTransition] = useTransition();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -486,19 +497,24 @@ export default function ReviewQueue({
             </div>
           )}
 
-          <div className={`relative overflow-x-auto transition-opacity ${isPending ? 'opacity-55' : ''}`}>
-            <table className="w-full min-w-[1180px] text-sm">
+          {/* Unit 9L (plan section 4.3): this used to be 10 columns at
+              min-w-[1180px] inside overflow-x-auto -- a horizontal scrollbar at
+              every viewport width, on the page's own front door. The row now
+              carries only what a reviewer actually decides from -- Story,
+              Readiness, Latest verdict, Assignee, Actions -- and everything else
+              (Persona, Decision, Entered review, Run) moved into the expandable
+              detail row below, which already existed for the Evaluation panel.
+              No min-width, no overflow-x-auto: the table must never scroll
+              horizontally, at any width. */}
+          <div className={`relative transition-opacity ${isPending ? 'opacity-55' : ''}`}>
+            <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-white/10 text-left text-xs uppercase tracking-[0.12em] text-neutral-600">
                   <th className="px-2 py-3" aria-label="Expand" />
                   <th className="px-4 py-3 font-medium">Story</th>
-                  <th className="px-4 py-3 font-medium">Persona</th>
                   <th className="px-4 py-3 font-medium">Readiness</th>
                   <th className="px-4 py-3 font-medium">Latest verdict</th>
-                  <th className="px-4 py-3 font-medium">Decision</th>
                   <th className="px-4 py-3 font-medium">Assignee</th>
-                  <th className="px-4 py-3 font-medium">Entered review</th>
-                  <th className="px-4 py-3 font-medium">Run</th>
                   <th className="px-4 py-3 font-medium" aria-label="Row actions" />
                 </tr>
               </thead>
@@ -576,9 +592,6 @@ export default function ReviewQueue({
                             {row.story?.id ? shortId(row.story.id) : '—'}
                           </div>
                         </td>
-                        <td className="px-4 py-4 font-mono text-xs text-neutral-400" title={row.run.personaId ?? undefined}>
-                          {shortId(row.run.personaId)}
-                        </td>
                         <td className="px-4 py-4">
                           <span
                             className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${QUEUE_READINESS_STYLES[row.readiness]}`}
@@ -598,18 +611,6 @@ export default function ReviewQueue({
                           )}
                         </td>
                         <td className="px-4 py-4">
-                          {row.latestDecision ? (
-                            <span
-                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${DECISION_STYLES[row.latestDecision.decision]}`}
-                              title={row.latestDecision.reviewerLabel ? `By ${row.latestDecision.reviewerLabel}` : undefined}
-                            >
-                              {DECISION_LABELS[row.latestDecision.decision]}
-                            </span>
-                          ) : (
-                            <span className="text-neutral-600">Undecided</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-4">
                           {isAssigned ? (
                             <span
                               className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-1 text-xs font-medium text-indigo-300"
@@ -620,10 +621,6 @@ export default function ReviewQueue({
                           ) : (
                             <span className="text-neutral-600">Unassigned</span>
                           )}
-                        </td>
-                        <td className="px-4 py-4 text-neutral-500">{formatDateTime(row.run.finishedAt)}</td>
-                        <td className="px-4 py-4 font-mono text-xs text-neutral-500" title={row.run.id}>
-                          {shortId(row.run.id)}
                         </td>
                         <td className="px-4 py-4 text-right" onClick={(event) => event.stopPropagation()}>
                           <RowActionsMenu
@@ -636,7 +633,48 @@ export default function ReviewQueue({
                       </tr>
                       {isExpanded && (
                         <tr className="border-b border-white/5 bg-white/[0.02]">
-                          <td colSpan={10} className="px-6 py-5">
+                          <td colSpan={5} className="px-6 py-5">
+                            {/* Unit 9L: Persona, Decision, Entered review and Run used to be
+                                their own columns in the always-visible row -- the 11-column,
+                                min-w-[1180px] table that forced a horizontal scrollbar at every
+                                width. They live here now, in the detail this chevron already
+                                opened for the Evaluation panel, rather than in a wider row. */}
+                            <dl className="mb-5 grid grid-cols-2 gap-x-4 gap-y-3 text-xs sm:grid-cols-4">
+                              <div>
+                                <dt className="uppercase tracking-wide text-neutral-600">Persona</dt>
+                                <dd className="mt-1 font-mono text-neutral-300" title={row.run.personaId ?? undefined}>
+                                  {shortId(row.run.personaId)}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="uppercase tracking-wide text-neutral-600">Decision</dt>
+                                <dd className="mt-1">
+                                  {row.latestDecision ? (
+                                    <span
+                                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${DECISION_STYLES[row.latestDecision.decision]}`}
+                                      title={row.latestDecision.reviewerLabel ? `By ${row.latestDecision.reviewerLabel}` : undefined}
+                                    >
+                                      {DECISION_LABELS[row.latestDecision.decision]}
+                                    </span>
+                                  ) : (
+                                    <span className="text-neutral-600">Undecided</span>
+                                  )}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="uppercase tracking-wide text-neutral-600">Entered review</dt>
+                                <dd className="mt-1 text-neutral-300">
+                                  <FormattedDateTime value={row.run.finishedAt} />
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="uppercase tracking-wide text-neutral-600">Run</dt>
+                                <dd className="mt-1 font-mono text-neutral-300" title={row.run.id}>
+                                  {shortId(row.run.id)}
+                                </dd>
+                              </div>
+                            </dl>
+
                             <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                               Evaluation
                             </h4>

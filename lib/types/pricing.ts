@@ -1,3 +1,9 @@
+// Type-only: lib/agentic/reviewers.shared.ts is pure/isomorphic (no server-only,
+// no 'use client', no network -- see that file's own header), so importing just
+// its type here is erased at build time and safe on either side of the
+// client/server boundary, exactly like every other type in this file.
+import type { AgentReviewerRole } from '@/lib/agentic/reviewers.shared';
+
 export const PRICING_MARKET_KEYS = ['IN', 'ROW'] as const;
 export type PricingMarketKey = (typeof PRICING_MARKET_KEYS)[number];
 
@@ -384,6 +390,16 @@ export interface PricingRuntimeContext {
   snapshot: EffectivePricingSnapshot;
   actionCosts: Record<string, number>;
   meterEntitlements: Record<string, boolean>;
+  /**
+   * The CURRENT user's own reviewer standing (D20,
+   * docs/agentic-creator-phase9c-plan.md section 4.1), or `null` for everyone
+   * else -- almost everyone. Rides this already-fetched, already-cached payload
+   * on purpose so UserMenu's badge and "Review queue" link cost zero additional
+   * requests; resolved by lib/agentic/reviewers.ts's resolveMyReviewerStanding(),
+   * which fails closed to `null` rather than throwing. Carries ONLY `{ role }` --
+   * never `notes`, never another account's standing (see `245588e`).
+   */
+  reviewer: { role: AgentReviewerRole } | null;
 }
 
 export interface PricingPlanOfferCard {

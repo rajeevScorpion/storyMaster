@@ -1,12 +1,33 @@
 import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import ReviewQueue from '@/components/admin/agentic/ReviewQueue';
-import { getReviewQueueSchemaStatusAction, listReviewQueueAction } from '@/app/actions/agentic-review';
+import {
+  getReviewQueueSchemaStatusAction,
+  listReviewQueueAction,
+  type ReviewQueueListFilters,
+} from '@/app/actions/agentic-review';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { requireReviewer } from '@/lib/agentic/reviewers';
 import { canAssignWork, canPublish } from '@/lib/agentic/reviewers.shared';
 import { Info } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
+
+// Unit 9L: app/review/layout.tsx's "My assignments" sidebar link navigates here
+// with `?assignment=mine` -- there is no separate route for it, so this page
+// reads the query param itself and both (a) fetches initialRows already
+// filtered server-side, so the first paint matches the sidebar link the reviewer
+// just clicked, and (b) seeds ReviewQueue's dropdown to match. 'unassigned' is
+// accepted too even though the sidebar does not link to it today, since it is
+// already a value ReviewQueueListFilters.assignment understands -- no reason to
+// silently drop a URL a reviewer might type or bookmark by hand.
+function parseAssignmentParam(value: string | string[] | undefined): 'mine' | 'unassigned' | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return raw === 'mine' || raw === 'unassigned' ? raw : undefined;
+}
+
+interface ReviewQueuePageProps {
+  searchParams: Promise<{ assignment?: string | string[] }>;
+}
 
 // ── Agentic Creator System: Phase 9b, Unit 9h ───────────────────────────
 //
@@ -31,7 +52,10 @@ export const dynamic = 'force-dynamic';
 // THIS page is, by construction, not staff and cannot reach /admin/agents
 // (verifyAdmin() would bar them) -- so this copy tells them to ask an admin
 // instead of linking somewhere they cannot go.
-export default async function ReviewQueuePage() {
+export default async function ReviewQueuePage({ searchParams }: ReviewQueuePageProps) {
+  const params = await searchParams;
+  const assignmentFilter = parseAssignmentParam(params.assignment);
+
   const flags = await getAgenticFlags();
 
   // D8: fail closed, and honestly -- no 404, no throw, and no fetch at all
@@ -55,7 +79,8 @@ export default async function ReviewQueuePage() {
   }
 
   const schemaStatus = await getReviewQueueSchemaStatusAction();
-  const initialRows = schemaStatus.schemaApplied ? await listReviewQueueAction() : [];
+  const listFilters: ReviewQueueListFilters = assignmentFilter ? { assignment: assignmentFilter } : {};
+  const initialRows = schemaStatus.schemaApplied ? await listReviewQueueAction(listFilters) : [];
 
   // Resolves the CURRENT session's own reviewer standing so ReviewQueue can render its
   // Publish action disabled (not hidden) for a reviewer who lacks the editor role. See
@@ -85,6 +110,7 @@ export default async function ReviewQueuePage() {
         schemaApplied={schemaStatus.schemaApplied}
         canPublish={canPublishDrafts}
         canAssignWork={canAssign}
+        initialAssignmentFilter={assignmentFilter}
       />
     </div>
   );

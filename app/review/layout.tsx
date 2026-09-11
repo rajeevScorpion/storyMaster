@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { requireReviewer } from '@/lib/agentic/reviewers';
+import ReviewSidebar from '@/components/review/ReviewSidebar';
 
-// ── Agentic Creator System: Phase 9b, Unit 9h ───────────────────────────
+// ── Agentic Creator System: Phase 9b/9c, Units 9h/9L ────────────────────
 //
 // Reviewer-facing route gate, living OUTSIDE /admin on purpose. Mirrors
 // app/admin/layout.tsx's shape -- verify, redirect('/') on throw, render
@@ -11,11 +12,14 @@ import { requireReviewer } from '@/lib/agentic/reviewers';
 // (agent_reviewers.status = 'active') can reach it, which verifyAdmin()'s
 // single-person ADMIN_USER_ID check would refuse outright.
 //
-// Deliberately a MINIMAL shell -- a bare header and the page, nothing else.
-// No AdminSidebar, no AdminMobileNav, no admin nav of any kind
-// (docs/agentic-creator-phase9b-plan.md section 4.1): a reviewer is not
-// staff and must not be shown the ~40-page admin information architecture,
-// most of which requireReviewer() would refuse them anyway.
+// Deliberately a MINIMAL shell -- a bare header, ReviewSidebar (Unit 9L: Queue
+// and My assignments only -- History is Unit 9k's, not built here), and the
+// page. No AdminSidebar, no AdminMobileNav, no admin nav of any kind
+// (docs/agentic-creator-phase9b-plan.md section 4.1 / phase9c-plan.md section
+// 4.2): a reviewer is not staff and must not be shown the ~40-page admin
+// information architecture, most of which requireReviewer() would refuse them
+// anyway. ReviewSidebar lives in components/review/, not components/admin/,
+// for the same reason -- there is nothing admin-shaped for it to drift toward.
 //
 // Known limit (plan section 4.4, recorded in PROJECT_STATE): a signed-out
 // visitor lands on redirect('/'), same as /admin -- not a sign-in redirect
@@ -32,7 +36,12 @@ export default async function ReviewLayout({ children }: { children: React.React
       <header className="border-b border-white/10 px-4 py-4 sm:px-6">
         <span className="font-serif text-lg text-neutral-100">Kissago Review</span>
       </header>
-      <main className="mx-auto max-w-6xl p-4 sm:p-6 md:p-10">{children}</main>
+      <main className="mx-auto max-w-6xl p-4 sm:p-6 md:p-10">
+        <div className="flex flex-col gap-6 md:flex-row md:items-start">
+          <ReviewSidebar />
+          <div className="min-w-0 flex-1">{children}</div>
+        </div>
+      </main>
     </div>
   );
 }

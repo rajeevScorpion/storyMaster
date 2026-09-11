@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy } from 'lucide-react';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
@@ -17,6 +17,17 @@ interface UserMenuProps {
 function beatsToCoins(value: number) {
   return Number((value * COINS_PER_BEAT).toFixed(2));
 }
+
+// Unit 9L, D20 (docs/agentic-creator-phase9c-plan.md section 4.1): the current
+// user's reviewer standing rides the pricing-runtime payload -- see
+// PricingRuntimeProvider.tsx -- so this badge and the "Review queue" link below
+// cost zero additional requests. Both render only when `reviewer` is non-null,
+// i.e. only for the small fraction of signed-in users who are an active reviewer
+// or editor (lib/agentic/reviewers.ts's resolveMyReviewerStanding()).
+const REVIEWER_ROLE_LABELS: Record<'reviewer' | 'editor', string> = {
+  reviewer: 'Reviewer',
+  editor: 'Editor',
+};
 
 export default function UserMenu({ onMyStories }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
@@ -75,6 +86,7 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
     <div ref={menuRef} className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
+        aria-label="Account menu"
         className="w-9 h-9 rounded-full overflow-hidden border-2 border-white/10 hover:border-emerald-500/40 transition-all ring-0 hover:ring-2 hover:ring-emerald-500/20"
       >
         {avatarUrl ? (
@@ -105,6 +117,12 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
             <div className="px-4 py-3 border-b border-white/5">
               <p className="text-sm font-medium text-neutral-200 truncate">{displayName}</p>
               <p className="text-xs text-neutral-500 truncate">{user.email}</p>
+              {pricing.reviewer && (
+                <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-300">
+                  <ClipboardCheck className="w-3 h-3" />
+                  {REVIEWER_ROLE_LABELS[pricing.reviewer.role]}
+                </span>
+              )}
             </div>
 
             <div className="mx-3 mt-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3">
@@ -137,6 +155,16 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
             </div>
 
             <div className="py-1">
+              {pricing.reviewer && (
+                <Link
+                  href="/review"
+                  onClick={() => setIsOpen(false)}
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
+                >
+                  <ClipboardCheck className="w-4 h-4" />
+                  Review queue
+                </Link>
+              )}
               <Link
                 href="/wallet"
                 onClick={() => setIsOpen(false)}
