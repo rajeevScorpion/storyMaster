@@ -632,7 +632,9 @@ export default function ReviewQueue({
                         <td className="px-4 py-4 text-right" onClick={(event) => event.stopPropagation()}>
                           <RowActionsMenu
                             actions={actions}
-                            ariaLabel={`Decide on run ${row.run.id}`}
+                            // "Decide on" until Unit 9M put a navigation action in this
+                            // menu alongside the four decisions; it no longer only decides.
+                            ariaLabel={`Actions for run ${row.run.id}`}
                             busy={busyRunId === row.run.id}
                             className="ml-auto"
                           />

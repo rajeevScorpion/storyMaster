@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
 import { updateBeatMediaState, updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
+import { resolveAgentDraftServerAuth } from '@/lib/agentic/billing-identity';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import {
   estimateElevenLabsForcedAlignmentCostUsd,
@@ -719,9 +720,24 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     }
   );
 
+  // Unit 9M: the overlay half of the same defect. The 0.30 align_story_text_overlay
+  // charge rode the CALLER on every interactive press, so a reviewer narrating an agent
+  // draft paid for it -- measured on dev alongside the 0.50 narration charge, both
+  // finalized against the reviewer. generateAndPersistNarration above resolves the same
+  // identity for itself rather than being handed this one, deliberately: passing it down
+  // would also set its `options.serverAuth`, which still means "no human is watching"
+  // there and gates the regeneration feature flag and the retry budget. A reviewer is
+  // interactive and must keep both.
+  const interactiveCallerId = options.serverAuth ? null : await getCurrentOverlayUserId();
+  const effectiveAuth =
+    options.serverAuth ??
+    (interactiveCallerId
+      ? await resolveAgentDraftServerAuth(savedStoryId, interactiveCallerId)
+      : undefined);
+
   const overlay = await buildMeteredStoryOverlayTiming({
-    userId: options.serverAuth?.userId ?? await getCurrentOverlayUserId(),
-    actorKind: options.serverAuth?.actorKind,
+    userId: effectiveAuth?.userId ?? interactiveCallerId ?? (await getCurrentOverlayUserId()),
+    actorKind: effectiveAuth?.actorKind,
     storyId: savedStoryId,
     nodeId,
     idempotencyKey: options.billingIdempotencyKey
@@ -746,7 +762,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
       storyTextOverlayStyle: overlayConfig.style,
       storyTextOverlayCaptions: overlay.captions,
       storyTextOverlayAlignment: overlay.alignment,
-    }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
+    }, effectiveAuth, options.serverAuth ? { attempts: 1 } : {});
   } catch (error) {
     console.warn(
       '[story-narration] Failed to persist story text overlay metadata:',

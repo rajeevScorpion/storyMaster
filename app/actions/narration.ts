@@ -50,6 +50,7 @@ import {
 import type { PricingActionKey } from '@/lib/types/pricing';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
+import { resolveAgentDraftServerAuth } from '@/lib/agentic/billing-identity';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { putR2Object, createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { recordMediaAsset } from '@/lib/media/media-assets';
@@ -80,6 +81,26 @@ async function resolveNarrationBillingUserId(explicitUserId?: string | null): Pr
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) throw new Error('Sign in to generate narration.');
   return user.id;
+}
+
+/**
+ * Unit 9M: the `serverAuth` an INTERACTIVE narration call should run under when the
+ * person pressing the button is a reviewer working on an agent draft, or `undefined`
+ * for everyone else -- which is the overwhelmingly common case and keeps its exact
+ * previous behaviour.
+ *
+ * Signed out yields `undefined` rather than throwing here: the existing flow already
+ * fails with its own "Sign in to generate narration." message a moment later, and
+ * this helper has no business owning that error.
+ */
+async function resolveInteractiveAgentDraftAuth(
+  savedStoryId: string | null | undefined
+): Promise<{ userId: string; actorKind: 'user' | 'agentic_system' } | undefined> {
+  if (!savedStoryId) return undefined;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return undefined;
+  return resolveAgentDraftServerAuth(savedStoryId, user.id);
 }
 
 async function runMeteredNarrationOperation<T>(input: {
@@ -1555,9 +1576,29 @@ export async function generateAndPersistNarration(
   const meterKey = options.taskKey === 'reel_tts'
     ? 'generate_reel_narration' as const
     : 'generate_story_narration' as const;
+
+  // Unit 9M. `options.serverAuth` means "a background worker is driving this"; it is
+  // absent for every interactive press, INCLUDING a reviewer narrating an agent draft
+  // -- and that is the bug. Measured on dev: the reviewer was charged for both the
+  // narration and the overlay alignment, the audio was generated, and the beat write
+  // then matched no rows under owner-only RLS, so audio_url stayed null and nothing
+  // reported a failure. 57b516b fixed the narration BATCH path and a5e9bff fixed the
+  // image submits; nothing ever resolved an agentic payer here.
+  //
+  // resolveAgentDraftServerAuth returns undefined for an owner, for a non-agent story,
+  // and whenever AGENTIC_SYSTEM_USER_ID does not line up -- so `effectiveAuth` is
+  // byte-for-byte `options.serverAuth` on every pre-existing path.
+  //
+  // The two concepts are kept APART below on purpose. `options.serverAuth` still means
+  // "no human is watching" and keeps gating the regeneration feature flag and the
+  // beat-write retry budget: a reviewer pressing the button is interactive and must
+  // still respect both. `effectiveAuth` means "act as this account", and is what the
+  // billing identity, the Supabase client, the storage prefix and the beat write follow.
+  const effectiveAuth = options.serverAuth ?? (await resolveInteractiveAgentDraftAuth(savedStoryId));
+
   return runMeteredNarrationOperation({
-    userId: options.serverAuth?.userId,
-    actorKind: options.serverAuth?.actorKind,
+    userId: effectiveAuth?.userId,
+    actorKind: effectiveAuth?.actorKind,
     meterKey,
     idempotencyKey: options.billingIdempotencyKey,
     storyId: savedStoryId,
@@ -1593,10 +1634,10 @@ export async function generateAndPersistNarration(
 
       const audioPayload = await buildNarrationAudioPayload(storyText, tone, genre, voiceName, language, costTelemetry, options);
 
-      const supabase = options.serverAuth ? createAdminClient() : await createClient();
+      const supabase = effectiveAuth ? createAdminClient() : await createClient();
       let userId: string;
-      if (options.serverAuth) {
-        userId = options.serverAuth.userId;
+      if (effectiveAuth) {
+        userId = effectiveAuth.userId;
       } else {
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) throw new Error('Not authenticated');
@@ -1722,7 +1763,7 @@ export async function generateAndPersistNarration(
               }),
               activeNarrationPreviewId: null,
               ...(audioPayload.reelCaptions?.length ? { reelCaptions: audioPayload.reelCaptions } : {}),
-            }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
+            }, effectiveAuth, options.serverAuth ? { attempts: 1 } : {});
             narrationMetadata = buildBeatNarrationMetadata({
               payload: audioPayload,
               audioUrl: persistedAudioUrl,
