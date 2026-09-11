@@ -6,6 +6,69 @@ Longer-lived material lives in the sibling docs: `-architecture.md`, `-decisions
 
 ---
 
+## Session handoff — 2026-09-11 (9L landed; 9J and 9M remain)
+
+**Read this first.** Sections below are earlier stops, still accurate for their own units.
+
+### Where to start
+
+`docs/agentic-creator-phase9c-plan.md`. **9J is section 5** (which defers to phase9b-plan section 6 for
+the full spec) and **9M is section 3**. Do 9M first if both are in play — it is the only unit that can
+invalidate the others.
+
+### What landed since the last stop
+
+| SHA | What |
+|---|---|
+| `0517bc0` | Phase 9c plan + D16-D20 recorded in the decisions doc |
+| `4bc2cf6` | **9L** — hydration fix, reviewer badge + queue link, queue table de-scrolled, `/review` sidebar |
+
+Gate at `4bc2cf6`, run on Opus rather than taken on report: **tsc 0, lint clean, 101 files / 952 tests,
+build green, e2e 19/19.**
+
+### 9L specifics worth not rediscovering
+
+- **The hydration error was real and is fixed.** Reproduced with the browser timezone forced away from
+  the server's: `"9 Sept 2026, 4:40 pm"` (server, IST) vs `"4:10 am"` (client). `formatDateTime` now pins
+  `timeZone`, but the actual fix is `FormattedDateTime`, which renders a placeholder for the SSR and
+  hydration passes and swaps afterwards via `useSyncExternalStore`'s getServerSnapshot/getSnapshot split.
+  A pinned timezone alone is NOT sufficient — Node's ICU and a browser's can differ on bytes for the same
+  instant in the same zone.
+- **`run-presentation.tsx` is now `'use client'`.** All three importers were already client components, so
+  this is safe today. **If a server component ever imports `formatDateTime` or `shortId` from it, that
+  import silently becomes a client-reference stub** — the trap CLAUDE.md documents. Check before adding an
+  importer.
+- Reviewer standing rides `getPricingRuntimeContext()` (D20), parallelised into its existing `Promise.all`
+  — zero extra requests. It carries only `{ role }` for the caller's own id and has no parameter for
+  anyone else's.
+- That payload is **cached per user for 30s**, so the three reviewer write actions call
+  `invalidatePricingRuntimeCacheForUser`. Any future action that changes reviewer standing must do the
+  same, or the badge goes stale.
+- **History in the `/review` sidebar was deliberately not built** — it needs its own query and belongs to
+  Unit 9k.
+
+### Delegation is unavailable until 2026-09-13
+
+The Sonnet subagent hit its **weekly** rate limit mid-9L and died with uncommitted work in the tree
+(recovered, reviewed and committed by Opus as `4bc2cf6`). Until the limit resets, everything runs on
+Opus directly. Two lessons worth keeping:
+
+- A dying agent leaves the tree dirty, not empty. **Check `git status` before assuming nothing happened.**
+- Its work was good and worth keeping. Recovering beat restarting.
+
+### Still true, and still the point
+
+**Nothing in 9M has been started.** Its three blocking unknowns are unchanged and are written up in
+phase9c-plan section 3: `saveStory` is not reviewer-aware, `PublishDialog` would attribute a published
+storyline to the reviewer instead of the persona (breaking D15), and image billing for agent drafts is
+unpriced. The first is an investigation to run before writing any 9M code.
+
+**9J can now be proven live.** 114 is applied, and `testuser` covers `[english, hindi]` × all five
+concrete age groups with no genre preference — matching 4 of the 5 waiting drafts. Only the `all_ages`
+pooling case (D16) still lacks a fixture; commission one such task to prove it.
+
+---
+
 ## Session handoff — 2026-09-10 (Phase 9b shipped; 9L/9M/9J planned, not started)
 
 **Read this section first. Everything below it is older and describes a world before roles existed.**
