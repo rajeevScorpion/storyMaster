@@ -591,3 +591,27 @@ keeps their badge for up to an hour.
 **Cost.** A pricing-shaped payload now carries an authorization fact. The constraint that keeps this
 safe: it carries only `{ role } | null` for the **current user** — never another account's standing and
 never `notes`. See `245588e` for the disclosure that shape prevents.
+
+## D21 — the agent account pays, and every charge is recorded per persona
+
+Narration and images triggered by a reviewer on an agent draft are charged to the **agentic
+account**, never to the reviewer who pressed the button. The billing bypass means no balance
+actually moves, so the bypass now **records** what it skipped — otherwise an agent would appear
+to spend nothing forever. `/admin/agents/spend` reports it per persona.
+
+**Why.** The owner needs to know which persona is costing what. A reviewer is doing the agent's
+work on the agent's behalf and should not be out of pocket for it.
+
+**How spend is attributed.** Through the story, not through the billing call: agent stories carry
+the persona that wrote them, and every charge records the story it was for. That avoids threading
+a persona id down through the billing layer, and it works because the two operations that reach
+the bypass — narration and images — both run on a story that already exists. A charge with no
+usable story is reported as an explicit unattributed total, never folded into a persona's row.
+
+**Deliberately not done:** a wallet per persona. All personas share one account, so this gives
+per-persona *spend*, not per-persona *balances*. Separate wallets are real work and are not needed
+to answer the question that was asked.
+
+*Considered and reversed:* charging the reviewer to keep things simple. Rejected once it was clear
+the owner wants per-persona spend — charging the reviewer would have put agent costs on a human's
+wallet and still needed the same reporting work.
