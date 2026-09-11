@@ -385,6 +385,14 @@ const AGENTS_CHILD_GROUPS: AdminNavChildGroup[] = [
         staticSummary: 'Run monitor: stage timeline, checkpoints, and retries',
       },
       {
+        id: 'spend',
+        label: 'Persona spend',
+        href: '/admin/agents/spend',
+        icon: Coins,
+        description: 'What each persona has cost, traced through the stories it wrote. Read-only.',
+        staticSummary: 'Coin spend per persona',
+      },
+      {
         id: 'routing',
         label: 'Model routing',
         href: '/admin/agents/routing',
