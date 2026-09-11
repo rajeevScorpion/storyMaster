@@ -77,6 +77,16 @@ import {
 import type { AgentTaskStatus } from '@/lib/agentic/supervisor';
 import { isMissingTaskSchemaError } from '@/lib/agentic/supervisor.shared';
 import { isMissingPersonaSchemaError } from '@/lib/agentic/personas.shared';
+// Unit 9j (Phase 9b plan section 6.3): a genuine VALUE import in this direction, the
+// mirror image of review-routing.ts's `import type { AdminClient }` from this very file.
+// That pairing is a real runtime cycle ONLY if either side imports a VALUE from the
+// other; review-routing.ts's AdminClient import is `import type`, which TypeScript
+// erases at compile time -- it never becomes a require()/import in the emitted JS -- so
+// there is exactly one live edge in this cycle (this one), which Node's CJS/ESM loaders
+// resolve fine because it is one-directional at runtime. Do not change review-routing.ts's
+// AdminClient import to a value import; that would make the edge bidirectional and a
+// genuine cycle.
+import { tryAutoAssignReview } from '@/lib/agentic/review-routing';
 
 // Exported (Unit 9e, lib/agentic/review-decisions.ts) so a reviewer-decision write can
 // pass the SAME admin client instance it already opened for its own agent_review_decisions
@@ -696,6 +706,13 @@ async function persistStageAdvance(
   // to the Phase 9/10 human-reviewer workflow and are deliberately left untouched here.
   if (target === 'awaiting_review') {
     await setTaskStatus(admin, updated.taskId, 'awaiting_review', 'persistStageAdvance');
+    // Unit 9j (Phase 9b plan section 6.3): route the newly-awaiting task to a reviewer,
+    // if one matches. tryAutoAssignReview() NEVER throws -- every failure path inside it
+    // logs and returns -- so a routing defect can never turn a successful stage advance
+    // into a failed run. It also self-gates on agentic_reviewer_workflow_enabled and on
+    // migrations 111/113/114 being applied, so this call is a safe no-op on any database
+    // that hasn't caught up yet.
+    await tryAutoAssignReview(admin, updated.taskId, 'persistStageAdvance');
   }
 
   return updated;

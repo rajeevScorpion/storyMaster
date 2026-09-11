@@ -1,6 +1,6 @@
 import 'server-only';
 
-// ── Agentic Creator System: Phase 9b reviewer assignment, server half (Unit 9i) ──
+// ── Agentic Creator System: Phase 9b reviewer assignment, server half (Units 9i + 9j) ──
 //
 // Reads/writes public.agent_review_assignments (migration 114, D18): which reviewer
 // is currently looking at which TASK (not run -- a task can produce several runs via
@@ -14,18 +14,27 @@ import 'server-only';
 // latches, per GOTCHAS.md. Reads degrade to an empty Map; writes throw one clear
 // "migration 114 is not applied yet" message rather than a raw Postgres error.
 //
-// Unit 9j (out of scope here) will add tryAutoAssignReview() to this same file and
-// wire it into orchestrator.ts's persistStageAdvance -- see the Phase 9b plan section
-// 6.3 for the import-direction hazard that decision creates. Nothing in THIS unit
-// imports from orchestrator.ts except the already-exported `AdminClient` type, which
-// TypeScript erases, so no cycle exists yet.
+// Unit 9j adds tryAutoAssignReview() (bottom of this file) and orchestrator.ts calls it
+// from persistStageAdvance -- see the Phase 9b plan section 6.3 for the import-direction
+// hazard that pairing creates. This file's only import from orchestrator.ts is the
+// already-exported `AdminClient` TYPE (`import type`, erased at compile time), while
+// orchestrator.ts's import of `tryAutoAssignReview` from here is a genuine value import
+// -- that asymmetry is what keeps this a one-directional edge rather than a runtime
+// cycle. See the comment beside that import in orchestrator.ts before changing either
+// side.
 
 import type { AdminClient } from '@/lib/agentic/orchestrator';
+import { getAgenticFlags } from '@/lib/agentic/flags';
+import { isMissingReviewerSchemaError } from '@/lib/agentic/reviewers.shared';
+import { isMissingTaskSchemaError } from '@/lib/agentic/supervisor.shared';
 import {
   isMissingAssignmentSchemaError,
+  routeTaskToReviewer,
   type AssignmentSource,
   type AssignmentStatus,
   type ReviewAssignment,
+  type RoutableReviewer,
+  type RoutableTask,
 } from '@/lib/agentic/review-routing.shared';
 
 const ASSIGNMENT_SCHEMA_UNAVAILABLE_MESSAGE =
@@ -319,5 +328,196 @@ export async function releaseAssignment(
       throw new Error(ASSIGNMENT_SCHEMA_UNAVAILABLE_MESSAGE);
     }
     throw error;
+  }
+}
+
+// ── Unit 9j: automatic assignment ────────────────────────────────────────
+//
+// tryAutoAssignReview() is orchestrator.ts's hook, called from persistStageAdvance
+// immediately after a run's task flips to 'awaiting_review' (Phase 9b plan section
+// 6.2/6.3). It is deliberately the ONLY function in this file that may never throw --
+// a routing failure must never fail a run that has otherwise generated successfully.
+// Every helper below exists to keep that function's own body a straight line: fetch the
+// task's routing axes (106), fetch the active reviewer roster with its current load
+// (111/113 + 114), call the pure routeTaskToReviewer (review-routing.shared.ts), and on
+// a match, write it with assignTask() above.
+
+// One latch for the migration-111/113 reviewer-roster read this file does for routing.
+// Deliberately its OWN boolean, not a reuse of reviewers.ts's private
+// `reviewerSchemaUnavailable` (module-private there, and per GOTCHAS.md latches are one
+// per FILE-migration pair, not shared across files even when they read the same table) --
+// it shares only the classifier (isMissingReviewerSchemaError), never the flag.
+let reviewerRosterSchemaUnavailable = false;
+function latchReviewerRosterSchemaUnavailable(context: string): void {
+  if (!reviewerRosterSchemaUnavailable) {
+    reviewerRosterSchemaUnavailable = true;
+    console.warn(
+      `[agentic-review-routing] agent_reviewers roster unavailable for auto-assignment (${context}); ` +
+        'migration 111/113 is not applied on this database. Auto-assignment will treat every task as unroutable until it is.'
+    );
+  }
+}
+
+interface RoutableReviewerRow {
+  user_id: string;
+  languages: string[] | null;
+  age_groups: string[] | null;
+  genres: string[] | null;
+}
+
+/**
+ * Every ACTIVE reviewer, shaped for routeTaskToReviewer, with each one's current open
+ * (active) assignment count already attached -- the matcher needs the whole roster in
+ * memory at once to compute least-loaded (migration 114's own header says the same).
+ * Fails closed to `[]` when migration 111/113 is unapplied, exactly like every other
+ * reviewer-roster read in this codebase -- an empty roster and "the table doesn't exist"
+ * both correctly produce 'no_active_reviewers' from the matcher, which is the honest
+ * outcome either way: there is nobody to route to.
+ *
+ * Does NOT include the synthetic ADMIN_USER_ID reviewer (buildImplicitAdminReviewer,
+ * reviewers.ts) -- that identity is never a row in agent_reviewers, so a plain table
+ * query naturally excludes it, which is exactly what Unit 9f's plan requires: the
+ * implicit admin must never be auto-assigned work.
+ */
+async function fetchActiveReviewersForRouting(admin: AdminClient): Promise<RoutableReviewer[]> {
+  if (reviewerRosterSchemaUnavailable) return [];
+
+  try {
+    const { data, error } = await admin
+      .from('agent_reviewers')
+      .select('user_id, languages, age_groups, genres')
+      .eq('status', 'active');
+
+    if (error) {
+      if (isMissingReviewerSchemaError(error)) {
+        latchReviewerRosterSchemaUnavailable('fetchActiveReviewersForRouting');
+        return [];
+      }
+      throw new Error(`Failed to list active agent_reviewers for routing: ${error.message}`);
+    }
+
+    const openAssignments = await countOpenAssignmentsByReviewer(admin);
+    return ((data ?? []) as RoutableReviewerRow[]).map((row) => ({
+      userId: row.user_id,
+      languages: row.languages ?? [],
+      ageGroups: row.age_groups ?? [],
+      genres: row.genres ?? [],
+      openAssignments: openAssignments.get(row.user_id) ?? 0,
+    }));
+  } catch (error) {
+    if (isMissingReviewerSchemaError(error as { code?: string; message?: string } | null | undefined)) {
+      latchReviewerRosterSchemaUnavailable('fetchActiveReviewersForRouting');
+      return [];
+    }
+    throw error;
+  }
+}
+
+interface RoutableTaskRow {
+  language: string;
+  age_group: string;
+  genre: string | null;
+}
+
+/**
+ * The routing axes for one agent_tasks row (migration 106) -- a query that touches ONLY
+ * agent_tasks, so it is classified with isMissingTaskSchemaError (106's own classifier),
+ * never isMissingAssignmentSchemaError (114) or isMissingReviewerSchemaError (111/113),
+ * per GOTCHAS.md ("classify by the query, not by the error"). Returns `null` on a
+ * missing row OR a missing migration -- both mean "there is nothing here to route",
+ * which tryAutoAssignReview treats identically: log and return.
+ */
+async function fetchRoutableTask(admin: AdminClient, taskId: string): Promise<RoutableTask | null> {
+  try {
+    const { data, error } = await admin
+      .from('agent_tasks')
+      .select('language, age_group, genre')
+      .eq('id', taskId)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingTaskSchemaError(error)) return null;
+      throw new Error(`Failed to read agent_task ${taskId} for auto-assignment: ${error.message}`);
+    }
+    if (!data) return null;
+
+    const row = data as RoutableTaskRow;
+    return { language: row.language, ageGroup: row.age_group, genre: row.genre };
+  } catch (error) {
+    if (isMissingTaskSchemaError(error as { code?: string; message?: string } | null | undefined)) return null;
+    throw error;
+  }
+}
+
+/**
+ * The Unit 9j hook: called from orchestrator.ts's persistStageAdvance immediately after
+ * a task's status is set to 'awaiting_review'. Returns `void` and NEVER THROWS -- every
+ * failure path below logs and returns, because a routing failure must never fail a run
+ * that otherwise generated successfully. An unrouted task is a normal outcome (it is
+ * visible in the unassigned pool on /review), not an incident, so the `assigned: false`
+ * branch logs at info, not warn or error.
+ *
+ * No-ops, in order, when:
+ *   - `agentic_reviewer_workflow_enabled` is off (no fetch of anything else at all).
+ *   - migration 114 is unapplied -- checked via THIS FILE's own `assignmentSchemaUnavailable`
+ *     latch (set by any of listAssignmentsForTasks/assignTask/etc. above), which is "the
+ *     existing latch" the plan means: this hook lives in the same module as that flag and
+ *     reads it directly rather than re-deriving it.
+ *   - the task already carries an ACTIVE assignment with a real reviewer (`reviewerId`
+ *     non-null). An active row with `reviewerId: null` (the FK's ON DELETE SET NULL) does
+ *     NOT count as "already assigned" -- per this file's header and listAssignmentsForTasks's
+ *     own doc comment, that state IS the unassigned pool, so routing proceeds and
+ *     assignTask() supersedes the stale null-reviewer row.
+ */
+export async function tryAutoAssignReview(admin: AdminClient, taskId: string, context: string): Promise<void> {
+  try {
+    const flags = await getAgenticFlags();
+    if (!flags.reviewerWorkflowEnabled) return;
+
+    if (assignmentSchemaUnavailable) return;
+
+    const existingByTask = await listAssignmentsForTasks(admin, [taskId]);
+    const existing = existingByTask.get(taskId);
+    if (existing && existing.reviewerId) {
+      console.info(`[agentic-review-routing] task ${taskId} already assigned to ${existing.reviewerId}; skipping auto-assignment (${context}).`);
+      return;
+    }
+
+    // listAssignmentsForTasks may itself have just discovered 114 is missing (it fails
+    // closed to an empty map rather than throwing) -- re-check before doing any further
+    // work, so a missing migration produces one quiet log line from its own latch above,
+    // not a second one down in the catch block below.
+    if (assignmentSchemaUnavailable) return;
+
+    const task = await fetchRoutableTask(admin, taskId);
+    if (!task) {
+      console.warn(`[agentic-review-routing] tryAutoAssignReview: agent_task ${taskId} was not found (or migration 106 is unapplied); leaving unassigned (${context}).`);
+      return;
+    }
+
+    const reviewers = await fetchActiveReviewersForRouting(admin);
+    const outcome = routeTaskToReviewer(task, reviewers);
+
+    if (!outcome.assigned) {
+      console.info(`[agentic-review-routing] task ${taskId} not auto-assigned: ${outcome.reason} (${context}).`);
+      return;
+    }
+
+    if (assignmentSchemaUnavailable) return;
+
+    await assignTask(admin, {
+      taskId,
+      reviewerId: outcome.reviewerId,
+      assignedBy: null,
+      source: 'auto',
+      // ReviewRoutingReason has no index signature of its own (it is a named interface,
+      // not a loose bag); assignTask's matchReason column is jsonb via a generic
+      // Record<string, unknown>, so the shape is spread into a fresh object literal
+      // rather than cast, keeping this a real runtime copy instead of a type-only lie.
+      matchReason: { ...outcome.reason },
+    });
+    console.info(`[agentic-review-routing] task ${taskId} auto-assigned to reviewer ${outcome.reviewerId} (${context}).`, outcome.reason);
+  } catch (error) {
+    console.error(`[agentic-review-routing] tryAutoAssignReview failed for task ${taskId} (${context}); leaving the task unassigned rather than failing the run.`, error);
   }
 }
