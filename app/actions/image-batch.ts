@@ -3,6 +3,10 @@
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { assertCanEditStory } from '@/lib/agentic/reviewers';
+import {
+  resolveAgenticBillingIdentity,
+  type AgenticBillingIdentity,
+} from '@/lib/agentic/billing-identity.shared';
 import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
 import { normalizeStoryConfig, deriveVisualStyleSummary } from '@/lib/ai/story-config';
@@ -67,8 +71,46 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 interface StoryRow {
   id: string;
   user_id: string;
+  /**
+   * Always present: assertCanEditStory unions id/user_id/agent_persona_id into
+   * whatever columns the caller asks for, so loadOwnedStory's row carries this
+   * whether or not it named it. resolveImageBillingIdentity is what reads it.
+   */
+  agent_persona_id: string | null;
   story_map: StoryMap | null;
   story_config: Partial<StoryConfig> | null;
+}
+
+/**
+ * Who pays for a submitted image job, and under whose actor kind.
+ *
+ * D13/Unit 9M, the image-side twin of the narration fix in 57b516b. Pressing
+ * "generate visuals" on an AGENT-owned draft charged the reviewer who pressed it:
+ * both submit paths reserved against the caller and stamped image_batch_jobs.user_id
+ * with them, and since every downstream settle (finalize, release, upload prefix)
+ * derives from that column, the whole chain followed the wrong person. A reviewer is
+ * finishing the agent's story on the agent's behalf; the agent's owner pays.
+ *
+ * actorKind is what actually unlocks it. authorizeBillableAction's agentic bypass
+ * requires all of actorKind === 'agentic_system', the agentic_billing_bypass_enabled
+ * flag, AGENTIC_SYSTEM_USER_ID set, and the userId matching it exactly -- so without
+ * this key beside userId the bypass stays structurally unreachable no matter who is
+ * named as payer. Derived here from the resolved payer rather than taken on trust.
+ *
+ * For an ordinary author on their own story, story.agent_persona_id is null and this
+ * returns { payerUserId: callerUserId, actorKind: 'user' } -- byte-for-byte the
+ * behaviour both paths had before, on every line this touches.
+ */
+function resolveImageBillingIdentity(
+  story: StoryRow,
+  callerUserId: string
+): AgenticBillingIdentity {
+  return resolveAgenticBillingIdentity({
+    storyUserId: story.user_id,
+    agentPersonaId: story.agent_persona_id,
+    callerUserId,
+    systemUserId: process.env.AGENTIC_SYSTEM_USER_ID,
+  });
 }
 
 async function assertImageGenerationEntitled(userId: string): Promise<PlanKey> {
@@ -304,6 +346,10 @@ export async function submitStoryImageBatch(input: {
 
   const admin = createAdminClient();
   const story = await loadOwnedStory(input.storyId, user.id);
+  // Unit 9M: an agent draft is billed to its owner (the system user), never to the
+  // reviewer who pressed the button -- see resolveImageBillingIdentity. An author on
+  // their own story gets payerUserId === user.id and nothing below changes for them.
+  const { payerUserId, actorKind } = resolveImageBillingIdentity(story, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.rootNodeId) throw new Error('Story has no beats to visualise.');
 
@@ -325,6 +371,13 @@ export async function submitStoryImageBatch(input: {
     };
   }
 
+  // Deliberately still the CALLER, not payerUserId. This gate answers "is this
+  // feature available to the person using it, and at which model tier" -- a different
+  // question from whose wallet is charged, and the agentic bypass does not cover it.
+  // The agentic system user holds no subscription, customer record or entitlement
+  // override, so it resolves to the free plan; routing this call to it would newly
+  // refuse reviewers a submit that works today, trading a billing defect for an
+  // availability one. Whose wallet is charged is fixed below, where it belongs.
   const currentPlanKey = await assertImageGenerationEntitled(user.id);
   const task = imageTaskForStoryKind(config.storyKind);
   const snapshot = await resolveImageModelSnapshot({
@@ -341,7 +394,12 @@ export async function submitStoryImageBatch(input: {
   // Generate any missing character portraits live now so batched beats keep
   // continuity (Gemini resend_refs). OpenAI /images/generations ignores refs.
   if (provider === 'gemini') {
-    await ensureCharacterPortraits(admin, user.id, story.id, map, config).catch((error) =>
+    // payerUserId, not the caller: uploadCharacterPortrait writes to
+    // `${userId}/${storyId}/characters/...`, so the reviewer's id here would scatter an
+    // agent story's portraits under a second prefix that nothing else -- not
+    // story-assembly, not the worker's own ensureCharacterPortraits (which derives
+    // from job.user_id) -- ever looks under.
+    await ensureCharacterPortraits(admin, payerUserId, story.id, map, config).catch((error) =>
       console.error('ensureCharacterPortraits failed:', error)
     );
   }
@@ -376,7 +434,8 @@ export async function submitStoryImageBatch(input: {
   let reservationId: string | null = null;
   try {
     const authorization = await authorizeCoinOperationForUser({
-      userId: user.id,
+      userId: payerUserId,
+      actorKind,
       operationKey: 'batch_image_generation',
       idempotencyKey: `batch_image_generation:${story.id}:${Date.now()}`,
       components: [{
@@ -409,7 +468,10 @@ export async function submitStoryImageBatch(input: {
   const { data: jobRow, error: jobError } = await admin
     .from('image_batch_jobs')
     .insert({
-      user_id: user.id,
+      // The column every downstream settle reads: processImageBatchJob's finalize and
+      // release, and the `${job.user_id}/${story_id}/...` upload prefix. Stamping the
+      // payer here is what carries this fix past submit into the worker.
+      user_id: payerUserId,
       story_id: story.id,
       provider,
       scope,
@@ -462,7 +524,7 @@ export async function submitStoryImageBatch(input: {
     await admin.from('image_batch_jobs').update({ status: 'failed', error: message }).eq('id', jobId);
     if (reservationId) {
       await releaseBillableAction({
-        userId: user.id,
+        userId: payerUserId,
         reservationId,
         reason: 'batch_submission_failed',
       }).catch(() => {});
@@ -840,6 +902,10 @@ export async function submitStoryStatefulVisuals(input: {
 
   const admin = createAdminClient();
   const story = await loadOwnedStory(input.storyId, user.id);
+  // Same fix as submitStoryImageBatch, and it belongs here too: the phase 9c plan
+  // named only that path, but this one bills the caller in exactly the same three
+  // places. See resolveImageBillingIdentity.
+  const { payerUserId, actorKind } = resolveImageBillingIdentity(story, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.rootNodeId) throw new Error('Story has no beats to visualise.');
 
@@ -863,6 +929,8 @@ export async function submitStoryStatefulVisuals(input: {
     };
   }
 
+  // The caller, not payerUserId -- for the reason given on the same call in
+  // submitStoryImageBatch above.
   const currentPlanKey = await assertImageGenerationEntitled(user.id);
   const task = imageTaskForStoryKind(config.storyKind);
   const snapshot = await resolveImageModelSnapshot({
@@ -885,7 +953,8 @@ export async function submitStoryStatefulVisuals(input: {
   let reservationId: string | null = null;
   try {
     const authorization = await authorizeCoinOperationForUser({
-      userId: user.id,
+      userId: payerUserId,
+      actorKind,
       operationKey: 'batch_image_generation',
       idempotencyKey: `stateful_image_generation:${story.id}:${Date.now()}`,
       components: [{
@@ -917,7 +986,9 @@ export async function submitStoryStatefulVisuals(input: {
   const { data: jobRow, error: jobError } = await admin
     .from('image_batch_jobs')
     .insert({
-      user_id: user.id,
+      // See the same line in submitStoryImageBatch: processStatefulJob's finalize,
+      // release and upload prefix all derive from this column.
+      user_id: payerUserId,
       story_id: story.id,
       provider,
       scope,
