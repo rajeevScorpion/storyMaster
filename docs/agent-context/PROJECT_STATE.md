@@ -437,14 +437,15 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   three more attempts achieving nothing. Not a regression — it behaved this way before D12 — but
   newly conspicuous now that the automatic path self-corrects. The fix is small (clear the same two
   keys `clearBriefForRebrief` clears) and belongs with whoever next touches `retryRun`.
-- **Phase 8's Unit 8d is written up but not built: agent-owned narration cannot bill the agent.**
-  `authorizeCoinOperationForUser` (`lib/pricing/coin-economy.ts`) never forwards `actorKind`, so the
-  agentic bypass in `authorizeBillableAction` is unreachable from every narration path. Narrating an
-  agent story today would charge the system user's 5.00-beat wallet at 0.80 beats/beat and run out
-  partway. Deferred deliberately, not forgotten: it is unobservable until Phase 9 fixes the
-  `Forbidden.` throw that stops a reviewer pressing the narrate button at all, so the two are worth
-  doing together. Full implementation shape in the 2026-09-09 handoff in
-  `docs/agentic-creator-working-memory.md`.
+- **RESOLVED — agent-owned narration now bills the agent, on both paths.** This entry used to say Unit
+  8d was written up but not built. `57b516b` (Unit 9d) did the **batch** path: `actorKind` is forwarded and
+  `narration_batch_jobs.user_id` carries the story owner, so the bypass in `authorizeBillableAction` is
+  reachable. `04e739b` (Unit 9M) did the **interactive single-beat** path, which nobody had noticed was
+  separate: it resolves no agentic payer at all, so a reviewer pressing "generate narration" was charged
+  for both the narration and the overlay alignment — and, because the same missing identity also decided
+  which Supabase client wrote the beat, the audio it paid for was never persisted. Measured on dev before
+  and after; see phase9c-plan section 11.4. The image twin of that second half is still open — see the
+  entry below.
 - **Nothing in Phase 8 has been exercised against a live database.** The gate is entirely static
   (tsc, lint, 854 unit tests, build:verify, e2e). Every prior agentic phase found real defects only
   once a run touched Postgres. The verification queries are in the same handoff.
@@ -489,6 +490,18 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   check before writing to `agent_story_memory`, which avoids the problem at the only current call site.
   The general fix — an `excludeStoryId` threaded through `runNoveltyCheck` — is deferred; any future
   caller comparing an already-recorded story will hit the same self-match.
+- **The interactive per-beat image regeneration still bills the reviewer, not the agent.** Found
+  2026-09-11 by the Unit 9M browser run, alongside its narration twin, which WAS fixed (`04e739b`).
+  `regenerateImageForNode` bills through `authorizeCurrentUserImageModelBillableAction`, which resolves
+  the payer as `getCurrentUserId()`. This is **not** the "Create all visuals" batch — `a5e9bff` fixed
+  that, and it is fine. Left for a designed change rather than patched: narration's
+  authorize/run/finalize all sit inside one server action, so one resolved identity covered the whole
+  operation, whereas the interactive image path has the CLIENT call `authorize`, `finalize` and
+  `release` as three separately-invocable server actions, each deriving the payer from the session on
+  its own. Paying from the agent account means all three accepting a story-derived payer and each
+  re-running `assertCanEditStory` — a client-supplied `storyId` deciding who pays, on three endpoints.
+  Measure it the way the narration one was measured (a real press, then read
+  `beat_spend_reservations`), do not reason about it. Detail in phase9c-plan section 11.5.
 - **`/review` (Unit 9h) redirects a signed-out visitor to `/`, not to sign-in with a return URL.**
   `app/review/layout.tsx`'s `requireReviewer()` gate mirrors `app/admin/layout.tsx`'s
   `redirect('/')`-on-throw exactly, matching existing admin behaviour rather than inventing a nicer

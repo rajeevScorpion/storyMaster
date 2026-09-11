@@ -615,3 +615,36 @@ to answer the question that was asked.
 *Considered and reversed:* charging the reviewer to keep things simple. Rejected once it was clear
 the owner wants per-persona spend — charging the reviewer would have put agent costs on a human's
 wallet and still needed the same reporting work.
+
+## D22 — an agent draft's payer is resolved per path, and each path must be measured
+
+D21 settled *who* pays. D22 is about how that answer actually reaches a billing call, because it has now
+been got wrong three times in three different places, and each one was found by measuring rather than by
+reading.
+
+**The rule.** Every path that can spend money on an agent draft resolves the payer from the **story**, and
+passes `actorKind` beside it. `resolveAgenticBillingIdentity` (pure) answers "given a story row and a
+caller, who pays"; `resolveAgentDraftServerAuth` (server) fetches the row, gates on `assertCanEditStory`,
+and returns the `serverAuth` shape the media paths already thread through. Naming a payer without
+`actorKind` leaves the bypass structurally unreachable, so half the fix is no fix.
+
+**The corollary that matters more.** A path is not covered because its neighbour is. `57b516b` fixed batch
+narration; the interactive single-beat narration next to it stayed broken for two days. `a5e9bff` fixed both
+image batch submits; the per-beat image regeneration beside them is still broken today. "Narration is fixed"
+and "images are fixed" were both true and both misleading.
+
+**Billing identity and write identity are the same decision.** On these paths the resolved payer also
+decides which Supabase client runs the write and what the storage prefix is. That is why the interactive
+narration defect did not merely bill the wrong person: it generated audio, charged for it, and then failed
+to persist it, silently, because the beat write ran on the reviewer's own session against owner-only RLS.
+Fixing the money without fixing the identity would have left a paid-for write still landing nowhere.
+
+**Measure, do not reason.** Every one of these was invisible to types, lint, unit tests and the build, and
+two of them reported success in the UI. The check that works is: press the button as the reviewer, then read
+`beat_spend_reservations` and the row that should have been written. The plan predicted the wrong failure
+mode for the first one; the code was right and the document was wrong, as usual.
+
+**Deliberately still open:** the interactive image path. Its authorize/finalize/release are three separately
+invocable server actions, each resolving the payer from the session, so paying from the agent account means
+a client-supplied `storyId` deciding who pays on three endpoints. That wants designing. Recorded in
+PROJECT_STATE and in phase9c-plan section 11.5.

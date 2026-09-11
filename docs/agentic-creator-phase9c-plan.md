@@ -438,8 +438,55 @@ Recorded because the plan has been wrong more often than the code, and these are
   client-supplied `beats`/`choices`/`nodePath`. For shared branching that is the intended shape; it is
   recorded here so the next person does not mistake the narrow guard for a general one.
 
-### 11.4 Still owed for 9M
+### 11.4 The browser run — done 2026-09-11, and it found a fourth blocker
 
-The browser run of section 3.1 — none of this has been exercised as `testuser`. In particular: confirm
-`stories.updated_at` now MOVES on a reviewer's save, that the narration and image batches submit, and that
-the publish panel appears instead of the publish buttons.
+Run as `testuser` against the agent-owned draft `568fb4bd` (रफ़ कट), against `npm run dev:agent` on
+port 3100, with every claim checked in the database rather than in the UI. **The UI is not evidence
+here** — the whole family of bugs in this section reports success and writes nothing.
+
+| Check | Result |
+|---|---|
+| Reviewer badge + "Review queue" link in the profile menu | Passes — covered by `e2e/agentic-review-reviewer.spec.ts` |
+| `/review` renders, sidebar, no horizontal scroll, no hydration error | Passes — same spec, timezone forced to `Pacific/Kiritimati` |
+| Open an assigned draft in authoring from the row menu | Passes — `e2e/agentic-review-doorway.spec.ts` |
+| Edit a beat's text and save | **Writes.** `stories.updated_at` moved `2026-09-09 11:10:43` → `2026-09-11 17:10:45`, the beat text changed (576 → 598 chars and back), and `beats.generated_by` stayed the agent account. Blocker A is genuinely fixed. |
+| Narration does not charge the reviewer | **FAILED — see below.** Now fixed in `04e739b` and re-measured. |
+| Publish buttons absent, panel present instead | Passes — `e2e/agentic-review-doorway.spec.ts` asserts no Publish control and the agent-draft panel visible |
+| `/admin/agents/spend` reports the persona's spend | Passes — reads 0.80 beats / 8 coins for Kabir Sinha across 2 operations, all flagged as never deducted |
+
+**The fourth blocker.** Pressing "generate narration" on an agent draft charged the reviewer 0.50
+(`generate_story_narration`) **and** 0.30 (`align_story_text_overlay`), both finalized against them, the
+audio was really generated and paid for, and then nothing persisted: `audio_url` null, `audio_status`
+`not_requested`, no overlay captions, and no error anywhere. Same silent-write class as Blocker A, with a
+charge attached.
+
+`57b516b` fixed the narration **batch** path and `a5e9bff` fixed both image submits. Neither touched the
+interactive single-beat path, where `options.serverAuth` is absent by definition, so the payer fell back to
+the session user and `actorKind` was undefined — leaving the bypass unreachable even had the payer been
+right. `04e739b` builds that `serverAuth` for a reviewer on an agent draft, which is what every downstream
+step already follows: the reservation, the Supabase client, the storage prefix and the beat write. Fixing
+only the billing would have left the audio unpersisted.
+
+Re-measured after the fix, same story, same button: both charges land on the agent account with
+`agenticBypass true`, the reviewer is charged nothing, and the beat carries `audio_url`, `audio_status`
+`ready`, a synced timestamp, its voice id and its overlay captions.
+
+**Images were deliberately not exercised**, and section 11.5 says why.
+
+### 11.5 Found by the browser run, NOT fixed — the image twin of the fourth blocker
+
+`regenerateImageForNode` (the per-beat "Regenerate image…" in the beat actions menu) bills through
+`authorizeCurrentUserImageModelBillableAction`, which resolves the payer as `getCurrentUserId()` — the
+reviewer. Same defect as narration had, on the image side.
+
+It is **not** the "Create all visuals" batch, which `a5e9bff` already fixed; that path is fine.
+
+It was not fixed here because it is a bigger change than the narration one, not a smaller one. Narration's
+authorize/run/finalize all happen inside one server action, so one resolved identity covers the whole
+operation. The interactive image path instead has the **client** call `authorize`, `finalize` and `release`
+as three separately-invocable server actions, each deriving the payer from the session independently.
+Making them pay from the agent account means each has to accept a story-derived payer and re-run
+`assertCanEditStory` itself — a client-supplied `storyId` deciding who pays, on three endpoints. That wants
+designing, not patching, and it should be measured the same way this one was rather than reasoned about.
+
+Confirmed unexercised: `agentic_image_generation_enabled` is **false** on dev and was left false.

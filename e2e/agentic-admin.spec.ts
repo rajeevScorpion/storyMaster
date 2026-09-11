@@ -22,7 +22,13 @@ const AGENTIC_ROUTES = [
   { path: '/admin/agents/test-lab', heading: /test lab/i },
   { path: '/admin/agents/tasks', heading: /task|coverage/i },
   { path: '/admin/agents/runs', heading: /run/i },
+  { path: '/admin/agents/spend', heading: /spend/i },
   { path: '/admin/agents/routing', heading: /routing|model/i },
+  // The Authors half of the agentic admin surface -- the reviewer-facing tables an
+  // admin looks at, rather than the pipeline. /admin/authors/workload is Unit 9k's.
+  { path: '/admin/authors', heading: /review queue/i },
+  { path: '/admin/authors/reviewers', heading: /reviewer/i },
+  { path: '/admin/authors/workload', heading: /workload/i },
 ];
 
 async function signIn(page: Page): Promise<void> {
