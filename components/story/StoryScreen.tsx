@@ -1870,6 +1870,9 @@ export default function StoryScreen() {
       lastPublishResult={lastPublishResult}
       cycleSettings={cycleSettings}
       pricing={pricing}
+      isAnotherUsersAgentDraft={Boolean(
+        session.agentPersonaId && user && session.savedByUserId && session.savedByUserId !== user.id
+      )}
       isAdminUser={isAdminUser}
       continueCoinCost={continueCoinCost}
       continueIncludesImage={continuationQuote.includesImage}
@@ -1926,6 +1929,7 @@ function StoryScreenInner({
   lastPublishResult,
   cycleSettings,
   pricing,
+  isAnotherUsersAgentDraft,
   isAdminUser,
   continueCoinCost,
   continueIncludesImage,
@@ -2017,6 +2021,12 @@ function StoryScreenInner({
   lastPublishResult: { alreadyPublished: boolean; storylineId: string; error?: string } | null;
   cycleSettings: StoryRuntimeSettings;
   pricing: PricingRuntimeContext;
+  /**
+   * Unit 9M / D15: this story was written by the agentic pipeline and the signed-in user
+   * does not own it -- a reviewer finishing an agent draft (D19). Computed in the outer
+   * StoryScreen, which is where useAuth's `user` lives. See where it is consumed below.
+   */
+  isAnotherUsersAgentDraft: boolean;
   isAdminUser: boolean;
   continueCoinCost: number;
   continueIncludesImage: boolean;
@@ -2629,8 +2639,25 @@ function StoryScreenInner({
   const activeCharacterStorageKey = activeCharacterPromptItem?.referenceSheetStorageKey;
   const activeCharacterHasSheet = Boolean(activeCharacterPromptItem?.referenceSheetUrl);
   const activeCharacterHasReference = Boolean(activeCharacterPromptItem?.referenceSheetUrl || activeCharacterPromptItem?.generatedReferenceUrl);
+  // Unit 9M / D15: somebody else's agent draft is never published from here.
+  //
+  // A reviewer finishing an agent story reaches this screen with full editing rights
+  // (D19), and every publish affordance on it runs publishStoryline or
+  // autoPublishStoryline -- both of which stamp the storyline with the CALLER and
+  // author it under their display name. Publishing here would therefore put a real
+  // person's name on a story the agentic persona wrote. The correct path is
+  // publishReviewedStoryline, reached through the review queue's own Publish, which
+  // also records the decision row and moves the run; doing it from here would either
+  // skip that or duplicate it (phase 9c plan section 3.5: reuse publishRunAction, do
+  // not write a second transition).
+  //
+  // app/actions/persistence.ts's assertNotAnotherUsersAgentDraft is the real boundary;
+  // these three flags only keep the UI honest about what will happen. An ordinary
+  // author's story has no agentPersonaId and is unaffected on every line below, as is
+  // an un-migrated database, where the field is always null.
   const publishPath = isEnding ? extractStoryline(session.storyMap, currentNodeId) : null;
   const canPublishStandardStoryline = Boolean(
+    !isAnotherUsersAgentDraft &&
     publishPath?.beats.every((beat) => {
       const normalizedBeat = normalizeBeatMediaFields(beat);
       return Boolean(normalizedBeat.imageUrl || normalizedBeat.persistedImageUrl);
@@ -2638,6 +2665,7 @@ function StoryScreenInner({
   );
   const canPublishAudioStoryline = Boolean(
     isEnding &&
+    !isAnotherUsersAgentDraft &&
     isPromptOnlyStory &&
     !canPublishStandardStoryline &&
     cycleSettings.audioStorylinePublishEnabled
@@ -2678,7 +2706,24 @@ function StoryScreenInner({
             Publish as Audio Story
           </button>
         )}
-        {!lastPublishResult && onSave && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
+        {!lastPublishResult && isAnotherUsersAgentDraft && (
+          <div className="max-w-xl rounded-xl border border-indigo-500/25 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-100">
+            <p>
+              This is an agent draft. Publishing it from here would credit it to you — it
+              has to be published from the review queue so it goes out under the persona
+              that wrote it.
+            </p>
+            {pricing.reviewer && (
+              <Link
+                href="/review"
+                className="mt-2 inline-flex items-center gap-1.5 font-medium text-indigo-200 underline underline-offset-2 transition-colors hover:text-white"
+              >
+                Open the review queue
+              </Link>
+            )}
+          </div>
+        )}
+        {!lastPublishResult && onSave && !isAnotherUsersAgentDraft && isPromptOnlyStory && !canPublishStandardStoryline && !cycleSettings.audioStorylinePublishEnabled && (
           <div className="max-w-xl rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
             Upload an image for every beat before publishing, or enable audio-only publishing in Global Settings.
           </div>
@@ -2991,7 +3036,7 @@ function StoryScreenInner({
     pricing.snapshot.canAccessUnbrandedExports
   );
   const reelPublishingEnabled = cycleSettings.reelStoryPublishEnabled;
-  const canPublishReel = Boolean(reelPublishingEnabled && !lastPublishResult && onSave && reelReadyForDistribution);
+  const canPublishReel = Boolean(reelPublishingEnabled && !lastPublishResult && onSave && reelReadyForDistribution && !isAnotherUsersAgentDraft);
   const canExportReelVideo = Boolean(videoDownloadGlobalOn && reelReadyForDistribution && canAccessVideoExport);
   const reelExportBeats = reelDistributionBeats.map((beat) => {
     const normalizedBeat = normalizeBeatMediaFields(beat);

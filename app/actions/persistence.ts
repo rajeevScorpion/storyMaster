@@ -6,6 +6,7 @@ import { normalizeStorageUrl, extractStoragePath, copyToPublicBucket } from '@/l
 import { signStoryMapAssetUrls, signCharacterRosterReferenceSheetUrls, signMixedUrls } from '@/lib/media/storage-url-signing';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { assertCanEditStory, type EditableStoryAccess } from '@/lib/agentic/reviewers';
+import { isMissingReviewerSchemaError } from '@/lib/agentic/reviewers.shared';
 import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImageGalleryEntry } from '@/lib/types/story';
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineShareCoverSource } from '@/lib/types/database';
@@ -754,6 +755,11 @@ export async function loadStory(storyId: string): Promise<StorySession> {
     storySessionId: story.id,
     savedStoryId: story.id,
     savedByUserId: story.user_id,
+    // Unit 9M/D15: cast because DbStory predates migration 103 and does not declare the
+    // column. `select('*')` returns it wherever 103 is applied and simply omits it where
+    // it is not, so an un-migrated database yields null and every ordinary story reads as
+    // "not an agent draft" -- which is the truth on such a database.
+    agentPersonaId: (story as { agent_persona_id?: string | null }).agent_persona_id ?? null,
     sourceUpdatedAt: story.updated_at,
     userPrompt: story.user_prompt,
     title: story.title,
@@ -1231,6 +1237,61 @@ export async function updateBeatAssets(
  * - Creates storyline + storyline_beats junction rows
  * - Auto-saves to user's saved_storylines
  */
+// ── Unit 9M / D15: nobody publishes somebody else's agent draft as themselves ──
+//
+// Both publish paths in this file -- publishStoryline (the PublishDialog's) and
+// autoPublishStoryline (the store's fire-and-forget on reaching an ending) -- stamp
+// `storylines.user_id` with the CALLER and author it under their display name. For an
+// ordinary author that is correct and is what has always happened. For an agent draft
+// finished by a reviewer it is not: the storyline would carry a real person's name on a
+// story the agentic persona wrote, which is exactly what D15 exists to prevent.
+// lib/agentic/review-publish.ts's publishReviewedStoryline is the path that gets this
+// right, and app/actions/agentic-review.ts's publishRunAction is how a reviewer reaches
+// it -- together with the decision row and run transition that a publish must record.
+//
+// This is a SERVER check because it is the only kind that counts. A server action is
+// directly invocable over its own RPC endpoint, so hiding a button decides nothing; the
+// StoryScreen change that accompanies this is UX, and this function is the boundary.
+//
+// Scope is deliberately narrow. It refuses only when the story is agent-owned AND the
+// caller is not its owner. It does NOT refuse a non-owner publishing an ordinary story:
+// "shared branching" lets any authenticated user continue someone else's story on their
+// own branch, and publishing that branch as themselves is the existing, intended
+// behaviour of this path -- widening the check to cover it would break a real feature to
+// fix a defect that only exists for agent drafts.
+//
+// SCHEMA TOLERANCE. stories.agent_persona_id arrives with migration 103, which
+// production has not applied. A missing column must therefore let publishing proceed --
+// on such a database there are no agent drafts to protect, and refusing would break
+// publishing for every user. Only the four missing-schema codes are treated that way;
+// any other error refuses, so a transient failure cannot silently reopen the hole.
+async function assertNotAnotherUsersAgentDraft(
+  supabase: SupabaseClient,
+  storyId: string,
+  callerUserId: string
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('stories')
+    .select('user_id, agent_persona_id')
+    .eq('id', storyId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingReviewerSchemaError(error)) return;
+    throw new Error(`Failed to verify story ownership before publishing: ${error.message}`);
+  }
+  // No row visible is not this function's call to make -- the publish paths below
+  // already tolerate a missing source story, and their own queries decide what happens.
+  if (!data) return;
+
+  if (data.agent_persona_id && data.user_id !== callerUserId) {
+    throw new Error(
+      'This is an agent draft. Publish it from the review queue so it is credited to the '
+      + 'persona that wrote it.'
+    );
+  }
+}
+
 export async function autoPublishStoryline(
   storyId: string,
   endingNodeId: string,
@@ -1240,6 +1301,11 @@ export async function autoPublishStoryline(
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Before anything else: this path runs automatically when a story reaches an ending,
+  // with no dialog and no confirmation, so a reviewer continuing an agent draft to its
+  // end would silently publish it under their own name. See the helper.
+  await assertNotAnotherUsersAgentDraft(supabase, storyId, user.id);
 
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
@@ -2206,6 +2272,9 @@ export async function publishStoryline(params: {
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) throw new Error('Not authenticated');
+
+  // Refuse before any of the work below, and before any row is written. See the helper.
+  await assertNotAnotherUsersAgentDraft(supabase, params.storyId, user.id);
 
   // Visibility + quality are server-validated; default keeps today's
   // public-publish behavior.
