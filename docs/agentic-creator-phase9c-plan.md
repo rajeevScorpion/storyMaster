@@ -104,6 +104,10 @@ be unusable by a non-owner, D19 is wrong and 9L's "Open in authoring" button has
 
 ### 3.1 Step one, before writing any code: prove the handoff works
 
+> **Done 2026-09-11 by reading the code — see [section 10](#10-unit-9m-pre-flight-findings--2026-09-11).**
+> All three blockers are confirmed, none needs a migration, and blocker A is worse than predicted here:
+> `saveStory` does not throw, it silently writes nothing. The browser half of this step is still owed.
+
 Sign in as the reviewer (credentials in `.env.local`, see section 6) and open an agent draft's
 `/story/[id]` directly. Record what actually happens for each of:
 
@@ -276,3 +280,106 @@ Carried forward, still open:
 - Thirteen comments across `ReviewQueue.tsx`, `image-batch.ts`, `narration-batch.ts` and others still describe `can_publish` / `can_trigger_media` as columns; 113 dropped both.
 - **Pre-existing:** `autoPublishStoryline` never checks `publicPublishingEnabled` or `moderationRequiredForPublic`, so the auto-publish-on-ending path can publish publicly while the admin switch is off.
 - **Pre-existing:** image billing for agent drafts is unpriced — now load-bearing for 9M (3.4).
+
+---
+
+## 10. Unit 9M pre-flight findings — 2026-09-11
+
+Section 3.1 required this investigation before any 9M code. Done by reading the code and the RLS
+policies. **Not yet done in a browser** — every claim below is marked for how it was established, and
+the browser run of 3.1 is still owed. Where a claim is inferred from a policy rather than observed, it
+says so; do not quote it as observed.
+
+### 10.1 Blocker A — `saveStory` is reachable, and it fails SILENTLY
+
+The plan (1.3) predicted a `Forbidden.` throw. **That prediction is wrong, and the truth is worse.**
+
+*Verified by reading:*
+
+- `session.sourceStoryOwnerId` — the flag every autosave guard checks — is set in exactly one place:
+  [exploration.ts:335](../app/actions/exploration.ts#L335), the `/explore/[id]` path. `loadStoryFromCloud`
+  ([story-store.ts:7015](../lib/store/story-store.ts#L7015)) never sets it. **A reviewer on `/story/[id]`
+  therefore has it `undefined` and passes every guard**, including
+  [StoryScreen.tsx:1864](../components/story/StoryScreen.tsx#L1864)'s Save button.
+- Three autosaves fire with **no button press at all**: after a storyboard regenerate
+  ([story-store.ts:6426](../lib/store/story-store.ts#L6426)), after an image regenerate
+  ([6598](../lib/store/story-store.ts#L6598)), and at the end of the auto-build walk
+  ([7920](../lib/store/story-store.ts#L7920)).
+- `saveStoryForUser` with a `savedStoryId` does
+  `.update(storyData).eq('id', …).eq('user_id', userId)` ([save-story.ts:619](../lib/story/save-story.ts#L619)).
+  `stories` UPDATE RLS is owner-only, so for a reviewer this matches **zero rows**.
+
+*Inferred from the above, to be confirmed in the browser:* PostgREST reports no error for an UPDATE that
+matches zero rows, so `saveStory` **returns success having written nothing**. The reviewer sees "saved".
+
+The beats half then runs `.upsert(beatRows, { onConflict: 'story_id,node_id' })` with
+`generated_by: reviewerId`. `beats` RLS (003_normalize_beats.sql) is:
+
+- INSERT — `auth.uid() IS NOT NULL AND generated_by = auth.uid() AND` the story is not archived. Note this
+  lets **any authenticated user** insert beats into **anyone's** non-archived story. Pre-existing, out of
+  scope here, worth its own look.
+- UPDATE — `USING (generated_by = auth.uid())`. Existing agent beats carry the system user, so the
+  upsert's update branch is refused.
+
+`saveStoryForUser` **catches beats errors and returns `beatsWarning`** rather than throwing
+([save-story.ts:688](../lib/story/save-story.ts#L688)), so this too degrades to a soft string.
+
+**Net: a reviewer's session-level edits are discarded with no error anywhere.** Silent data loss beats a
+visible `Forbidden.` for how bad it is, and it is the reason this must be the first commit of 9M, alone.
+
+**Fix:** mirror `saveBeat` — `assertCanEditStory` + the admin client. No migration.
+
+### 10.2 Blocker B — `PublishDialog` publishes as the reviewer
+
+*Verified by reading:* [PublishDialog.tsx:195](../components/story/PublishDialog.tsx#L195) calls
+`publishStoryline`, which resolves `user` from the cookie session
+([persistence.ts:2144](../app/actions/persistence.ts#L2144)) and stamps the storyline with it. It also
+uploads assets to `public-storylines/${user.id}/${storyId}` — **the reviewer's own storage prefix**
+([PublishDialog.tsx:160](../components/story/PublishDialog.tsx#L160)), which the plan did not mention and
+which a reviewer branch must also redirect.
+
+`handlePublish`'s `saveStory` call is **not** on the reviewer's path — it is guarded by `if (!storyId)`,
+and a reviewer always arrives with one. Blocker A does not compound here.
+
+**Fix:** as planned in 3.3 — an explicit `mode` prop and a `publishReviewedStorylineAction`. No migration.
+
+### 10.3 Blocker C — the image batch bills the reviewer
+
+*Verified by reading:* **both** image submit paths bill `user.id`, the caller:
+
+- `submitStoryImageBatch` — `assertImageGenerationEntitled(user.id)`
+  ([image-batch.ts:328](../app/actions/image-batch.ts#L328)), `authorizeCoinOperationForUser({ userId: user.id })`
+  ([379](../app/actions/image-batch.ts#L379)), `user_id: user.id` on the job row
+  ([412](../app/actions/image-batch.ts#L412)).
+- `submitStoryStatefulVisuals` — the same three at
+  [866](../app/actions/image-batch.ts#L866)/[888](../app/actions/image-batch.ts#L888)/[920](../app/actions/image-batch.ts#L920).
+  **The plan named only the first. Both need the fix.**
+
+The worker already derives everything downstream from `job.user_id` (reserve, finalize, release, and the
+`${job.user_id}/${story_id}/…` upload path), so stamping the job correctly at submit fixes the whole chain —
+exactly the shape `57b516b` used for narration.
+
+**Fix:** `const payerUserId = story.agent_persona_id ? story.user_id : user.id`, mirroring
+[narration-batch.ts:199-200](../app/actions/narration-batch.ts#L199-L200), on both paths. Entitlement should
+be checked against the payer too, not the presser. `image_batch_jobs` (066) has **no** jsonb column, same as
+`narration_batch_jobs` — so the submitting reviewer is logged, not stored, and **no migration is needed**.
+
+### 10.4 Unit 9k has no blockers
+
+`agent_review_decisions` (112) carries `reviewer_id`, `decision`, `story_id`, `storyline_id`, `notes`,
+`created_at` — everything History needs. `agent_review_assignments` (114) carries the assigned/completed/
+pending split and already has `agent_review_assignments_reviewer_idx`. Both applied on dev. 9k is read-side
+work against applied schema.
+
+One non-blocking note: `agent_review_decisions` is indexed `(run_id, created_at DESC)` only. A per-reviewer
+History filters on `reviewer_id` with no index. Irrelevant at today's row counts; if it ever matters it is a
+115, not a change to 112.
+
+### 10.5 Still owed
+
+- **The browser run of 3.1.** Everything above is static reading. Confirm the silent no-op in 10.1 by
+  actually pressing Save as `testuser` and checking `stories.updated_at` does not move.
+- **9J has never run live** (phase 9b plan section 6, and the `587e123` handoff). Deferred by the owner,
+  2026-09-11, not abandoned: re-drive a run to `awaiting_review` and confirm `agent_review_assignments`
+  gains a row with `source='auto'` and a populated `match_reason`. The `all_ages` pooling case still has
+  no fixture.
