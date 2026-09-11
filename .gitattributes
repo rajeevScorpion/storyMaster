@@ -1,0 +1,39 @@
+# Line endings: normalised to LF in the index and in the working tree.
+#
+# WHY THIS FILE EXISTS. Without it, and with core.autocrlf=false (this repo's
+# setting), git stores exactly the bytes the working tree holds. Tooling on
+# Windows writes CRLF, so a three-line edit could land as a whole-file diff, and
+# every contributor -- human or agent -- had to remember to strip carriage
+# returns by hand after every write. That manual step was forgotten repeatedly:
+# 16 files reached main with CRLF before this file landed, and one ended up
+# mixed. Normalising here deletes the whole class of problem. Write whatever
+# your editor produces; git stores LF.
+#
+# `text=auto` lets git detect text vs. binary; `eol=lf` pins the working-tree
+# ending too, so behaviour does not depend on a per-machine git config.
+
+* text=auto eol=lf
+
+# Binary formats git must never translate. `text=auto` already detects these
+# correctly, but naming them means a misconfigured tool cannot corrupt an asset
+# by guessing wrong.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.avif  binary
+*.svgz  binary
+*.mp3   binary
+*.mp4   binary
+*.wav   binary
+*.webm  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary

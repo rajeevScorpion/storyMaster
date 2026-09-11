@@ -341,3 +341,24 @@ branch before you believe it.
   `snapshot.entitlementPlanKey` is what feature gates read. Resolution is promote-only
   (`max(billing, override)`). A promoted user still pays catalog price and can still hit
   `insufficient_balance`.
+
+---
+
+## Line endings are handled by `.gitattributes` now — do not strip CRs by hand
+
+**The old ritual is dead.** For months, anything that wrote a file on Windows had to follow it with
+`sed -i 's/$//' <path>`, because the repo had **no `.gitattributes`** and `core.autocrlf=false`, so git
+committed whatever bytes the working tree held. Forgetting it turned a three-line edit into a whole-file
+diff. It was forgotten often enough that **16 files reached the repo with CRLF** and one ended up mixed.
+
+`.gitattributes` now carries `* text=auto eol=lf`, so **git normalises on `git add`** regardless of what
+your editor produced. Write the file and commit it. No `sed`, no `od -c` check, no instruction in a brief
+telling an agent to remember.
+
+**What this does NOT do:** it does not retroactively fix files already stored as CRLF. Those were
+renormalised once, in their own commit, deliberately isolated so the noise never lands inside a feature
+commit. If you ever add a path pattern that changes text/binary classification, do the same —
+`git add --renormalize .` on its own, never mixed with real changes.
+
+**If you see a whole-file diff for a small edit**, that is the symptom this fixed. Check
+`git ls-files --eol <path>`: `i/lf` is correct, `i/crlf` means something bypassed normalisation.
