@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { ClipboardCheck, UserCheck } from 'lucide-react';
+import { ClipboardCheck, History, UserCheck } from 'lucide-react';
 import type { ComponentType } from 'react';
 
 // ── Agentic Creator System: Phase 9c, Unit 9L ───────────────────────────
@@ -17,9 +17,10 @@ import type { ComponentType } from 'react';
 // subtree on every query change), so there is no way to do this from the server
 // component above it.
 //
-// Deliberately just two items: Queue and "My assignments". History is Unit 9k's
-// (docs/agentic-creator-phase9c-plan.md section 4.2 lists it too, but this
-// unit's brief explicitly carves it out) -- do not add a third link here for it.
+// Three items: Queue, "My assignments", and (Unit 9k) History. The first two are the
+// same page under different filters; History is its own route, /review/history,
+// because it reads a different table (agent_review_decisions, 112) and shows finished
+// work rather than a queue.
 //
 // "My assignments" is NOT a separate route -- there is only one page under
 // /review. It links to `/review?assignment=mine`, which app/review/page.tsx
@@ -45,6 +46,13 @@ const NAV_ITEMS: NavItem[] = [
     label: 'My assignments',
     icon: UserCheck,
     isActive: (pathname, assignment) => pathname === '/review' && assignment === 'mine',
+  },
+  {
+    href: '/review/history',
+    label: 'History',
+    icon: History,
+    // A real route, so the assignment param is irrelevant to whether this is active.
+    isActive: (pathname) => pathname === '/review/history',
   },
 ];
 

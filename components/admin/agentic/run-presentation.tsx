@@ -38,6 +38,7 @@
 // guards against. This one is not that case.
 import { useSyncExternalStore } from 'react';
 import type { StoredEvaluation, AgentRunEventLevel, AgentRunStage } from '@/app/actions/agentic-runs';
+import type { StoredReviewDecisionValue } from '@/lib/agentic/review-decisions.shared';
 import {
   EVALUATION_DIMENSIONS,
   type EvaluationModelStatus,
@@ -93,6 +94,27 @@ export const EVALUATION_VERDICT_STYLES: Record<EvaluationVerdict, string> = {
 export const REVIEW_READINESS_LABELS: Record<ReviewReadiness, string> = {
   ready_for_review: 'Ready for review',
   needs_rewrite: 'Needs rewrite',
+};
+
+// ── Reviewer decision tables (Units 9e-i, 9e-ii; shared as of 9k) ───────
+//
+// Covers every value migration 112's CHECK constraint allows. Lived in ReviewQueue.tsx
+// until Unit 9k added a second surface showing the same badge (the reviewer's own
+// history at /review/history); two copies of a label table are exactly the drift trap
+// this file exists to avoid.
+
+export const DECISION_LABELS: Record<StoredReviewDecisionValue, string> = {
+  approved: 'Approved',
+  rewrite_requested: 'Rewrite requested',
+  rejected: 'Rejected',
+  published: 'Published',
+};
+
+export const DECISION_STYLES: Record<StoredReviewDecisionValue, string> = {
+  approved: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
+  rewrite_requested: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
+  rejected: 'border-rose-500/25 bg-rose-500/10 text-rose-300',
+  published: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-300',
 };
 
 export const MODEL_STATUS_LABELS: Record<EvaluationModelStatus, string> = {

@@ -142,6 +142,98 @@ export async function listReviewDecisionsForRun(runId: string): Promise<AgentRev
   }
 }
 
+/**
+ * Unit 9k: every decision ONE reviewer has recorded, most recent first. This is the
+ * reviewer's own history, shown to them at /review/history.
+ *
+ * `reviewer_id` is nullable by design (the FK's ON DELETE SET NULL, migration 112
+ * header), so a deleted account's decisions match nothing here -- correct: nobody
+ * signed in can be that account. `reviewer_label` is the snapshot that keeps those rows
+ * legible in any view that shows them by name; this filter is by id because it answers
+ * "what have I decided", and only an id can answer that safely.
+ *
+ * There is NO index on reviewer_id -- idx_agent_review_decisions_run covers
+ * (run_id, created_at) only. Irrelevant at this table's row counts, and if it ever
+ * matters the fix is a migration 115, never an edit to 112. `limit` is here so a
+ * long-serving reviewer's history can never become an unbounded read.
+ *
+ * Degrades to [] while migration 112 is unapplied, like every other read here.
+ */
+export async function listReviewDecisionsForReviewer(
+  reviewerId: string,
+  limit = 200
+): Promise<AgentReviewDecision[]> {
+  if (reviewDecisionSchemaUnavailable) return [];
+
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('agent_review_decisions')
+      .select('*')
+      .eq('reviewer_id', reviewerId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      if (isReviewDecisionSchemaMissing(error)) {
+        latchReviewDecisionSchemaUnavailable('listReviewDecisionsForReviewer');
+        return [];
+      }
+      throw new Error(`Failed to list agent_review_decisions for reviewer ${reviewerId}: ${error.message}`);
+    }
+
+    return ((data ?? []) as AgentReviewDecisionRow[]).map(rowToDecision);
+  } catch (error) {
+    if (isReviewDecisionSchemaMissing(error)) {
+      latchReviewDecisionSchemaUnavailable('listReviewDecisionsForReviewer');
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Unit 9k: every decision on the whole table, most recent first -- what the admin
+ * workload view aggregates. Read whole rather than per-reviewer or per-run because the
+ * workload page needs both cuts at once (how many each reviewer recorded, AND which
+ * tasks have been decided at all), and this table is append-only with one row per
+ * reviewer action: a few per draft, not per beat.
+ *
+ * `limit` caps it anyway, for the same reason getPersonaSpendReport caps its own read:
+ * an admin page must never become a full-table scan. If the cap is ever genuinely
+ * reached, the fix is a date filter on the page, not a bigger number.
+ *
+ * Degrades to [] while migration 112 is unapplied.
+ */
+export async function listAllReviewDecisions(limit = 2000): Promise<AgentReviewDecision[]> {
+  if (reviewDecisionSchemaUnavailable) return [];
+
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('agent_review_decisions')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      if (isReviewDecisionSchemaMissing(error)) {
+        latchReviewDecisionSchemaUnavailable('listAllReviewDecisions');
+        return [];
+      }
+      throw new Error(`Failed to list agent_review_decisions: ${error.message}`);
+    }
+
+    return ((data ?? []) as AgentReviewDecisionRow[]).map(rowToDecision);
+  } catch (error) {
+    if (isReviewDecisionSchemaMissing(error)) {
+      latchReviewDecisionSchemaUnavailable('listAllReviewDecisions');
+      return [];
+    }
+    throw error;
+  }
+}
+
 // ── Writes ─────────────────────────────────────────────────────────────
 
 /**

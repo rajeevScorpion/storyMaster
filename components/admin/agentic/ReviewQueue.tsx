@@ -34,9 +34,10 @@ import {
   type ReviewQueueListFilters,
   type ReviewQueueReadiness,
   type ReviewQueueRow,
-  type StoredReviewDecisionValue,
 } from '@/app/actions/agentic-review';
 import {
+  DECISION_LABELS,
+  DECISION_STYLES,
   EVALUATION_VERDICT_LABELS,
   EVALUATION_VERDICT_STYLES,
   REVIEW_READINESS_LABELS,
@@ -132,22 +133,6 @@ const QUEUE_READINESS_LABELS: Record<ReviewQueueReadiness, string> = {
   ready_for_review: REVIEW_READINESS_LABELS.ready_for_review,
   needs_rewrite: REVIEW_READINESS_LABELS.needs_rewrite,
   unscored: 'Not yet evaluated',
-};
-
-// Covers every value migration 112's CHECK constraint allows (StoredReviewDecisionValue),
-// including 'published' -- the value publishRunAction (Unit 9e-ii) now writes.
-const DECISION_LABELS: Record<StoredReviewDecisionValue, string> = {
-  approved: 'Approved',
-  rewrite_requested: 'Rewrite requested',
-  rejected: 'Rejected',
-  published: 'Published',
-};
-
-const DECISION_STYLES: Record<StoredReviewDecisionValue, string> = {
-  approved: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300',
-  rewrite_requested: 'border-amber-500/25 bg-amber-500/10 text-amber-300',
-  rejected: 'border-rose-500/25 bg-rose-500/10 text-rose-300',
-  published: 'border-indigo-500/25 bg-indigo-500/10 text-indigo-300',
 };
 
 /** One row's confirm-dialog target: which run, and which of the four decisions it's for. */

@@ -135,6 +135,46 @@ export async function listAssignmentsForTasks(
 }
 
 /**
+ * Unit 9k: every ACTIVE assignment row, whoever it belongs to -- what the admin
+ * workload view aggregates. countOpenAssignmentsByReviewer below already returns the
+ * counts, but the workload view needs the task ids too, so it can ask which of those
+ * tasks have actually been decided; a count cannot answer that.
+ *
+ * Rows with `reviewerId: null` are RETURNED, not filtered out -- per D18 and the
+ * migration header that state is the unassigned pool, and the workload view reports it
+ * as its own line rather than attributing it to anyone. Callers asking "whose is this"
+ * must check `.reviewerId`, exactly as listAssignmentsForTasks's doc says.
+ *
+ * Degrades to [] whenever migration 114 is unapplied.
+ */
+export async function listActiveAssignments(admin: AdminClient): Promise<ReviewAssignment[]> {
+  if (assignmentSchemaUnavailable) return [];
+
+  try {
+    const { data, error } = await admin
+      .from('agent_review_assignments')
+      .select('*')
+      .eq('status', 'active');
+
+    if (error) {
+      if (isAssignmentSchemaMissing(error)) {
+        latchAssignmentSchemaUnavailable('listActiveAssignments');
+        return [];
+      }
+      throw new Error(`Failed to list active agent_review_assignments: ${error.message}`);
+    }
+
+    return ((data ?? []) as AgentReviewAssignmentRow[]).map(rowToAssignment);
+  } catch (error) {
+    if (isAssignmentSchemaMissing(error)) {
+      latchAssignmentSchemaUnavailable('listActiveAssignments');
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
  * Open (active) assignment count per reviewer_id, across the WHOLE roster -- what
  * Unit 9j's least-loaded matcher needs. Rows with `reviewer_id IS NULL` are
  * deliberately EXCLUDED from every reviewer's count -- per D18/the migration
