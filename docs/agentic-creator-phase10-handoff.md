@@ -1,7 +1,9 @@
-# Handoff — Phase 10 Round 1 is complete; Round 3 was in flight when this was written
+# Handoff — Phase 10 Rounds 1 and 3 are both complete
 
-Written 2026-09-12 at 87% of the session window, which is why it exists: the delegation ceiling is 90%
-and a fresh session should start from here rather than from a compacted summary.
+Written 2026-09-12. Originally recorded at 87% of a session window (the delegation ceiling is 90%) with
+Round 3 still in flight; **updated after a later session finished Round 3 and re-ran all five gates green**,
+so this file no longer describes an in-progress state. The paragraph immediately below is left as it was
+written, since sections 2 and on are still accurate as Round 1's own record.
 
 **The plan is the source of truth: [agentic-creator-phase10-plan.md](agentic-creator-phase10-plan.md).**
 Read it before anything else. This file records only what has happened since, and what is owed.
@@ -13,11 +15,9 @@ rewritten to match what shipped.
 
 ---
 
-## 1. First thing to do: check what landed
+## 1. Round 3 is complete — all five parts, gated green
 
-**Updated at 96% session usage, after Round 3 had landed most of its work.** Exact state:
-
-**Committed and done** — plan section 5's four parts:
+Plan section 5's four parts, plus the honest-empty-state consequence from section 4, are all committed:
 
 | Commit | Part |
 |---|---|
@@ -25,26 +25,30 @@ rewritten to match what shipped.
 | `77f0a59` | 5.2 — the review queue scoped by role |
 | `21a2ee6` | 5.3 — "My assignments" retired for a plain reviewer |
 | `897946f` | 5.4 — assigned-count bubble in the profile menu |
+| `4850456` | Plan section 4's honest empty state ("nothing assigned to you" vs. "nothing is waiting") |
+| `49ac64d` | `e2e/agentic-review-reviewer.spec.ts` extended: header-links-home, the count bubble, and a role-branching fix so the spec no longer assumes which role `E2E_REVIEWER_EMAIL` holds |
 
-**Uncommitted and unfinished** — the honest empty state (plan section 4's consequence). Three files were
-mid-edit when the session hit its ceiling:
+**All five gates re-run after `49ac64d`, independently — not taken from an earlier report:** tsc clean, lint
+clean (0 warnings/errors), **106 files / 995 tests** (matches the Round 1 baseline exactly), `build:verify`
+green, **e2e 28/28, 0 skipped** (27 from Round 1's baseline plus the one new header-links-home test).
 
-```
-app/actions/agentic-review.ts
-app/review/page.tsx
-components/admin/agentic/ReviewQueue.tsx
-```
+What an earlier draft of this section said was uncommitted and unverified — the empty-state edits across
+`app/actions/agentic-review.ts`, `app/review/page.tsx`, and `components/admin/agentic/ReviewQueue.tsx` — is
+now `4850456` above, gated.
 
-**Do not assume those edits are complete or correct** — they were left deliberately uncommitted rather than
-committed half-done, because the full gate could not be re-run at that point. Read the diff
-(`git diff`) and decide whether to finish it or discard it and redo it from the spec. **The five gates have
-NOT been run since `897946f`**, so the first thing to do after resolving those three files is run all five
-and compare against the baseline in section 2.
+Two things worth knowing before touching this area again:
+- **No admin special case anywhere in Round 3.** `buildImplicitAdminReviewer()` synthesizes role `editor`
+  (`lib/agentic/reviewers.ts` ~line 82), so every `role === 'editor'` check already leaves the admin seeing
+  everything on `/review` and `/admin/authors`, with nothing keyed on `ADMIN_USER_ID` directly.
+- **The empty-state total count is a count only.** `getReviewQueueTotalAwaitingCountAction` (new, in
+  `app/actions/agentic-review.ts`) returns the number of runs at stage `awaiting_review` system-wide, never
+  the rows or who they belong to — a scoped reviewer's own queue stays exactly as narrow as 5.2 made it.
 
 The empty state matters more than it looks: once 5.2 scopes the queue, an unassigned draft becomes
 *invisible* to a reviewer rather than merely unlabelled, and since 9J has never run against a database
-(section 3), a blank page is what a reviewer will actually hit. It must distinguish "nothing is assigned to
-you" from "nothing is waiting".
+(section 3), a blank page is what a reviewer will actually hit. It now distinguishes "nothing is assigned to
+you" (the system-wide count is known and positive) from "nothing is waiting" (the existing default, used
+whenever the count is zero or could not be resolved).
 
 ---
 
@@ -91,7 +95,7 @@ e2e 22 — all five gates were green before Round 1 too, so any future deviation
 
 ## 4. What is left, in order
 
-- **Round 3** — plan section 5. In flight; see section 1.
+- **Round 3 — done.** See section 1.
 - **Round 1b** — the two findings deliberately held back, each needing one question answered first:
   - `stories` carries an **anonymous SELECT policy with no auth predicate**
     (`003_normalize_beats.sql` lines 219-222). Any anonymous caller can read any non-archived story row,
