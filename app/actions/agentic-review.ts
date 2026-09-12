@@ -155,6 +155,10 @@ export interface ReviewQueueListFilters {
    * Map, so every row's `assignment` is `null` and 'unassigned' returns everything
    * -- an honest reflection of "nothing is assigned because there is nowhere to
    * record an assignment yet", not a silent narrowing to zero rows.
+   *
+   * Phase 10 Round 3, 5.2: for a plain reviewer (role 'reviewer'), listReviewQueueAction
+   * IGNORES whatever this field is set to and clamps to 'mine' -- see that function's
+   * own comment. This field only has its full range of effect for role 'editor'.
    */
   assignment?: 'mine' | 'unassigned' | 'all';
 }
@@ -211,7 +215,25 @@ export async function getReviewQueueSchemaStatusAction(): Promise<{ schemaApplie
  * need revisiting at a queue size this surface is not expected to reach.
  */
 export async function listReviewQueueAction(filters: ReviewQueueListFilters = {}): Promise<ReviewQueueRow[]> {
-  const { userId } = await requireReviewer();
+  const { userId, reviewer } = await requireReviewer();
+
+  // Phase 10 Round 3, 5.2 (owner decision 3, plan section 0): role 'reviewer' sees
+  // ONLY rows whose active assignment is theirs; role 'editor' still sees everything.
+  // This is a DEFAULT AND A CLAMP on top of filtering that already existed --
+  // 'mine' was already resolved against the session user below, never trusted from
+  // the caller -- so a plain reviewer's `assignment` is forced to 'mine' regardless
+  // of what filters.assignment arrives as (including 'all' or 'unassigned', both of
+  // which would otherwise show a plain reviewer someone else's row). The clamp lives
+  // HERE, not in app/review/page.tsx, because server actions are directly invocable
+  // -- a page-level default gates nothing.
+  //
+  // process.env.ADMIN_USER_ID needs NO special case: buildImplicitAdminReviewer()
+  // (lib/agentic/reviewers.ts) gives the implicit admin role 'editor', so the plain
+  // `reviewer.role === 'editor'` check below already leaves them seeing everything on
+  // both /review and /admin/authors. Adding an `isImplicitAdmin` branch here would be
+  // dead code -- verified 2026-09-12 by reading that function.
+  const effectiveAssignment: ReviewQueueListFilters['assignment'] =
+    reviewer.role === 'editor' ? filters.assignment : 'mine';
 
   const runs = await listRuns({ stage: 'awaiting_review' });
   if (runs.length === 0) return [];
@@ -298,10 +320,11 @@ export async function listReviewQueueAction(filters: ReviewQueueListFilters = {}
   // ALL and when one exists with reviewerId === null (the FK's ON DELETE SET
   // NULL) -- never as "assigned to nobody in particular". 'mine' is resolved
   // against THIS call's own authenticated userId, never a value the caller could
-  // pass in.
-  if (filters.assignment === 'unassigned') {
+  // pass in. `effectiveAssignment`, not `filters.assignment` -- see the 5.2 clamp
+  // above: a plain reviewer's value is always 'mine' here, whatever was requested.
+  if (effectiveAssignment === 'unassigned') {
     filtered = filtered.filter((row) => !row.assignment?.reviewerId);
-  } else if (filters.assignment === 'mine') {
+  } else if (effectiveAssignment === 'mine') {
     filtered = filtered.filter((row) => row.assignment?.reviewerId === userId);
   }
 
