@@ -30,12 +30,19 @@ import UserMenu from '@/components/auth/UserMenu';
 // anyway. ReviewSidebar lives in components/review/, not components/admin/,
 // for the same reason -- there is nothing admin-shaped for it to drift toward.
 //
+// `reviewer.role` is threaded down to ReviewSidebar (Phase 10 Round 3, 5.3) so it
+// can drop "My assignments" for a plain reviewer, for whom the scoped queue (5.2)
+// and that link are now the same list -- kept for an editor, who still sees
+// everyone by default and uses the link to narrow to their own.
+//
 // Known limit (plan section 4.4, recorded in PROJECT_STATE): a signed-out
 // visitor lands on redirect('/'), same as /admin -- not a sign-in redirect
 // carrying a return URL. Deferred, not forgotten.
 export default async function ReviewLayout({ children }: { children: React.ReactNode }) {
+  let role: 'reviewer' | 'editor' = 'reviewer';
   try {
-    await requireReviewer();
+    const { reviewer } = await requireReviewer();
+    role = reviewer.role;
   } catch {
     redirect('/');
   }
@@ -48,7 +55,7 @@ export default async function ReviewLayout({ children }: { children: React.React
       </header>
       <main className="mx-auto max-w-6xl p-4 sm:p-6 md:p-10">
         <div className="flex flex-col gap-6 md:flex-row md:items-start">
-          <ReviewSidebar />
+          <ReviewSidebar role={role} />
           <div className="min-w-0 flex-1">{children}</div>
         </div>
       </main>

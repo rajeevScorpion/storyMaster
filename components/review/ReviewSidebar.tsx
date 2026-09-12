@@ -27,11 +27,23 @@ import type { ComponentType } from 'react';
 // reads to both fetch initialRows already filtered server-side and seed
 // ReviewQueue's own assignment dropdown to match (see that file's
 // parseAssignmentParam and ReviewQueue's initialAssignmentFilter prop).
+//
+// Phase 10 Round 3, 5.3: with the queue itself scoped to a plain reviewer's own
+// assignments (agentic-review.ts's listReviewQueueAction clamp, 5.2), "Queue" and
+// "My assignments" are the same list for them -- so this item is dropped for role
+// 'reviewer' and kept for 'editor', who still sees everyone by default and uses it
+// to narrow down. `role` only decides which items THIS nav renders -- the route
+// itself is untouched, so `/review?assignment=mine` keeps working as a bookmarked
+// URL for anyone, reviewer included.
+type ReviewSidebarRole = 'reviewer' | 'editor';
+
 interface NavItem {
   href: string;
   label: string;
   icon: ComponentType<{ className?: string }>;
   isActive: (pathname: string, assignment: string | null) => boolean;
+  /** Omit to show for every role; set to restrict to specific roles (5.3). */
+  roles?: readonly ReviewSidebarRole[];
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -46,6 +58,7 @@ const NAV_ITEMS: NavItem[] = [
     label: 'My assignments',
     icon: UserCheck,
     isActive: (pathname, assignment) => pathname === '/review' && assignment === 'mine',
+    roles: ['editor'],
   },
   {
     href: '/review/history',
@@ -56,13 +69,14 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export default function ReviewSidebar() {
+export default function ReviewSidebar({ role }: { role: ReviewSidebarRole }) {
   const pathname = usePathname();
   const assignment = useSearchParams().get('assignment');
+  const items = NAV_ITEMS.filter((item) => !item.roles || item.roles.includes(role));
 
   return (
     <nav className="flex gap-2 overflow-x-auto pb-1 md:w-48 md:shrink-0 md:flex-col md:overflow-visible md:pb-0">
-      {NAV_ITEMS.map((item) => {
+      {items.map((item) => {
         const active = item.isActive(pathname, assignment);
         const Icon = item.icon;
         return (
