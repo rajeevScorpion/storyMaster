@@ -9,6 +9,7 @@ import {
 } from '@/lib/pricing/enforcement';
 import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { authorizeImageModelBillableActionForUser } from '@/lib/pricing/image-aware-authorize';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import type { ImageTaskKey } from '@/lib/ai/image-models.shared';
 import type {
   AuthorizeBillableActionInput,
@@ -58,6 +59,39 @@ export async function authorizeCurrentUserImageModelBillableAction(
   }
 ): Promise<PricingBillableActionAuthorization> {
   const userId = await getCurrentUserId();
+  return authorizeImageModelBillableActionForUser(userId, input);
+}
+
+/**
+ * Round 1 (D24/3.2): the legacy continueStory authorize call
+ * (lib/store/story-store.ts), with one check added ahead of the coin
+ * reservation -- continuing an existing story is owner-or-reviewer only.
+ *
+ * `authorizeCurrentUserImageModelBillableAction` above stays untouched: it
+ * also serves start_story (no related story exists yet to check) and
+ * regenerateImageForNode (Phase 10 Round 4's billing fix is a separate,
+ * later change). Adding the check to this narrow continuation-only wrapper
+ * instead keeps both of those exactly as they were.
+ *
+ * `assertCanEditStory` throws for a stranger and that throw is left to
+ * propagate uncaught -- image-batch.ts and narration-batch.ts already let
+ * the same throw surface this way. A real signed-in user never reaches this
+ * as a stranger: app/story/[id]/layout.tsx and app/explore/[id]/layout.tsx
+ * already redirect them before the "Continue" button is ever clickable.
+ * This is defence in depth against a direct server-action call, per the
+ * standing rule that server actions are directly invocable.
+ */
+export async function authorizeCurrentUserStoryContinuation(
+  input: AuthorizeBillableActionInput & {
+    storyConfig: StoryConfig;
+    imageCount?: number;
+    taskKey?: ImageTaskKey;
+  }
+): Promise<PricingBillableActionAuthorization> {
+  const userId = await getCurrentUserId();
+  if (userId && input.relatedStoryId) {
+    await assertCanEditStory(input.relatedStoryId, userId);
+  }
   return authorizeImageModelBillableActionForUser(userId, input);
 }
 

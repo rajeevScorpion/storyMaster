@@ -2,6 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { resolveEffectiveProcessingMode } from '@/lib/media/processing-mode';
 import { getStoryModelOverrides } from '@/app/actions/admin';
@@ -115,6 +116,23 @@ export async function generateBeatCore(input: GenerateBeatCoreInput): Promise<Ge
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return { status: 'legacy' };
+  }
+
+  // Round 1 (D24/3.2): continuing an existing story is owner-or-reviewer only,
+  // checked BEFORE authorizeImageModelBillableActionForUser below reserves
+  // coins -- that ordering is the whole point of gating here instead of at
+  // the beat write. relatedStoryId is only set for a continuation (start_story
+  // never carries one), so a brand-new story session is unaffected.
+  // assertCanEditStory throws 'Forbidden.'/'Story not found.' for anyone who
+  // is neither the story's owner nor an authorized reviewer, and that throw
+  // is left to propagate uncaught -- image-batch.ts and narration-batch.ts
+  // already let the same throw surface this way. A real user never reaches
+  // this as a stranger: app/story/[id]/layout.tsx and
+  // app/explore/[id]/layout.tsx already redirect them before the "Continue"
+  // button is ever clickable. This is defence in depth against a direct
+  // server-action call.
+  if (input.authorize.relatedStoryId) {
+    await assertCanEditStory(input.authorize.relatedStoryId, user.id);
   }
 
   const [modelOverrides, authorization] = await Promise.all([
