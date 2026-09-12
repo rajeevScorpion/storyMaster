@@ -290,31 +290,50 @@ attempt cap (needs a migration).
 
 ---
 
-### `saveBeat` is not an owner-only path, and gating it breaks shared branching
+### `saveBeat` routes by identity rather than gating — shared branching is dormant, not deleted (D23)
 
-`app/actions/persistence.ts`'s `saveBeat` looks like it should be gated on story ownership. It must not
-be. **Any authenticated user may continue someone else's non-archived story on their own branch** — a
-real, working feature, and `saveBeat` is its persistence path. The gate for it is `beats` RLS from
-migration 003, not application code:
+`app/actions/persistence.ts`'s `saveBeat` looks like it should be gated on story ownership. **Still don't
+wire the reviewer-authorization helper into it as a strict allow/deny check** — that reasoning below is
+current, even though the feature it originally protected is not.
+
+**As of Phase 10 Round 1 (2026-09-12), "any authenticated user may continue someone else's non-archived
+story on their own branch" is no longer true.** That was shared branching, a real working feature this
+section used to describe — the owner has since taken it **dormant by decision (D23)**, not deleted, with
+an explicit path back. Creation mode is now owner-or-reviewer only, enforced at four layers:
+
+- the one non-owner entry point, `StorylinePlayer.tsx`'s "Explore full story tree" link, is removed
+- `app/story/[id]/layout.tsx` and `app/explore/[id]/layout.tsx` gate both routes server-side to
+  owner-or-reviewer via `assertCanEditStory`, redirecting a signed-in non-owner — never a signed-out
+  visitor, who still needs through to the page's own sign-in dialog
+- `continueStory`'s authorize step now refuses a non-owner, non-reviewer continuation **before** coins are
+  reserved, on both the legacy and bundle paths
+- migration `115_beats_owner_only_writes.sql` narrows `beats` INSERT/UPDATE RLS to also require the story's
+  owner, ANDed onto the existing `003_normalize_beats.sql` predicates — **written, but NOT applied on any
+  environment.** Until the owner applies it by hand, the database keeps the original, broader policy below;
+  the three application-level layers above are what actually stop a direct explorer write in the meantime,
+  not RLS. See `PROJECT_STATE.md`'s migration table (row 115) for where it stands.
 
 ```
-beats INSERT  auth.uid() IS NOT NULL AND generated_by = auth.uid() AND story not archived
-beats UPDATE  generated_by = auth.uid()
+beats INSERT (today, unmigrated)  auth.uid() IS NOT NULL AND generated_by = auth.uid() AND story not archived
+beats UPDATE (today, unmigrated)  generated_by = auth.uid()
 ```
 
-Note that `beats.UPDATE` keys on `generated_by`, **not** on the story's owner — a differently shaped
-predicate from `stories.UPDATE` (`auth.uid() = user_id`), and the reason an explorer can write their own
-beats onto a story they do not own.
+Note `beats.UPDATE` keys on `generated_by`, **not** on the story's owner — a differently shaped predicate
+from `stories.UPDATE` (`auth.uid() = user_id`), and the reason an explorer's write was ever possible at all.
 
-Phase 9 nearly broke this. Wiring the reviewer authorization helper into `saveBeat` as a strict
-allow/deny gate — the way the other three ownership guards use it — would have thrown `Forbidden.` for
-every explorer continuing any story, agent-owned or not, because they are neither the owner nor a
-reviewer. The fix is that `saveBeat` consults the helper **only to decide routing** — reviewer writes
-swap to the admin client and drop the `generated_by` / `user_id` filters — and every other outcome,
-including the helper throwing, falls through to the ordinary path unchanged.
+**Why `saveBeat` still must not become a strict gate, even now.** The reviewer path is real, live, and
+untouched by D23: a reviewer granted by `assertCanEditStory`'s reviewer branch continues an agent draft
+that isn't theirs. `saveBeat` consults the same helper **only to decide routing** — a granted reviewer
+swaps to the admin client and drops the `generated_by` / `user_id` filters; every other outcome, including
+the helper throwing, falls through to the ordinary session-client path unchanged. Turning that consultation
+into `throw Forbidden.` on a non-grant is exactly what Phase 9 nearly shipped and would have broken every
+reviewer continuation — the same defect class D23 avoided for explorers by gating at the route and the
+authorize step instead of inside `saveBeat` itself.
 
-The whole test suite passes either way. If you add an ownership check here, prove a non-owner can still
-branch before you believe it.
+Reversing D23 — restoring shared branching end-to-end — needs `115_beats_owner_only_writes_rollback.sql`
+applied, the doorway restored, and both route layouts relaxed. Recorded in full in `PROJECT_STATE.md` so
+it's one lookup, not an excavation; design rationale is in
+[docs/agentic-creator-phase10-plan.md](../agentic-creator-phase10-plan.md), section 2 (D23).
 
 ## Product decisions worth not re-deriving
 
