@@ -15,16 +15,36 @@ rewritten to match what shipped.
 
 ## 1. First thing to do: check what landed
 
-Round 3 was executing when this was written and commits as it goes. **Run `git log --oneline` before
-assuming anything about it.** Baseline for comparison: Round 1 ended at `a952aa4`.
+**Updated at 96% session usage, after Round 3 had landed most of its work.** Exact state:
 
-```bash
-git log --oneline a952aa4..HEAD     # anything here is Round 3, partial or complete
-git status --short                  # should be clean
+**Committed and done** — plan section 5's four parts:
+
+| Commit | Part |
+|---|---|
+| `d920006` | 5.1 — `/review` keeps the app header (`KissagoLogo` + `UserMenu`) |
+| `77f0a59` | 5.2 — the review queue scoped by role |
+| `21a2ee6` | 5.3 — "My assignments" retired for a plain reviewer |
+| `897946f` | 5.4 — assigned-count bubble in the profile menu |
+
+**Uncommitted and unfinished** — the honest empty state (plan section 4's consequence). Three files were
+mid-edit when the session hit its ceiling:
+
+```
+app/actions/agentic-review.ts
+app/review/page.tsx
+components/admin/agentic/ReviewQueue.tsx
 ```
 
-If Round 3 is partial, its spec is plan section 5 — four parts plus an honest empty state — and each part
-is independently committable. Nothing about a partial Round 3 is unsafe to leave; it is additive UI work.
+**Do not assume those edits are complete or correct** — they were left deliberately uncommitted rather than
+committed half-done, because the full gate could not be re-run at that point. Read the diff
+(`git diff`) and decide whether to finish it or discard it and redo it from the spec. **The five gates have
+NOT been run since `897946f`**, so the first thing to do after resolving those three files is run all five
+and compare against the baseline in section 2.
+
+The empty state matters more than it looks: once 5.2 scopes the queue, an unassigned draft becomes
+*invisible* to a reviewer rather than merely unlabelled, and since 9J has never run against a database
+(section 3), a blank page is what a reviewer will actually hit. It must distinguish "nothing is assigned to
+you" from "nothing is waiting".
 
 ---
 
