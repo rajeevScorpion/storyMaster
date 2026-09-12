@@ -1325,16 +1325,12 @@ export default function StorylinePlayer({
             }}
           />
 
-          {/* Explore full story tree — logged-in only */}
-          {isLoggedIn && (
-            <Link
-              href={`/explore/${storyId}`}
-              className="p-2 hover:bg-white/10 rounded-full transition-colors text-neutral-500 hover:text-indigo-300"
-              title="Explore full story tree"
-            >
-              <Compass className="w-4 h-4" />
-            </Link>
-          )}
+          {/* Round 1 (D24): "Explore full story tree" removed. Creation mode
+              (including /explore/[id]) is owner-or-reviewer only now, and this
+              link had no ownership check -- it was the one non-owner entry
+              point into it (docs/agentic-creator-phase10-plan.md section 3.1).
+              Everything else linking to /story/[id] is already scoped by its
+              data source. */}
           </div>
 
 
