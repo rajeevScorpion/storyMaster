@@ -2304,6 +2304,42 @@ export async function publishStoryline(params: {
   // Refuse before any of the work below, and before any row is written. See the helper.
   await assertNotAnotherUsersAgentDraft(supabase, params.storyId, user.id);
 
+  // Round 1b fix C: publishStoryline never checked that the caller owns the SOURCE
+  // story at all. `storylines` INSERT RLS only requires `user_id = auth.uid()` on the
+  // STORYLINE row being inserted, so nothing stopped a non-owner from publishing a
+  // storyline built from someone else's tree and crediting themselves as author --
+  // and params.beats/choices/nodePath are client-supplied, so a crafted direct call
+  // is the real attack, not the UI. This was previously *intended*, supporting shared
+  // branching (9c plan 11.3); branching is dormant now (D23), so that justification
+  // is gone. assertNotAnotherUsersAgentDraft above is a narrower, agent-draft-specific
+  // guard and stays exactly as it was -- this is the general case it doesn't cover.
+  //
+  // Deliberately a PLAIN ownership check, not assertCanEditStory. This path is reached
+  // only by the story's own owner: StoryScreen hides every publish affordance when
+  // `isAnotherUsersAgentDraft` (its own D15 comment, right above where these buttons
+  // are built), and a reviewer's legitimate publish goes through
+  // publishReviewedStoryline (lib/agentic/review-publish.ts) -- a wholly separate
+  // admin-client function that never calls this one. Granting reviewer access here via
+  // assertCanEditStory would let a reviewer publish an agent draft under THEIR OWN
+  // name via a direct call, reopening exactly the defect assertNotAnotherUsersAgentDraft
+  // exists to prevent.
+  {
+    const { data: ownerRow, error: ownerCheckError } = await supabase
+      .from('stories')
+      .select('user_id')
+      .eq('id', params.storyId)
+      .maybeSingle();
+    if (ownerCheckError) {
+      throw new Error(`Failed to verify story ownership before publishing: ${ownerCheckError.message}`);
+    }
+    // No row visible is not this function's call to make -- the same tolerance
+    // assertNotAnotherUsersAgentDraft uses above; the queries below already handle a
+    // missing source story on their own.
+    if (ownerRow && ownerRow.user_id !== user.id) {
+      throw new Error('Forbidden.');
+    }
+  }
+
   // Visibility + quality are server-validated; default keeps today's
   // public-publish behavior.
   const requestedVisibility = normalizeStorylineVisibility(params.visibility ?? 'public');
