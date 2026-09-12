@@ -25,6 +25,16 @@ import { resolveNonOwnerRedirectTarget } from '@/lib/story/creation-mode-access'
 // Redirects to /storyline/[id] when a published storyline exists for this
 // story, '/' otherwise (resolveNonOwnerRedirectTarget) -- never back to this
 // same owner-only route, which would loop.
+//
+// A signed-out visitor is NOT a non-owner for this gate's purposes (D24,
+// corrected 2026-09-12). The page already handles anonymity itself by
+// opening the sign-in dialog with a return URL back to this story
+// (app/story/[id]/page.tsx lines 56-61). Redirecting on `!user` here would
+// make that dialog unreachable and bounce someone away from their own story
+// before they ever get the chance to sign in. This is safe to skip because
+// loadStory (app/actions/persistence.ts) requires a session and throws for
+// an anonymous caller, so no story data loads and nothing leaks -- only a
+// *signed-in* non-owner is refused.
 export default async function StoryLayout({
   children,
   params,
@@ -34,14 +44,16 @@ export default async function StoryLayout({
 }) {
   const { id: storyId } = await params;
 
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return <>{children}</>;
+  }
+
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) {
-      throw new Error('Not authenticated');
-    }
     // ['id']: only the access decision matters here, same minimal select
     // app/actions/persistence.ts's autosave path already uses for the same
     // "just checking access" purpose.

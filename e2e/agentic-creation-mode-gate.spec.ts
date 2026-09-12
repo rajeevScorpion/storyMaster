@@ -72,22 +72,30 @@ async function findFirstOwnStoryId(page: Page): Promise<string | null> {
 }
 
 test.describe('signed-out visitor (no credentials needed)', () => {
-  test('is redirected out of /story/[id] and /explore/[id], never reaching the editor', async ({ request }) => {
+  // Regression coverage (Phase 10 Round 1b, fix A). D24's layout originally threw on
+  // `!user` and redirected before the page ever rendered -- but app/story/[id]/page.tsx
+  // and app/explore/[id]/page.tsx already handle anonymity themselves by opening the
+  // sign-in dialog with a return URL back to the story (page.tsx lines 56-61 / 50-53).
+  // A signed-out visitor clicking a link to their OWN story was bounced to `/` instead
+  // of being offered sign-in and returned. The layout must let an anonymous visitor
+  // through and refuse only a *signed-in* non-owner; loadStory / loadStoryTree still
+  // require a session and throw for an anonymous caller, so nothing leaks.
+  test('is not redirected out of /story/[id] or /explore/[id] -- the layout lets an anonymous visitor through', async ({ request }) => {
     const storyResponse = await request.get(`/story/${NO_SUCH_STORY_ID}`, { maxRedirects: 0 });
-    expect(storyResponse.status()).toBe(307);
-    expect(storyResponse.headers()['location']).toBeTruthy();
+    expect(storyResponse.status()).toBe(200);
 
     const exploreResponse = await request.get(`/explore/${NO_SUCH_STORY_ID}`, { maxRedirects: 0 });
-    expect(exploreResponse.status()).toBe(307);
-    expect(exploreResponse.headers()['location']).toBeTruthy();
+    expect(exploreResponse.status()).toBe(200);
   });
 
-  test('following the redirect never renders the creation-mode editor', async ({ page }) => {
+  test('reaches the page and is offered sign-in with a return URL, rather than being bounced to /', async ({ page }) => {
     await page.goto(`/story/${NO_SUCH_STORY_ID}`, { waitUntil: 'domcontentloaded' });
-    await expect(page).not.toHaveURL(new RegExp(`/story/${NO_SUCH_STORY_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/story/${NO_SUCH_STORY_ID}$`));
+    await expect(page.locator('[role="dialog"]').first()).toBeVisible({ timeout: 15_000 });
 
     await page.goto(`/explore/${NO_SUCH_STORY_ID}`, { waitUntil: 'domcontentloaded' });
-    await expect(page).not.toHaveURL(new RegExp(`/explore/${NO_SUCH_STORY_ID}$`));
+    await expect(page).toHaveURL(new RegExp(`/explore/${NO_SUCH_STORY_ID}$`));
+    await expect(page.locator('[role="dialog"]').first()).toBeVisible({ timeout: 15_000 });
   });
 });
 
