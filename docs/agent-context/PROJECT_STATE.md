@@ -85,17 +85,20 @@ Everything up to 068 is long-applied.
 
 ### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
 
-**102-108, 110, 111, 112 and 113 applied to dev; 114 written but NOT applied anywhere.** 102-107
+**102-108 and 110-114 applied to dev; 115 written but NOT applied anywhere.** 102-107
 verified against `schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against
 the schema itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied
 SELECT, 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112
-applied 2026-09-09** and **113 applied 2026-09-10**, all three verified against the schema rather than only
-their ledger rows (see their rows below). **114 (`agent_review_assignments`, Unit 9i) is written and
-committed but deliberately unapplied** — per WORKING_AGREEMENTS, the agent producing it never applies a
-migration; the owner runs it by hand. Every write path in `lib/agentic/review-routing.ts` fails closed
-until then (see that row below). **Production has none of them** — the prod ledger returns zero rows for
-`migration_number >= 103`, so the entire agentic schema is dev-only and prod will need 103-onward applied in
-order whenever it is promoted.
+applied 2026-09-09**, **113 applied 2026-09-10**, and **114 applied 2026-09-10** (this file previously said
+114 was "written and committed but deliberately unapplied" here, contradicting its own row in the table
+below, which has carried the correct applied timestamp since 2026-09-11 — the table was right, this
+paragraph was stale; see that row for the verification detail). **115 (`115_beats_owner_only_writes.sql`,
+D23 — narrows `beats` INSERT/UPDATE RLS to also require the story owner) is written and committed but
+deliberately unapplied** — per WORKING_AGREEMENTS, the agent producing it never applies a migration; the
+owner runs it by hand, dev first, and only once the Phase 10 Round 1 application-level gates it backstops
+are confirmed live (see the migration table row and "Shared branching" below). **Production has none of
+them** — the prod ledger returns zero rows for `migration_number >= 103`, so the entire agentic schema is
+dev-only and prod will need 103-onward applied in order whenever it is promoted.
 
 **There is no migration 109, and there will not be one.** Phase 8 planned an
 `agentic_narration_enabled` flag to sit above each persona's `allow_narration`, mirroring
@@ -119,6 +122,7 @@ for what has actually run.
 | 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
 | 113 | `agent_reviewer_roles` | `agent_reviewers` gains `role` (`reviewer`\|`editor`, CHECK-constrained), the `age_groups`/`languages`/`genres` coverage arrays, and `updated_by`; **drops `can_publish` and `can_trigger_media`** — Phase 9b's D17, capability derived from role by pure functions rather than stored twice | **Applied** 2026-09-10 03:07:27+00. Schema verified directly, not just the ledger row: 12 columns, `role` NOT NULL DEFAULT `'reviewer'` with CHECK `('reviewer','editor')`, the three arrays NOT NULL DEFAULT `'{}'`, `updated_by` FK SET NULL, both booleans confirmed **gone**, **0 rows**. Dropping the booleans was only safe because the table was empty and prod has no agentic schema at all | Not applied |
 | 114 | `agent_review_assignments` | table `agent_review_assignments` — Phase 9b's D18, TASK-level manual reviewer assignment (Unit 9i). `source` (`manual`\|`auto`) and `status` (`active`\|`released`\|`superseded`) CHECK-constrained, a partial UNIQUE index enforcing at most one `active` row per task, `reviewer_id`/`assigned_by` both `ON DELETE SET NULL` | **Applied** 2026-09-10 08:07:22+00 (this row said "Not applied" until 2026-09-11 — the ledger and the live schema both disagreed with it). Verified directly, not just the ledger row: `agent_review_assignments_one_active_idx` is UNIQUE and partial (`WHERE status = 'active'`), which is the load-bearing part — it is what makes Unit 9J's auto-assignment idempotent | Not applied |
+| 115 | `beats_owner_only_writes` | narrows `beats` INSERT/UPDATE RLS from `003_normalize_beats.sql` by ANDing `s.user_id = auth.uid()` onto both policies — the database half of D23, shared branching going dormant. Must be applied only *after* the Phase 10 Round 1 application-level gates (doorway removed, `/story/[id]` + `/explore/[id]` layouts, pre-authorize refusal — plan section 3.2) are confirmed live, never before: applying it first alone would let a non-owner's continuation be charged and generated before the write is refused at the database — the charge-and-write-nothing defect class this phase keeps finding. Until applied, the original 003 policies still govern, and the four application-level layers (see "Shared branching" below) are what actually stop an explorer's write. Reviewer writes are unaffected either way — they run on the admin client and bypass RLS entirely | **Not applied.** | **Not applied.** |
 
 #### Promoting the agentic system to production — checklist
 
@@ -302,7 +306,9 @@ order by c.relname;
 
 ## Dormant / gated features
 
-Built and merged, but not live for users. Each is behind a flag that defaults to off or to a no-op mode.
+Not live for users. Most rows are built and merged, gated behind a flag that defaults to off or to a no-op
+mode; the "Shared branching" row is the deliberate exception — no flag (D23), and its code sits on the
+unmerged `feat/agentic-creator` branch rather than on `dev`.
 
 Flag state **differs between environments**, and that difference is the point — dev runs ahead. Most rows
 below were verified 2026-08-26; the Runware and Agentic rows were re-verified against both live databases on
@@ -319,6 +325,16 @@ below were verified 2026-08-26; the Runware and Agentic rows were re-verified ag
 | Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
 | Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
 | Agentic Creator System | six `agentic_*` flags | present; **`agentic_creator_enabled` + `agentic_billing_bypass_enabled` ON** since 2026-09-07, other four off. 102–108 all applied (105 on 2026-09-06, 106/107 on 2026-09-07, 108 on 2026-09-08), 15 personas seeded (all `draft`), **two real drafts generated** and sitting at `awaiting_review` | **absent** — 102–108 not applied |
+| Shared branching (continuing / forking someone else's story) | **none, deliberately (D23)** — the enforcement point is `beats` RLS, and a Postgres policy can't cheaply read `feature_flags`, so a flag here would gate the button while the database kept accepting the write | **dormant, application-level only** — Phase 10 Round 1's gates are code-complete on `feat/agentic-creator` (doorway removed, `/story/[id]` + `/explore/[id]` gated owner-or-reviewer, `continueStory` refuses a non-owner/non-reviewer before `authorize`); the database backstop, **migration 115, is written but not applied** | **still fully live** — none of Round 1 has reached production; the "Explore full story tree" doorway and the original, broader migration-003 `beats` RLS both still work there today |
+
+**Reversing D23 — what re-enabling shared branching needs**, so this is one lookup rather than an
+excavation: `115_beats_owner_only_writes_rollback.sql` applied (restores the two original
+`003_normalize_beats.sql` policies byte-for-byte); the "Explore full story tree" link restored in
+`components/story/StorylinePlayer.tsx`; and the owner-or-reviewer gate removed or relaxed in
+`app/story/[id]/layout.tsx` and `app/explore/[id]/layout.tsx` — plus reverting the pre-authorize checks in
+`lib/store/story-store.ts`, `app/actions/pricing-enforcement.ts`'s `authorizeCurrentUserStoryContinuation`,
+and `app/actions/beat-bundle.ts`'s `generateBeatCore`. Nothing here is scheduled; it is recorded because D23
+asked for it to be.
 
 The Runware row previously read "**absent** — 095 not applied" for production. That was wrong on both counts:
 the ledger records 095 applied on prod, and prod holds all 9 Runware rows. They are `is_enabled = false` on
@@ -478,7 +494,8 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 - **`agent_schedules` (migration 107) is unused.** `enqueueCommissionedTasks` ignores cadence entirely and
   drains whatever is commissioned. Wiring schedules into enqueue is unclaimed work, not an oversight.
 - **Agent spend is indistinguishable from human spend by action key.** It reuses `preview_seed_plan` and the
-  `*_prompt_only` beat keys; only `activity_key = 'agentic_creator'` separates it. Revisit in Phase 12.
+  `*_prompt_only` beat keys; only `activity_key = 'agentic_creator'` separates it. Revisit in Phase 11
+  (renumbered from 12 — Phase 11 was never written; see docs/agentic-creator-phase10-plan.md section 0.7).
 - **A novelty `block` is now decided once, and only by the deterministic layer.** RESOLVED
   2026-09-08 (`32f2c65`). The adjudicator may downgrade a verdict but never escalate one
   (`applyAdjudication`, pure and tested), and the verdict is cached per run so a retry inherits it
@@ -507,14 +524,14 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   `redirect('/')`-on-throw exactly, matching existing admin behaviour rather than inventing a nicer
   flow for this one route. A sign-in redirect carrying `?next=/review` would be friendlier and is
   deferred, not forgotten — plan section 4.4.
-- **Unit 9i (manual assignment) is code-complete but unproven live** — migration 114 is written
-  (`supabase/migrations/114_agent_review_assignments.sql`) but, per WORKING_AGREEMENTS, not applied by
-  the agent that wrote it. `ReviewQueueListFilters.assignment` (`'mine' | 'unassigned' | 'all'`) is now
-  wired for real in `listReviewQueueAction`, and `ReviewQueue.tsx` has an assignee pill plus
-  Assign-to-.../Reassign.../Release-assignment row actions gated on `canAssignWork` (editor role, D17).
-  Until an admin applies 114, every read degrades to "everyone unassigned" and every write throws a
-  clear "migration 114 is not applied yet" error rather than a raw Postgres one — none of this has been
-  exercised against a real assignment row yet. **The reviewer-picker gap** (plan section 5.3 does not
+- **Unit 9i (manual assignment) is code-complete; migration 114 is now applied on dev (2026-09-10, see the
+  migration table above) but the feature is still unproven live.** `ReviewQueueListFilters.assignment`
+  (`'mine' | 'unassigned' | 'all'`) is wired for real in `listReviewQueueAction`, and `ReviewQueue.tsx` has
+  an assignee pill plus Assign-to-.../Reassign.../Release-assignment row actions gated on `canAssignWork`
+  (editor role, D17). Before 114 was applied, every read degraded to "everyone unassigned" and every write
+  threw a clear "migration 114 is not applied yet" error rather than a raw Postgres one; with 114 applied
+  that fail-closed path is no longer exercised, but nobody has yet confirmed a real assignment row against
+  the live schema. **The reviewer-picker gap** (plan section 5.3 does not
   say where the "Assign to..." dropdown's reviewer list comes from): `listReviewersAction` returns the
   full admin roster row (including `notes`, admin-only commentary, and un-filtered by status), so a new
   `listAssignableReviewersAction` was added instead — gated on `requireReviewer()` + `canAssignWork()`
@@ -523,6 +540,57 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   un-gated join inside `listReviewQueueAction` (against `agent_reviewers` directly, not through that
   action) so a plain reviewer — who cannot call the editor-gated picker — can still see who a draft is
   assigned to, including a since-suspended reviewer's name.
+- **RESOLVED, partially — the `beats` INSERT policy no longer lets any signed-in user write into someone
+  else's story, at the application layer.** Previously filed as "pre-existing, unrelated to reviewers"
+  (`docs/agentic-creator-phase9d-handoff.md` lines 167-168). Phase 10 Round 1 (2026-09-12) closed the entry
+  points: `67fad24` removed the one non-owner doorway (`StorylinePlayer.tsx`'s "Explore full story tree"),
+  `e25d065`/`cc7ba14` gated `/story/[id]` and `/explore/[id]` to owner-or-reviewer (D24), and `d20ecb3`
+  refused a non-owner continuation before `authorize` on both the legacy and bundle paths. **Not fully
+  closed** — the RLS half is migration 115, which is written but not applied anywhere (see the migration
+  table and "Shared branching" above). Until it's applied, a direct `saveBeat` invocation bypassing the now
+  gated UI is still permitted by the database itself; the three application-level changes are what actually
+  stop it today, not RLS.
+- **RESOLVED — `autoPublishStoryline` now honours the public-publishing switch.** Previously filed as
+  "pre-existing" (`docs/agentic-creator-phase9c-plan.md` line 281: "`autoPublishStoryline` never checks
+  `publicPublishingEnabled` or `moderationRequiredForPublic`, so the auto-publish-on-ending path can publish
+  publicly while the admin switch is off"). Fixed in `08cd0c1` (Phase 10 Round 1, item 6): it now calls
+  `getMediaPipelineSettings()` and sets `visibility` / `published_at` / `moderation_status` explicitly in
+  both write branches, mirroring `publishStoryline`.
+- **Also closed in Round 1, not previously recorded as a gap here:** `publishStoryline` had no ownership
+  check on the source story at all (`storylines` INSERT RLS only constrains the storyline row being
+  inserted, nothing about which story it's built from) — fixed in `168f6c8` with a plain ownership check,
+  deliberately not `assertCanEditStory` (that would let a reviewer publish an agent draft under their own
+  name, reopening what `assertNotAnotherUsersAgentDraft` exists to prevent). And the bundle path's
+  `processBeatVisuals` compared `story.user_id` to the caller directly instead of going through
+  `assertCanEditStory`, so a reviewer continuing an agent draft through the bundle path (`beat_bundle_enabled`
+  is on in dev) was charged and the beat generated before being refused at that last check — fixed in
+  `2c7156e`.
+- **New, found by the Round 1 audit and deliberately not bundled into migration 115 (plan section 3.4) —
+  "Round 1b":**
+  - `stories` carries an anonymous SELECT policy with no auth predicate at all — `USING (is_archived =
+    false)` (`003_normalize_beats.sql` lines 219-222). Any anonymous caller can read any non-archived story
+    row, including unpublished drafts; the comment says "for gallery metadata" but the policy covers the
+    whole table. Not narrowed yet — it needs one targeted question answered first: what actually reads
+    `stories` anonymously, and does the gallery depend on it or does it read `storylines` instead?
+  - `storage.objects` lets any authenticated user read the `story-assets` bucket — comment says "needed for
+    exploration of other users' story trees" (`003_normalize_beats.sql` lines 228-234). With exploration now
+    gated to owner-or-reviewer (D24), that justification has expired, but the policy itself is untouched.
+    Same treatment: check what actually serves images today before narrowing.
+  - `storylines` has no UPDATE policy in any of the migration files. This is **fail-closed, a note rather
+    than a hole** — every storyline update must already be going through the service-role client. Recorded
+    so nobody adds a session-client update expecting it to work, and is baffled when it silently writes
+    nothing instead of erroring.
+- **Production consideration owed before migration 115 is ever applied there (plan section 3.6).** Dev has
+  no real shared-branching data; production does. A beat whose `generated_by` differs from its story's
+  `user_id` satisfies neither of 115's new policies through the session client — the explorer fails
+  `s.user_id = auth.uid()`, the owner fails `generated_by = auth.uid()` — so such rows become immutable via
+  the session client once 115 lands there. Narrow rather than alarming: batch narration/images run on the
+  admin client (unaffected), and the interactive single-beat path already refuses someone else's beat today
+  (`BEAT_ROW_NOT_FOUND`). Still owed before promoting 115 to production: count the affected rows and decide
+  deliberately whether to leave them, reassign `generated_by` to the story owner, or accept them read-only —
+  `select count(*) from beats b join stories s on s.id = b.story_id where b.generated_by <> s.user_id;` This
+  session's Supabase access to production is read-only and this wasn't run; the owner runs it before 115
+  reaches prod.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.

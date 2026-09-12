@@ -1135,7 +1135,8 @@ select count(*) from public.image_generation_jobs where created_at > now() - int
   band. Deliberate: cheap, and showing both verdicts before promotion is the point of the tool.
 - Agent spend still reuses existing `PricingActionKey`s, so it is indistinguishable from human
   spend *by action key*; `activity_key = 'agentic_creator'` is what separates it. Revisit in
-  Phase 12.
+  Phase 11 (renumbered from 12 — Phase 11 was never written; see
+  docs/agentic-creator-phase10-plan.md section 0.7).
 - Checkpoints store full `StoryBeat` objects. Safe while this stage emits only text prompts.
   **If a future phase moves portrait generation here, beats must be trimmed first.**
 - `agent_schedules` (migration 107) is still unused. Enqueue ignores cadence entirely and simply
