@@ -72,9 +72,22 @@ invocable, so the flag would gate the button while the database still accepted t
 
 ### D24 — creation mode is owner-or-reviewer, enforced server-side at the route
 
-`/story/[id]` gains a **server-component layout** that resolves access and redirects a non-owner to
-`/explore/[id]`. The predicate already exists as `assertCanEditStory` — owner, or an authorized reviewer on
-an agent draft — so this adds a gate, not a new rule.
+`/story/[id]` **and `/explore/[id]`** each gain a **server-component layout** that resolves access and
+redirects a non-owner to `/storyline/[id]` where one exists, `/` otherwise. The predicate already exists as
+`assertCanEditStory` — owner, or an authorized reviewer on an agent draft — so this adds a gate, not a new
+rule.
+
+> **Corrected 2026-09-12.** This decision first said the layout redirects a non-owner *to* `/explore/[id]`,
+> which section 3 then contradicted by gating that route too. The text above is the operative version. The
+> executing agent caught the inconsistency and followed section 3, which was right.
+
+**A signed-out visitor is NOT a non-owner for this gate's purposes.** Both pages already handle anonymity
+themselves by opening the sign-in dialog with a return URL back to the story
+(`app/story/[id]/page.tsx` lines 56-61, `app/explore/[id]/page.tsx` lines 50-53). A layout that redirects
+on `!user` destroys that and bounces someone away from their *own* story. The gate must therefore let
+signed-out through to the page and refuse only a **signed-in** non-owner. This is safe because `loadStory`
+and `loadStoryTree` both require a session and throw for an anonymous caller, so nothing loads and nothing
+leaks.
 
 *Why a layout, not the page:* the page is `'use client'` by necessity (it drives the store). A sibling
 server layout is how `/admin` and `/review` already gate, so this matches the codebase rather than
@@ -221,6 +234,38 @@ through a session client (only `lib/agentic/review-publish.ts`, admin-only). No 
 functions), `image-batch.ts`, `narration-batch.ts`, `beat-bundle.ts`, `episodes.ts`.
 
 **Only shared branching breaks — which is the point.**
+
+Verified directly while reviewing 115, beyond what the audit was asked for:
+
+- Both `DROP POLICY` names in 115 match `003_normalize_beats.sql` exactly ("Authenticated users can insert
+  beats" line 120, "Beat generator can update own beats" line 132). This matters more than it looks:
+  RLS policies are **OR'd**, so a misspelled name in a `DROP … IF EXISTS` would no-op and leave the
+  permissive policy standing beside the new one, making the migration ineffective while appearing to apply
+  cleanly.
+- The agentic pipeline passes the **admin client explicitly** — `saveStoryForUser(admin, systemUserId, …)`
+  at `lib/agentic/story-assembly.ts` line 1280 — so headless agent generation bypasses RLS and 115 cannot
+  affect it.
+
+### 3.6 A consequence of 115 to understand BEFORE applying it to production
+
+Dev has no real shared-branching data. **Production does** — branching has been live there, so real stories
+may carry beats with `generated_by = <some explorer>` and `stories.user_id = <the owner>`.
+
+After 115, such a beat satisfies neither new policy through the session client: the explorer fails
+`s.user_id = auth.uid()`, and the owner fails `generated_by = auth.uid()`. **Those existing beats become
+immutable via the session client.**
+
+In practice this is narrow rather than alarming, and should be confirmed rather than assumed:
+
+- Batch narration and batch images run on the **admin client** in the worker, so "narrate/illustrate the
+  whole story" is unaffected on such beats.
+- The interactive single-beat path already refuses someone else's beat today (`updateBeatMediaState` throws
+  `BEAT_ROW_NOT_FOUND`), so 115 removes nothing that currently works there.
+
+**Owed before production:** count the affected rows on prod —
+`select count(*) from beats b join stories s on s.id = b.story_id where b.generated_by <> s.user_id` — and
+decide deliberately whether to leave them, reassign `generated_by` to the story owner, or keep them
+read-only. Dev-first application is unaffected either way.
 
 ---
 
