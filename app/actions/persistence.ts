@@ -1307,6 +1307,20 @@ export async function autoPublishStoryline(
   // end would silently publish it under their own name. See the helper.
   await assertNotAnotherUsersAgentDraft(supabase, storyId, user.id);
 
+  // Round 1b fix D: this function never called getMediaPipelineSettings() and
+  // hardcoded is_public: true in both write branches below, so an admin disabling
+  // public publishing had no effect on a story that reaches its ending organically --
+  // only the manual publishStoryline path (lines ~2317-2323) honoured the switch.
+  // autoPublishStoryline always targets 'public' -- there is no "auto-publish
+  // unlisted" concept, mirroring why lib/agentic/review-publish.ts's
+  // publishReviewedStoryline deliberately never reads unlistedSharingEnabled either --
+  // so this is the same gate publishStoryline runs for requestedVisibility === 'public',
+  // simplified because that's the only visibility this function ever produces.
+  const pipelineSettings = await getMediaPipelineSettings();
+  if (!pipelineSettings.publicPublishingEnabled) {
+    throw new Error('Public publishing is currently disabled by the admin.');
+  }
+
   const { data: sourceStory, error: sourceStoryError } = await supabase
     .from('stories')
     .select('story_config, story_kind, is_vertical_story, aspect_ratio, genre')
@@ -1431,6 +1445,13 @@ export async function autoPublishStoryline(
       genre: normalizeStoredGenre(sourceStory?.genre),
       ...seriesFields,
       is_public: true,
+      // Round 1b fix D: previously unset, matching publishStoryline's own
+      // requestedVisibility === 'public' branch. withoutAdditiveColumns strips these
+      // below when migration 073 isn't applied yet, same as every other additive
+      // storyline column here.
+      visibility: 'public',
+      published_at: new Date().toISOString(),
+      moderation_status: pipelineSettings.moderationRequiredForPublic ? 'pending' : 'none',
     };
 
     const { error: refreshError } = await supabase
@@ -1566,6 +1587,13 @@ export async function autoPublishStoryline(
     ...seriesFields,
     author_name: profile?.display_name || 'Anonymous',
     is_public: true,
+    // Round 1b fix D: previously unset, matching publishStoryline's own
+    // requestedVisibility === 'public' branch. withoutAdditiveColumns strips these
+    // below when migration 073 isn't applied yet, same as every other additive
+    // storyline column here.
+    visibility: 'public',
+    published_at: new Date().toISOString(),
+    moderation_status: pipelineSettings.moderationRequiredForPublic ? 'pending' : 'none',
     path_hash: pathHash,
   };
 

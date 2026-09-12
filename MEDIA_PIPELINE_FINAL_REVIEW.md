@@ -71,8 +71,13 @@ Implementation review of the durable server-side media pipeline
 - No moderation review UI (the gate holds `pending` rows out of listings; approval currently
   means updating `moderation_status` via admin content tools/SQL).
 - No dead-letter queue view beyond the failed-jobs list + requeue.
-- `autoPublishStoryline` untouched: it publishes public via `is_public: true` (the 073 trigger
-  derives `visibility='public'`), but does not stamp `published_at`.
+- ~~`autoPublishStoryline` untouched~~ **Fixed (Round 1b, fix D).** This line understated the
+  gap: the real issue was not merely a missing `published_at` stamp -- the function never called
+  `getMediaPipelineSettings()` at all, so an admin's public-publishing switch had no effect on a
+  story that reaches its ending organically, and it also left `moderation_status` unset. It now
+  mirrors `publishStoryline`'s `requestedVisibility === 'public'` branch: gates on
+  `publicPublishingEnabled`, and sets `visibility`, `published_at`, and `moderation_status`
+  explicitly (`withoutAdditiveColumns` still strips all three when migration 073 isn't applied).
 
 ## Risks
 
