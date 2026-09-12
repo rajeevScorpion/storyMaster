@@ -23,6 +23,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import {
   approveRunAction,
   assignTaskAction,
+  getReviewQueueTotalAwaitingCountAction,
   listAssignableReviewersAction,
   listReviewQueueAction,
   publishRunAction,
@@ -189,6 +190,8 @@ export default function ReviewQueue({
   canPublish,
   canAssignWork,
   initialAssignmentFilter,
+  scopedToSelf = false,
+  totalAwaitingReviewCount: initialTotalAwaitingReviewCount = null,
 }: {
   initialRows: ReviewQueueRow[];
   schemaApplied: boolean;
@@ -219,10 +222,33 @@ export default function ReviewQueue({
    * this prop and keeps its existing unfiltered-by-default behavior unchanged.
    */
   initialAssignmentFilter?: 'mine' | 'unassigned' | 'all';
+  /**
+   * Phase 10 Round 3, 5.2/5.3: true for a plain reviewer, whose queue
+   * listReviewQueueAction already clamps to `assignment: 'mine'` regardless of what
+   * this component asks for. When true, the assignment FilterDropdown below is
+   * hidden entirely -- offering "Everyone" / "Unassigned" to someone whose own
+   * requests are always answered as "mine" would be a control that does nothing.
+   * Defaults to false, so app/admin/authors/page.tsx (always an editor) is unaffected.
+   */
+  scopedToSelf?: boolean;
+  /**
+   * Plan section 4's honest empty state, meaningful only when `scopedToSelf` is true:
+   * the total count of runs at stage 'awaiting_review' SYSTEM-WIDE, regardless of who
+   * they are assigned to -- resolved server-side by
+   * getReviewQueueTotalAwaitingCountAction. `null` means "not fetched" or "fetch
+   * failed", and emptyReason() below falls back to the generic message rather than
+   * asserting either honest-empty-state message with no evidence. An editor (for whom
+   * `rows.length` already IS the true total) does not need this -- app/admin/authors
+   * does not pass it.
+   */
+  totalAwaitingReviewCount?: number | null;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [readinessFilter, setReadinessFilter] = useState('all');
   const [assignmentFilter, setAssignmentFilter] = useState<string>(initialAssignmentFilter ?? 'all');
+  const [totalAwaitingReviewCount, setTotalAwaitingReviewCount] = useState<number | null>(
+    initialTotalAwaitingReviewCount
+  );
   const [isPending, startTransition] = useTransition();
   const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -277,7 +303,10 @@ export default function ReviewQueue({
     }
   }, [assignTarget, assignableReviewers, selectedReviewerId]);
 
-  const filterActive = readinessFilter !== 'all' || assignmentFilter !== 'all';
+  // scopedToSelf's assignment filter is never a manual narrowing a reviewer chose --
+  // it is always effectively 'mine', dropdown or not -- so it does not count toward
+  // "filters are hiding rows" the way it does for an editor.
+  const filterActive = readinessFilter !== 'all' || (!scopedToSelf && assignmentFilter !== 'all');
 
   function reload(nextReadiness: string = readinessFilter, nextAssignment: string = assignmentFilter) {
     setLoadError(null);
@@ -290,6 +319,18 @@ export default function ReviewQueue({
         setRows(result);
       } catch (error) {
         setLoadError(error instanceof Error ? error.message : 'Unable to load the review queue.');
+      }
+
+      // Best-effort and independent of the fetch above: a stale/missing total only
+      // costs the more specific "nothing assigned to you" copy in emptyReason() below,
+      // never the queue reload itself.
+      if (scopedToSelf) {
+        try {
+          setTotalAwaitingReviewCount(await getReviewQueueTotalAwaitingCountAction());
+        } catch {
+          // Leave the previous value in place rather than clearing it to null on a
+          // transient failure.
+        }
       }
     });
   }
@@ -382,6 +423,10 @@ export default function ReviewQueue({
     }
   }
 
+  // Plan section 4: distinguishes "nothing is assigned to you" from "nothing is
+  // waiting" for a scoped reviewer -- without this, listReviewQueueAction's 5.2 clamp
+  // makes an unassigned draft invisible rather than merely unlabelled, and an empty
+  // table reads as a bug rather than the honest "not yours yet" it usually is.
   function emptyReason(): { title: string; body: string } {
     if (!schemaApplied) {
       return {
@@ -391,6 +436,16 @@ export default function ReviewQueue({
     }
     if (filterActive) {
       return { title: 'No drafts match these filters.', body: 'Clear the readiness or assignment filter to see the rest of the queue.' };
+    }
+    // Only asserted with actual evidence: totalAwaitingReviewCount is null both
+    // before the fetch resolves and if it ever failed, and the generic message below
+    // is the honest fallback for that case -- never "assigned to you" with nothing to
+    // back it, and never a wrong claim that nothing is waiting anywhere.
+    if (scopedToSelf && totalAwaitingReviewCount != null && totalAwaitingReviewCount > 0) {
+      return {
+        title: 'Nothing is assigned to you right now.',
+        body: 'There is work waiting in the review queue -- it just is not assigned to you yet. An editor can assign it, or automatic assignment may route it to you.',
+      };
     }
     return {
       title: 'Nothing is waiting on review right now.',
@@ -444,15 +499,21 @@ export default function ReviewQueue({
                 reload(value, assignmentFilter);
               }}
             />
-            <FilterDropdown
-              value={assignmentFilter}
-              options={ASSIGNMENT_FILTER_OPTIONS}
-              ariaLabel="Filter by assignment"
-              onChange={(value) => {
-                setAssignmentFilter(value);
-                reload(readinessFilter, value);
-              }}
-            />
+            {/* Hidden for a scoped reviewer (5.2/5.3): listReviewQueueAction already
+                clamps their requests to 'mine' regardless of what this control asks
+                for, so offering "Everyone" / "Unassigned" here would be a control that
+                visibly does nothing. */}
+            {!scopedToSelf && (
+              <FilterDropdown
+                value={assignmentFilter}
+                options={ASSIGNMENT_FILTER_OPTIONS}
+                ariaLabel="Filter by assignment"
+                onChange={(value) => {
+                  setAssignmentFilter(value);
+                  reload(readinessFilter, value);
+                }}
+              />
+            )}
           </div>
 
           {loadError && (

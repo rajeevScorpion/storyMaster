@@ -2,6 +2,7 @@ import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import ReviewQueue from '@/components/admin/agentic/ReviewQueue';
 import {
   getReviewQueueSchemaStatusAction,
+  getReviewQueueTotalAwaitingCountAction,
   listReviewQueueAction,
   type ReviewQueueListFilters,
 } from '@/app/actions/agentic-review';
@@ -88,15 +89,38 @@ export default async function ReviewQueuePage({ searchParams }: ReviewQueuePageP
   // already gated by app/review/layout.tsx's requireReviewer(), so this call should never
   // throw for anyone who reached this page today, but a thrown error here must still fail
   // closed (no Publish button) rather than 500 the whole queue.
+  //
+  // Also resolves `scopedToSelf` (Phase 10 Round 3, 5.2/section 4): true for role
+  // 'reviewer', whose queue agentic-review.ts's listReviewQueueAction clamps to their
+  // own assignments regardless of `assignmentFilter` above. Defaults to false on a
+  // thrown error, matching canPublishDrafts/canAssign's own fail-closed reasoning --
+  // ReviewQueue then just behaves exactly as it does for an editor.
   let canPublishDrafts = false;
   let canAssign = false;
+  let scopedToSelf = false;
   try {
     const { reviewer } = await requireReviewer();
     canPublishDrafts = canPublish(reviewer);
     canAssign = canAssignWork(reviewer);
+    scopedToSelf = reviewer.role === 'reviewer';
   } catch {
     canPublishDrafts = false;
     canAssign = false;
+    scopedToSelf = false;
+  }
+
+  // Plan section 4's honest empty state: a scoped reviewer whose own queue is empty
+  // cannot otherwise tell "nothing is assigned to me" from "nothing is waiting at
+  // all" -- fetched only for that role, since an editor already sees the true total
+  // as initialRows.length. Best-effort: a failure here must not fail the whole page,
+  // it only costs the more specific empty-state copy.
+  let totalAwaitingReviewCount: number | null = null;
+  if (scopedToSelf) {
+    try {
+      totalAwaitingReviewCount = await getReviewQueueTotalAwaitingCountAction();
+    } catch {
+      totalAwaitingReviewCount = null;
+    }
   }
 
   return (
@@ -111,6 +135,8 @@ export default async function ReviewQueuePage({ searchParams }: ReviewQueuePageP
         canPublish={canPublishDrafts}
         canAssignWork={canAssign}
         initialAssignmentFilter={assignmentFilter}
+        scopedToSelf={scopedToSelf}
+        totalAwaitingReviewCount={totalAwaitingReviewCount}
       />
     </div>
   );

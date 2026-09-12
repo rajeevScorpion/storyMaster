@@ -197,6 +197,26 @@ export async function getReviewQueueSchemaStatusAction(): Promise<{ schemaApplie
 }
 
 /**
+ * Plan section 4 ("also required"): the honest empty state a plain reviewer needs
+ * now that 5.2 scopes their queue to their own assignments. Once that clamp is in
+ * place, an unassigned draft is invisible to them rather than merely unlabelled --
+ * their OWN filtered list reading empty no longer tells them whether nothing is
+ * genuinely waiting or whether work exists but isn't theirs. This returns ONLY a
+ * COUNT of every run at stage 'awaiting_review', system-wide, regardless of who
+ * (if anyone) it is assigned to -- never the rows, never who they belong to, so it
+ * tells a scoped reviewer "is there anything at all" without leaking the queue
+ * 5.2 just hid from them.
+ *
+ * Gated on requireReviewer() alone, same as the queue itself -- any active
+ * reviewer (either role) may know this number exists.
+ */
+export async function getReviewQueueTotalAwaitingCountAction(): Promise<number> {
+  await requireReviewer();
+  const runs = await listRuns({ stage: 'awaiting_review' });
+  return runs.length;
+}
+
+/**
  * The queue itself: every run at stage 'awaiting_review', joined to its story
  * (title + audience fields) and its latest evaluation (StoredEvaluation, most
  * recent first per listEvaluationsForRun -- so [0] is "latest"). Optionally
