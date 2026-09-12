@@ -34,6 +34,8 @@ import {
   type AgentReviewerRole,
   type AgentReviewerStatus,
 } from '@/lib/agentic/reviewers.shared';
+import { listRuns } from '@/lib/agentic/orchestrator';
+import { isMissingAssignmentSchemaError } from '@/lib/agentic/review-routing.shared';
 
 interface AgentReviewerRow {
   user_id: string;
@@ -151,36 +153,123 @@ async function resolveReviewerForUser(userId: string): Promise<AgentReviewer | n
   return fetchReviewerRow(userId);
 }
 
+// One latch for migration 114 alone, SCOPED TO THIS FILE. Per GOTCHAS.md ("Column
+// availability latches are per migration group"), and per review-routing.ts's own
+// header for this exact table ("never shared across files even when they read the
+// same table"): this is a second, independent latch from review-routing.ts's own
+// `assignmentSchemaUnavailable`, sharing only the classifier
+// (isMissingAssignmentSchemaError), never the flag.
+let assignmentSchemaUnavailableForStanding = false;
+function latchAssignmentSchemaUnavailableForStanding(context: string): void {
+  if (!assignmentSchemaUnavailableForStanding) {
+    assignmentSchemaUnavailableForStanding = true;
+    console.warn(
+      `[agentic-reviewers] agent_review_assignments unavailable (${context}); migration 114 is not applied on this database. ` +
+        'The assigned-count bubble will stay hidden (count 0) until it is.'
+    );
+  }
+}
+
+/**
+ * Phase 10 Round 3, 5.4: the count behind the profile-menu bubble beside "Review
+ * queue" -- ACTIVE assignments pointing at `userId` whose task's CURRENT run is
+ * still at stage 'awaiting_review'. Deliberately NOT all-time assignments: an
+ * assignment can stay 'active' (nobody has released it) after its run has already
+ * been decided (approved/rejected/published all move the run off
+ * 'awaiting_review'), and a decided run is not outstanding work any more.
+ *
+ * Reuses listRuns (lib/agentic/orchestrator.ts) exactly as listReviewQueueAction's
+ * own 'mine' filter does, rather than re-deriving "which runs are awaiting review"
+ * a second way. Two queries, not a joined one: agent_review_assignments and
+ * agent_runs are read from separate files with separate migration-availability
+ * latches (114 and 107 respectively), and there is no FK-embed relationship set up
+ * between them to lean on.
+ *
+ * NEVER THROWS -- always degrades to 0 (missing migration 114, a transient query
+ * error, or genuinely zero). This is what lets resolveMyReviewerStanding below keep
+ * its "fails closed to no bubble, never a thrown provider" property: a count
+ * failure must not cost a reviewer their role badge, only the bubble.
+ */
+async function countMyAwaitingReviewAssignments(userId: string): Promise<number> {
+  if (assignmentSchemaUnavailableForStanding) return 0;
+
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('agent_review_assignments')
+      .select('task_id')
+      .eq('reviewer_id', userId)
+      .eq('status', 'active');
+
+    if (error) {
+      if (isMissingAssignmentSchemaError(error)) {
+        latchAssignmentSchemaUnavailableForStanding('countMyAwaitingReviewAssignments');
+        return 0;
+      }
+      throw new Error(`Failed to count review assignments: ${error.message}`);
+    }
+
+    const assignedTaskIds = new Set((data ?? []).map((row) => (row as { task_id: string }).task_id));
+    if (assignedTaskIds.size === 0) return 0;
+
+    const awaitingRuns = await listRuns({ stage: 'awaiting_review' });
+    let count = 0;
+    for (const run of awaitingRuns) {
+      if (assignedTaskIds.has(run.taskId)) count += 1;
+    }
+    return count;
+  } catch (error) {
+    if (isMissingAssignmentSchemaError(error as { code?: string; message?: string } | null | undefined)) {
+      latchAssignmentSchemaUnavailableForStanding('countMyAwaitingReviewAssignments');
+      return 0;
+    }
+    // Fails closed to 0, not a throw -- see this function's own doc comment.
+    console.error('[agentic-reviewers] countMyAwaitingReviewAssignments failed; showing no bubble instead.', error);
+    return 0;
+  }
+}
+
 /**
  * Resolves the CURRENT user's reviewer standing for the pricing-runtime payload
- * (D20, docs/agentic-creator-phase9c-plan.md section 4.1): `{ role } | null`, never
- * more. requireReviewer() below throws by design -- a hard authorization gate --
- * which is exactly wrong for this caller: getPricingRuntimeContext() is fetched
- * once per session by an app-wide provider on every signed-in page, so a reviewer
- * lookup here must degrade to `null` for ANY reason (migration 111 unapplied, a
- * transient query error, or simply "not a reviewer") rather than take the whole
- * pricing payload down with it. Reuses resolveReviewerForUser() above -- same
- * fetch, same 111-latch, same ADMIN_USER_ID short-circuit as requireReviewer() --
- * so this is not a second way of answering "is this user a reviewer".
+ * (D20, docs/agentic-creator-phase9c-plan.md section 4.1): `{ role, assignedCount }
+ * | null`, never more. requireReviewer() below throws by design -- a hard
+ * authorization gate -- which is exactly wrong for this caller:
+ * getPricingRuntimeContext() is fetched once per session by an app-wide provider
+ * on every signed-in page, so a reviewer lookup here must degrade to `null` for
+ * ANY reason (migration 111 unapplied, a transient query error, or simply "not a
+ * reviewer") rather than take the whole pricing payload down with it. Reuses
+ * resolveReviewerForUser() above -- same fetch, same 111-latch, same
+ * ADMIN_USER_ID short-circuit as requireReviewer() -- so this is not a second way
+ * of answering "is this user a reviewer".
  *
- * Deliberately returns ONLY `{ role }` for the CALLER's own id. Never `notes`,
- * never `status`, never any other account's standing -- see `245588e`, which fixed
- * exactly this shape (admin-only `notes`) leaking from a different reviewer action
- * to every active reviewer. There is no parameter here to pass another user's id.
+ * Deliberately returns ONLY `{ role, assignedCount }` for the CALLER's own id.
+ * Never `notes`, never `status`, never any other account's standing -- see
+ * `245588e`, which fixed exactly this shape (admin-only `notes`) leaking from a
+ * different reviewer action to every active reviewer. There is no parameter here
+ * to pass another user's id.
  *
  * Only an ACTIVE reviewer/editor gets a standing back (isActiveReviewer), matching
  * requireReviewer()'s own gate -- a suspended reviewer must not see a badge or a
  * queue link that requireReviewer() would then refuse to honor.
+ *
+ * `assignedCount` (Phase 10 Round 3, 5.4) is resolved by
+ * countMyAwaitingReviewAssignments above, which NEVER throws -- so a count failure
+ * degrades to 0 (no bubble rendered) without disturbing this function's own
+ * "fails closed to null on any error" property for `role`/the reviewer badge
+ * itself. The query only runs here, inside this branch -- once `isActiveReviewer`
+ * is already known true -- so it costs nothing for the overwhelming majority of
+ * signed-in users who are not reviewers at all.
  */
 export async function resolveMyReviewerStanding(
   userId: string
-): Promise<{ role: AgentReviewerRole } | null> {
+): Promise<{ role: AgentReviewerRole; assignedCount: number } | null> {
   try {
     const reviewer = await resolveReviewerForUser(userId);
     if (!isActiveReviewer(reviewer)) {
       return null;
     }
-    return { role: reviewer.role };
+    const assignedCount = await countMyAwaitingReviewAssignments(userId);
+    return { role: reviewer.role, assignedCount };
   } catch {
     return null;
   }

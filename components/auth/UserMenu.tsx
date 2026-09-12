@@ -162,7 +162,18 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
                 >
                   <ClipboardCheck className="w-4 h-4" />
-                  Review queue
+                  <span className="flex-1 text-left">Review queue</span>
+                  {/* Phase 10 Round 3, 5.4: active assignments whose run is still
+                      awaiting review -- never all-time assignments, and never shown
+                      as a "0" bubble (that's noise, not information). */}
+                  {pricing.reviewer.assignedCount > 0 && (
+                    <span
+                      aria-label={`${pricing.reviewer.assignedCount} assigned to you`}
+                      className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-500/20 px-1.5 text-[11px] font-semibold leading-none text-indigo-300"
+                    >
+                      {pricing.reviewer.assignedCount}
+                    </span>
+                  )}
                 </Link>
               )}
               <Link
