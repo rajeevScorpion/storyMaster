@@ -1,7 +1,6 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import { createAdminClient } from '@/lib/supabase/admin';
 import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { getFeatureFlag } from '@/lib/ai/model-config';
 import { resolveEffectiveProcessingMode } from '@/lib/media/processing-mode';
@@ -246,17 +245,27 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
   }
 
   if (input.target.kind === 'existing') {
-    const admin = createAdminClient();
-    const { data: story, error: storyError } = await admin
-      .from('stories')
-      .select('id, user_id')
-      .eq('id', input.target.storyId)
-      .single();
-    if (storyError || !story) {
-      return { status: 'not_queued', reason: 'forbidden', message: 'Story not found.' };
-    }
-    if (story.user_id !== user.id) {
-      return { status: 'not_queued', reason: 'forbidden', message: 'Forbidden.' };
+    // Round 1b fix B: reviewer-aware, matching every other write path in this
+    // file and elsewhere (generateBeatCore above, beat-control.ts,
+    // image-batch.ts, narration-batch.ts). The previous check compared
+    // story.user_id to user.id directly, which is not reviewer-aware -- a
+    // reviewer continuing an agent draft was refused HERE even though
+    // generateBeatCore's own assertCanEditStory (which runs first and is
+    // where the coin reservation happens) had already let them through.
+    // That is the charge-then-refuse defect class already fixed four times
+    // in this phase (3347ffb, a5e9bff, 4974611, 04e739b): the reviewer pays,
+    // the model generates, and only then is the write refused. beat_bundle
+    // is on in dev, so this was reachable today, not merely theoretical.
+    try {
+      await assertCanEditStory(input.target.storyId, user.id, ['id']);
+    } catch (error) {
+      // assertCanEditStory throws exactly 'Story not found.' or 'Forbidden.'
+      // -- both are already the messages this branch returned before.
+      return {
+        status: 'not_queued',
+        reason: 'forbidden',
+        message: error instanceof Error ? error.message : 'Forbidden.',
+      };
     }
   }
 
