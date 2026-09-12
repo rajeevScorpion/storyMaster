@@ -1,12 +1,20 @@
 import { test, expect, type Page } from '@playwright/test';
 
 /**
- * Reviewer-authenticated coverage of the /review workspace (Phase 9c, Unit 9L).
+ * Reviewer-authenticated coverage of the /review workspace (Phase 9c, Unit 9L;
+ * Phase 10 Round 3).
  *
  * Credentials come from the environment and are never committed. Set
  * E2E_REVIEWER_EMAIL / E2E_REVIEWER_PASSWORD (in .env.local, gitignored) to a
  * real, active row in agent_reviewers; without them these tests skip rather
  * than fail, exactly like e2e/agentic-admin.spec.ts's E2E_ADMIN_* pattern.
+ *
+ * This spec deliberately does NOT assume which role ('reviewer' or 'editor') the
+ * configured E2E account holds. Round 3's 5.2 (queue scoping) and 5.3 (sidebar nav)
+ * are both role-dependent, so the assertions that care read the role off the
+ * profile-menu badge first and branch, rather than hardcoding either shape --
+ * E2E_REVIEWER_EMAIL/PASSWORD are credentials, never role data, and this file must
+ * never inspect them for anything beyond signing in.
  */
 
 const EMAIL = process.env.E2E_REVIEWER_EMAIL;
@@ -27,10 +35,28 @@ async function signIn(page: Page): Promise<void> {
   await expect(dialog).toHaveCount(0, { timeout: 30_000 });
 }
 
+/**
+ * Opens the profile menu, reads the reviewer role badge ("Reviewer" or "Editor"),
+ * and closes the menu again by clicking the trigger a second time. Round 3's 5.2
+ * and 5.3 both branch on which role the configured E2E account holds, and reading
+ * it off the badge -- the same D20 payload UserMenu itself renders from -- is the
+ * only way this spec can branch correctly without assuming either shape.
+ */
+async function readReviewerRoleLabel(page: Page): Promise<'Reviewer' | 'Editor'> {
+  const trigger = page.getByRole('button', { name: 'Account menu' });
+  await trigger.click();
+  const badge = page.getByText(/^(Reviewer|Editor)$/);
+  await expect(badge).toBeVisible();
+  const label = ((await badge.textContent()) ?? '').trim() as 'Reviewer' | 'Editor';
+  await trigger.click();
+  await expect(badge).toHaveCount(0);
+  return label;
+}
+
 test.describe('reviewer workspace (authenticated)', () => {
   test.skip(!EMAIL || !PASSWORD, 'E2E_REVIEWER_EMAIL / E2E_REVIEWER_PASSWORD not set');
 
-  test('the profile menu shows a reviewer badge and a Review queue link (D20)', async ({ page }) => {
+  test('the profile menu shows a reviewer badge, a Review queue link, and an honest count bubble (D20, 5.4)', async ({ page }) => {
     await signIn(page);
 
     // D20: reviewer standing rides the already-fetched pricing-runtime payload,
@@ -44,6 +70,42 @@ test.describe('reviewer workspace (authenticated)', () => {
 
     const badge = page.getByText(/^(Reviewer|Editor)$/);
     await expect(badge).toBeVisible();
+
+    // 5.4: assignedCount rides the same payload and is never shown as a "0" bubble
+    // -- rendering nothing IS what a zero count maps to. This spec cannot assert an
+    // exact value (it depends on live agent_review_assignments state for whichever
+    // account E2E_REVIEWER_EMAIL points at), but whatever DOES render inside the
+    // link must be a genuine positive integer, never a literal "0" or an empty
+    // pill. The bubble is aria-hidden (the link carries an explicit aria-label
+    // instead, see UserMenu.tsx), so it is queried as a plain DOM node, not by role.
+    const bubble = menu.locator('span[aria-hidden="true"]');
+    if (await bubble.count()) {
+      const text = (await bubble.first().textContent())?.trim() ?? '';
+      expect(text).toMatch(/^\d+$/);
+      expect(Number(text)).toBeGreaterThan(0);
+    }
+  });
+
+  test('the header links home from /review (5.1)', async ({ page }) => {
+    await signIn(page);
+    await page.goto('/review', { waitUntil: 'domcontentloaded' });
+
+    // Scoped to the header landmark: "Review queue" (agent-draft panel link) and
+    // "Queue" (sidebar item / empty-state prose) both appear more than once on this
+    // page, but the Kissago logo and the account menu trigger only ever live in the
+    // banner -- see this file's own header for the ambiguity this project's specs
+    // are known to hit.
+    const banner = page.getByRole('banner');
+    const logoLink = banner.getByRole('link', { name: 'kissago' });
+    await expect(logoLink).toBeVisible();
+    await expect(logoLink).toHaveAttribute('href', '/');
+
+    // The rest of the profile menu is reachable too -- the whole point of 5.1 was
+    // that a reviewer previously had no way back to either of these.
+    await expect(banner.getByRole('button', { name: 'Account menu' })).toBeVisible();
+
+    await logoLink.click();
+    await expect(page).toHaveURL(/\/$/);
   });
 
   // A forced timezone different from the dev server's own is what actually
@@ -63,6 +125,7 @@ test.describe('reviewer workspace (authenticated)', () => {
       page.on('pageerror', (err) => pageErrors.push(err.message));
 
       await signIn(page);
+      const roleLabel = await readReviewerRoleLabel(page);
 
       const response = await page.goto('/review', { waitUntil: 'load' });
       expect(response?.status()).toBeLessThan(400);
@@ -75,13 +138,18 @@ test.describe('reviewer workspace (authenticated)', () => {
       const hydrationErrors = pageErrors.filter((message) => /hydrat/i.test(message));
       expect(hydrationErrors, `Hydration error(s) on /review:\n${hydrationErrors.join('\n\n')}`).toEqual([]);
 
-      // Section 4.2: the minimal reviewer sidebar -- Queue, My assignments, and
-      // (Unit 9k) History -- and never AdminSidebar. History was asserted ABSENT
-      // here until 9k shipped, which is exactly what this spec is for: the
-      // carve-out was real, and its end is a visible change to this file rather
-      // than a silent one.
-      await expect(page.getByRole('link', { name: 'Queue' })).toBeVisible();
-      await expect(page.getByRole('link', { name: 'My assignments' })).toBeVisible();
+      // Section 4.2: the minimal reviewer sidebar -- Queue and (Unit 9k) History
+      // always; "My assignments" only for role 'editor' (Phase 10 Round 3, 5.3 --
+      // retired for a plain reviewer, since their queue is already scoped to their
+      // own assignments and the two links would show the same list). Never
+      // AdminSidebar.
+      await expect(page.getByRole('link', { name: 'Queue', exact: true })).toBeVisible();
+      const myAssignments = page.getByRole('link', { name: 'My assignments' });
+      if (roleLabel === 'Editor') {
+        await expect(myAssignments).toBeVisible();
+      } else {
+        await expect(myAssignments).toHaveCount(0);
+      }
       await expect(page.getByRole('link', { name: 'History' })).toHaveAttribute('href', '/review/history');
       await expect(page.getByText(/admin/i)).toHaveCount(0);
 

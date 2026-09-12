@@ -159,6 +159,15 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                 <Link
                   href="/review"
                   onClick={() => setIsOpen(false)}
+                  // Explicit aria-label rather than letting the link's name compute from
+                  // its children: with no whitespace between the "Review queue" span and
+                  // the count bubble's own text node, the computed name would otherwise
+                  // read as "Review queue3" for a screen reader.
+                  aria-label={
+                    pricing.reviewer.assignedCount > 0
+                      ? `Review queue, ${pricing.reviewer.assignedCount} assigned to you`
+                      : 'Review queue'
+                  }
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
                 >
                   <ClipboardCheck className="w-4 h-4" />
@@ -168,7 +177,7 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
                       as a "0" bubble (that's noise, not information). */}
                   {pricing.reviewer.assignedCount > 0 && (
                     <span
-                      aria-label={`${pricing.reviewer.assignedCount} assigned to you`}
+                      aria-hidden="true"
                       className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-500/20 px-1.5 text-[11px] font-semibold leading-none text-indigo-300"
                     >
                       {pricing.reviewer.assignedCount}
