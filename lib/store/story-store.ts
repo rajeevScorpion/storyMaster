@@ -57,6 +57,7 @@ import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
   authorizeCurrentUserImageModelBillableAction,
+  authorizeCurrentUserImageRegenerationBillableAction,
   authorizeCurrentUserStoryContinuation,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
@@ -6183,7 +6184,7 @@ export const useStoryStore = create<StoryState>()(
 
         try {
           if (!promptOnly) {
-            const billingAuthorization = await authorizeCurrentUserImageModelBillableAction({
+            const billingAuthorization = await authorizeCurrentUserImageRegenerationBillableAction({
               actionKey: 'regenerate_image',
               idempotencyKey: `regenerate_image:${session.savedStoryId || session.storySessionId}:${nodeId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,
