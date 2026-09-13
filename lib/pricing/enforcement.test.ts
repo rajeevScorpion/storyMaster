@@ -92,7 +92,7 @@ describe('authorizeBillableAction -- the agentic bypass requires all four condit
       supervisorEnabled: true,
       reviewerWorkflowEnabled: true,
       billingBypassEnabled: true,
-      imageGenerationEnabled: true,
+      pipelineImageGenerationEnabled: true,
     });
     process.env.AGENTIC_SYSTEM_USER_ID = SYSTEM_USER_ID;
   });
@@ -134,7 +134,7 @@ describe('authorizeBillableAction -- the agentic bypass requires all four condit
       supervisorEnabled: true,
       reviewerWorkflowEnabled: true,
       billingBypassEnabled: false,
-      imageGenerationEnabled: true,
+      pipelineImageGenerationEnabled: true,
     });
 
     const result = await authorizeBillableAction({

@@ -42,7 +42,7 @@ export async function setAgenticBillingBypassEnabled(enabled: boolean): Promise<
   await setFeatureFlag('agentic_billing_bypass_enabled', enabled);
 }
 
-export async function setAgenticImageGenerationEnabled(enabled: boolean): Promise<void> {
+export async function setAgenticPipelineImageGenerationEnabled(enabled: boolean): Promise<void> {
   await verifyAdmin();
-  await setFeatureFlag('agentic_image_generation_enabled', enabled);
+  await setFeatureFlag('agentic_pipeline_image_generation_enabled', enabled);
 }

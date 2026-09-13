@@ -25,7 +25,11 @@ export const AGENTIC_FLAG_KEYS = [
   'agentic_supervisor_enabled',
   'agentic_reviewer_workflow_enabled',
   'agentic_billing_bypass_enabled',
-  'agentic_image_generation_enabled',
+  // Renamed from agentic_image_generation_enabled (migration 118). The old name
+  // read as a general image-generation switch and was repeatedly mistaken for a
+  // guard on a REVIEWER's interactive "Regenerate image..." -- it never was one;
+  // it only gates the autonomous agent PIPELINE generating images.
+  'agentic_pipeline_image_generation_enabled',
 ] as const;
 
 export interface AgenticFlags {
@@ -39,8 +43,10 @@ export interface AgenticFlags {
   reviewerWorkflowEnabled: boolean;
   /** Lets the AGENTIC_SYSTEM_USER_ID account skip the coin reservation. Cost telemetry is still recorded. */
   billingBypassEnabled: boolean;
-  /** Global gate that sits above each persona's own allow_image_generation. */
-  imageGenerationEnabled: boolean;
+  /** Global gate above each persona's own allow_image_generation for the AUTONOMOUS
+   *  PIPELINE only -- it does NOT gate a reviewer's interactive image regeneration
+   *  (that has its own authorization path; see app/actions/pricing-enforcement.ts). */
+  pipelineImageGenerationEnabled: boolean;
 }
 
 export async function getAgenticFlags(): Promise<AgenticFlags> {
@@ -52,6 +58,6 @@ export async function getAgenticFlags(): Promise<AgenticFlags> {
     supervisorEnabled: flags.agentic_supervisor_enabled ?? false,
     reviewerWorkflowEnabled: flags.agentic_reviewer_workflow_enabled ?? false,
     billingBypassEnabled: flags.agentic_billing_bypass_enabled ?? false,
-    imageGenerationEnabled: flags.agentic_image_generation_enabled ?? false,
+    pipelineImageGenerationEnabled: flags.agentic_pipeline_image_generation_enabled ?? false,
   };
 }

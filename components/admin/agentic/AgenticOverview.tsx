@@ -9,7 +9,7 @@ import {
   setAgenticSupervisorEnabled,
   setAgenticReviewerWorkflowEnabled,
   setAgenticBillingBypassEnabled,
-  setAgenticImageGenerationEnabled,
+  setAgenticPipelineImageGenerationEnabled,
 } from '@/app/actions/agentic-admin';
 import type { AgenticFlags } from '@/lib/agentic/flags';
 
@@ -21,7 +21,7 @@ const FLAG_ACTIONS: Record<FlagKey, (enabled: boolean) => Promise<void>> = {
   supervisorEnabled: setAgenticSupervisorEnabled,
   reviewerWorkflowEnabled: setAgenticReviewerWorkflowEnabled,
   billingBypassEnabled: setAgenticBillingBypassEnabled,
-  imageGenerationEnabled: setAgenticImageGenerationEnabled,
+  pipelineImageGenerationEnabled: setAgenticPipelineImageGenerationEnabled,
 };
 
 interface FlagRowConfig {
@@ -60,9 +60,10 @@ const SUBORDINATE_FLAGS: FlagRowConfig[] = [
       'Lets the agentic system user skip the coin reservation. Cost telemetry is still written to ai_cost_events either way.',
   },
   {
-    key: 'imageGenerationEnabled',
-    label: 'Image generation',
-    description: "Global gate above each persona's own image permission. Both must be on before a persona can generate images.",
+    key: 'pipelineImageGenerationEnabled',
+    label: 'Pipeline image generation',
+    description:
+      "Global gate above each persona's own image permission, for the AUTONOMOUS PIPELINE only -- it does not gate a reviewer's interactive image regeneration.",
   },
 ];
 
