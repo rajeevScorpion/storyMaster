@@ -48,6 +48,21 @@ least once. The ledger is queryable directly per environment via the read-only S
 any doc. The Supabase dashboard's own "saved queries" list is **not** evidence either way; it is client-side
 history unrelated to whether SQL actually executed.
 
+### Keep migration comments minimal
+
+A migration's header comment earns its length only with what the SQL cannot say itself. Target **under ~15
+lines**; 116 was cut from 99 to 34 and lost nothing.
+
+Worth writing:
+- what the migration fixes, in a sentence
+- the **trap** — what a future reader would plausibly do instead that would break something, and what breaks
+- anything deliberately left out of scope, and what auditing it would require
+- the one verification that decides whether it worked
+
+Not worth writing: restating the SQL in prose, index names, "depends on NNN", reasoning about whether
+`DROP POLICY IF EXISTS` matches a name, or re-justifying a decision already recorded in a plan or decisions
+doc. Link to those; don't copy them.
+
 ## Verification before saying "done"
 
 The expected gate for any change:
