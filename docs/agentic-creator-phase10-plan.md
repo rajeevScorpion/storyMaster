@@ -413,6 +413,11 @@ backwards would degrade every image while appearing to satisfy the requirement.
 - A per-reviewer index on `agent_review_decisions` — a **115+**, never an edit to 112.
 - Thirteen stale comments still describing `can_publish` / `can_trigger_media` as columns; 113 dropped both.
 - Rename `agentic_image_generation_enabled` to say what it actually gates (6.3).
+- The reviewer e2e spec races the pricing payload rather than waiting for it to settle, so it can fail
+  on a cold server. The product bug behind it is fixed (the menu now shows a loading skeleton instead of
+  the non-reviewer shape); only test determinism is left. Judged not worth fixing 2026-09-13.
+- Round 5's 7.1 says two doc references still need renumbering to Phase 11. Both were already updated;
+  that item is done.
 
 ---
 
