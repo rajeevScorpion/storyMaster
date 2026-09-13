@@ -15,8 +15,22 @@
 // story is assembled by the same code the browser store uses. If the shape of a
 // node ever changes, this module inherits the change instead of drifting from it.
 
-import type { SeedBeatOutline, SeedPlan, SourceFidelity, StoryBeat, StoryMap } from '@/lib/types/story';
+import type {
+  Character,
+  SeedBeatOutline,
+  SeedPlan,
+  SourceFidelity,
+  StoryAspectRatio,
+  StoryBeat,
+  StoryboardPlan,
+  StoryMap,
+} from '@/lib/types/story';
 import { addChildNode, createStoryMap } from '@/lib/utils/story-map';
+import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import {
+  assembleFinalImagePrompt,
+  type ImagePromptCompilerRuntime,
+} from '@/lib/ai/prompt-compiler/assemble.shared';
 
 // ── Source fidelity ──────────────────────────────────────────────────────
 
@@ -175,4 +189,110 @@ export function nextBeatIndexToGenerate(
 ): number | undefined {
   const done = progress?.completedBeats?.length ?? 0;
   return done >= targetBeatCount ? undefined : done + 1;
+}
+
+// ── Final image prompt (agent path) ─────────────────────────────────────
+//
+// The defect this fixes: story-assembly.ts (the server half) used to set only
+// storyboardPromptText -- the bare, unrendered plan text -- and never called
+// buildCanonicalImageScene / assembleFinalImagePrompt / buildFinalStoryboard-
+// ImagePrompt. app/actions/image-batch.ts falls back to storyboardPromptText
+// whenever finalImagePromptText is empty, so every agent-authored beat's image
+// generated from raw plan text: no visual-style lock, no world anchor, no
+// text-overlay mode, no layout/aspect requirements. The human path
+// (app/actions/beat-bundle.ts:309-347) already builds all of that; this
+// mirrors that exact sequence -- render plan -> canonical scene -> assemble --
+// so an agent beat ends up with the same finalImagePromptText a human beat
+// gets.
+//
+// `legacyBuild` is taken as an input closure rather than built in here, for
+// two reasons: it mirrors assembleFinalImagePrompt's own AssembleInput
+// contract exactly (that function already takes legacyBuild the same way, so
+// it never needs to import the heavy legacy assembler either), and it keeps
+// this file genuinely isomorphic. buildFinalStoryboardImagePrompt lives in
+// lib/ai/beat-orchestration.ts, which -- despite having no 'use client'/
+// 'use server' directive of its own -- statically imports server actions
+// (callGeminiText et al.) that transitively pull in 'server-only' modules
+// (lib/ai/model-config.ts, lib/supabase/admin.ts). Next's bundler resolves
+// that safely for both targets, but plain vitest does not: importing it here
+// crashes every test in this file with "This module cannot be imported from
+// a Client Component module," even though nothing in this file runs in a
+// browser. Callers (story-assembly.ts) build the closure with the real
+// function; tests pass a plain stand-in, exactly like
+// lib/ai/prompt-compiler/assemble.shared.test.ts already does for
+// assembleFinalImagePrompt itself.
+//
+// Pure otherwise: buildCanonicalImageScene and assembleFinalImagePrompt are
+// pure/isomorphic (no I/O, no Supabase/Gemini calls). The server half
+// resolves modelOverrides (published prompt templates, needed only inside its
+// own legacyBuild closure) and compilerRuntime (the prompt-compiler mode +
+// per-model capability) once per story -- both need I/O -- and passes
+// compilerRuntime in already resolved, so this function stays unit-testable
+// with plain inputs and no mocking.
+//
+// Fail-closed: a null compilerRuntime (registry/flag unavailable) or a thrown
+// compile error both fall through to legacyBuild()'s output, which is still a
+// fully-dressed prompt -- style lock, world anchor, text-overlay mode and the
+// storyboard layout hard requirements -- never bare storyboard text.
+
+export interface ComposeAgentFinalImagePromptInput {
+  storyboardPlan: StoryboardPlan;
+  /** Only feeds the canonical scene's legacy-text passthrough; storyboardPlan is always present here. */
+  storyboardPromptText?: string;
+  continuityNotes?: string[];
+  characters: Character[];
+  visualStyle: string;
+  aspectRatio: StoryAspectRatio;
+  /** Null when the compiler runtime could not be resolved -- assembleFinalImagePrompt treats that as legacy. */
+  compilerRuntime: ImagePromptCompilerRuntime | null;
+  /** Builds the legacy (pre-compiler) prompt -- both the fallback and, pre-rollout, the norm. */
+  legacyBuild: () => string;
+  existingImageGenerationMetadata?: Record<string, unknown>;
+}
+
+export interface ComposeAgentFinalImagePromptResult {
+  finalImagePromptText: string;
+  imageGenerationMetadata?: Record<string, unknown>;
+}
+
+export function composeAgentFinalImagePrompt(
+  input: ComposeAgentFinalImagePromptInput
+): ComposeAgentFinalImagePromptResult {
+  const canonicalScene = buildCanonicalImageScene({
+    storyboardPlan: input.storyboardPlan,
+    storyboardPromptText: input.storyboardPromptText,
+    continuityNotes: input.continuityNotes,
+    characters: input.characters,
+    visualStyle: input.visualStyle,
+    aspectRatio: input.aspectRatio,
+  });
+
+  let finalImagePromptText: string;
+  let promptCompilerMeta: ReturnType<typeof assembleFinalImagePrompt>['compiler'];
+  try {
+    const assembled = assembleFinalImagePrompt({
+      runtime: input.compilerRuntime,
+      scene: canonicalScene,
+      legacyBuild: input.legacyBuild,
+    });
+    finalImagePromptText = assembled.finalPrompt;
+    promptCompilerMeta = assembled.compiler;
+  } catch (error) {
+    // 'new'-mode strict compile failure -- fall back to the legacy prompt
+    // rather than strand the beat with no final prompt at all.
+    console.error('prompt compiler failed in agentic path; using legacy prompt:', error);
+    finalImagePromptText = input.legacyBuild();
+  }
+
+  return {
+    finalImagePromptText,
+    ...(promptCompilerMeta
+      ? {
+          imageGenerationMetadata: {
+            ...(input.existingImageGenerationMetadata ?? {}),
+            promptCompiler: promptCompilerMeta,
+          },
+        }
+      : {}),
+  };
 }

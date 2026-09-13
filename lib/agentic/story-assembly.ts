@@ -56,6 +56,7 @@ import {
 import {
   AGENTIC_SOURCE_FIDELITY,
   buildSeededStoryMap,
+  composeAgentFinalImagePrompt,
   getSeedBeatByIndex,
   mergeNoveltyAvoidTitles,
   nextBeatIndexToGenerate,
@@ -77,7 +78,15 @@ import type { NoveltyCandidate, NoveltyTopCandidate, NoveltyVerdict } from '@/li
 import { evaluateAndRecord, getPipelineEvaluationForRun } from '@/lib/agentic/evaluation';
 import { toEvaluatedBeats, type DeterministicEvaluationInput } from '@/lib/agentic/evaluation.shared';
 import { generateSeedPlanPreview, materializeSeededBeat } from '@/lib/ai/seed-authoring';
-import { composeStoryboardPlan, renderStoryboardPlan, mergeCharacterVisualReferences } from '@/lib/ai/beat-orchestration';
+import {
+  composeStoryboardPlan,
+  renderStoryboardPlan,
+  mergeCharacterVisualReferences,
+  buildFinalStoryboardImagePrompt,
+  type StoryModelOverrides,
+} from '@/lib/ai/beat-orchestration';
+import { resolveImagePromptCompilerRuntime } from '@/lib/ai/prompt-compiler/mode';
+import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStoryForUser } from '@/lib/story/save-story';
 import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
 import { getModelConfig } from '@/lib/ai/model-config';
@@ -974,6 +983,31 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
   const storyConfig = buildSeededStoryConfig(persona, brief, sourceText, seedPlan, targetBeatCount);
   const visualStyle = deriveVisualStyleSummary(storyConfig.visualSettings);
 
+  // Final image prompt assembly (composeAgentFinalImagePrompt, called per beat
+  // below) needs the same two pieces of config the human bundle path resolves
+  // per generation -- app/actions/beat-bundle.ts:272 (modelOverrides) and :325
+  // (compilerRuntime). Resolved once here since neither varies across this
+  // story's beats. Both calls are fail-closed already: a missing config/
+  // registry degrades to undefined/null, and composeAgentFinalImagePrompt's
+  // own legacyBuild fallback still produces a fully-dressed prompt from that.
+  //
+  // Plan key: this pipeline runs headless on the admin client with no signed-in
+  // user, so there is no pricing context to read a plan key from the way
+  // resolveImagePromptCompilerRuntimeAction does for a session-bound caller.
+  // 'free' stands in -- it is also exactly what that action itself falls back
+  // to when pricing context is unavailable, and this project has already
+  // decided the system user's entitlement tier is irrelevant to the image path
+  // for the same reason (docs/agentic-creator-phase9-plan.md section 1.8):
+  // every compiler mode still degrades to the same legacy prompt on a disabled
+  // capability or resolution failure, so getting this plan key exactly right
+  // does not change what a strict-mode failure or a legacy-mode run produces.
+  const modelOverrides = await getStoryModelOverrides().catch(() => undefined as StoryModelOverrides | undefined);
+  const compilerRuntime = await resolveImagePromptCompilerRuntime({
+    taskKey: 'image_generation',
+    selection: storyConfig.imageModelSelection ?? null,
+    planKey: 'free',
+  }).catch(() => null);
+
   let completedBeats = progress.completedBeats ?? [];
   let runningCharacters: Character[] = mergeCharacterRoster(
     briefCharactersToRoster(brief.characters),
@@ -1070,7 +1104,43 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
         undefined,
         buildTelemetry(run, task, persona, `story_generated:beat_${nextIndex}_storyboard`)
       );
-      beat = { ...beat, storyboardPlan: plan, storyboardPromptText: renderStoryboardPlan(plan), isStoryboard: true };
+      const storyboardPromptText = renderStoryboardPlan(plan);
+      // The actual defect fix: mirror app/actions/beat-bundle.ts:309-347's
+      // render-plan -> canonical-scene -> assemble sequence so this beat gets
+      // a real finalImagePromptText, not just the bare storyboardPromptText
+      // above. Without this, app/actions/image-batch.ts:145 falls back to that
+      // bare text for every agent-authored image -- no style lock, no world
+      // anchor, no text-overlay mode, no layout requirements.
+      const legacyBuild = () => buildFinalStoryboardImagePrompt(
+        storyboardPromptText,
+        beat.characters,
+        visualStyle,
+        beat.beatNumber,
+        modelOverrides,
+        {
+          aspectRatio: storyConfig.aspectRatio,
+          task: 'image_generation',
+        }
+      );
+      const { finalImagePromptText, imageGenerationMetadata } = composeAgentFinalImagePrompt({
+        storyboardPlan: plan,
+        storyboardPromptText,
+        continuityNotes: beat.continuityNotes,
+        characters: beat.characters,
+        visualStyle,
+        aspectRatio: storyConfig.aspectRatio,
+        compilerRuntime,
+        legacyBuild,
+        existingImageGenerationMetadata: beat.imageGenerationMetadata,
+      });
+      beat = {
+        ...beat,
+        storyboardPlan: plan,
+        storyboardPromptText,
+        isStoryboard: true,
+        finalImagePromptText,
+        ...(imageGenerationMetadata ? { imageGenerationMetadata } : {}),
+      };
       await finalizeAgenticSpend(storyboardAuthorization.reservationId);
     } catch (error) {
       await releaseAgenticSpend(storyboardAuthorization.reservationId, 'beat_storyboard_failed');
