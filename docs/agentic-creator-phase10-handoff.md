@@ -25,12 +25,18 @@ Read also: [WORKING_AGREEMENTS.md](agent-context/WORKING_AGREEMENTS.md),
 Gate after `79a52a1`, run independently: tsc clean, lint clean, **108 files / 1017 tests**,
 `build:verify` green, **e2e 28/28**.
 
-**CHECK `git log` BEFORE TRUSTING THIS FILE.** The session that wrote this ended at its usage ceiling
-with an agent still working on three things: Phase 11's reviewer-spend marker, migration **117** (the
-per-reviewer index), and migration **118** (renaming the misleading image flag). That agent commits each
-task separately as it finishes, so its work may be on the branch even though this file does not describe
-it. If commits exist past `79a52a1`, read them — they are real and gated. If migrations 117 or 118 exist,
-they are written and applied nowhere.
+Three more landed after that, all gated at **108 files / 1017 tests**, e2e 28/28:
+
+| Commit | What |
+|---|---|
+| `6d510ef` | **Phase 11** — reviewer spend on agent-owned stories is now marked and separable in the admin cost view |
+| `c967add` | Migration **117** — per-reviewer index on review decisions |
+| `a7222e5` | Migration **118** — renamed the misleading pipeline image-generation flag |
+
+**Phase 11 is complete. Phases 1-11 are done.** What remains is verification the owner owes (section 2)
+and two design-sized items nobody has started (section 4).
+
+**Migrations 116, 117 and 118 are all written and applied NOWHERE.** Next free number is **119**.
 
 ---
 
@@ -97,12 +103,21 @@ no migration needed.
 |---|---|
 | Thirteen stale `can_publish` / `can_trigger_media` comments | **Already gone.** The backlog item is itself stale. |
 | Per-persona spend attribution | **Already works.** Pooled balances are a recorded decision, not a defect. |
-| Per-reviewer index on `agent_review_decisions` | Missing. A three-line migration (**117**, never an edit to 112). |
-| Rename `agentic_image_generation_enabled` | Real. ~5 files plus a flag-key row, so it needs a migration. |
+| Per-reviewer index on `agent_review_decisions` | **Done** — migration 117. |
+| Rename `agentic_image_generation_enabled` | **Done** — migration 118. But see the finding below. |
 | `/review` sends signed-out visitors to `/` | Real, but there is no return-URL convention anywhere — sign-in is a modal, not a route. Small design job. |
 | Assignment notifications | No notification infrastructure exists at all. From scratch. |
 | Role-change audit history | No audit table; only a "last editor" field. Needs design + migration. |
 | Reviewer e2e spec races the pricing payload | Product bug fixed (`189b75b`); only test determinism left. Judged not worth fixing. |
+
+---
+
+**A gap the rename surfaced, NOT fixed.** The pipeline image-generation flag is enforced **nowhere**.
+Only the admin toggle and some doc comments ever referenced it — nothing in the pipeline checks it, and
+nothing combines it with a persona's own image permission despite a comment claiming it does. So an admin
+can switch it on or off and nothing changes. Pre-existing, unrelated to the rename, and left alone
+deliberately because wiring it up is a behaviour change, not a cleanup. Decide what it should gate before
+implementing it.
 
 ---
 
