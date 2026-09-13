@@ -12,7 +12,10 @@ import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { authorizeImageModelBillableActionForUser } from '@/lib/pricing/image-aware-authorize';
 import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
-import { resolveAgenticBillingIdentity } from '@/lib/agentic/billing-identity.shared';
+import {
+  resolveAgenticBillingIdentity,
+  AGENT_STORY_REVIEWER_SPEND_METADATA_KEY,
+} from '@/lib/agentic/billing-identity.shared';
 import type { ImageTaskKey } from '@/lib/ai/image-models.shared';
 import type {
   AuthorizeBillableActionInput,
@@ -161,6 +164,17 @@ export async function authorizeCurrentUserImageRegenerationBillableAction(
     ...input,
     actorKind,
     entitlementUserId: callerUserId,
+    // Phase 11: actorKind above is resolveAgenticBillingIdentity's own output --
+    // reused here, not a new signal. Only touches `metadata` for the agent-owned
+    // case, so an ordinary author's call is byte-for-byte what it was before.
+    ...(actorKind === 'agentic_system'
+      ? {
+          metadata: {
+            ...(input.metadata ?? {}),
+            [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true,
+          },
+        }
+      : {}),
   });
 }
 

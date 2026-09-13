@@ -51,6 +51,7 @@ import type { PricingActionKey } from '@/lib/types/pricing';
 import { resolveNarrationVoiceDecision } from '@/lib/ai/narration-voice-resolver';
 import { updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
 import { resolveAgentDraftServerAuth } from '@/lib/agentic/billing-identity';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import { getEffectiveMediaStorageConfig } from '@/lib/media/storage-config';
 import { putR2Object, createR2SignedGetUrl } from '@/lib/media/r2-server';
 import { recordMediaAsset } from '@/lib/media/media-assets';
@@ -1607,6 +1608,12 @@ export async function generateAndPersistNarration(
       generationMode: options.generationMode ?? 'final',
       language,
       providerTaskKey: options.taskKey ?? 'tts',
+      // Phase 11: effectiveAuth.actorKind is resolveAgenticBillingIdentity's own
+      // output (via serverAuth for the batch worker, or resolveAgentDraftServerAuth
+      // for an interactive reviewer press) -- reusing it here, not a new signal.
+      ...(effectiveAuth?.actorKind === 'agentic_system'
+        ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true }
+        : {}),
     },
     run: () => timeNarrationStep(
     'narration.generate_and_persist',

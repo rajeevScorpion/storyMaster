@@ -2,6 +2,7 @@
 
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { RECENT_BEAT_LIMIT_OPTIONS, DEFAULT_RECENT_BEAT_LIMIT } from '@/lib/admin/cost-config';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import type { DbAiCostEvent, DbBeat, DbStory } from '@/lib/types/database';
 
 const INR_PER_USD = 93;
@@ -53,6 +54,12 @@ export interface AdminDailyActivityCostRow {
   beatCount: number;
 }
 
+export interface AdminReviewerAgentStorySpend {
+  totalCostUsd: number;
+  totalCostInr: number;
+  dailyActivity: AdminDailyActivityCostRow[];
+}
+
 export interface AdminCostDashboardData {
   inrPerUsd: number;
   dailyWindowDays: number;
@@ -62,6 +69,11 @@ export interface AdminCostDashboardData {
   totalWindowCostInr: number;
   recentBeats: AdminCostBeatRow[];
   dailyActivity: AdminDailyActivityCostRow[];
+  /** Phase 11: the slice of dailyActivity above that a REVIEWER caused on an
+   *  agent-owned story -- ordinary human activity by activity_key, but marked in
+   *  metadata because the target story was agent-owned. See
+   *  AGENT_STORY_REVIEWER_SPEND_METADATA_KEY. */
+  reviewerAgentStorySpend: AdminReviewerAgentStorySpend;
 }
 
 type StorylineLinkRow = {
@@ -152,6 +164,47 @@ function groupBreakdown(events: DbAiCostEvent[]): CostBreakdownItem[] {
       imageCostUsd: Number(item.imageCostUsd.toFixed(6)),
     }))
     .sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd);
+}
+
+/** Groups a list of cost events into the day x activity rows the dashboard's
+ *  "Daily Cost by Activity" table renders. Shared by the ordinary window and the
+ *  reviewer-on-agent-story segment below so both read the query the same way. */
+function buildDailyActivity(events: DbAiCostEvent[]): AdminDailyActivityCostRow[] {
+  const dailyByKey = new Map<string, AdminDailyActivityCostRow & { beatKeys: Set<string> }>();
+  for (const event of events) {
+    const day = dayKey(event.created_at);
+    const key = `${day}:${event.activity_key}`;
+    const current = dailyByKey.get(key) || {
+      day,
+      activityKey: event.activity_key,
+      estimatedCostUsd: 0,
+      estimatedCostInr: 0,
+      eventCount: 0,
+      beatCount: 0,
+      beatKeys: new Set<string>(),
+    };
+    current.estimatedCostUsd += asCost(event.estimated_cost_usd);
+    current.eventCount += 1;
+    if (event.story_id && event.node_id) {
+      current.beatKeys.add(`${event.story_id}:${event.node_id}`);
+    }
+    dailyByKey.set(key, current);
+  }
+
+  return Array.from(dailyByKey.values())
+    .map((row) => ({
+      day: row.day,
+      activityKey: row.activityKey,
+      estimatedCostUsd: Number(row.estimatedCostUsd.toFixed(6)),
+      estimatedCostInr: Number(toInr(row.estimatedCostUsd).toFixed(2)),
+      eventCount: row.eventCount,
+      beatCount: row.beatKeys.size,
+    }))
+    .sort((a, b) => (a.day === b.day ? b.estimatedCostUsd - a.estimatedCostUsd : b.day.localeCompare(a.day)));
+}
+
+function isReviewerAgentStorySpendEvent(event: DbAiCostEvent): boolean {
+  return (event.metadata || {})[AGENT_STORY_REVIEWER_SPEND_METADATA_KEY] === true;
 }
 
 export async function getCostDashboardData(input?: { userId?: string | null; limit?: number }): Promise<AdminCostDashboardData> {
@@ -279,39 +332,14 @@ export async function getCostDashboardData(input?: { userId?: string | null; lim
     };
   });
 
-  const dailyByKey = new Map<string, AdminDailyActivityCostRow & { beatKeys: Set<string> }>();
-  for (const event of events) {
-    const day = dayKey(event.created_at);
-    const key = `${day}:${event.activity_key}`;
-    const current = dailyByKey.get(key) || {
-      day,
-      activityKey: event.activity_key,
-      estimatedCostUsd: 0,
-      estimatedCostInr: 0,
-      eventCount: 0,
-      beatCount: 0,
-      beatKeys: new Set<string>(),
-    };
-    current.estimatedCostUsd += asCost(event.estimated_cost_usd);
-    current.eventCount += 1;
-    if (event.story_id && event.node_id) {
-      current.beatKeys.add(`${event.story_id}:${event.node_id}`);
-    }
-    dailyByKey.set(key, current);
-  }
-
-  const dailyActivity = Array.from(dailyByKey.values())
-    .map((row) => ({
-      day: row.day,
-      activityKey: row.activityKey,
-      estimatedCostUsd: Number(row.estimatedCostUsd.toFixed(6)),
-      estimatedCostInr: Number(toInr(row.estimatedCostUsd).toFixed(2)),
-      eventCount: row.eventCount,
-      beatCount: row.beatKeys.size,
-    }))
-    .sort((a, b) => (a.day === b.day ? b.estimatedCostUsd - a.estimatedCostUsd : b.day.localeCompare(a.day)));
-
+  const dailyActivity = buildDailyActivity(events);
   const totalWindowCostUsd = events.reduce((sum, event) => sum + asCost(event.estimated_cost_usd), 0);
+
+  const reviewerAgentStoryEvents = events.filter(isReviewerAgentStorySpendEvent);
+  const reviewerAgentStoryCostUsd = reviewerAgentStoryEvents.reduce(
+    (sum, event) => sum + asCost(event.estimated_cost_usd),
+    0
+  );
 
   return {
     inrPerUsd: INR_PER_USD,
@@ -322,5 +350,10 @@ export async function getCostDashboardData(input?: { userId?: string | null; lim
     totalWindowCostInr: Number(toInr(totalWindowCostUsd).toFixed(2)),
     recentBeats,
     dailyActivity,
+    reviewerAgentStorySpend: {
+      totalCostUsd: Number(reviewerAgentStoryCostUsd.toFixed(6)),
+      totalCostInr: Number(toInr(reviewerAgentStoryCostUsd).toFixed(2)),
+      dailyActivity: buildDailyActivity(reviewerAgentStoryEvents),
+    },
   };
 }

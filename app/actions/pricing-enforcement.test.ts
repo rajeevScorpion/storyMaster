@@ -172,10 +172,13 @@ describe('authorizeCurrentUserImageRegenerationBillableAction', () => {
 
       await authorizeCurrentUserImageRegenerationBillableAction(fakeInput());
 
+      // Phase 11: the spend record is marked as reviewer work on an agent-owned
+      // story -- the admin cost view's new segment reads this back.
       expect(authorizeImageModelBillableActionForUserMock).toHaveBeenCalledWith(SYSTEM, {
         ...fakeInput(),
         actorKind: 'agentic_system',
         entitlementUserId: CALLER,
+        metadata: { agentStoryReviewerSpend: true },
       });
     } finally {
       if (originalSystemUserId === undefined) delete process.env.AGENTIC_SYSTEM_USER_ID;

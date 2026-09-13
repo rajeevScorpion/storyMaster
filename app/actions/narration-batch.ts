@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getPathToNode } from '@/lib/utils/story-map';
 import { resolveNarrationVoiceServer } from '@/app/actions/narration';
@@ -344,7 +345,14 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
       storyId: job.story_id,
       nodeId,
       beatNumber: node.data.beatNumber,
-      metadata: { language: config.language, narrationBatch: true },
+      metadata: {
+        language: config.language,
+        narrationBatch: true,
+        // Phase 11: actorKind above already IS the agent-owned-story test
+        // (resolveAgenticBillingIdentity, one hop upstream) -- reusing it here marks
+        // this cost-telemetry event as reviewer work on an agent draft.
+        ...(actorKind === 'agentic_system' ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true } : {}),
+      },
     };
 
     try {

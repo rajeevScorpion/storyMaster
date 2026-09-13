@@ -7,6 +7,7 @@ import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
 import { updateBeatMediaState, updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
 import { resolveAgentDraftServerAuth } from '@/lib/agentic/billing-identity';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import {
   estimateElevenLabsForcedAlignmentCostUsd,
@@ -333,6 +334,12 @@ async function buildMeteredStoryOverlayTiming(input: {
     metadata: {
       transcriptCharacterCount: input.storyText.length,
       audioSeconds: input.audioSeconds ?? null,
+      // Phase 11: input.actorKind is resolveAgenticBillingIdentity's own output,
+      // threaded down from generateAndPersistStoryNarrationWithOverlay -- reused
+      // here, not a new signal.
+      ...(input.actorKind === 'agentic_system'
+        ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true }
+        : {}),
     },
   });
 

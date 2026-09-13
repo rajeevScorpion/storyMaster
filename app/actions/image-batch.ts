@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import {
   resolveAgenticBillingIdentity,
+  AGENT_STORY_REVIEWER_SPEND_METADATA_KEY,
   type AgenticBillingIdentity,
 } from '@/lib/agentic/billing-identity.shared';
 import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
@@ -111,6 +112,25 @@ function resolveImageBillingIdentity(
     callerUserId,
     systemUserId: process.env.AGENTIC_SYSTEM_USER_ID,
   });
+}
+
+/** Phase 11 marker for the submit-time spend record: present only when this batch is
+ *  a reviewer finishing an agent draft (see AGENT_STORY_REVIEWER_SPEND_METADATA_KEY). */
+function agentStoryReviewerSpendMetadata(story: StoryRow): Record<string, true> {
+  return story.agent_persona_id ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true } : {};
+}
+
+/** Same marker, one hop downstream in the reconcile/stateful worker: those only have
+ *  the job row (no agent_persona_id column), but job.user_id already carries the payer
+ *  resolveImageBillingIdentity resolved at submit time -- comparing it to
+ *  AGENTIC_SYSTEM_USER_ID here is the same signal, not a new one. */
+function isAgentOwnedStoryJobUserId(userId: string): boolean {
+  const systemUserId = process.env.AGENTIC_SYSTEM_USER_ID;
+  return Boolean(systemUserId) && userId === systemUserId;
+}
+
+function agentStoryReviewerSpendMetadataForJobUserId(userId: string): Record<string, true> {
+  return isAgentOwnedStoryJobUserId(userId) ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true } : {};
 }
 
 async function assertImageGenerationEntitled(userId: string): Promise<PlanKey> {
@@ -445,7 +465,13 @@ export async function submitStoryImageBatch(input: {
         metadata: { generationMode: 'batch', provider },
       }],
       relatedStoryId: story.id,
-      metadata: { scope, imageCount: items.length, provider, estimatedCostUsd },
+      metadata: {
+        scope,
+        imageCount: items.length,
+        provider,
+        estimatedCostUsd,
+        ...agentStoryReviewerSpendMetadata(story),
+      },
     });
     if (authorization.status === 'denied') {
       throw new Error('NOT_ENOUGH_COINS');
@@ -681,6 +707,7 @@ async function recordBatchImageCost(
       savingsUsd: Number((regularCostUsd - discountedCostUsd).toFixed(6)),
       imageProviderCostUsd: regularCostUsd,
       ...(providerUsage ? { providerUsage } : {}),
+      ...agentStoryReviewerSpendMetadataForJobUserId(job.user_id),
     },
   }).then(({ error }) => {
     if (error) console.error('Failed to record batch image cost event:', error.message);
@@ -964,7 +991,14 @@ export async function submitStoryStatefulVisuals(input: {
         metadata: { generationMode: 'stateful', provider },
       }],
       relatedStoryId: story.id,
-      metadata: { scope, imageCount: targetNodes.length, provider, estimatedCostUsd, generationMode: 'stateful' },
+      metadata: {
+        scope,
+        imageCount: targetNodes.length,
+        provider,
+        estimatedCostUsd,
+        generationMode: 'stateful',
+        ...agentStoryReviewerSpendMetadata(story),
+      },
     });
     if (authorization.status === 'denied') {
       throw new Error('NOT_ENOUGH_COINS');
@@ -1169,6 +1203,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
               generationMode: 'stateful',
               storyId: job.story_id,
               nodeId: item.node_id,
+              metadata: agentStoryReviewerSpendMetadataForJobUserId(job.user_id),
             },
             continuity: { requestedStrategy: 'provider_stateful', previousState, allowRuntimeFallback: true },
           });

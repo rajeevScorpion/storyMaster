@@ -54,3 +54,17 @@ export function resolveAgenticBillingIdentity(input: {
       input.systemUserId && payerUserId === input.systemUserId ? 'agentic_system' : 'user',
   };
 }
+
+// ── Phase 11: marking reviewer spend on an agent-owned story ─────────────
+//
+// Autonomous pipeline spend is already separable (activity_key = 'agentic_creator'
+// plus the per-persona spend report). The gap this closes: a REVIEWER finishing an
+// agent draft bills as ordinary human activity, with nothing recording that the
+// target story was agent-owned -- recovering it today needs a join through the
+// story's agent_persona_id that no admin view performs.
+//
+// Every call site that writes this key has already resolved reviewer/edit access on
+// the story (assertCanEditStory) or is one hop downstream of a payer this module
+// already resolved from agentPersonaId (job.user_id / actorKind) -- never a second
+// signal invented at the write site.
+export const AGENT_STORY_REVIEWER_SPEND_METADATA_KEY = 'agentStoryReviewerSpend' as const;
