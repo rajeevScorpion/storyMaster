@@ -117,12 +117,22 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
             <div className="px-4 py-3 border-b border-white/5">
               <p className="text-sm font-medium text-neutral-200 truncate">{displayName}</p>
               <p className="text-xs text-neutral-500 truncate">{user.email}</p>
-              {pricing.reviewer && (
+              {/* `pricing.reviewer` is null both while the runtime payload is in
+                  flight and when the viewer genuinely is not a reviewer. Rendering
+                  nothing for both made a reviewer's own standing briefly invisible
+                  on every cold load -- the menu showed the plain non-reviewer shape
+                  until the fetch landed. The skeleton keeps the two states apart. */}
+              {pricingLoading ? (
+                <span
+                  aria-hidden="true"
+                  className="mt-1.5 inline-flex h-[22px] w-24 animate-pulse rounded-full border border-white/5 bg-white/5"
+                />
+              ) : pricing.reviewer ? (
                 <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-300">
                   <ClipboardCheck className="w-3 h-3" />
                   {REVIEWER_ROLE_LABELS[pricing.reviewer.role]}
                 </span>
-              )}
+              ) : null}
             </div>
 
             <div className="mx-3 mt-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3">
@@ -155,7 +165,18 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
             </div>
 
             <div className="py-1">
-              {pricing.reviewer && (
+              {/* Same reasoning as the badge above: a loading payload must not be
+                  rendered as "you have no review queue". */}
+              {pricingLoading && (
+                <div
+                  aria-hidden="true"
+                  className="flex items-center gap-3 px-4 py-2.5"
+                >
+                  <span className="h-4 w-4 animate-pulse rounded bg-white/5" />
+                  <span className="h-3 w-28 animate-pulse rounded bg-white/5" />
+                </div>
+              )}
+              {!pricingLoading && pricing.reviewer && (
                 <Link
                   href="/review"
                   onClick={() => setIsOpen(false)}
