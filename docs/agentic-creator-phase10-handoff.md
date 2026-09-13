@@ -20,9 +20,17 @@ Read also: [WORKING_AGREEMENTS.md](agent-context/WORKING_AGREEMENTS.md),
 | `452a8a4` | Working agreement: keep migration comments minimal (116 was cut 99 to 34 lines) |
 | `189b75b` | Profile menu now tells "payload loading" apart from "not a reviewer" |
 | `42fc085` | **Round 4** — regenerating a beat image no longer bills the reviewer |
+| `79a52a1` | **Round 5** — agent-composed beats now get a real final image prompt |
 
-Gate after `42fc085`, run independently: tsc clean, lint clean, **108 files / 1012 tests**,
+Gate after `79a52a1`, run independently: tsc clean, lint clean, **108 files / 1017 tests**,
 `build:verify` green, **e2e 28/28**.
+
+**CHECK `git log` BEFORE TRUSTING THIS FILE.** The session that wrote this ended at its usage ceiling
+with an agent still working on three things: Phase 11's reviewer-spend marker, migration **117** (the
+per-reviewer index), and migration **118** (renaming the misleading image flag). That agent commits each
+task separately as it finishes, so its work may be on the branch even though this file does not describe
+it. If commits exist past `79a52a1`, read them — they are real and gated. If migrations 117 or 118 exist,
+they are written and applied nowhere.
 
 ---
 
