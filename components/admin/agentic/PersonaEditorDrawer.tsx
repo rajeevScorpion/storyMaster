@@ -540,6 +540,11 @@ export default function PersonaEditorDrawer({
                     className={`${inputClass} min-h-20 resize-y font-mono text-xs`}
                     spellCheck={false}
                   />
+                  <p className="mt-1 text-xs text-neutral-500">
+                    Each <code>modelId</code> must be an enabled key from Admin → Text Models, e.g.{' '}
+                    <code>{'{"agent_story_evaluation": {"modelId": "openrouter:qwen/qwen3.7-flash"}}'}</code>. Saving rejects
+                    unknown or disabled keys.
+                  </p>
                 </Field>
               </FieldGroup>
 

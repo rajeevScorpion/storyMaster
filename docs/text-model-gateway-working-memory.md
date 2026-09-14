@@ -34,8 +34,14 @@ non-abort network failure is `provider_error`, not `timeout`.
 - Story/Reel Playground model picker now reads enabled registry models via `FilterDropdown` (native `<select>`
   removed); shows the production key even when disabled/unknown; disables the temperature slider for models
   that reject it. Committed right after this note (`feat(text-models): registry-backed playground picker`).
-- **Still open in P4b:** persona drawer help text listing enabled keys; `/admin/agents/routing` showing
-  resolution/fallback. Both small. **Nothing in P4b is browser-verified** — tsc and lint only.
+- Persona drawer help text and `/admin/agents/routing` resolution/fallback display: committed with this note.
+- **Gap found — top of next session's work:** the five agentic tasks (incl. `agent_story_evaluation`,
+  `agent_novelty_assessment`) are **not** in the Story Playground (their prompts live in code), so the only way
+  to point the evaluator at a cheap model today is a per-persona override. Pack acceptance #7 wants it globally.
+  Add a "Task assignments" section to `/admin/text-models`: one `FilterDropdown` per agentic task, saved through
+  `updateModelConfig` behind `validateTextModelSelection` (new admin action, `verifyAdmin` first).
+- **Nothing in P4b is browser-verified** — tsc and lint only. P5 should add an e2e route check for
+  `/admin/text-models` redirecting signed-out visitors, and the owner checks the page signed in.
 
 **Next session — start here:**
 1. Ask the owner for a usage reading.
