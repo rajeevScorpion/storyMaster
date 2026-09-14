@@ -401,6 +401,17 @@ export interface StorySession {
   sourceUpdatedAt?: string;
   explorationMode?: boolean;
   sourceStoryOwnerId?: string;
+  /**
+   * stories.agent_persona_id (migration 103) for a loaded story: set when the story
+   * was written by the agentic pipeline, null or absent otherwise. Unit 9M reads it
+   * with savedByUserId to answer "is this somebody else's agent draft", which decides
+   * whether the owner publish path is offered at all -- publishing one of those as the
+   * signed-in user would attribute an agent's story to a real person (D15).
+   *
+   * Absent on a database without migration 103 (production today), which reads as
+   * "not an agent draft" and leaves every ordinary story exactly as it was.
+   */
+  agentPersonaId?: string | null;
   userPrompt: string;
   title: string;
   genre: string;

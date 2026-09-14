@@ -48,6 +48,21 @@ least once. The ledger is queryable directly per environment via the read-only S
 any doc. The Supabase dashboard's own "saved queries" list is **not** evidence either way; it is client-side
 history unrelated to whether SQL actually executed.
 
+### Keep migration comments minimal
+
+A migration's header comment earns its length only with what the SQL cannot say itself. Target **under ~15
+lines**; 116 was cut from 99 to 34 and lost nothing.
+
+Worth writing:
+- what the migration fixes, in a sentence
+- the **trap** — what a future reader would plausibly do instead that would break something, and what breaks
+- anything deliberately left out of scope, and what auditing it would require
+- the one verification that decides whether it worked
+
+Not worth writing: restating the SQL in prose, index names, "depends on NNN", reasoning about whether
+`DROP POLICY IF EXISTS` matches a name, or re-justifying a decision already recorded in a plan or decisions
+doc. Link to those; don't copy them.
+
 ## Verification before saying "done"
 
 The expected gate for any change:
@@ -101,8 +116,24 @@ whole feature can be reverted as a unit.
 
 ## Planning and execution
 
-The owner **plans with one model and executes the plan on Opus**, switching models after approving the plan.
+**Opus plans, audits and reviews; Sonnet subagents execute.** Exploration, per-phase implementation and
+gate runs are dispatched to Sonnet; architecture, migration design, reviewing what came back and writing the
+handoff stay on Opus. The owner is told at each phase boundary whether to switch models. The reason is token
+economy: judgment is worth Opus, producing components and running gates is not.
+
 Each execution session therefore starts cold, with none of the planning session's exploration in context.
+
+Delegation has its own rules, learned after a subagent died at its session limit and took its whole context
+with it:
+
+- **Stop delegating at 90% of the 5-hour session window.** Below that, delegate freely.
+- **Poll running subagents** instead of waiting on a completion notification, and require them to land work
+  on disk — files, commits — as they go rather than holding it in context.
+- **Scope each delegation to one committable unit**, and have the agent commit before it reports.
+- **Review delegated work by reading the diff, not the agent's report.** Every agentic phase so far has had
+  defects the full suite passed over, and most were the record asserting something untrue.
+- **Keep the handoff current** so a fresh session starts without compaction — judged at roughly 75% context,
+  not mechanically after every phase.
 
 **Implementation plans must be self-contained handover documents.** A plan is finished when a fresh session
 could execute it without re-deriving discovery:

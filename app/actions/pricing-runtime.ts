@@ -7,6 +7,7 @@ import {
   loadCachedPricingGlobals,
   loadEntitlementOverridePlanKey,
 } from '@/lib/pricing/enforcement';
+import { resolveMyReviewerStanding } from '@/lib/agentic/reviewers';
 import {
   buildPricingRuntimeCacheKey,
   getCachedPricingRuntimeContext,
@@ -75,9 +76,15 @@ export async function getPricingRuntimeContext(
   let beatGrants: DbBeatGrant[] = [];
   let beatReservations: DbBeatSpendReservation[] = [];
   let entitlementOverridePlanKey: PlanKey | null = null;
+  // D20 (docs/agentic-creator-phase9c-plan.md section 4.1): the current user's
+  // reviewer standing rides this already-fetched, already-cached payload instead
+  // of UserMenu making its own request. resolveMyReviewerStanding() never throws,
+  // so it needs no throwIfQueryFailed companion -- it degrades to `null` on its
+  // own for every failure mode (see lib/agentic/reviewers.ts).
+  let reviewerStanding: PricingRuntimeContext['reviewer'] = null;
 
   if (userId) {
-    const [customersResult, subscriptionsResult, grantsResult, reservationsResult, overridePlanKey] = await Promise.all([
+    const [customersResult, subscriptionsResult, grantsResult, reservationsResult, overridePlanKey, standing] = await Promise.all([
       supabase
         .from('billing_customers')
         .select('*')
@@ -99,6 +106,7 @@ export async function getPricingRuntimeContext(
         .eq('user_id', userId)
         .order('created_at', { ascending: false }),
       loadEntitlementOverridePlanKey(supabase, userId),
+      resolveMyReviewerStanding(userId),
     ]);
 
     throwIfQueryFailed(customersResult.error, 'Failed to load billing customers');
@@ -111,6 +119,7 @@ export async function getPricingRuntimeContext(
     beatGrants = (grantsResult.data ?? []) as DbBeatGrant[];
     beatReservations = (reservationsResult.data ?? []) as DbBeatSpendReservation[];
     entitlementOverridePlanKey = overridePlanKey;
+    reviewerStanding = standing;
 
     const withWalletBase = buildPricingRuntimeContextData({
       pricingMarketKey: input.pricingMarketKey ?? null,
@@ -181,6 +190,7 @@ export async function getPricingRuntimeContext(
     // Feature gates read the entitlement tier so a promoted account sees the
     // storyboard-image toggle unlocked; costs below stay on the same catalog.
     meterEntitlements: buildMeterEntitlementMap(globals.actionCosts, snapshot.entitlementPlanKey),
+    reviewer: reviewerStanding,
   };
 
   setCachedPricingRuntimeContext(cacheKey, context);

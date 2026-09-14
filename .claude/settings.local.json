@@ -73,9 +73,18 @@
       "Bash(git commit -m ' *)",
       "Bash(git commit -m 'chore: add video export fix prompt pack *)",
       "Bash(git commit -m 'diagnostics: add video export report and timestamp logging *)",
-      "PowerShell(git checkout -b feature/image-prompt-compiler)"
+      "PowerShell(git checkout -b feature/image-prompt-compiler)",
+      "PowerShell(git add prompt-packs/kissago_legal_ux_prompt_pack_2026-08-28/)",
+      "PowerShell(git checkout -b feat/legal-auth-ux)",
+      "Bash(git checkout *)"
     ]
   },
+  "enabledMcpjsonServers": [
+    "vercel",
+    "github",
+    "supabase",
+    "shadcn"
+  ],
   "sandbox": {
     "filesystem": {
       "allowWrite": [
@@ -83,11 +92,5 @@
         "d:/AiCoding/storyMaster/tsconfig.tsbuildinfo"
       ]
     }
-  },
-  "enabledMcpjsonServers": [
-    "vercel",
-    "github",
-    "supabase",
-    "shadcn"
-  ]
+  }
 }

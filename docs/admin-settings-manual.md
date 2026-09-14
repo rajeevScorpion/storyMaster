@@ -99,7 +99,7 @@ Prompt/seed authoring limits and seed preview pricing.
 
 | Setting | What it does | Affects | Safe default | Flag key |
 |---|---|---|---|---|
-| Word cap | Max words in a prompt/seed | Landing / authoring | 500 | `story_authoring_word_cap` |
+| ~~Word cap~~ | **Removed.** Both caps are now hardcoded at 800 words in `lib/story/authoring-limits.ts` — `STORY_PROMPT_WORD_CAP` for the typed prompt, `SEED_SOURCE_WORD_CAP` for a pasted story. They were always two separate limits, not the one this row described. The `story_authoring_word_cap` flag row still exists but is read by nothing; editing it has no effect | — | — | — |
 | Default Beat length | Baseline Brief-to-Immersive text amount for each new standard-story beat; audience profiles resolve it to a safe word range and users may override it | Landing / story generation / narration | Balanced (3) | `story_beat_length_default_level` |
 | Seed preview price | Coin price to preview a seed plan | Authoring paywall | — | (from pricing action costs) |
 | Vertical stories | Allow vertical (9:16) stories | Authoring | Off | `vertical_stories_setting_enabled` |

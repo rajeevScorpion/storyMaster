@@ -218,6 +218,25 @@ The gallery tolerates missing columns by latching "this column group is unavaila
 Relatedly: the `stories!inner` join was deliberately **not** widened with episode columns as a pre-093
 fallback. A database without migration 075 would then fail the whole gallery rather than lose one feature.
 
+**The classifiers behind those latches are usually code-identical, which is what makes the rule easy to
+violate.** `isMissingRunSchemaError` (migration 107) and `isMissingTaskSchemaError` (106) in the agentic
+modules both accept exactly `42P01`, `42703`, `PGRST200`, `PGRST204`, as do the persona and memory ones.
+They are told apart **only by which table the failing query touched** — never by the error itself. So
+"try both classifiers and latch whichever matches" is not a safe pattern: it always matches the first one
+you check. **Classify by the query, not by the error.**
+
+This shipped once and was caught in review: `enqueueCommissionedTasks` classified an `agent_tasks`-only
+read against the 107 latch first, so a missing `agent_tasks` — or a transient PostgREST `PGRST204` after
+any migration — would latch `runSchemaUnavailable`, which `drainAgentRuns` reads at its top and
+`listRuns`/`getRun` read too. One `agent_tasks` hiccup would have killed the entire run pipeline for the
+life of the process and blanked `/admin/agents/runs` behind a "migration 107 is not applied" message that
+was simply false. Fixed in `aa950db`.
+
+A query that genuinely spans two groups — `drainAgentRuns`'s `agent_runs` select with an
+`agent_tasks!inner` embed — is the one case where you cannot tell them apart, and there the right answer
+is to reason from the schema: `agent_runs.task_id` is a foreign key onto `agent_tasks`, so 107 cannot
+exist without 106 and latching 107 is correct either way. Write that reasoning down at the call site.
+
 ### PostgREST `or()` needs double-quoted values
 
 Values in an `or()` filter are double-quoted (`title.ilike."%Mr. Bean%"`) so dots and commas survive. Strip
@@ -271,6 +290,51 @@ attempt cap (needs a migration).
 
 ---
 
+### `saveBeat` routes by identity rather than gating — shared branching is dormant, not deleted (D23)
+
+`app/actions/persistence.ts`'s `saveBeat` looks like it should be gated on story ownership. **Still don't
+wire the reviewer-authorization helper into it as a strict allow/deny check** — that reasoning below is
+current, even though the feature it originally protected is not.
+
+**As of Phase 10 Round 1 (2026-09-12), "any authenticated user may continue someone else's non-archived
+story on their own branch" is no longer true.** That was shared branching, a real working feature this
+section used to describe — the owner has since taken it **dormant by decision (D23)**, not deleted, with
+an explicit path back. Creation mode is now owner-or-reviewer only, enforced at four layers:
+
+- the one non-owner entry point, `StorylinePlayer.tsx`'s "Explore full story tree" link, is removed
+- `app/story/[id]/layout.tsx` and `app/explore/[id]/layout.tsx` gate both routes server-side to
+  owner-or-reviewer via `assertCanEditStory`, redirecting a signed-in non-owner — never a signed-out
+  visitor, who still needs through to the page's own sign-in dialog
+- `continueStory`'s authorize step now refuses a non-owner, non-reviewer continuation **before** coins are
+  reserved, on both the legacy and bundle paths
+- migration `115_beats_owner_only_writes.sql` narrows `beats` INSERT/UPDATE RLS to also require the story's
+  owner, ANDed onto the existing `003_normalize_beats.sql` predicates — **written, but NOT applied on any
+  environment.** Until the owner applies it by hand, the database keeps the original, broader policy below;
+  the three application-level layers above are what actually stop a direct explorer write in the meantime,
+  not RLS. See `PROJECT_STATE.md`'s migration table (row 115) for where it stands.
+
+```
+beats INSERT (today, unmigrated)  auth.uid() IS NOT NULL AND generated_by = auth.uid() AND story not archived
+beats UPDATE (today, unmigrated)  generated_by = auth.uid()
+```
+
+Note `beats.UPDATE` keys on `generated_by`, **not** on the story's owner — a differently shaped predicate
+from `stories.UPDATE` (`auth.uid() = user_id`), and the reason an explorer's write was ever possible at all.
+
+**Why `saveBeat` still must not become a strict gate, even now.** The reviewer path is real, live, and
+untouched by D23: a reviewer granted by `assertCanEditStory`'s reviewer branch continues an agent draft
+that isn't theirs. `saveBeat` consults the same helper **only to decide routing** — a granted reviewer
+swaps to the admin client and drops the `generated_by` / `user_id` filters; every other outcome, including
+the helper throwing, falls through to the ordinary session-client path unchanged. Turning that consultation
+into `throw Forbidden.` on a non-grant is exactly what Phase 9 nearly shipped and would have broken every
+reviewer continuation — the same defect class D23 avoided for explorers by gating at the route and the
+authorize step instead of inside `saveBeat` itself.
+
+Reversing D23 — restoring shared branching end-to-end — needs `115_beats_owner_only_writes_rollback.sql`
+applied, the doorway restored, and both route layouts relaxed. Recorded in full in `PROJECT_STATE.md` so
+it's one lookup, not an excavation; design rationale is in
+[docs/agentic-creator-phase10-plan.md](../agentic-creator-phase10-plan.md), section 2 (D23).
+
 ## Product decisions worth not re-deriving
 
 - **`/gallery` is a 307, not a 308.** A cached permanent redirect would make moving the gallery back very hard.
@@ -296,3 +360,24 @@ attempt cap (needs a migration).
   `snapshot.entitlementPlanKey` is what feature gates read. Resolution is promote-only
   (`max(billing, override)`). A promoted user still pays catalog price and can still hit
   `insufficient_balance`.
+
+---
+
+## Line endings are handled by `.gitattributes` now — do not strip CRs by hand
+
+**The old ritual is dead.** For months, anything that wrote a file on Windows had to follow it with
+`sed -i 's/$//' <path>`, because the repo had **no `.gitattributes`** and `core.autocrlf=false`, so git
+committed whatever bytes the working tree held. Forgetting it turned a three-line edit into a whole-file
+diff. It was forgotten often enough that **16 files reached the repo with CRLF** and one ended up mixed.
+
+`.gitattributes` now carries `* text=auto eol=lf`, so **git normalises on `git add`** regardless of what
+your editor produced. Write the file and commit it. No `sed`, no `od -c` check, no instruction in a brief
+telling an agent to remember.
+
+**What this does NOT do:** it does not retroactively fix files already stored as CRLF. Those were
+renormalised once, in their own commit, deliberately isolated so the noise never lands inside a feature
+commit. If you ever add a path pattern that changes text/binary classification, do the same —
+`git add --renormalize .` on its own, never mixed with real changes.
+
+**If you see a whole-file diff for a small edit**, that is the symptom this fixed. Check
+`git ls-files --eol <path>`: `i/lf` is correct, `i/crlf` means something bypassed normalisation.

@@ -31,6 +31,22 @@ export type AuthorizeImageModelBillableActionInput = AuthorizeBillableActionInpu
   storyConfig: StoryConfig;
   imageCount?: number;
   taskKey?: ImageTaskKey;
+  /**
+   * Round 4 (D25): forwarded into every coin-operation call below so the agentic
+   * bypass in authorizeBillableAction is reachable. Every existing caller omits
+   * this, which is indistinguishable from 'user' -- no behaviour change for them.
+   */
+  actorKind?: 'user' | 'agentic_system';
+  /**
+   * Round 4 (D25): who the free-tier/entitlement gate and model-tier resolution
+   * run against, when it must differ from `userId` (the payer). A reviewer
+   * regenerating an image on an agent draft pays through the agent account, which
+   * resolves to the free plan -- gating entitlement on IT would refuse a submit
+   * that works today for every reviewer (9c plan 11.2), so the caller passes their
+   * own id here while `userId` below carries the resolved payer. Defaults to
+   * `userId`, so every existing caller (which never sets this) is unaffected.
+   */
+  entitlementUserId?: string | null;
 };
 
 /**
@@ -43,10 +59,12 @@ export async function authorizeImageModelBillableActionForUser(
   input: AuthorizeImageModelBillableActionInput
 ): Promise<PricingBillableActionAuthorization> {
   const storyConfig = normalizeStoryConfig(input.storyConfig);
+  const entitlementUserId = input.entitlementUserId ?? userId;
 
   if (storyConfig.imageGenerationMode === 'prompt_only') {
     return authorizeCoinOperationForUser({
       userId,
+      actorKind: input.actorKind,
       operationKey: input.actionKey,
       idempotencyKey: input.idempotencyKey,
       components: [{ meterKey: input.actionKey }],
@@ -57,10 +75,10 @@ export async function authorizeImageModelBillableActionForUser(
     });
   }
 
-  const pricing = await getPricingPolicyContextForUser(userId);
+  const pricing = await getPricingPolicyContextForUser(entitlementUserId);
   if (pricing.entitlementPlanKey === 'free') {
     const freeTierGate = await authorizeCoinOperationForUser({
-      userId,
+      userId: entitlementUserId,
       operationKey: input.actionKey,
       idempotencyKey: input.idempotencyKey,
       components: [{
@@ -90,6 +108,7 @@ export async function authorizeImageModelBillableActionForUser(
 
   return authorizeCoinOperationForUser({
     userId,
+    actorKind: input.actorKind,
     operationKey: input.actionKey,
     idempotencyKey: input.idempotencyKey,
     components: [

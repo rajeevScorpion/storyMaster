@@ -33,7 +33,6 @@ const getCachedLandingInitialData = unstable_cache(
             verticalStoriesSettingEnabled: storyboardSettings.verticalStoriesSettingEnabled,
           }
         : DEFAULT_LANDING_SETUP_SETTINGS,
-      authoringWordCap: storyboardSettings?.authoringWordCap,
       storyBeatLengthDefaultLevel: storyboardSettings?.storyBeatLengthDefaultLevel,
       reelSetup,
       narrationVoiceConfig,

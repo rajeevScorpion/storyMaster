@@ -6,6 +6,8 @@ import { randomUUID } from 'crypto';
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
 import { generateAndPersistNarration, generateNarrationOnly } from '@/app/actions/narration';
 import { updateBeatMediaState, updateBeatMediaStateWithRetry } from '@/app/actions/persistence';
+import { resolveAgentDraftServerAuth } from '@/lib/agentic/billing-identity';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import {
   estimateElevenLabsForcedAlignmentCostUsd,
@@ -300,6 +302,13 @@ async function buildStoryOverlayTiming(input: {
 
 async function buildMeteredStoryOverlayTiming(input: {
   userId: string;
+  // D13/Unit 9d: flat, per the hop-7 shape in the plan's billing-chain table --
+  // buildMeteredStoryOverlayTiming already takes userId flat (not inside a serverAuth
+  // object), so actorKind rides beside it the same way. This is what lets the 0.30
+  // align_story_text_overlay charge ride the same agentic bypass as the 0.50
+  // generate_story_narration charge, instead of silently billing the system user's
+  // caller for the overlay half only.
+  actorKind?: 'user' | 'agentic_system';
   storyId?: string | null;
   nodeId?: string | null;
   idempotencyKey?: string;
@@ -316,6 +325,7 @@ async function buildMeteredStoryOverlayTiming(input: {
 }> {
   const authorization = await authorizeCoinOperationForUser({
     userId: input.userId,
+    actorKind: input.actorKind,
     operationKey: 'align_story_text_overlay',
     idempotencyKey: input.idempotencyKey ?? `align-story-text:${randomUUID()}`,
     components: [{ meterKey: 'align_story_text_overlay' }],
@@ -324,6 +334,12 @@ async function buildMeteredStoryOverlayTiming(input: {
     metadata: {
       transcriptCharacterCount: input.storyText.length,
       audioSeconds: input.audioSeconds ?? null,
+      // Phase 11: input.actorKind is resolveAgenticBillingIdentity's own output,
+      // threaded down from generateAndPersistStoryNarrationWithOverlay -- reused
+      // here, not a new signal.
+      ...(input.actorKind === 'agentic_system'
+        ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true }
+        : {}),
     },
   });
 
@@ -683,8 +699,11 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     storyTextParts?: StoryTextParts;
     overlayConfig?: Partial<StoryTextOverlayConfig> | null;
     // Background worker path: persist on behalf of `userId` via the service-role
-    // client. Absent for the interactive path (unchanged behaviour).
-    serverAuth?: { userId: string };
+    // client. Absent for the interactive path (unchanged behaviour). actorKind rides
+    // inside this object (hops 1-3 of the D13/Unit 9d billing chain carry it beside
+    // userId wherever userId already sits) so a reconcile re-entry that rebuilds this
+    // same serverAuth shape carries the bypass forward too.
+    serverAuth?: { userId: string; actorKind?: 'user' | 'agentic_system' };
     billingIdempotencyKey?: string;
   } = {}
 ): Promise<StoryOverlayNarrationResult> {
@@ -708,8 +727,24 @@ export async function generateAndPersistStoryNarrationWithOverlay(
     }
   );
 
+  // Unit 9M: the overlay half of the same defect. The 0.30 align_story_text_overlay
+  // charge rode the CALLER on every interactive press, so a reviewer narrating an agent
+  // draft paid for it -- measured on dev alongside the 0.50 narration charge, both
+  // finalized against the reviewer. generateAndPersistNarration above resolves the same
+  // identity for itself rather than being handed this one, deliberately: passing it down
+  // would also set its `options.serverAuth`, which still means "no human is watching"
+  // there and gates the regeneration feature flag and the retry budget. A reviewer is
+  // interactive and must keep both.
+  const interactiveCallerId = options.serverAuth ? null : await getCurrentOverlayUserId();
+  const effectiveAuth =
+    options.serverAuth ??
+    (interactiveCallerId
+      ? await resolveAgentDraftServerAuth(savedStoryId, interactiveCallerId)
+      : undefined);
+
   const overlay = await buildMeteredStoryOverlayTiming({
-    userId: options.serverAuth?.userId ?? await getCurrentOverlayUserId(),
+    userId: effectiveAuth?.userId ?? interactiveCallerId ?? (await getCurrentOverlayUserId()),
+    actorKind: effectiveAuth?.actorKind,
     storyId: savedStoryId,
     nodeId,
     idempotencyKey: options.billingIdempotencyKey
@@ -734,7 +769,7 @@ export async function generateAndPersistStoryNarrationWithOverlay(
       storyTextOverlayStyle: overlayConfig.style,
       storyTextOverlayCaptions: overlay.captions,
       storyTextOverlayAlignment: overlay.alignment,
-    }, options.serverAuth, options.serverAuth ? { attempts: 1 } : {});
+    }, effectiveAuth, options.serverAuth ? { attempts: 1 } : {});
   } catch (error) {
     console.warn(
       '[story-narration] Failed to persist story text overlay metadata:',

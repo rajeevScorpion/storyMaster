@@ -9,6 +9,7 @@ import {
   invalidatePricingRuntimeCacheForUser,
 } from '@/lib/pricing/runtime-context-cache';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getAgenticFlags } from '@/lib/agentic/flags';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -220,6 +221,7 @@ export async function authorizeBillableAction(input: {
   pricingMarketKey?: PricingMarketKey | null;
   countryCode?: string | null;
   requestedBeatCostOverride?: number | null;
+  actorKind?: 'user' | 'agentic_system';
 }): Promise<PricingBillableActionAuthorization> {
   return timeEnforcementStep(
     'pricing.authorize_billable_action',
@@ -273,6 +275,41 @@ export async function authorizeBillableAction(input: {
             pricingMarketKey: input.pricingMarketKey,
             countryCode: input.countryCode,
           });
+        }
+      }
+
+      // Ordered so the flag read only happens for an actual agent call: actorKind is
+      // checked first, so the human path does no extra I/O whatsoever.
+      if (input.actorKind === 'agentic_system') {
+        const systemUserId = process.env.AGENTIC_SYSTEM_USER_ID;
+        const { billingBypassEnabled } = await getAgenticFlags();
+        if (billingBypassEnabled && systemUserId && input.userId === systemUserId) {
+          // Record what this cost before returning. The bypass means no balance is
+          // deducted, but the work still happened and still cost real money, and the
+          // admin persona-spend report is built entirely from these rows -- without
+          // this write, a bypassed agent looks like it spends nothing forever.
+          // Non-fatal by design: a failure to record must never stop a story being
+          // generated, so this logs and carries on.
+          await logAgenticBypassSpend(supabase, input.userId, {
+            actionKey: input.actionKey,
+            beatCost,
+            idempotencyKey: input.idempotencyKey,
+            relatedStoryId: input.relatedStoryId ?? null,
+            relatedNodeId: input.relatedNodeId ?? null,
+            relatedStorylineId: input.relatedStorylineId ?? null,
+            metadata: input.metadata ?? {},
+          }).catch((error) => {
+            console.error(
+              'Failed to record agentic bypass spend (generation continues):',
+              error instanceof Error ? error.message : error
+            );
+          });
+          return {
+            status: 'bypassed',
+            reason: 'agentic_system',
+            beatCost,
+            coinCost,
+          };
         }
       }
 
@@ -791,6 +828,63 @@ export async function loadCachedPricingGlobals(supabase: AdminClient): Promise<C
   };
 
   return cachedPricingGlobals;
+}
+
+/**
+ * Record a bypassed agentic charge so it can still be reported on.
+ *
+ * Deliberately the same shape as logShadowMeteringAttempt below: a
+ * beat_spend_reservations row that documents a cost without a balance ever moving.
+ * The two differ in what they mean and how they are read back. Shadow metering says
+ * "enforcement is off, this is what we WOULD have charged"; this says "the agentic
+ * system did this work and it cost this much, and we chose not to charge for it".
+ *
+ * Status is 'finalized' because the spend really did happen -- 'released' would read
+ * as a refund. `agenticBypass: true` in the metadata is what distinguishes these rows
+ * from money that actually moved, and is what the persona-spend report filters on.
+ *
+ * Attribution to a persona comes from related_story_id: agent stories carry
+ * agent_persona_id, so the report joins through the story rather than needing the
+ * persona threaded down through every billing call site. That works because the two
+ * operations that reach this bypass -- narration and images -- both run on a story
+ * that already exists.
+ *
+ * Upserts on idempotency_key, so a retried operation records once, not twice.
+ */
+async function logAgenticBypassSpend(
+  supabase: AdminClient,
+  userId: string,
+  input: {
+    actionKey: PricingActionKey;
+    beatCost: number;
+    idempotencyKey: string;
+    relatedStoryId: string | null;
+    relatedNodeId: string | null;
+    relatedStorylineId: string | null;
+    metadata: Record<string, unknown>;
+  }
+): Promise<void> {
+  const { error } = await supabase
+    .from('beat_spend_reservations')
+    .upsert({
+      user_id: userId,
+      action_key: input.actionKey,
+      requested_beat_cost: input.beatCost,
+      status: 'finalized',
+      idempotency_key: input.idempotencyKey,
+      related_story_id: input.relatedStoryId,
+      related_node_id: input.relatedNodeId,
+      related_storyline_id: input.relatedStorylineId,
+      expires_at: new Date().toISOString(),
+      metadata_json: {
+        ...input.metadata,
+        agenticBypass: true,
+      },
+    }, {
+      onConflict: 'idempotency_key',
+    });
+
+  throwIfQueryFailed(error, 'Failed to record agentic bypass spend');
 }
 
 async function logShadowMeteringAttempt(

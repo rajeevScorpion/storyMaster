@@ -19,7 +19,8 @@ const PRICING_MARKET_STORAGE_KEY = 'kissago_pricing_market_override';
 
 // Bump the version suffix whenever the PricingRuntimeContext shape changes so
 // stale snapshots from an older deploy are discarded instead of painted.
-const PRICING_SNAPSHOT_STORAGE_KEY = 'kissago_pricing_runtime_snapshot_v2';
+// v3 (Unit 9L, D20): added `reviewer`.
+const PRICING_SNAPSHOT_STORAGE_KEY = 'kissago_pricing_runtime_snapshot_v3';
 const PRICING_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 interface StoredPricingSnapshot {
@@ -139,6 +140,7 @@ const DEFAULT_PRICING_RUNTIME_CONTEXT: PricingRuntimeContext = {
     availableTopupBeats: 0,
     availableTotalBeats: 0,
   },
+  reviewer: null,
 };
 
 const PricingRuntimeContextValue = createContext<PricingRuntimeContextValue>({

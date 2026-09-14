@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/lib/hooks/useAuth';
 import { usePricingRuntime } from '@/lib/hooks/usePricingRuntime';
-import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy } from 'lucide-react';
+import { User, LogOut, LogIn, BookMarked, Loader2, Coins, Wallet, LifeBuoy, ClipboardCheck } from 'lucide-react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import Link from 'next/link';
@@ -17,6 +17,17 @@ interface UserMenuProps {
 function beatsToCoins(value: number) {
   return Number((value * COINS_PER_BEAT).toFixed(2));
 }
+
+// Unit 9L, D20 (docs/agentic-creator-phase9c-plan.md section 4.1): the current
+// user's reviewer standing rides the pricing-runtime payload -- see
+// PricingRuntimeProvider.tsx -- so this badge and the "Review queue" link below
+// cost zero additional requests. Both render only when `reviewer` is non-null,
+// i.e. only for the small fraction of signed-in users who are an active reviewer
+// or editor (lib/agentic/reviewers.ts's resolveMyReviewerStanding()).
+const REVIEWER_ROLE_LABELS: Record<'reviewer' | 'editor', string> = {
+  reviewer: 'Reviewer',
+  editor: 'Editor',
+};
 
 export default function UserMenu({ onMyStories }: UserMenuProps) {
   const { user, isLoading, openAuthDialog, signOut } = useAuth();
@@ -75,6 +86,7 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
     <div ref={menuRef} className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
+        aria-label="Account menu"
         className="w-9 h-9 rounded-full overflow-hidden border-2 border-white/10 hover:border-emerald-500/40 transition-all ring-0 hover:ring-2 hover:ring-emerald-500/20"
       >
         {avatarUrl ? (
@@ -105,6 +117,22 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
             <div className="px-4 py-3 border-b border-white/5">
               <p className="text-sm font-medium text-neutral-200 truncate">{displayName}</p>
               <p className="text-xs text-neutral-500 truncate">{user.email}</p>
+              {/* `pricing.reviewer` is null both while the runtime payload is in
+                  flight and when the viewer genuinely is not a reviewer. Rendering
+                  nothing for both made a reviewer's own standing briefly invisible
+                  on every cold load -- the menu showed the plain non-reviewer shape
+                  until the fetch landed. The skeleton keeps the two states apart. */}
+              {pricingLoading ? (
+                <span
+                  aria-hidden="true"
+                  className="mt-1.5 inline-flex h-[22px] w-24 animate-pulse rounded-full border border-white/5 bg-white/5"
+                />
+              ) : pricing.reviewer ? (
+                <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-indigo-500/25 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-medium text-indigo-300">
+                  <ClipboardCheck className="w-3 h-3" />
+                  {REVIEWER_ROLE_LABELS[pricing.reviewer.role]}
+                </span>
+              ) : null}
             </div>
 
             <div className="mx-3 mt-3 rounded-2xl border border-emerald-500/15 bg-emerald-500/8 px-4 py-3">
@@ -137,6 +165,47 @@ export default function UserMenu({ onMyStories }: UserMenuProps) {
             </div>
 
             <div className="py-1">
+              {/* Same reasoning as the badge above: a loading payload must not be
+                  rendered as "you have no review queue". */}
+              {pricingLoading && (
+                <div
+                  aria-hidden="true"
+                  className="flex items-center gap-3 px-4 py-2.5"
+                >
+                  <span className="h-4 w-4 animate-pulse rounded bg-white/5" />
+                  <span className="h-3 w-28 animate-pulse rounded bg-white/5" />
+                </div>
+              )}
+              {!pricingLoading && pricing.reviewer && (
+                <Link
+                  href="/review"
+                  onClick={() => setIsOpen(false)}
+                  // Explicit aria-label rather than letting the link's name compute from
+                  // its children: with no whitespace between the "Review queue" span and
+                  // the count bubble's own text node, the computed name would otherwise
+                  // read as "Review queue3" for a screen reader.
+                  aria-label={
+                    pricing.reviewer.assignedCount > 0
+                      ? `Review queue, ${pricing.reviewer.assignedCount} assigned to you`
+                      : 'Review queue'
+                  }
+                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 hover:text-neutral-100 transition-colors"
+                >
+                  <ClipboardCheck className="w-4 h-4" />
+                  <span className="flex-1 text-left">Review queue</span>
+                  {/* Phase 10 Round 3, 5.4: active assignments whose run is still
+                      awaiting review -- never all-time assignments, and never shown
+                      as a "0" bubble (that's noise, not information). */}
+                  {pricing.reviewer.assignedCount > 0 && (
+                    <span
+                      aria-hidden="true"
+                      className="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-indigo-500/20 px-1.5 text-[11px] font-semibold leading-none text-indigo-300"
+                    >
+                      {pricing.reviewer.assignedCount}
+                    </span>
+                  )}
+                </Link>
+              )}
               <Link
                 href="/wallet"
                 onClick={() => setIsOpen(false)}

@@ -21,6 +21,12 @@ import { getEffectiveUserModeration } from '@/lib/admin/user-moderation';
 
 export interface AuthorizeCoinOperationInput {
   userId: string | null;
+  // D13/Unit 9d: flat, per hop 5 of the billing chain -- userId is already flat here,
+  // so actorKind rides beside it. This is forwarded into authorizeBillableAction below,
+  // which is the single defect the plan identifies: without this key on that call's
+  // object literal, the agentic bypass is structurally unreachable from every narration
+  // path no matter what a caller further up the chain claims.
+  actorKind?: 'user' | 'agentic_system';
   operationKey: PricingActionKey;
   idempotencyKey: string;
   components: CoinEconomyComponentInput[];
@@ -116,6 +122,7 @@ export async function authorizeCoinOperationForUser(
 
   const authorization = await authorizeBillableAction({
     userId: input.userId,
+    actorKind: input.actorKind,
     actionKey: input.operationKey,
     idempotencyKey: input.idempotencyKey,
     relatedStoryId: input.relatedStoryId ?? null,

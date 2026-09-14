@@ -57,6 +57,8 @@ import type { ImageBatchScope } from '@/lib/ai/image-batch.shared';
 import {
   authorizeCurrentUserBillableAction,
   authorizeCurrentUserImageModelBillableAction,
+  authorizeCurrentUserImageRegenerationBillableAction,
+  authorizeCurrentUserStoryContinuation,
   finalizeCurrentUserBillableAction,
   releaseCurrentUserBillableAction,
 } from '@/app/actions/pricing-enforcement';
@@ -4313,7 +4315,7 @@ export const useStoryStore = create<StoryState>()(
             timingSteps,
             'wallet_authorization',
             'Authorize branch continuation',
-            () => authorizeCurrentUserImageModelBillableAction({
+            () => authorizeCurrentUserStoryContinuation({
               actionKey: continueStoryActionKey,
               idempotencyKey: `continue_story:${session.savedStoryId || session.storySessionId}:${session.storyMap.currentNodeId}:${optionId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,
@@ -6182,7 +6184,7 @@ export const useStoryStore = create<StoryState>()(
 
         try {
           if (!promptOnly) {
-            const billingAuthorization = await authorizeCurrentUserImageModelBillableAction({
+            const billingAuthorization = await authorizeCurrentUserImageRegenerationBillableAction({
               actionKey: 'regenerate_image',
               idempotencyKey: `regenerate_image:${session.savedStoryId || session.storySessionId}:${nodeId}:${uuidv4()}`,
               relatedStoryId: session.savedStoryId ?? null,

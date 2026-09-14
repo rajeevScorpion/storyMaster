@@ -5,6 +5,8 @@ import { runImageGenerationJobs } from '@/lib/media/image-job-runner';
 import { runReferenceAdoptionJobs } from '@/lib/references/adoption-job-runner';
 import { cleanupExpiredOriginals } from '@/lib/media/cleanup';
 import { cleanupAbandonedReferenceSetups } from '@/lib/references/reference-cleanup';
+import { drainAgentRuns } from '@/lib/agentic/orchestrator';
+import { getAgenticFlags } from '@/lib/agentic/flags';
 
 // Reconciliation downloads + compresses images; give it room but stay bounded.
 export const maxDuration = 300;
@@ -18,12 +20,47 @@ function isAuthorized(request: Request): boolean {
   return header === `Bearer ${secret}`;
 }
 
+// This route is live, runs daily on Vercel's only cron, and already reconciles
+// narration/image work real users depend on. Everything below is wrapped so an
+// agentic failure -- a thrown error, a rejected promise, or a hang -- can NEVER
+// stop that work from completing:
+//   1. getAgenticFlags() itself already fails closed (fallback = false) if the
+//      feature_flags read errors, so a flags-table problem just reads as "off".
+//   2. The flag is read through getAgenticFlags() (never getFeatureFlag directly
+//      for agentic keys), per lib/agentic/flags.ts's own contract.
+//   3. drainAgentRuns() is raced against a hard timeout so a stuck drain (e.g. a
+//      future Phase 6 stage executor that never resolves) can't hold up the
+//      route past this budget -- the route moves on regardless of which side
+//      of the race finished.
+//   4. The whole thing sits behind one try/catch that swallows and logs
+//      concisely; nothing here is allowed to reject the outer Promise.all.
+// Deliberately independent of /api/agentic/run rather than calling it: this
+// keeps the reconcile route's failure surface identical to today's (it never
+// makes an outbound fetch to itself) and needs no CRON_SECRET round-trip.
+const AGENTIC_DRAIN_TIMEOUT_MS = 30_000;
+
+async function runAgenticSchedulerDrain(): Promise<{ processed: number }> {
+  try {
+    const flags = await getAgenticFlags();
+    if (!flags.schedulerEnabled) return { processed: 0 };
+
+    const timeout = new Promise<{ processed: number }>((resolve) => {
+      setTimeout(() => resolve({ processed: 0 }), AGENTIC_DRAIN_TIMEOUT_MS);
+    });
+    const drain = drainAgentRuns().then((processed) => ({ processed }));
+    return await Promise.race([drain, timeout]);
+  } catch (error) {
+    console.error('Agentic scheduler drain failed (reconcile continues regardless):', error instanceof Error ? error.message : error);
+    return { processed: 0 };
+  }
+}
+
 async function handle(request: Request): Promise<Response> {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
   try {
-    const [images, narration, imageJobs, adoptionJobs] = await Promise.all([
+    const [images, narration, imageJobs, adoptionJobs, agenticRuns] = await Promise.all([
       reconcileActiveImageBatches(),
       reconcileActiveNarrationJobs().catch((error) => {
         console.error('Narration reconcile failed:', error instanceof Error ? error.message : error);
@@ -39,6 +76,15 @@ async function handle(request: Request): Promise<Response> {
       runReferenceAdoptionJobs({}).catch((error) => {
         console.error('Reference adoption reconcile failed:', error instanceof Error ? error.message : error);
         return { processed: 0, failed: 0, remaining: 0 };
+      }),
+      // Agentic Creator System: drains the run queue when agentic_scheduler_enabled
+      // is on. runAgenticSchedulerDrain() already never throws -- see its own
+      // comment above -- this .catch is a deliberate second layer, not redundancy:
+      // an agentic failure reaching this Promise.all must be structurally
+      // impossible, not just unlikely.
+      runAgenticSchedulerDrain().catch((error) => {
+        console.error('Agentic scheduler drain rejected unexpectedly (reconcile continues regardless):', error instanceof Error ? error.message : error);
+        return { processed: 0 };
       }),
     ]);
     // Retention cleanup after the reconcile work (no-ops when disabled).
@@ -59,6 +105,7 @@ async function handle(request: Request): Promise<Response> {
       imageJobsRemaining: imageJobs.remaining,
       adoptionJobsProcessed: adoptionJobs.processed,
       adoptionJobsRemaining: adoptionJobs.remaining,
+      agenticRunsProcessed: agenticRuns.processed,
       originalsDeleted: cleanup.deleted,
       referenceSourcesDeleted: referenceCleanup.sourcesDeleted,
     });

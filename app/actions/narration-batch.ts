@@ -2,6 +2,9 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { assertCanEditStory } from '@/lib/agentic/reviewers';
+import { canTriggerMediaForEditAccess } from '@/lib/agentic/reviewers.shared';
+import { AGENT_STORY_REVIEWER_SPEND_METADATA_KEY } from '@/lib/agentic/billing-identity.shared';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
 import { getPathToNode } from '@/lib/utils/story-map';
 import { resolveNarrationVoiceServer } from '@/app/actions/narration';
@@ -53,6 +56,7 @@ const NARRATION_JOB_SELECT =
 interface NarrationStoryRow {
   id: string;
   user_id: string;
+  agent_persona_id: string | null;
   story_map: StoryMap | null;
   story_config: Partial<StoryConfig> | null;
   genre: string | null;
@@ -122,15 +126,22 @@ async function kickNarrationWorker(jobId: string): Promise<void> {
   }).catch((error) => console.error('Failed to kick narration worker:', error));
 }
 
-async function loadOwnedStory(admin: AdminClient, storyId: string, userId: string): Promise<NarrationStoryRow> {
-  const { data, error } = await admin
-    .from('stories')
-    .select('id, user_id, story_map, story_config, genre, tone, target_age')
-    .eq('id', storyId)
-    .single();
-  if (error || !data) throw new Error('Story not found.');
-  if ((data as NarrationStoryRow).user_id !== userId) throw new Error('Forbidden.');
-  return data as NarrationStoryRow;
+// D14/Unit 9b: an ordinary owner narrating their own story is unaffected --
+// assertCanEditStory grants owner access with reviewer === null, and
+// canTriggerMediaForEditAccess short-circuits to true for that case without
+// ever consulting can_trigger_media. Only a reviewer's submit is gated on it.
+async function loadOwnedStory(storyId: string, userId: string): Promise<NarrationStoryRow> {
+  const { story, reviewer } = await assertCanEditStory(storyId, userId, [
+    'story_map',
+    'story_config',
+    'genre',
+    'tone',
+    'target_age',
+  ]);
+  if (!canTriggerMediaForEditAccess(reviewer)) {
+    throw new Error('Forbidden.');
+  }
+  return story as unknown as NarrationStoryRow;
 }
 
 /**
@@ -146,7 +157,7 @@ export async function submitStoryNarrationBatch(input: {
   if (authError || !user) throw new Error('Not authenticated');
 
   const admin = createAdminClient();
-  const story = await loadOwnedStory(admin, input.storyId, user.id);
+  const story = await loadOwnedStory(input.storyId, user.id);
   const map = story.story_map;
   if (!map || !map.nodes || !map.currentNodeId) throw new Error('Story has no beats to narrate.');
 
@@ -176,9 +187,29 @@ export async function submitStoryNarrationBatch(input: {
     targetAge,
   });
 
+  // D13/Unit 9d: an agent-owned story is billed to its owner -- the system user --
+  // never to the reviewer who happened to press the button. narration_batch_jobs.user_id
+  // is the column that decides who pays (processNarrationJob derives actorKind from it,
+  // never from who submitted), so stamping it with story.user_id here is what lets the
+  // agentic bypass in authorizeBillableAction fire downstream. For an ordinary user's own
+  // story story.user_id === user.id already, so this changes nothing on that path.
+  // narration_batch_jobs has no metadata/jsonb column to also record the submitting
+  // reviewer on the row (checked: migrations 068/069 are its only schema, neither adds
+  // one) -- logged instead so "who pressed it" is at least discoverable without a
+  // migration this unit was told not to invent.
+  const isAgentOwnedStory = Boolean(story.agent_persona_id);
+  const payerUserId = isAgentOwnedStory ? story.user_id : user.id;
+  if (isAgentOwnedStory && payerUserId !== user.id) {
+    console.info('[narration:batch] agent-owned story narration submitted by reviewer', {
+      storyId: story.id,
+      submittedByUserId: user.id,
+      payerUserId,
+    });
+  }
+
   const nodeIds = targetNodes.map((node) => node.id);
   const jobInsert = {
-    user_id: user.id,
+    user_id: payerUserId,
     story_id: story.id,
     scope: 'current_path',
     status: 'running',
@@ -243,6 +274,13 @@ export async function submitStoryNarrationBatch(input: {
  */
 async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Promise<void> {
   const startedAt = Date.now();
+  // D13/Unit 9d: derived HERE, not at submit time. reconcileStoryNarration and
+  // reconcileActiveNarrationJobs both re-enter processNarrationJob with no agentic
+  // context of their own -- they only have the job row -- so deriving actorKind from
+  // job.user_id (rather than trusting something stamped at submit) is what keeps the
+  // bypass alive through every recovery path, not just the first attempt.
+  const actorKind: 'user' | 'agentic_system' =
+    job.user_id === process.env.AGENTIC_SYSTEM_USER_ID ? 'agentic_system' : 'user';
   const nodeIds = Array.isArray(job.node_ids) ? job.node_ids : [];
   if (nodeIds.length === 0) {
     await admin.from('narration_batch_jobs')
@@ -307,7 +345,14 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
       storyId: job.story_id,
       nodeId,
       beatNumber: node.data.beatNumber,
-      metadata: { language: config.language, narrationBatch: true },
+      metadata: {
+        language: config.language,
+        narrationBatch: true,
+        // Phase 11: actorKind above already IS the agent-owned-story test
+        // (resolveAgenticBillingIdentity, one hop upstream) -- reusing it here marks
+        // this cost-telemetry event as reviewer work on an agent draft.
+        ...(actorKind === 'agentic_system' ? { [AGENT_STORY_REVIEWER_SPEND_METADATA_KEY]: true } : {}),
+      },
     };
 
     try {
@@ -325,7 +370,7 @@ async function processNarrationJob(admin: AdminClient, job: NarrationJobRow): Pr
           audience: config.ageGroup,
           storyTextParts: node.data.storyTextParts as StoryTextParts | undefined,
           overlayConfig: config.storyTextOverlay,
-          serverAuth: { userId: job.user_id },
+          serverAuth: { userId: job.user_id, actorKind },
           billingIdempotencyKey: `narration-batch:${job.id}:${nodeId}:${Date.now()}`,
         }
       );
