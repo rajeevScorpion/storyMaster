@@ -127,7 +127,7 @@ for what has actually run.
 | 117 | `agent_review_decisions_reviewer_index` | additive index `idx_agent_review_decisions_reviewer` on `(reviewer_id, created_at DESC)` — 112 indexed only `run_id`, so "this reviewer's own history" full-scanned | **Applied** 2026-09-14 03:13:50+00 | Not applied |
 | 118 | `rename_agentic_pipeline_image_flag` | renames flag `agentic_image_generation_enabled` → `agentic_pipeline_image_generation_enabled`, so the name says what it gates (the autonomous pipeline only, never a reviewer's interactive regenerate) | **Applied** 2026-09-14 03:14:10+00. **Order-independent** — it UPDATEs the row if 102 already ran, or INSERTs it off if it lands first. ⚠ The flag is enforced **nowhere in code**; see "Deferred" | Not applied |
 
-### Text Model Gateway (branch `feature/text-model-gateway`; not yet merged into `dev`)
+### Text Model Gateway (`feature/text-model-gateway`, merged into `dev` 2026-09-14; not on production)
 
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|

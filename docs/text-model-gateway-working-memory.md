@@ -40,10 +40,11 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
   section K.
 
 ### Current state — supersedes everything above
-**Code-complete on `feature/text-model-gateway`; not merged into `dev`.** Migrations 119 and 120 applied on dev.
-Owner next: (1) sign in, try a task's Thinking dropdown and a model's Edit / Test / Enable on `/admin/text-models`;
-(2) decide whether the economy tasks stay on 3.8 Flash Low or go to 3.5 Flash Minimal (PROJECT_STATE deferred);
-(3) merge into `dev` `--no-ff`; (4) production: pre-apply check, 119, 120, redeploy.
+**Merged into `dev` with `--no-ff` on 2026-09-14 and pushed** (owner's instruction). Migrations 119 and 120 applied
+on dev; neither on production. Still open: (1) the admin Thinking / Edit / Test / Enable actions have not been
+clicked through in a real browser; (2) whether the economy tasks stay on 3.8 Flash Low or go to 3.5 Flash Minimal
+(PROJECT_STATE deferred); (3) production: pre-apply check, 119, 120, redeploy. Not started: an "Add from
+OpenRouter" catalog picker for the Add model form (proposed, owner did not ask for it).
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
   read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
 
