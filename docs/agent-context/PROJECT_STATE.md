@@ -618,6 +618,12 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   session's Supabase access to production is read-only and this wasn't run; the owner runs it before 115
   reaches prod.
 
+**Text models**
+- **Evaluate → writer-repair loop deferred** (owner, 2026-09-14). A cheap evaluator whose verdict triggers an
+  automatic writer repair conflicts with D9 ("a model call may never be the sole cause of an automatic
+  consequence"). Amend or scope around D9 before building it. Existing bounded behaviour is unchanged: beat and
+  seed generation get one code-validated repair retry; agent evaluation stays advisory.
+
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
 - The full `ImageModelSnapshot` — including both `providerCost*Usd` fields — still reaches the client inside
@@ -674,6 +680,9 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
 
 ## Roadmap notes
 
+- **Text Model Gateway — in progress on `feature/text-model-gateway`** (started 2026-09-14). Registry-backed
+  text models across Gemini, OpenAI and OpenRouter. Start at
+  [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
   or independent providers per task. Much of this has since been overtaken by the real multi-provider image
