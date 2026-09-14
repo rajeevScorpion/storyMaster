@@ -24,8 +24,11 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
 - **Phase B landed as `2a593e9`, reviewed by Opus: passes.** Deviation accepted: `capabilities.reasoningLevels`
   typed optional (always an array after normalization). Agent also fixed the edit form wiping seeded levels.
 - **Delegated in parallel to Sonnet:** Phase C gateway (commit `feat(text-models): gateway sends each task's
-  thinking level…`) and Phase D admin page (commit `feat(text-models): card-grid Text Models page…`). Review
-  both diffs next, then Phase E (live smoke, full gate, docs).
+  thinking level…`) and Phase D admin page (commit `feat(text-models): card-grid Text Models page…`).
+- **Phase C landed as `73a2fbe`, reviewed by Opus: passes.** Level resolved server-side per call; Gemini
+  temperature 1; thoughts counted as output; "no row" config cached 60s.
+- **Phase E live smoke delegated to Sonnet** (only `scripts/text-gateway.smoke.ts`; commit `test(text-models):
+  live smoke per thinking level…`). Still to do after D: review D, full gate (Sonnet, report-only), docs (Opus).
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
   read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
 
