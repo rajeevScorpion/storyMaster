@@ -129,6 +129,10 @@ for what has actually run.
 
 #### Promoting the agentic system to production — checklist
 
+**The executable version of this is [../production-promotion-runbook.md](../production-promotion-runbook.md)** —
+step-by-step, with all 16 migrations in order, the two that must not be applied early, and the
+post-deploy checks. The summary below is kept for context; the runbook is what to work through.
+
 Migrations are only one of three things prod needs. All three, in this order:
 
 1. **Apply migrations 102-118 by hand, in numeric order** (there is no 109 — see above). 103 must precede 104, 105 and 106.
