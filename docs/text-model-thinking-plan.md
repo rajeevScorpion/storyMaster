@@ -499,9 +499,12 @@ Verify: `npx tsc --noEmit`, `npm run lint`, `npm test`.
    `callProvider` → adapters. `testTextModel` uses the model default only. Cost metadata gains
    `reasoningLevel`, `reasoningSource`, `temperatureSent`.
 3. `openai-compatible.shared.ts buildChatCompletionsBody(record, request, reasoningLevel)`.
-4. Tests: Gemini config (temperature always 1 even when the request says 0.2; thinkingConfig per level; none
+4. `lib/ai/model-config.ts getModelConfig`: cache the "no row" result (`PGRST116`) as the task defaults for
+   the normal 60s, so the router's per-call lookup does not hit the database on every call for tasks without
+   a row (story bible, discovery metadata, most agentic tasks). Every writer already calls `invalidateCache()`.
+5. Tests: Gemini config (temperature always 1 even when the request says 0.2; thinkingConfig per level; none
    when undefined), usage (thoughts added to output and reported as reasoning), chat body per provider and
-   level, router passes the task level only for the configured key.
+   level, router passes the task level only for the configured key, "no row" is cached.
 
 Verify: tsc, lint, test.
 
@@ -513,6 +516,10 @@ Verify: tsc, lint, test.
    admin detail (Phase A).
 2. `TextModelRegistryStudio.tsx` per 2.4.
 3. `e2e/text-models-admin.spec.ts`: keep it passing; add an assertion that a task card shows a Thinking control.
+4. Story Playground (`components/admin/PlaygroundStudio.tsx` ~886-887): the disabled-slider note says the value
+   "is not sent", which is wrong for Gemini (1.0 is sent). Add `providerKey` to `TextModelOption`
+   (`app/actions/text-models.ts getTextModelOptions`) and show "Gemini always runs at temperature 1.0." for
+   Gemini models.
 
 Verify: tsc, lint, test, `npm run build:verify`, `npm run test:e2e`.
 

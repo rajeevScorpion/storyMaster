@@ -21,8 +21,11 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
   Frozen: any change ships as 121.** Usage 56% at that point.
 - **Phase A landed as `45e32a1`, reviewed by Opus: passes.** Also covered two legacy `story_map` fallback paths
   the plan missed. Opus fix `7c9c941`: empty image error stays "no error".
-- Next: review A and B diffs → Phase C (gateway) and D (admin page) in parallel → Phase E (live smoke, full
-  gate, docs).
+- **Phase B landed as `2a593e9`, reviewed by Opus: passes.** Deviation accepted: `capabilities.reasoningLevels`
+  typed optional (always an array after normalization). Agent also fixed the edit form wiping seeded levels.
+- **Delegated in parallel to Sonnet:** Phase C gateway (commit `feat(text-models): gateway sends each task's
+  thinking level…`) and Phase D admin page (commit `feat(text-models): card-grid Text Models page…`). Review
+  both diffs next, then Phase E (live smoke, full gate, docs).
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
   read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
 
