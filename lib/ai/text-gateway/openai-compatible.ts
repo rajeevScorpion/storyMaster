@@ -66,7 +66,7 @@ export async function callOpenAiCompatible(
       providerKey,
       modelKey: record.modelKey,
       retryable: false,
-      message: aborted
+      detail: aborted
         ? `${describeCall(record, request.taskKey)} timed out after ${timeoutMs}ms.`
         : `${describeCall(record, request.taskKey)} request failed before a response was received.`,
     });
@@ -82,7 +82,7 @@ export async function callOpenAiCompatible(
       modelKey: record.modelKey,
       status: response.status,
       retryable,
-      message: `${describeCall(record, request.taskKey)} failed with HTTP ${response.status}${await readProviderErrorMessage(response)}.`,
+      detail: `${describeCall(record, request.taskKey)} failed with HTTP ${response.status}${await readProviderErrorMessage(response)}.`,
     });
   }
 
@@ -94,7 +94,7 @@ export async function callOpenAiCompatible(
       providerKey,
       modelKey: record.modelKey,
       retryable: false,
-      message: `${describeCall(record, request.taskKey)} was refused by the provider.`,
+      detail: `${describeCall(record, request.taskKey)} was refused by the provider.`,
     });
   }
   return parsed;

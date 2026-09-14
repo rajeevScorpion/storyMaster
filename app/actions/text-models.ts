@@ -21,7 +21,7 @@ import {
 } from '@/lib/ai/text-models.shared';
 import { testTextModel } from '@/lib/ai/text-gateway/router';
 import { computeTextCostUsd } from '@/lib/ai/text-gateway/cost.shared';
-import { TextGatewayError } from '@/lib/ai/text-gateway/types.shared';
+import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
 
 // Admin-only. Every export re-checks verifyAdmin: provider identity and env status never reach
 // a non-admin browser.
@@ -157,7 +157,7 @@ export async function testAdminTextModel(id: string): Promise<AdminTextModelTest
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: errorDetail(error),
       category: error instanceof TextGatewayError ? error.category : undefined,
     };
   }

@@ -25,7 +25,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, record: TextModelRecord
             providerKey: 'gemini',
             modelKey: record.modelKey,
             retryable: false,
-            message: `Gemini model "${record.modelKey}" timed out after ${ms}ms.`,
+            detail: `Gemini model "${record.modelKey}" timed out after ${ms}ms.`,
           })
         ),
       ms
@@ -90,7 +90,7 @@ export async function callGemini(
       modelKey: record.modelKey,
       status,
       retryable,
-      message: `Gemini model "${record.modelKey}" request failed for task ${request.taskKey}${upstream}`,
+      detail: `Gemini model "${record.modelKey}" request failed for task ${request.taskKey}${upstream}`,
     });
   }
 
@@ -101,7 +101,7 @@ export async function callGemini(
       providerKey: 'gemini',
       modelKey: record.modelKey,
       retryable: false,
-      message: `Empty response from Gemini model "${record.modelKey}" for task ${request.taskKey}.`,
+      detail: `Empty response from Gemini model "${record.modelKey}" for task ${request.taskKey}.`,
     });
   }
 

@@ -87,6 +87,7 @@ import { isMissingPersonaSchemaError } from '@/lib/agentic/personas.shared';
 // AdminClient import to a value import; that would make the edge bidirectional and a
 // genuine cycle.
 import { tryAutoAssignReview } from '@/lib/agentic/review-routing';
+import { errorDetail } from '@/lib/ai/text-gateway/types.shared';
 
 // Exported (Unit 9e, lib/agentic/review-decisions.ts) so a reviewer-decision write can
 // pass the SAME admin client instance it already opened for its own agent_review_decisions
@@ -863,7 +864,7 @@ async function advanceRun(
     try {
       outcome = await executor(run, target);
     } catch (error) {
-      await handleStageFailure(admin, run, target, error instanceof Error ? error.message : 'Unknown stage executor error.', undefined, error);
+      await handleStageFailure(admin, run, target, errorDetail(error, 'Unknown stage executor error.'), undefined, error);
       return;
     }
 
@@ -1003,7 +1004,7 @@ export async function executeRunNow(
       admin,
       run,
       run.stage,
-      error instanceof Error ? error.message : 'Unknown orchestrator error.',
+      errorDetail(error, 'Unknown orchestrator error.'),
       undefined,
       error
     ).catch(() => {});
@@ -1164,7 +1165,7 @@ export async function drainAgentRuns(
         admin,
         run,
         run.stage,
-        error instanceof Error ? error.message : 'Unknown orchestrator error.',
+        errorDetail(error, 'Unknown orchestrator error.'),
         undefined,
         error
       ).catch(() => {});

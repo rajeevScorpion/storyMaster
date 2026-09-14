@@ -70,27 +70,45 @@ export interface TextGatewayErrorInput {
   category: TextGatewayErrorCategory;
   providerKey: TextProviderKey;
   modelKey: string;
-  message: string;
+  detail: string;
   status?: number;
   retryable?: boolean;
 }
 
-/** Never includes headers, API keys, or full prompts in `message` -- only provider,
- * model key and task, per plan section 3.3's HTTP mapping rules. */
+export const TEXT_FAILURE_MESSAGE = 'Something went wrong while generating this. Please try again.';
+export const TEXT_BUSY_MESSAGE = 'This is taking longer than usual. Please try again in a moment.';
+
+/** Reader-safe: never contains a provider, model or task name. */
+export function readerSafeTextFailureMessage(category: TextGatewayErrorCategory): string {
+  return category === 'timeout' || category === 'rate_limited' ? TEXT_BUSY_MESSAGE : TEXT_FAILURE_MESSAGE;
+}
+
+/** Full failure text for server logs and admin screens only. */
+export function errorDetail(error: unknown, fallback = 'Unknown error'): string {
+  if (error instanceof TextGatewayError) return error.detail;
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/** `message` is always the fixed reader-safe sentence from `readerSafeTextFailureMessage` --
+ * never includes headers, API keys, full prompts, or the provider/model/task names. The full
+ * failure text (which does name provider and model, per plan section 3.3's HTTP mapping rules)
+ * lives in `detail`, for server logs and admin screens only -- read it via `errorDetail`. */
 export class TextGatewayError extends Error {
   category: TextGatewayErrorCategory;
   providerKey: TextProviderKey;
   modelKey: string;
   status?: number;
   retryable: boolean;
+  detail: string;
 
   constructor(input: TextGatewayErrorInput) {
-    super(input.message);
+    super(readerSafeTextFailureMessage(input.category));
     this.name = 'TextGatewayError';
     this.category = input.category;
     this.providerKey = input.providerKey;
     this.modelKey = input.modelKey;
     this.status = input.status;
     this.retryable = input.retryable ?? false;
+    this.detail = input.detail;
   }
 }

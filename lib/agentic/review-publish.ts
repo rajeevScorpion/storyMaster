@@ -104,6 +104,7 @@ import { normalizeStoredAgeGroup } from '@/lib/ai/story-audience';
 import { normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
 import { getStorylinePublishModes } from '@/lib/story/publish-modes';
+import { readerSafeImageError } from '@/lib/media/image-failure.shared';
 import {
   getStoryOrientation,
   isMissingAdditiveColumnError,
@@ -191,7 +192,7 @@ function toLegacyBeat(
     endingForecast: beat.ending_forecast,
     imageUrl: beat.image_url,
     imageStatus: beat.image_status,
-    imageError: beat.image_error || undefined,
+    imageError: readerSafeImageError(beat.image_error),
     audioUrl: beat.audio_url,
     audioStatus: beat.audio_status,
     audioError: beat.audio_error || undefined,

@@ -16,7 +16,7 @@ import { extractJsonText, stripNullOptionals, validateAgainstGeminiSchema, type 
 import { callGemini } from './gemini';
 import { callOpenAiCompatible } from './openai-compatible';
 import type { ParsedChatCompletionsResponse } from './openai-compatible.shared';
-import { TextGatewayError, type TextGenerationRequest, type TextGenerationResult } from './types.shared';
+import { TextGatewayError, errorDetail, type TextGenerationRequest, type TextGenerationResult } from './types.shared';
 
 const DEFAULT_TEXT_GATEWAY_TIMEOUT_MS = 30_000;
 
@@ -41,7 +41,7 @@ function assertCredentials(record: TextModelRecord): void {
       modelKey: record.modelKey,
       retryable: false,
       // Names only, never values -- see lib/ai/text-models.ts's getMissingEnvVars.
-      message: `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" is missing environment variable(s): ${missing.join(', ')}.`,
+      detail: `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" is missing environment variable(s): ${missing.join(', ')}.`,
     });
   }
 }
@@ -97,7 +97,7 @@ function finalizeOutputText(
       providerKey: record.providerKey,
       modelKey: record.modelKey,
       retryable: false,
-      message: `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" returned unparsable JSON for task ${request.taskKey}.`,
+      detail: `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" returned unparsable JSON for task ${request.taskKey}.`,
     });
   }
   if (!request.schema) return { text: JSON.stringify(parsed), schemaIssueCount: 0 };
@@ -109,7 +109,7 @@ function finalizeOutputText(
       providerKey: record.providerKey,
       modelKey: record.modelKey,
       retryable: false,
-      message: `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" output failed schema validation for task ${request.taskKey}: ${issues.slice(0, 3).join('; ')}`,
+      detail: `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" output failed schema validation for task ${request.taskKey}: ${issues.slice(0, 3).join('; ')}`,
     });
   }
   return { text: JSON.stringify(stripNullOptionals(parsed, request.schema as GeminiSchemaNode)), schemaIssueCount: 0 };
@@ -130,7 +130,7 @@ export async function generateText(request: TextGenerationRequest): Promise<Text
       providerKey: resolution.record.providerKey,
       modelKey: request.modelKey,
       retryable: false,
-      message: `Model "${request.modelKey}" is not available for task ${request.taskKey}${resolution.fallbackReason ? ` (${resolution.fallbackReason})` : ''}.`,
+      detail: `Model "${request.modelKey}" is not available for task ${request.taskKey}${resolution.fallbackReason ? ` (${resolution.fallbackReason})` : ''}.`,
     });
   }
 
@@ -191,7 +191,7 @@ function logTiming(taskKey: string, record: TextModelRecord, durationMs: number,
     success,
     provider: record.providerKey,
     modelKey: record.modelKey,
-    ...(error ? { message: error instanceof Error ? error.message : 'Unknown error' } : {}),
+    ...(error ? { message: errorDetail(error) } : {}),
   });
 }
 

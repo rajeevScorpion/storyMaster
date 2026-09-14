@@ -13,6 +13,7 @@ import { getFeatureFlag, getFeatureFlagValue, getModelConfig } from '@/lib/ai/mo
 import { optionsRegenerationSchema } from '@/lib/ai/generation-schemas';
 import { OPTIONS_REGENERATION_PROMPT } from '@/lib/ai/prompts';
 import { generateText } from '@/lib/ai/text-gateway/router';
+import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import { releaseBillableAction } from '@/lib/pricing/enforcement';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import {
@@ -579,9 +580,12 @@ export async function regenerateBeatOptions(input: {
 
     return { status: 'updated', options: nextOptions };
   } catch (error) {
+    console.error('[beat-control] regenerateBeatOptions failed:', errorDetail(error));
     return {
       status: 'failed',
-      error: error instanceof Error ? error.message : 'Failed to regenerate options.',
+      error: error instanceof BeatControlError || error instanceof TextGatewayError
+        ? error.message
+        : 'Failed to regenerate options.',
     };
   }
 }

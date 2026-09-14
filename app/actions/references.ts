@@ -18,6 +18,7 @@ import {
   isReferenceKind,
 } from '@/lib/references/reference-storage';
 import { ReferenceError } from '@/lib/references/reference-errors';
+import { readerSafeAdoptionError } from '@/lib/references/adoption-errors.shared';
 import { authorizeCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import { buildSeedCharacters, type SeedCharacterInput } from '@/lib/references/seed';
@@ -441,7 +442,7 @@ export async function getReferenceSetupStatus(setupId: string): Promise<Referenc
       status,
       previewUrl,
       canonicalUrl,
-      error: adoption?.error ?? null,
+      error: readerSafeAdoptionError(adoption?.error ?? null),
     });
   }
 

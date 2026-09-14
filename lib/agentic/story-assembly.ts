@@ -103,6 +103,7 @@ import {
   type StoryNarrationVoiceSelection,
 } from '@/lib/ai/narration-voices';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import { errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import type {
   Character,
   CharacterNameSource,
@@ -438,7 +439,7 @@ async function releaseAgenticSpend(reservationId: string | null, reason: string)
 function toFailure(error: unknown, metadata?: Record<string, unknown>): StageExecutionOutcome {
   return {
     kind: 'failed',
-    message: error instanceof Error ? error.message : 'Unknown error during story assembly.',
+    message: errorDetail(error, 'Unknown error during story assembly.'),
     metadata,
     error,
   };
@@ -1160,7 +1161,7 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
     buildSeededStoryMap(completedBeats);
   } catch (error) {
     if (error instanceof SeededStoryMapError) {
-      return { kind: 'failed', message: error.message, error };
+      return { kind: 'failed', message: errorDetail(error), error };
     }
     throw error;
   }
@@ -1321,7 +1322,7 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
     storyMap = buildSeededStoryMap(progress.completedBeats);
   } catch (error) {
     if (error instanceof SeededStoryMapError) {
-      return { kind: 'failed', message: error.message, error };
+      return { kind: 'failed', message: errorDetail(error), error };
     }
     throw error;
   }

@@ -648,7 +648,7 @@ export async function generateImage(
       finalPromptText: finalImagePrompt,
       imageGenerationMetadata: {
         placeholder: true,
-        reason: error instanceof Error ? error.message : 'image_generation_failed',
+        reason: 'image_generation_failed',
       },
     };
   }

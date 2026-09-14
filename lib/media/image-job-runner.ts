@@ -23,6 +23,7 @@ import {
 } from '@/lib/beat-control/settings';
 import type { BeatImageJobRequestPayload, ImageGenerationJobRow } from '@/lib/types/image-jobs';
 import type { BeatImageGalleryEntry, StoryMap } from '@/lib/types/story';
+import { IMAGE_FAILURE_MESSAGE } from '@/lib/media/image-failure.shared';
 
 type AdminClient = ReturnType<typeof createAdminClient>;
 
@@ -30,8 +31,6 @@ type AdminClient = ReturnType<typeof createAdminClient>;
 // serverless duration cap and re-kick for whatever is left.
 const JOB_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.WORKER_TIME_BUDGET_MS) || 20_000);
 const STALE_CLAIM_MINUTES = 5;
-
-const FRIENDLY_FAILURE = 'Image generation failed. Please try again.';
 
 function baseUrl(): string {
   const raw = process.env.APP_URL
@@ -182,7 +181,7 @@ async function markJobFailed(admin: AdminClient, job: ImageGenerationJobRow, mes
     .eq('id', job.id);
   await admin
     .from('beats')
-    .update({ image_status: 'failed', image_error: FRIENDLY_FAILURE })
+    .update({ image_status: 'failed', image_error: IMAGE_FAILURE_MESSAGE })
     .eq('story_id', job.story_id)
     .eq('node_id', job.node_id);
   await settleReservation(admin, job, 'release', 'image_job_failed');
