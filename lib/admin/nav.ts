@@ -496,6 +496,7 @@ export const ADMIN_NAV: AdminNavGroup[] = [
     id: 'studio',
     label: 'Studio',
     items: [
+      { label: 'Text Models', href: '/admin/text-models', icon: FileText },
       { label: 'Image Models', href: '/admin/image-models', icon: Images },
       { label: 'Graphic Styles', href: '/admin/graphic-styles', icon: Palette },
       { label: 'Story Visuals', href: '/admin/settings/story-visuals', icon: Brush },
