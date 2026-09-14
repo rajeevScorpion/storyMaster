@@ -28,7 +28,11 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
 - **Phase C landed as `73a2fbe`, reviewed by Opus: passes.** Level resolved server-side per call; Gemini
   temperature 1; thoughts counted as output; "no row" config cached 60s.
 - **Phase E live smoke delegated to Sonnet** (only `scripts/text-gateway.smoke.ts`; commit `test(text-models):
-  live smoke per thinking level…`). Still to do after D: review D, full gate (Sonnet, report-only), docs (Opus).
+  live smoke per thinking level…`).
+- **Phase D landed as `0cf116f`, reviewed by Opus: passes** (tsc, lint, build:verify, e2e 30/30 incl. the new
+  Thinking control assertion). Opus nit: Gemini model cards say "temperature fixed at 1.0". GOTCHAS and
+  PROJECT_STATE (120 row, deferred list) updated.
+- Left: smoke results → final report addendum → owner click-through → merge into `dev` `--no-ff`.
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
   read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
 
