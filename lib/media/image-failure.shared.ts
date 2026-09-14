@@ -7,7 +7,8 @@
 
 export const IMAGE_FAILURE_MESSAGE = 'Image generation failed. Please try again.';
 
-/** `raw` present (non-null, non-undefined) becomes the generic constant; absent stays absent. */
+/** Any non-empty `raw` becomes the generic constant; null, undefined and '' stay absent, matching
+ * the `image_error || undefined` mappings this replaced. */
 export function readerSafeImageError(raw: string | null | undefined): string | undefined {
-  return raw != null ? IMAGE_FAILURE_MESSAGE : undefined;
+  return raw ? IMAGE_FAILURE_MESSAGE : undefined;
 }

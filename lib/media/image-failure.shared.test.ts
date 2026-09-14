@@ -2,9 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { IMAGE_FAILURE_MESSAGE, readerSafeImageError } from './image-failure.shared';
 
 describe('readerSafeImageError', () => {
-  it('returns undefined for null and undefined', () => {
+  it('returns undefined for null, undefined and an empty string', () => {
     expect(readerSafeImageError(null)).toBeUndefined();
     expect(readerSafeImageError(undefined)).toBeUndefined();
+    expect(readerSafeImageError('')).toBeUndefined();
   });
 
   it('collapses any present raw error text to the generic constant', () => {
