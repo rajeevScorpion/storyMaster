@@ -65,15 +65,15 @@ export function buildChatCompletionsBody(record: TextModelRecord, request: TextG
     body.max_completion_tokens = record.defaultParams.maxOutputTokens;
   }
 
-  if (record.providerKey === 'openai' && record.defaultParams.reasoningEffort) {
-    body.reasoning_effort = record.defaultParams.reasoningEffort;
+  // Phase B reads only the model's own default thinking level; Phase C threads the resolved
+  // per-request level (task override or model default, per resolveReasoningLevel) through a
+  // parameter here instead. 'none' is a real, sendable level for both providers -- it is not
+  // falsy-equivalent to "absent" since TextReasoningLevel is always a non-empty string.
+  if (record.providerKey === 'openai' && record.defaultParams.reasoningLevel) {
+    body.reasoning_effort = record.defaultParams.reasoningLevel;
   }
-  if (record.providerKey === 'openrouter') {
-    if (record.defaultParams.reasoningEnabled === false) {
-      body.reasoning = { enabled: false };
-    } else if (record.defaultParams.reasoningEffort) {
-      body.reasoning = { effort: record.defaultParams.reasoningEffort };
-    }
+  if (record.providerKey === 'openrouter' && record.defaultParams.reasoningLevel) {
+    body.reasoning = { effort: record.defaultParams.reasoningLevel };
   }
 
   if (responseFormat) {

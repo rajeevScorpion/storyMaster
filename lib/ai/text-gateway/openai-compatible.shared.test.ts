@@ -113,12 +113,23 @@ describe('buildChatCompletionsBody', () => {
     expect(buildChatCompletionsBody(positive, makeRequest()).max_completion_tokens).toBe(512);
   });
 
-  it('OpenAI reasoningEffort becomes reasoning_effort; OpenRouter becomes reasoning.effort', () => {
-    const openaiRecord = makeRecord({ providerKey: 'openai', defaultParams: { reasoningEffort: 'low' } });
+  it('OpenAI reasoningLevel becomes reasoning_effort; OpenRouter becomes reasoning.effort, including "none"', () => {
+    const openaiRecord = makeRecord({ providerKey: 'openai', defaultParams: { reasoningLevel: 'low' } });
     expect(buildChatCompletionsBody(openaiRecord, makeRequest()).reasoning_effort).toBe('low');
 
-    const openrouterRecord = makeRecord({ defaultParams: { reasoningEffort: 'low' } });
+    const openrouterRecord = makeRecord({ defaultParams: { reasoningLevel: 'low' } });
     expect(buildChatCompletionsBody(openrouterRecord, makeRequest()).reasoning).toEqual({ effort: 'low' });
+
+    const openrouterNone = makeRecord({ defaultParams: { reasoningLevel: 'none' } });
+    expect(buildChatCompletionsBody(openrouterNone, makeRequest()).reasoning).toEqual({ effort: 'none' });
+  });
+
+  it('neither provider sends a reasoning field when the model has no default level', () => {
+    const openaiRecord = makeRecord({ providerKey: 'openai', defaultParams: {} });
+    expect('reasoning_effort' in buildChatCompletionsBody(openaiRecord, makeRequest())).toBe(false);
+
+    const openrouterRecord = makeRecord({ defaultParams: {} });
+    expect('reasoning' in buildChatCompletionsBody(openrouterRecord, makeRequest())).toBe(false);
   });
 
   it('a "none" structuredOutput model gets no response_format, and the schema shape is described in the prompt instead', () => {

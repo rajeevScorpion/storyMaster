@@ -7,8 +7,11 @@ import {
   isMissingTextModelRegistrySchemaError,
   isTextModelTask,
   mapTextModelRow,
+  resolveReasoningLevel,
   resolveTextModel,
   suggestModelKey,
+  validateReasoningConfig,
+  validateTaskReasoningLevel,
   validateTextModelInput,
   validateTextModelSelection,
   type TextModelRecord,
@@ -71,7 +74,7 @@ describe('mapTextModelRow', () => {
       sort_order: null,
     }));
 
-    expect(record.capabilities).toEqual({ structuredOutput: 'none', vision: false, temperature: true });
+    expect(record.capabilities).toEqual({ structuredOutput: 'none', vision: false, temperature: true, reasoningLevels: [] });
     expect(record.defaultParams).toEqual({});
     expect(record.requiredEnvVars).toEqual([]);
     expect(record.description).toBe('');
@@ -92,7 +95,51 @@ describe('mapTextModelRow', () => {
     const record = mapTextModelRow(makeRow({
       capabilities: { structuredOutput: 'strict-json-please', vision: 'yes', temperature: 1 },
     }));
-    expect(record.capabilities).toEqual({ structuredOutput: 'none', vision: false, temperature: true });
+    expect(record.capabilities).toEqual({ structuredOutput: 'none', vision: false, temperature: true, reasoningLevels: [] });
+  });
+
+  it('normalizes reasoningLevels to vocabulary order, deduplicated, with unknown values dropped', () => {
+    const record = mapTextModelRow(makeRow({
+      capabilities: { structuredOutput: 'native', vision: true, temperature: true, reasoningLevels: ['high', 'low', 'low', 'not-a-level', 'medium'] },
+    }));
+    expect(record.capabilities.reasoningLevels).toEqual(['low', 'medium', 'high']);
+  });
+
+  it('defaults reasoningLevels to [] when absent or not an array', () => {
+    expect(mapTextModelRow(makeRow({ capabilities: { structuredOutput: 'native', vision: true, temperature: true } })).capabilities.reasoningLevels).toEqual([]);
+    expect(mapTextModelRow(makeRow({ capabilities: { structuredOutput: 'native', vision: true, temperature: true, reasoningLevels: 'low' } })).capabilities.reasoningLevels).toEqual([]);
+  });
+});
+
+describe('normalizeDefaultParams (via mapTextModelRow)', () => {
+  it('a valid reasoningLevel wins outright', () => {
+    const record = mapTextModelRow(makeRow({ default_params: { reasoningLevel: 'medium', reasoningEffort: 'low', reasoningEnabled: false } }));
+    expect(record.defaultParams.reasoningLevel).toBe('medium');
+  });
+
+  it('an invalid reasoningLevel is ignored, falling through to legacy fields', () => {
+    const record = mapTextModelRow(makeRow({ default_params: { reasoningLevel: 'ludicrous', reasoningEffort: 'low' } }));
+    expect(record.defaultParams.reasoningLevel).toBe('low');
+  });
+
+  it('legacy reasoningEnabled === false folds to "none"', () => {
+    const record = mapTextModelRow(makeRow({ default_params: { reasoningEnabled: false } }));
+    expect(record.defaultParams.reasoningLevel).toBe('none');
+  });
+
+  it('legacy reasoningEffort in the vocabulary folds to that level', () => {
+    const record = mapTextModelRow(makeRow({ default_params: { reasoningEffort: 'high' } }));
+    expect(record.defaultParams.reasoningLevel).toBe('high');
+  });
+
+  it('a legacy reasoningEffort outside the vocabulary (e.g. an old free-text value) is dropped', () => {
+    const record = mapTextModelRow(makeRow({ default_params: { reasoningEffort: 'somewhat curious' } }));
+    expect(record.defaultParams.reasoningLevel).toBeUndefined();
+  });
+
+  it('no reasoning fields at all leaves reasoningLevel undefined', () => {
+    const record = mapTextModelRow(makeRow({ default_params: {} }));
+    expect(record.defaultParams.reasoningLevel).toBeUndefined();
   });
 });
 
@@ -103,7 +150,7 @@ describe('buildSyntheticGeminiRecord', () => {
     expect(record.modelKey).toBe('gemini-3.5-flash');
     expect(record.providerModelId).toBe('gemini-3.5-flash');
     expect(record.isEnabled).toBe(true);
-    expect(record.capabilities).toEqual({ structuredOutput: 'native', vision: true, temperature: true });
+    expect(record.capabilities).toEqual({ structuredOutput: 'native', vision: true, temperature: false, reasoningLevels: [] });
     expect(record.requiredEnvVars).toEqual([TEXT_PROVIDER_ENV_VARS.gemini]);
   });
 });
@@ -424,5 +471,145 @@ describe('validateTextModelSelection', () => {
 
   it('accepts a non-vision model for a non-vision task', () => {
     expect(validateTextModelSelection(TASK, noVisionRow.modelKey, [noVisionRow])).toBeNull();
+  });
+});
+
+describe('resolveReasoningLevel', () => {
+  const configuredRecord: TextModelRecord = mapTextModelRow(makeRow({
+    model_key: 'gemini-3.8-flash',
+    provider_key: 'gemini',
+    provider_model_id: 'gemini-3.8-flash',
+    is_enabled: true,
+    capabilities: { structuredOutput: 'native', vision: true, temperature: false, reasoningLevels: ['low', 'medium', 'high'] },
+    default_params: { reasoningLevel: 'medium' },
+  }));
+
+  it('task override wins when it is for the model the task is actually configured on, and the model lists it', () => {
+    const result = resolveReasoningLevel({
+      record: configuredRecord,
+      taskReasoningLevel: 'low',
+      taskConfiguredKey: 'gemini-3.8-flash',
+    });
+    expect(result).toEqual({ level: 'low', source: 'task' });
+  });
+
+  it('falls through to the model default when the task level is not one the model lists', () => {
+    const result = resolveReasoningLevel({
+      record: configuredRecord,
+      taskReasoningLevel: 'xhigh',
+      taskConfiguredKey: 'gemini-3.8-flash',
+    });
+    expect(result).toEqual({ level: 'medium', source: 'model' });
+  });
+
+  it('ignores the task level when the record is a fallback on a DIFFERENT model than the task is configured for', () => {
+    // e.g. the task is configured for gemini-3.8-flash but disabled/unknown-model fallback
+    // resolution handed back some other record -- the override belongs to the configured model.
+    const result = resolveReasoningLevel({
+      record: configuredRecord,
+      taskReasoningLevel: 'low',
+      taskConfiguredKey: 'openrouter:qwen/qwen3.7-flash',
+    });
+    expect(result).toEqual({ level: 'medium', source: 'model' });
+  });
+
+  it('falls through to the model default when there is no task override', () => {
+    const result = resolveReasoningLevel({
+      record: configuredRecord,
+      taskReasoningLevel: null,
+      taskConfiguredKey: 'gemini-3.8-flash',
+    });
+    expect(result).toEqual({ level: 'medium', source: 'model' });
+  });
+
+  it('falls through to provider default when the model has no default and no task override applies', () => {
+    const noDefaultRecord: TextModelRecord = mapTextModelRow(makeRow({
+      model_key: 'openrouter:deepseek/deepseek-v4-flash-0731',
+      provider_key: 'openrouter',
+      is_enabled: true,
+      capabilities: { structuredOutput: 'native', vision: false, temperature: true, reasoningLevels: ['none', 'low', 'medium', 'high'] },
+      default_params: {},
+    }));
+    const result = resolveReasoningLevel({
+      record: noDefaultRecord,
+      taskReasoningLevel: null,
+      taskConfiguredKey: noDefaultRecord.modelKey,
+    });
+    expect(result).toEqual({ level: undefined, source: 'provider_default' });
+  });
+
+  it('provider default when the model has no reasoningLevels at all', () => {
+    const noThinkingRecord: TextModelRecord = mapTextModelRow(makeRow({
+      model_key: 'gemini-3.5-flash',
+      provider_key: 'gemini',
+      is_enabled: true,
+      capabilities: { structuredOutput: 'native', vision: true, temperature: false },
+      default_params: {},
+    }));
+    const result = resolveReasoningLevel({
+      record: noThinkingRecord,
+      taskReasoningLevel: 'low',
+      taskConfiguredKey: noThinkingRecord.modelKey,
+    });
+    expect(result).toEqual({ level: undefined, source: 'provider_default' });
+  });
+});
+
+describe('validateReasoningConfig', () => {
+  it('rejects a level the provider cannot express at all -- Gemini cannot list "none"', () => {
+    expect(validateReasoningConfig('gemini', ['none', 'low'], undefined)).toEqual([
+      'Gemini does not support thinking level(s): none',
+    ]);
+  });
+
+  it('accepts a Gemini-legal subset with a listed default', () => {
+    expect(validateReasoningConfig('gemini', ['low', 'medium', 'high'], 'medium')).toEqual([]);
+  });
+
+  it('rejects a default that is not in the accepted list', () => {
+    expect(validateReasoningConfig('openai', ['low', 'medium'], 'high')).toEqual([
+      'Default thinking level "high" must be one of the model\'s accepted thinking levels.',
+    ]);
+  });
+
+  it('an empty reasoningLevels list with no default is fine (no thinking control)', () => {
+    expect(validateReasoningConfig('gemini', [], undefined)).toEqual([]);
+  });
+
+  it('reports every unsupported level in one message', () => {
+    expect(validateReasoningConfig('gemini', ['minimal', 'xhigh', 'max'], undefined)).toEqual([
+      'Gemini does not support thinking level(s): xhigh, max',
+    ]);
+  });
+});
+
+describe('validateTaskReasoningLevel', () => {
+  const record: TextModelRecord = mapTextModelRow(makeRow({
+    model_key: 'gemini-3.8-flash',
+    provider_key: 'gemini',
+    is_enabled: true,
+    capabilities: { structuredOutput: 'native', vision: true, temperature: false, reasoningLevels: ['low', 'medium', 'high'] },
+  }));
+
+  it('null always clears the override', () => {
+    expect(validateTaskReasoningLevel(null, record)).toBeNull();
+  });
+
+  it('accepts a level the configured model lists', () => {
+    expect(validateTaskReasoningLevel('medium', record)).toBeNull();
+  });
+
+  it('rejects a level the configured model does not list', () => {
+    expect(validateTaskReasoningLevel('xhigh', record)).toMatch(/is not a thinking level/);
+  });
+
+  it('rejects any level when the configured model has no thinking control at all', () => {
+    const noThinking: TextModelRecord = mapTextModelRow(makeRow({
+      model_key: 'gemini-3.5-flash',
+      provider_key: 'gemini',
+      is_enabled: true,
+      capabilities: { structuredOutput: 'native', vision: true, temperature: false },
+    }));
+    expect(validateTaskReasoningLevel('low', noThinking)).toMatch(/is not a thinking level/);
   });
 });

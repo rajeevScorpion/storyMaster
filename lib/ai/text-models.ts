@@ -5,6 +5,7 @@ import {
   TEXT_PROVIDER_ENV_VARS,
   isMissingTextModelRegistrySchemaError,
   mapTextModelRow,
+  validateReasoningConfig,
   validateTextModelInput,
   validateTextModelSelection,
   type TextModelCapabilities,
@@ -26,18 +27,26 @@ export {
   type TextModelResolution,
   type TextModelResolutionSource,
   type TextModelFallbackReason,
+  type TextReasoningLevel,
+  type TextReasoningLevelSource,
   TEXT_PROVIDER_LABELS,
   TEXT_PROVIDER_ENV_VARS,
   TEXT_PROVIDER_TELEMETRY_KEYS,
   LEGACY_GEMINI_MODEL_ID_PATTERN,
   TEXT_MODEL_KEY_PATTERN,
+  TEXT_REASONING_LEVELS,
+  TEXT_REASONING_LEVEL_LABELS,
+  PROVIDER_REASONING_LEVELS,
   VISION_TEXT_TASKS,
   NON_TEXT_MODEL_TASKS,
   mapTextModelRow,
   buildSyntheticGeminiRecord,
   resolveTextModel,
+  resolveReasoningLevel,
   isMissingTextModelRegistrySchemaError,
   suggestModelKey,
+  validateReasoningConfig,
+  validateTaskReasoningLevel,
   validateTextModelInput,
   validateTextModelSelection,
 } from '@/lib/ai/text-models.shared';
@@ -147,6 +156,9 @@ export async function createTextModelRecord(input: CreateTextModelInput, userId:
     outputCostPerMtokUsd: input.outputCostPerMtokUsd,
     cachedInputCostPerMtokUsd: input.cachedInputCostPerMtokUsd,
   });
+  issues.push(
+    ...validateReasoningConfig(input.providerKey, input.capabilities.reasoningLevels ?? [], input.defaultParams?.reasoningLevel)
+  );
   if (issues.length > 0) throw new Error(`Invalid text model input: ${issues.join('; ')}`);
 
   const supabase = createAdminClient();
@@ -194,6 +206,27 @@ export async function updateTextModelRecord(
     outputCostPerMtokUsd: patch.outputCostPerMtokUsd,
     cachedInputCostPerMtokUsd: patch.cachedInputCostPerMtokUsd,
   });
+
+  const supabase = createAdminClient();
+
+  // A patch carries no provider (model_key/provider_key/provider_model_id are immutable), so
+  // reasoning config can only be validated against the MERGED record -- the patch's
+  // capabilities/defaultParams (when given) applied over the row as it stands today.
+  const { data: existingRow, error: fetchError } = await supabase
+    .from('text_model_registry')
+    .select('*')
+    .eq('id', id)
+    .single();
+  if (fetchError || !existingRow) {
+    throw new Error(`Failed to update text model: ${fetchError?.message ?? id}`);
+  }
+  const current = mapTextModelRow(existingRow as TextModelRow);
+  const mergedCapabilities = patch.capabilities ?? current.capabilities;
+  const mergedDefaultParams = patch.defaultParams ?? current.defaultParams;
+  issues.push(
+    ...validateReasoningConfig(current.providerKey, mergedCapabilities.reasoningLevels ?? [], mergedDefaultParams.reasoningLevel)
+  );
+
   if (issues.length > 0) throw new Error(`Invalid text model input: ${issues.join('; ')}`);
 
   const update: Record<string, unknown> = { updated_by: userId };
@@ -209,7 +242,6 @@ export async function updateTextModelRecord(
   if (patch.requiredEnvVars) update.required_env_vars = patch.requiredEnvVars;
   if (typeof patch.sortOrder === 'number' && Number.isFinite(patch.sortOrder)) update.sort_order = Math.round(patch.sortOrder);
 
-  const supabase = createAdminClient();
   const { data, error } = await supabase
     .from('text_model_registry')
     .update(update)

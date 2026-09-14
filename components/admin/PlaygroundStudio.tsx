@@ -404,6 +404,7 @@ export default function PlaygroundStudio({
     taskKey: selectedTask,
     modelId: defaultConfig.modelId,
     temperature: defaultConfig.temperature,
+    reasoningLevel: null,
     updatedAt: '',
   };
   const taskDef = TASK_DEFINITIONS.find((task) => task.key === selectedTask)!;

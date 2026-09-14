@@ -15,10 +15,12 @@ import {
 } from '@/app/actions/text-models';
 import {
   TEXT_PROVIDER_LABELS,
+  TEXT_REASONING_LEVELS,
   suggestModelKey,
   validateTextModelSelection,
   type TextModelDefaultParams,
   type TextProviderKey,
+  type TextReasoningLevel,
   type TextStructuredOutputSupport,
 } from '@/lib/ai/text-models.shared';
 
@@ -35,7 +37,9 @@ interface FormState {
   inputCost: string;
   outputCost: string;
   cachedCost: string;
-  reasoningEffort: string;
+  // Free-text for now; Phase D replaces this with checkboxes limited to
+  // PROVIDER_REASONING_LEVELS[provider]. Only a value in TEXT_REASONING_LEVELS is saved.
+  reasoningLevel: string;
   maxOutputTokens: string;
 }
 
@@ -52,7 +56,7 @@ const EMPTY_FORM: FormState = {
   inputCost: '',
   outputCost: '',
   cachedCost: '',
-  reasoningEffort: '',
+  reasoningLevel: '',
   maxOutputTokens: '',
 };
 
@@ -90,7 +94,7 @@ function formFromRecord(record: AdminTextModelRecord): FormState {
     inputCost: record.inputCostPerMtokUsd?.toString() ?? '',
     outputCost: record.outputCostPerMtokUsd?.toString() ?? '',
     cachedCost: record.cachedInputCostPerMtokUsd?.toString() ?? '',
-    reasoningEffort: record.defaultParams.reasoningEffort ?? '',
+    reasoningLevel: record.defaultParams.reasoningLevel ?? '',
     maxOutputTokens: record.defaultParams.maxOutputTokens?.toString() ?? '',
   };
 }
@@ -170,15 +174,27 @@ export default function TextModelRegistryStudio() {
     run(async () => {
       const base = editingId && editingId !== 'new' ? data?.records.find((record) => record.id === editingId) : undefined;
       const maxOutputTokens = numberOrNull(form.maxOutputTokens);
+      const trimmedReasoningLevel = form.reasoningLevel.trim();
+      const reasoningLevel = (TEXT_REASONING_LEVELS as readonly string[]).includes(trimmedReasoningLevel)
+        ? (trimmedReasoningLevel as TextReasoningLevel)
+        : undefined;
       const defaultParams: TextModelDefaultParams = {
         ...base?.defaultParams,
-        reasoningEffort: form.reasoningEffort.trim() || undefined,
+        reasoningLevel,
         maxOutputTokens: maxOutputTokens && maxOutputTokens > 0 ? maxOutputTokens : undefined,
       };
       const shared = {
         displayName: form.displayName,
         description: form.description,
-        capabilities: { structuredOutput: form.structuredOutput, vision: form.vision, temperature: form.temperature },
+        // reasoningLevels isn't editable from this free-text-era form (Phase D adds the
+        // checkboxes) -- carry the existing model's levels forward so a save never blanks the
+        // list migration 120 seeded, since this object fully replaces the stored capabilities.
+        capabilities: {
+          structuredOutput: form.structuredOutput,
+          vision: form.vision,
+          temperature: form.temperature,
+          reasoningLevels: base?.capabilities.reasoningLevels ?? [],
+        },
         defaultParams,
         timeoutMs: numberOrNull(form.timeoutMs),
         inputCostPerMtokUsd: numberOrNull(form.inputCost),
@@ -337,8 +353,8 @@ export default function TextModelRegistryStudio() {
             <Field label="Cached input $ per 1M tokens">
               <input className={inputClass} value={form.cachedCost} onChange={(event) => updateForm({ cachedCost: event.target.value })} />
             </Field>
-            <Field label="Reasoning effort (optional, e.g. low)">
-              <input className={inputClass} value={form.reasoningEffort} onChange={(event) => updateForm({ reasoningEffort: event.target.value })} />
+            <Field label={`Default thinking level (optional; one of ${TEXT_REASONING_LEVELS.join(', ')})`}>
+              <input className={inputClass} value={form.reasoningLevel} onChange={(event) => updateForm({ reasoningLevel: event.target.value })} />
             </Field>
             <Field label="Max output tokens (optional)">
               <input className={inputClass} value={form.maxOutputTokens} onChange={(event) => updateForm({ maxOutputTokens: event.target.value })} />
