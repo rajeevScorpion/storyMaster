@@ -212,7 +212,7 @@ export function nextBeatIndexToGenerate(
 // this file genuinely isomorphic. buildFinalStoryboardImagePrompt lives in
 // lib/ai/beat-orchestration.ts, which -- despite having no 'use client'/
 // 'use server' directive of its own -- statically imports server actions
-// (callGeminiText et al.) that transitively pull in 'server-only' modules
+// (callTextModel et al.) that transitively pull in 'server-only' modules
 // (lib/ai/model-config.ts, lib/supabase/admin.ts). Next's bundler resolves
 // that safely for both targets, but plain vitest does not: importing it here
 // crashes every test in this file with "This module cannot be imported from

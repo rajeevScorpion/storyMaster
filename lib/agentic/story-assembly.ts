@@ -88,7 +88,7 @@ import {
 import { resolveImagePromptCompilerRuntime } from '@/lib/ai/prompt-compiler/mode';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStoryForUser } from '@/lib/story/save-story';
-import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
+import { callTextModelAgenticJson } from '@/app/actions/text-model-proxy';
 import { getModelConfig } from '@/lib/ai/model-config';
 import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import type { PricingActionKey } from '@/lib/types/pricing';
@@ -561,7 +561,7 @@ async function generateStoryBrief(
     const config = await getModelConfig('agent_story_brief');
     const memoryBlock = await loadPersonaMemoryBlockForBrief(persona.id);
     const prompt = buildStoryBriefPrompt(persona, task, memoryBlock, avoidTitles);
-    const raw = await callGeminiAgenticJson({
+    const raw = await callTextModelAgenticJson({
       task: 'agent_story_brief',
       model: config.model,
       prompt,
@@ -915,7 +915,7 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
     try {
       const config = await getModelConfig('agent_seed_story_writing');
       const prompt = buildSeedSourcePrompt(persona, brief, targetBeatCount, beatLength);
-      const raw = await callGeminiAgenticJson({
+      const raw = await callTextModelAgenticJson({
         task: 'agent_seed_story_writing',
         model: config.model,
         prompt,

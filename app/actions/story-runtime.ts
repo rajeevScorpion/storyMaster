@@ -3,7 +3,8 @@
 import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import { compressImage, sanitizeStoryboardGridImage } from '@/lib/utils/image';
 import { splitBase64DataUrl } from '@/lib/utils/data-url';
-import { callGeminiText, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import type { InlineImagePart } from '@/app/actions/gemini-proxy';
+import { callTextModel } from '@/app/actions/text-model-proxy';
 import { generateSelectedImage } from '@/app/actions/image-generation';
 import {
   buildPromptCharacterAnchors,
@@ -167,7 +168,7 @@ export async function distributeReelTextAction(input: {
     '"""',
   ].join('\n');
 
-  const raw = await callGeminiText({
+  const raw = await callTextModel({
     task: 'reel_story_generation',
     model: DEFAULT_TEXT_MODEL_ID,
     prompt,
@@ -287,7 +288,7 @@ export async function generateReelDraft(
   const text = await timeRuntimeStep(
     'story_runtime.generate_reel_draft',
     { beatCount, language: lang },
-    () => callGeminiText({
+    () => callTextModel({
       task: 'reel_story_generation',
       model: modelOverrides?.reelStoryModel || modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
       prompt,

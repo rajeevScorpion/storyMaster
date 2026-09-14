@@ -24,7 +24,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
-import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
+import { callTextModelAgenticJson } from '@/app/actions/text-model-proxy';
 import { isMissingPersonaSchemaError, type AgentPersonaStatus } from '@/lib/agentic/personas.shared';
 import { isMissingMemorySchemaError } from '@/lib/agentic/memory.shared';
 import {
@@ -296,7 +296,7 @@ export async function proposeCommissions(limit: number = MAX_COMMISSIONS_PER_TIC
 
   let raw: unknown;
   try {
-    const text = await callGeminiAgenticJson({
+    const text = await callTextModelAgenticJson({
       task: 'agent_supervisor_planning',
       model: config.model,
       prompt,

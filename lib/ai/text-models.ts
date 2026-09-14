@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
+  TEXT_PROVIDER_ENV_VARS,
   isMissingTextModelRegistrySchemaError,
   mapTextModelRow,
   validateTextModelInput,
@@ -41,9 +42,9 @@ export {
 // ── In-process cache (60s TTL), plus a permanent per-process latch ─────────────
 //
 // The latch is separate from the TTL cache on purpose: a missing-schema error means migration
-// 119 was never applied (or was rolled back), which cannot become true again without a process
-// restart, so there is no value in re-querying every 60s. Any OTHER error (network blip, RLS
-// misconfiguration) is not latched -- the very next call tries the database again.
+// 119 is absent, and re-querying a missing table every 60s is pure waste. The cost: applying 119
+// by hand does not take effect in a process that already latched -- restart the dev server or
+// redeploy. Any OTHER error (network blip) is not latched; the next call tries again.
 let cachedRegistry: TextModelRecord[] | null = null;
 let cachedAt = 0;
 let legacyModeLatched = false;
@@ -89,10 +90,11 @@ export async function listTextModelRegistryForAdmin(): Promise<{ available: bool
   return { available: registry !== null, records: registry ?? [] };
 }
 
-/** Reads process.env by the record's own required_env_vars and returns only the missing NAMES
- * -- never the values, and never logged. */
-export function getMissingEnvVars(record: Pick<TextModelRecord, 'requiredEnvVars'>): string[] {
-  return record.requiredEnvVars.filter((name) => !process.env[name]);
+/** Missing env var NAMES only -- never values, never logged. The provider's own key is always
+ * required, so a row saved with an empty required_env_vars cannot skip the credential check. */
+export function getMissingEnvVars(record: Pick<TextModelRecord, 'requiredEnvVars' | 'providerKey'>): string[] {
+  const names = new Set([TEXT_PROVIDER_ENV_VARS[record.providerKey], ...record.requiredEnvVars]);
+  return [...names].filter((name) => !process.env[name]);
 }
 
 export interface CreateTextModelInput {

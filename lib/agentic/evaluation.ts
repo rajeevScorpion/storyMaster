@@ -29,7 +29,7 @@ import 'server-only';
 // reserve/finalize/release cycle against PRICING_ACTION_KEYS
 // (lib/types/pricing.ts). This one does not, and instead follows memory.ts's
 // adjudicate() precedent: a real ai_cost_events row is written via the
-// `telemetry` argument to callGeminiAgenticJson (activity_key:
+// `telemetry` argument to callTextModelAgenticJson (activity_key:
 // 'agentic_creator'), with no reservation at all. The reason: PRICING_ACTION_KEYS
 // has no key that fits a platform-internal quality check no user ever
 // triggers, and inventing one would need a new pricing_action_costs row, a
@@ -52,7 +52,7 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
-import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
+import { callTextModelAgenticJson } from '@/app/actions/text-model-proxy';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { AgentRunWithTimeline } from './orchestrator';
 import {
@@ -177,7 +177,7 @@ export async function evaluateAndRecord(params: {
       const config = await getModelConfig('agent_story_evaluation');
       modelId = config.model;
       const prompt = buildStoryEvaluationPrompt(params.promptInput);
-      const raw = await callGeminiAgenticJson({
+      const raw = await callTextModelAgenticJson({
         task: 'agent_story_evaluation',
         model: config.model,
         prompt,
@@ -190,7 +190,7 @@ export async function evaluateAndRecord(params: {
       // modelCalled=true + model=null as modelStatus: 'unavailable'.
       evaluation = composeEvaluation({ deterministic, model: modelResult, modelCalled: true });
     } catch (error) {
-      // Any throw from getModelConfig/callGeminiAgenticJson (timeout, network,
+      // Any throw from getModelConfig/callTextModelAgenticJson (timeout, network,
       // provider error) is caught here and becomes the same honest
       // modelStatus: 'unavailable' outcome as an unparseable response --
       // never a thrown error escaping this function.
