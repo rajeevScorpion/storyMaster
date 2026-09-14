@@ -45,6 +45,7 @@ export async function callTextModel(params: TextCallParams): Promise<string> {
     schemaName: task,
     temperature: temperature ?? 0.7,
     telemetry,
+    telemetryMetadata: { promptChars: prompt.length, temperature: temperature ?? 0.7 },
   });
   return result.text;
 }
@@ -69,6 +70,7 @@ export async function callTextModelVision(params: VisionTextCallParams): Promise
     requireVision: true,
     temperature: temperature ?? 0.4,
     telemetry,
+    telemetryMetadata: { promptChars: prompt.length, referenceCount: referenceParts.length },
   });
   return result.text;
 }
@@ -100,6 +102,7 @@ export async function callTextModelReferenceAnalysis(params: ReferenceAnalysisCa
     expectJson: true,
     temperature: temperature ?? 0.2,
     telemetry,
+    telemetryMetadata: { promptChars: prompt.length, referenceCount: referenceParts.length },
   });
   return result.text;
 }
@@ -131,6 +134,7 @@ export async function callTextModelAgenticJson(params: AgenticJsonCallParams): P
     expectJson: true,
     temperature: temperature ?? 0.2,
     telemetry,
+    telemetryMetadata: { promptChars: prompt.length, temperature: temperature ?? 0.2 },
   });
   return result.text;
 }

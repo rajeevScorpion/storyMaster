@@ -33,6 +33,10 @@ export interface TextGenerationRequest {
   /** Admin playground only: throw instead of silently running the task's fallback model. */
   strictModel?: boolean;
   telemetry?: CostTelemetryContext;
+  /** Extra telemetry metadata fields (promptChars, temperature, referenceCount, ...) from the
+   * caller. Merged into the router's own metadata with the router's keys winning on collision --
+   * see generateText in router.ts. */
+  telemetryMetadata?: Record<string, unknown>;
 }
 
 export interface TextUsage {

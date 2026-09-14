@@ -18,6 +18,7 @@
 // override lookup is keyed on `taskKey` and nothing else.
 
 import type { TaskKey } from '@/lib/ai/model-config.shared';
+import { validateTextModelSelection, type TextModelRecord } from '@/lib/ai/text-models.shared';
 import type { AgentPersona } from './personas.shared';
 
 /**
@@ -125,4 +126,39 @@ export function resolveAgentModel(
   }
 
   return { model: globalConfig.model, temperature: globalConfig.temperature, source: 'global_config' };
+}
+
+/**
+ * Write-path guard for agent_personas.model_overrides (migration 103's admin-editable JSONB).
+ * Stricter than readPersonaOverride on purpose -- that function is a defensive *read* of
+ * possibly-hostile stored JSON and silently treats anything malformed as "no override", but a
+ * *write* should tell the admin why their input was rejected rather than saving something that
+ * will just be ignored at read time.
+ *
+ * Only checks entries that name a task key and a modelId: an override key outside AGENT_TASK_KEYS
+ * is always rejected, but an entry with no usable modelId (e.g. temperature-only) is skipped here
+ * exactly as it is at read time, since it can never route a call anywhere.
+ *
+ * Returns a human-readable problem, or null when every entry is fine to save.
+ */
+export function validatePersonaModelOverrides(
+  modelOverrides: Record<string, unknown> | null | undefined,
+  registry: TextModelRecord[] | null
+): string | null {
+  if (!modelOverrides || typeof modelOverrides !== 'object') return null;
+
+  for (const [key, value] of Object.entries(modelOverrides)) {
+    if (!(AGENT_TASK_KEYS as readonly string[]).includes(key)) {
+      return `Unknown agent task key in model overrides: "${key}". Expected one of ${AGENT_TASK_KEYS.join(', ')}.`;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+
+    const modelId = (value as AgentModelOverride).modelId;
+    if (typeof modelId !== 'string' || !modelId.trim()) continue;
+
+    const issue = validateTextModelSelection(key as AgentTaskKey, modelId.trim(), registry);
+    if (issue) return `Invalid model override for "${key}": ${issue}`;
+  }
+
+  return null;
 }

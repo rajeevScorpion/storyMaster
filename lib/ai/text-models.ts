@@ -6,6 +6,7 @@ import {
   isMissingTextModelRegistrySchemaError,
   mapTextModelRow,
   validateTextModelInput,
+  validateTextModelSelection,
   type TextModelCapabilities,
   type TextModelDefaultParams,
   type TextModelRecord,
@@ -31,12 +32,14 @@ export {
   LEGACY_GEMINI_MODEL_ID_PATTERN,
   TEXT_MODEL_KEY_PATTERN,
   VISION_TEXT_TASKS,
+  NON_TEXT_MODEL_TASKS,
   mapTextModelRow,
   buildSyntheticGeminiRecord,
   resolveTextModel,
   isMissingTextModelRegistrySchemaError,
   suggestModelKey,
   validateTextModelInput,
+  validateTextModelSelection,
 } from '@/lib/ai/text-models.shared';
 
 // ── In-process cache (60s TTL), plus a permanent per-process latch ─────────────

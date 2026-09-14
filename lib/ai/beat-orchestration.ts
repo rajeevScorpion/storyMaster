@@ -505,7 +505,9 @@ export async function generateStoryBeat(
           model: modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
           prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
           temperature: modelOverrides?.storyTemperature ?? 0.7,
-          telemetry: costTelemetry,
+          telemetry: costTelemetry
+            ? { ...costTelemetry, metadata: { ...costTelemetry.metadata, attempt: repairNote ? 2 : 1 } }
+            : undefined,
         });
         try {
           return JSON.parse(text) as StoryBeat;

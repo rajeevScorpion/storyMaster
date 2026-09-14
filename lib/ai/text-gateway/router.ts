@@ -165,6 +165,7 @@ export async function generateText(request: TextGenerationRequest): Promise<Text
       latencyMs,
       estimatedCostUsdOverride: costUsd ?? undefined,
       metadata: {
+        ...(request.telemetryMetadata ?? {}),
         providerModelId: record.providerModelId,
         actualModel: providerResult.actualModel,
         requestId: providerResult.requestId,

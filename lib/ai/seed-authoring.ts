@@ -146,7 +146,9 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
       model: input.modelOverrides?.seedPlanModel || DEFAULT_TEXT_MODEL_ID,
       prompt: repairNote ? `${prompt}\n\nQuality Repair Note:\n${repairNote}` : prompt,
       temperature: input.modelOverrides?.seedPlanTemperature ?? 0.3,
-      telemetry: input.costTelemetry,
+      telemetry: input.costTelemetry
+        ? { ...input.costTelemetry, metadata: { ...input.costTelemetry.metadata, attempt: repairNote ? 2 : 1 } }
+        : undefined,
     });
 
     try {
@@ -235,7 +237,9 @@ export async function materializeSeededBeat(
       model: modelOverrides?.seededBeatModel || DEFAULT_TEXT_MODEL_ID,
       prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
       temperature: modelOverrides?.seededBeatTemperature ?? 0.4,
-      telemetry: costTelemetry,
+      telemetry: costTelemetry
+        ? { ...costTelemetry, metadata: { ...costTelemetry.metadata, attempt: repairNote ? 2 : 1 } }
+        : undefined,
     });
 
     try {

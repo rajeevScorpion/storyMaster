@@ -13,6 +13,7 @@ import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import { estimateElevenLabsModelCostUsd } from '@/lib/ai/provider-costs';
+import { generateText } from '@/lib/ai/text-gateway/router';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { StoryBeat, WordTiming } from '@/lib/types/story';
@@ -2196,7 +2197,6 @@ export async function selectLegacyNarratorVoiceServer(
   costTelemetry?: CostTelemetryContext
 ): Promise<string> {
   try {
-    const ai = new GoogleGenAI({ apiKey: getApiKey() });
     const voiceConfig = await getModelConfig('voice_selection');
     const voicePrompt = resolvePromptTemplate(
       await getPublishedPrompt('voice_selection'),
@@ -2208,34 +2208,17 @@ export async function selectLegacyNarratorVoiceServer(
         availableVoices: AVAILABLE_VOICES.join(', '),
       }
     );
-    const startedAt = narrationNowMs();
-    const response = await ai.models.generateContent({
-      model: voiceConfig.model,
-      contents: voicePrompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
-        temperature: voiceConfig.temperature ?? 0.3,
-      },
+    const { text } = await generateText({
+      taskKey: 'voice_selection',
+      modelKey: voiceConfig.model,
+      prompt: voicePrompt,
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.voice_selection,
+      temperature: voiceConfig.temperature ?? 0.3,
+      telemetry: costTelemetry,
+      telemetryMetadata: { genre, tone, targetAge, language },
     });
 
-    if (costTelemetry) {
-      await recordModelCostEvent({
-        context: costTelemetry,
-        taskKey: 'voice_selection',
-        modelId: voiceConfig.model,
-        inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-        outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-        latencyMs: narrationNowMs() - startedAt,
-        metadata: {
-          genre,
-          tone,
-          targetAge,
-          language,
-        },
-      });
-    }
-
-    const voiceName = response.text?.trim() || '';
+    const voiceName = text.trim();
     if (AVAILABLE_VOICES.includes(voiceName as any)) {
       return voiceName;
     }

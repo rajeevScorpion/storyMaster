@@ -203,6 +203,33 @@ describe('generateText', () => {
     );
   });
 
+  it('merges request.telemetryMetadata into telemetry metadata, with router keys winning on collision', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    })));
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+      telemetryMetadata: { promptChars: 2, temperature: 0.7, requestedModelKey: 'stale-caller-value' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          promptChars: 2,
+          temperature: 0.7,
+          // Router-computed fields win over a same-named caller field.
+          requestedModelKey: 'openrouter:qwen/qwen3.7-flash',
+        }),
+      })
+    );
+  });
+
   it('does not retry on a 429 -- fetch is called exactly once', async () => {
     getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
     const fetchMock = vi.fn().mockResolvedValue(fetchFail(429));

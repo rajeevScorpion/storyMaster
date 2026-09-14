@@ -9,6 +9,8 @@ import {
   resolveTextModel,
   suggestModelKey,
   validateTextModelInput,
+  validateTextModelSelection,
+  type TextModelRecord,
   type TextModelRow,
 } from './text-models.shared';
 
@@ -343,5 +345,60 @@ describe('validateTextModelInput', () => {
     expect(validateTextModelInput({ capabilities: { vision: 'yes' as unknown as boolean } })).toContain(
       'capabilities.vision must be a boolean'
     );
+  });
+});
+
+describe('validateTextModelSelection', () => {
+  const TASK = 'story_generation' as const;
+  const VISION_TASK = 'graphic_style_extraction' as const;
+
+  const enabledRow: TextModelRecord = mapTextModelRow(makeRow({
+    model_key: 'openrouter:qwen/qwen3.7-flash',
+    is_enabled: true,
+    capabilities: { structuredOutput: 'json', vision: true, temperature: true },
+  }));
+  const disabledRow: TextModelRecord = mapTextModelRow(makeRow({
+    model_key: 'openai:gpt-5.6-luna',
+    provider_key: 'openai',
+    provider_model_id: 'gpt-5.6-luna',
+    is_enabled: false,
+  }));
+  const noVisionRow: TextModelRecord = mapTextModelRow(makeRow({
+    model_key: 'openrouter:deepseek/deepseek-v4-flash-0731',
+    provider_key: 'openrouter',
+    provider_model_id: 'deepseek/deepseek-v4-flash-0731',
+    is_enabled: true,
+    capabilities: { structuredOutput: 'native', vision: false, temperature: true },
+  }));
+
+  it('is a no-op for image, TTS and alignment tasks regardless of registry state', () => {
+    expect(validateTextModelSelection('image_generation', 'anything-goes', null)).toBeNull();
+    expect(validateTextModelSelection('tts', 'anything-goes', [])).toBeNull();
+    expect(validateTextModelSelection('story_text_overlay_alignment', 'anything-goes', [enabledRow])).toBeNull();
+  });
+
+  it('legacy mode (registry unavailable): accepts only a bare Gemini id', () => {
+    expect(validateTextModelSelection(TASK, 'gemini-3.5-flash', null)).toBeNull();
+    expect(validateTextModelSelection(TASK, 'openrouter:qwen/qwen3.7-flash', null)).toMatch(/not a valid Gemini model id/);
+  });
+
+  it('registry present: accepts an enabled row', () => {
+    expect(validateTextModelSelection(TASK, enabledRow.modelKey, [enabledRow])).toBeNull();
+  });
+
+  it('rejects an unknown key', () => {
+    expect(validateTextModelSelection(TASK, 'no-such-model', [enabledRow])).toMatch(/not a known text model/);
+  });
+
+  it('rejects a disabled row', () => {
+    expect(validateTextModelSelection(TASK, disabledRow.modelKey, [disabledRow])).toMatch(/disabled/);
+  });
+
+  it('rejects a non-vision model for a vision task', () => {
+    expect(validateTextModelSelection(VISION_TASK, noVisionRow.modelKey, [noVisionRow])).toMatch(/does not support vision/);
+  });
+
+  it('accepts a non-vision model for a non-vision task', () => {
+    expect(validateTextModelSelection(TASK, noVisionRow.modelKey, [noVisionRow])).toBeNull();
   });
 });

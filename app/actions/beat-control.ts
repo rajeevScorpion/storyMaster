@@ -5,7 +5,6 @@
 // options, and image version restore. All actions verify story ownership and
 // enforce feature flags server-side (UI gating alone is not trusted).
 
-import { GoogleGenAI } from '@google/genai';
 import { v4 as uuidv4 } from 'uuid';
 import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -13,6 +12,7 @@ import { assertCanEditStory } from '@/lib/agentic/reviewers';
 import { getFeatureFlag, getFeatureFlagValue, getModelConfig } from '@/lib/ai/model-config';
 import { optionsRegenerationSchema } from '@/lib/ai/generation-schemas';
 import { OPTIONS_REGENERATION_PROMPT } from '@/lib/ai/prompts';
+import { generateText } from '@/lib/ai/text-gateway/router';
 import { releaseBillableAction } from '@/lib/pricing/enforcement';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import {
@@ -537,20 +537,17 @@ export async function regenerateBeatOptions(input: {
       audience,
     })}\n\n${formatAudienceBranchingContract(storyConfig.ageGroup)}`;
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) return { status: 'failed', error: 'Story generation is not configured.' };
     const { model, temperature } = await getModelConfig('story_generation');
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: optionsRegenerationSchema,
-        temperature: temperature ?? 0.7,
-      },
+    // No systemInstruction here, matching this call site's behavior before the gateway --
+    // unlike callTextModel's story_generation branch, options regeneration never had a guardrail.
+    const { text: raw } = await generateText({
+      taskKey: 'story_generation',
+      modelKey: model,
+      prompt,
+      schema: optionsRegenerationSchema,
+      schemaName: 'options_regeneration',
+      temperature: temperature ?? 0.7,
     });
-    const raw = response.text;
     if (!raw) return { status: 'failed', error: 'No options were generated. Please try again.' };
     let parsed: { options?: Array<{ label?: string; intent?: string }> };
     try {

@@ -265,6 +265,49 @@ export function suggestModelKey(providerKey: TextProviderKey, providerModelId: s
   return providerKey === 'gemini' ? providerModelId : `${providerKey}:${providerModelId}`;
 }
 
+/** Tasks resolveTextModel/this module never governs -- image, TTS and forced alignment stay on
+ * their existing (unchanged) model-picking rules. Kept as an exclusion list rather than an
+ * allow-list because every other TaskKey is a text task by construction. */
+export const NON_TEXT_MODEL_TASKS: readonly TaskKey[] = [
+  'image_generation',
+  'reel_image_generation',
+  'portrait_generation',
+  'tts',
+  'reel_tts',
+  'story_text_overlay_alignment',
+];
+
+/**
+ * Write-path guard for a text task's model key -- used by the admin playground's "apply to
+ * production" action and by agent persona model_overrides validation. Deliberately independent
+ * of resolveTextModel: that function always returns something runnable (falling back when
+ * needed) because a generation call must proceed; this one instead tells a write path whether
+ * the key it is about to persist would even resolve to something other than the fallback.
+ *
+ * Returns a human-readable problem, or null when the key is fine to save.
+ */
+export function validateTextModelSelection(
+  taskKey: TaskKey,
+  modelKey: string,
+  registry: TextModelRecord[] | null
+): string | null {
+  if (NON_TEXT_MODEL_TASKS.includes(taskKey)) return null;
+
+  if (registry === null) {
+    return LEGACY_GEMINI_MODEL_ID_PATTERN.test(modelKey)
+      ? null
+      : `"${modelKey}" is not a valid Gemini model id (no text model registry is available).`;
+  }
+
+  const record = registry.find((candidate) => candidate.modelKey === modelKey);
+  if (!record) return `"${modelKey}" is not a known text model.`;
+  if (!record.isEnabled) return `"${modelKey}" is disabled and cannot be assigned to a task.`;
+  if (VISION_TEXT_TASKS.includes(taskKey) && !record.capabilities.vision) {
+    return `"${modelKey}" does not support vision, which task "${taskKey}" requires.`;
+  }
+  return null;
+}
+
 /** Fields an admin create/update may supply. Every field optional so the same validator covers
  * both a full create payload and a partial patch (model_key is create-only; see plan 3.1). */
 export interface TextModelInput {

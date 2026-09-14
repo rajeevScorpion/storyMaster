@@ -1,11 +1,11 @@
 'use server';
 
-import { GoogleGenAI } from '@google/genai';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
 import { getPublishedPrompt } from '@/lib/ai/prompt-config';
 import { LOCKED_PROMPT_GUARDRAILS, resolvePromptTemplate } from '@/lib/ai/prompt-config.shared';
 import { storylineDiscoveryMetadataSchema } from '@/lib/ai/generation-schemas';
+import { generateText } from '@/lib/ai/text-gateway/router';
 import { normalizeDiscoveryIntro } from '@/lib/story/discovery-intro';
 import { normalizeStoredGenre } from '@/lib/story/genres';
 import { normalizeStoryConfig } from '@/lib/ai/story-config';
@@ -76,9 +76,6 @@ export async function generateStorylineDiscoveryMetadata(input: {
   title: string;
   beats: unknown;
 }): Promise<StorylineDiscoveryMetadata | null> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return null;
-
   const beatSummaries = buildBeatSummaries(input.beats);
   if (!beatSummaries) return null;
 
@@ -115,21 +112,19 @@ export async function generateStorylineDiscoveryMetadata(input: {
       beatSummaries,
     });
 
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model,
-      contents: prompt,
-      config: {
-        systemInstruction: LOCKED_PROMPT_GUARDRAILS.storyline_discovery_metadata,
-        responseMimeType: 'application/json',
-        responseSchema: storylineDiscoveryMetadataSchema,
-        temperature: temperature ?? 0.4,
-      },
+    const { text } = await generateText({
+      taskKey: 'storyline_discovery_metadata',
+      modelKey: model,
+      prompt,
+      systemInstruction: LOCKED_PROMPT_GUARDRAILS.storyline_discovery_metadata,
+      schema: storylineDiscoveryMetadataSchema,
+      schemaName: 'storyline_discovery_metadata',
+      temperature: temperature ?? 0.4,
     });
 
-    if (!response.text) return null;
+    if (!text) return null;
 
-    const parsed = JSON.parse(response.text) as {
+    const parsed = JSON.parse(text) as {
       intro?: unknown;
       genre?: unknown;
       ageFit?: unknown;
