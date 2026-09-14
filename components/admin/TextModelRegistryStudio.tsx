@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import FilterDropdown from '@/components/ui/FilterDropdown';
 import {
+  assignTextModelToTask,
   createAdminTextModel,
   getAdminTextModelRegistry,
   testAdminTextModel,
@@ -10,10 +11,12 @@ import {
   type AdminTextModelRecord,
   type AdminTextModelRegistryState,
   type AdminTextModelTestResult,
+  type TextTaskModelStatus,
 } from '@/app/actions/text-models';
 import {
   TEXT_PROVIDER_LABELS,
   suggestModelKey,
+  validateTextModelSelection,
   type TextModelDefaultParams,
   type TextProviderKey,
   type TextStructuredOutputSupport,
@@ -97,6 +100,26 @@ function formatPrice(record: AdminTextModelRecord): string {
     return record.providerKey === 'gemini' ? 'code price table' : 'no price set';
   }
   return `$${record.inputCostPerMtokUsd} / $${record.outputCostPerMtokUsd} per 1M`;
+}
+
+/** Dropdown options for one task's row: every registry model that would actually resolve for
+ * that task, plus the currently configured key even when it wouldn't -- so the dropdown never
+ * renders with a blank value just because an admin disabled or removed the model mid-flight. */
+function buildTaskAssignmentOptions(task: TextTaskModelStatus, records: AdminTextModelRecord[]) {
+  const options = records
+    .filter((record) => validateTextModelSelection(task.taskKey, record.modelKey, records) === null)
+    .map((record) => ({
+      value: record.modelKey,
+      label: `${record.displayName} — ${TEXT_PROVIDER_LABELS[record.providerKey]}`,
+    }));
+
+  if (!options.some((option) => option.value === task.configuredKey)) {
+    const configuredRecord = records.find((record) => record.modelKey === task.configuredKey);
+    const suffix = configuredRecord ? ' (disabled)' : ' (not in registry)';
+    options.unshift({ value: task.configuredKey, label: `${task.configuredKey}${suffix}` });
+  }
+
+  return options;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -191,8 +214,8 @@ export default function TextModelRegistryStudio() {
         <div>
           <h1 className="text-2xl font-semibold text-neutral-100">Text Models</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-400">
-            Models text tasks can run on. Tasks pick a model in the Story Playground. A task pointing at a disabled or
-            unknown model runs on its Gemini default instead.
+            Models text tasks can run on. Assign a task to a model in the section below, or in the Story Playground.
+            A task pointing at a disabled or unknown model runs on its Gemini default instead.
           </p>
         </div>
         {data?.available && (
@@ -228,6 +251,41 @@ export default function TextModelRegistryStudio() {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {data?.available && (
+        <div className="space-y-3 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+          <div>
+            <h2 className="text-lg font-medium text-neutral-100">Task assignments</h2>
+            <p className="mt-1 text-sm text-neutral-400">
+              Point any text task at any enabled model, including the agentic tasks (story evaluation, novelty
+              assessment, and the rest) which otherwise have no picker of their own.
+            </p>
+          </div>
+          <div className="space-y-2">
+            {data.taskStatus.map((task) => (
+              <div
+                key={task.taskKey}
+                className="flex flex-col gap-2 rounded-lg border border-white/5 bg-neutral-950/40 p-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm text-neutral-200">{task.label}</p>
+                  {task.problem && <p className="mt-1 text-xs text-amber-300">{task.problem}</p>}
+                </div>
+                <div className={`w-full shrink-0 sm:w-72 ${busy ? 'pointer-events-none opacity-50' : ''}`}>
+                  <FilterDropdown
+                    value={task.configuredKey}
+                    options={buildTaskAssignmentOptions(task, data.records)}
+                    onChange={(value) => run(() => assignTextModelToTask(task.taskKey, value))}
+                    fullWidth
+                    size="form"
+                    ariaLabel={`Model for ${task.label}`}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

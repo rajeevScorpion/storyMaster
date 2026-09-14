@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { verifyAdmin } from '@/lib/supabase/admin';
-import { getAllModelConfigs } from '@/lib/ai/model-config';
+import { getAllModelConfigs, updateModelConfig } from '@/lib/ai/model-config';
 import { DEFAULT_MODELS, KNOWN_MODELS, TASK_DEFINITIONS, type TaskKey } from '@/lib/ai/model-config.shared';
 import {
   createTextModelRecord,
@@ -14,8 +14,8 @@ import {
   type TextModelPatch,
 } from '@/lib/ai/text-models';
 import {
-  NON_TEXT_MODEL_TASKS,
   TEXT_PROVIDER_LABELS,
+  isTextModelTask,
   validateTextModelSelection,
   type TextModelRecord,
 } from '@/lib/ai/text-models.shared';
@@ -72,17 +72,15 @@ async function freshRegistry(): Promise<TextModelRecord[] | null> {
 async function buildTaskStatus(registry: TextModelRecord[] | null): Promise<TextTaskModelStatus[]> {
   const configs = await getAllModelConfigs();
   const byTask = new Map(configs.map((config) => [config.taskKey, config.modelId]));
-  return TASK_DEFINITIONS.filter((task) => !NON_TEXT_MODEL_TASKS.includes(task.key) && task.key !== 'story_text_overlay_alignment').map(
-    (task) => {
-      const configuredKey = byTask.get(task.key) ?? DEFAULT_MODELS[task.key].modelId;
-      return {
-        taskKey: task.key,
-        label: task.label,
-        configuredKey,
-        problem: validateTextModelSelection(task.key, configuredKey, registry),
-      };
-    }
-  );
+  return TASK_DEFINITIONS.filter((task) => isTextModelTask(task.key)).map((task) => {
+    const configuredKey = byTask.get(task.key) ?? DEFAULT_MODELS[task.key].modelId;
+    return {
+      taskKey: task.key,
+      label: task.label,
+      configuredKey,
+      problem: validateTextModelSelection(task.key, configuredKey, registry),
+    };
+  });
 }
 
 export async function getAdminTextModelRegistry(): Promise<AdminTextModelRegistryState> {
@@ -93,6 +91,29 @@ export async function getAdminTextModelRegistry(): Promise<AdminTextModelRegistr
     records: (registry ?? []).map((record) => ({ ...record, missingEnvVars: getMissingEnvVars(record) })),
     taskStatus: await buildTaskStatus(registry),
   };
+}
+
+/** Points any text task -- including the five agentic tasks, which have no dedicated picker --
+ * at any enabled registry model. Runtime-validated because the studio calls this with a taskKey
+ * that only TypeScript, not the browser, promises is a real TaskKey. */
+export async function assignTextModelToTask(taskKey: TaskKey, modelKey: string): Promise<void> {
+  await verifyAdmin();
+  if (!isTextModelTask(taskKey)) {
+    throw new Error(`"${taskKey}" is not a text task and cannot be assigned a text model here.`);
+  }
+  const registry = await freshRegistry();
+  if (registry === null) {
+    throw new Error('Migration 119 is not applied — assign models in the Story Playground.');
+  }
+  const problem = validateTextModelSelection(taskKey, modelKey, registry);
+  if (problem) throw new Error(problem);
+
+  const configs = await getAllModelConfigs();
+  const current = configs.find((config) => config.taskKey === taskKey);
+  const temperature = current?.temperature ?? DEFAULT_MODELS[taskKey].temperature;
+  await updateModelConfig(taskKey, modelKey, temperature);
+  revalidatePath(TEXT_MODELS_PATH);
+  revalidatePath('/admin/agents/routing');
 }
 
 export async function createAdminTextModel(input: CreateTextModelInput): Promise<void> {

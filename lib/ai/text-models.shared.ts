@@ -1,7 +1,7 @@
 // Pure, isomorphic half of the text model registry. See migration 119 and
 // docs/text-model-gateway-plan.md section 3.2 for the resolution rules this encodes.
 
-import { DEFAULT_MODELS, type TaskKey } from '@/lib/ai/model-config.shared';
+import { DEFAULT_MODELS, TASK_DEFINITIONS, type TaskKey } from '@/lib/ai/model-config.shared';
 
 export type TextProviderKey = 'gemini' | 'openai' | 'openrouter';
 
@@ -276,6 +276,16 @@ export const NON_TEXT_MODEL_TASKS: readonly TaskKey[] = [
   'reel_tts',
   'story_text_overlay_alignment',
 ];
+
+/** True for any task a text model can be assigned to -- every known task except the image/TTS/
+ * alignment ones in NON_TEXT_MODEL_TASKS. Includes the five agentic tasks (agent_*), which have
+ * no dedicated picker of their own and are assigned the same way as every other text task. */
+export function isTextModelTask(taskKey: string): taskKey is TaskKey {
+  return (
+    TASK_DEFINITIONS.some((task) => task.key === taskKey) &&
+    !NON_TEXT_MODEL_TASKS.includes(taskKey as TaskKey)
+  );
+}
 
 /**
  * Write-path guard for a text task's model key -- used by the admin playground's "apply to

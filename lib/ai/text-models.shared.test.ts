@@ -5,6 +5,7 @@ import {
   TEXT_PROVIDER_ENV_VARS,
   buildSyntheticGeminiRecord,
   isMissingTextModelRegistrySchemaError,
+  isTextModelTask,
   mapTextModelRow,
   resolveTextModel,
   suggestModelKey,
@@ -269,6 +270,29 @@ describe('TEXT_MODEL_KEY_PATTERN', () => {
 
   it('accepts the maximum length of 120 characters', () => {
     expect(TEXT_MODEL_KEY_PATTERN.test('a'.repeat(120))).toBe(true);
+  });
+});
+
+describe('isTextModelTask', () => {
+  it('accepts an ordinary text task', () => {
+    expect(isTextModelTask('story_generation')).toBe(true);
+  });
+
+  it('accepts an agentic task -- these have no dedicated picker and route through this same list', () => {
+    expect(isTextModelTask('agent_story_evaluation')).toBe(true);
+    expect(isTextModelTask('agent_novelty_assessment')).toBe(true);
+  });
+
+  it('rejects an image task', () => {
+    expect(isTextModelTask('image_generation')).toBe(false);
+  });
+
+  it('rejects story_text_overlay_alignment', () => {
+    expect(isTextModelTask('story_text_overlay_alignment')).toBe(false);
+  });
+
+  it('rejects an unknown string', () => {
+    expect(isTextModelTask('not_a_real_task')).toBe(false);
   });
 });
 
