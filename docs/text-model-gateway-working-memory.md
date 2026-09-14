@@ -5,6 +5,41 @@ Branch `feature/text-model-gateway` off `dev`. Pack: `prompt-packs/kisago_text_m
 
 ---
 
+## Session 2 — 2026-09-14 (usage 10% at start)
+
+- **P4a (`311d019`) reviewed by Opus: passes.** Playground tests are strict; production apply and persona saves
+  reject disabled/unknown keys; narration keeps telemetry; image/TTS untouched; wrappers pass telemetry
+  metadata; the retry `attempt` reaches the cost row (context metadata is merged). One nit, recorded as
+  deferred in PROJECT_STATE: options regeneration shows gateway error text to readers.
+- Agentic tasks read `model_config` through `getModelConfig`, so a global assignment is honoured.
+- Dev queried: ledger has 119 (05:27:43+00); all non-Gemini rows disabled; every text task on Gemini; no
+  agentic `model_config` rows (they use code defaults).
+- **Delegated in parallel to Sonnet:** (A) "Task assignments" section on `/admin/text-models`
+  (`assignTextModelToTask`, `isTextModelTask`); (B) `scripts/text-gateway.smoke.ts` live run on all three
+  providers plus an e2e check for `/admin/text-models`. If this session ends mid-way, look for commits
+  `feat(text-models): assign any text task…` and `test(text-models): live gateway smoke…` and review their diffs.
+- **A landed as `fb87733`, reviewed by Opus: passes** (admin check and text-task check server-side, temperature
+  preserved, registry validation, configured key always listed). 40/40 registry tests.
+- **B landed as `15c3106`, reviewed by Opus: passes.** Live smoke through the real gateway: Gemini 2.5 Flash-Lite
+  22/18 tokens ~1.2s; Luna (OpenAI, reasoning low) 59/16 tokens ~$0.000031; Qwen 3.7 Flash (OpenRouter, JSON mode)
+  76/**324** tokens ~$0.000044 ~5s — passes alone, but got HTTP 429 (`rate_limited`, no retry) when fired straight
+  after the other two. `npm test` does not pick up smoke files. New `e2e/text-models-admin.spec.ts`.
+- Full gate delegated to Sonnet after A and B (tsc, lint, test, build:verify, test:e2e) — report-only, no commits.
+- **Gate green:** tsc, lint (no warnings), 1122/1122 unit tests, `build:verify`, e2e 30/30 including the
+  authenticated `/admin/text-models` render.
+- Docs committed: final report [text-model-gateway-report.md](text-model-gateway-report.md); GOTCHAS "Text
+  models"; PROJECT_STATE 119 row, deferred text-model gaps, roadmap note.
+
+### Current state — supersedes the older sections below
+**Code-complete on `feature/text-model-gateway`; not merged into `dev`.** Every phase P1–P5 is done and
+Opus-reviewed. Next, all owner actions:
+1. Sign in and click through Task assignments, Test and Enable on `/admin/text-models` (e2e proves render only).
+2. Merge into `dev` with `--no-ff`.
+3. Production: pre-apply `model_config` check (plan section 4), apply 119, redeploy.
+Genuine follow-ups are in the report's section J and PROJECT_STATE "Deferred → Text models".
+
+---
+
 ## Session handoff — 2026-09-14 close of session 1 (P3 done and reviewed; P4a next)
 
 **Supersedes the P3 row below:** P3 landed as `968a7f2` (57 new tests, full suite 1102 green) and Opus

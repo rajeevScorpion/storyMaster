@@ -335,6 +335,31 @@ applied, the doorway restored, and both route layouts relaxed. Recorded in full 
 it's one lookup, not an excavation; design rationale is in
 [docs/agentic-creator-phase10-plan.md](../agentic-creator-phase10-plan.md), section 2 (D23).
 
+## Text models
+
+### A text model id is a registry key — never trust one from the client
+
+Every text call runs through the gateway (`lib/ai/text-gateway/router.ts`), and the model id it is handed is a
+`text_model_registry.model_key`, not a provider id. On the reader path that id comes from the browser — the
+client fetches task model ids and passes them back into server actions — so treat it as attacker-controlled.
+The gateway runs only an **enabled** registry row; anything else drops to the task's Gemini default with a
+`[text-gateway] fallback` warning. Never pass a raw id straight to a provider adapter, and never widen the
+legacy branch of `resolveTextModel` beyond a bare `gemini-*` id: with migration 119 absent, that regex is the
+only thing between a client-supplied string and a paid OpenRouter call.
+
+Related traps from the same build:
+- **Never rename a `model_key`.** Tasks and persona overrides point at it by string, so a rename silently sends
+  all of them to their fallback. Add a new row and move the tasks.
+- **A process that saw 119 missing stays Gemini-only until it restarts.** The registry read latches legacy
+  mode; after applying 119 the server needs a redeploy (or dev-server restart) before Text Models shows rows.
+- **Gemini output is validated observe-only; OpenAI and OpenRouter strictly.** A schema mismatch on Gemini
+  only warns, preserving production behaviour; the same mismatch elsewhere throws `malformed_output`. Changing
+  either direction is a live behaviour change, not a tidy-up.
+- **Capabilities are load-bearing.** GPT-5.6 Luna rejects `temperature` (HTTP 400) and Qwen 3.7 Flash has JSON
+  mode only, no strict schema. A wrong checkbox in an admin edit makes every call on that model fail.
+
+---
+
 ## Product decisions worth not re-deriving
 
 - **`/gallery` is a 307, not a 308.** A cached permanent redirect would make moving the gallery back very hard.

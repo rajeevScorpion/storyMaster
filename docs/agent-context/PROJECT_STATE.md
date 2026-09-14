@@ -127,6 +127,12 @@ for what has actually run.
 | 117 | `agent_review_decisions_reviewer_index` | additive index `idx_agent_review_decisions_reviewer` on `(reviewer_id, created_at DESC)` — 112 indexed only `run_id`, so "this reviewer's own history" full-scanned | **Applied** 2026-09-14 03:13:50+00 | Not applied |
 | 118 | `rename_agentic_pipeline_image_flag` | renames flag `agentic_image_generation_enabled` → `agentic_pipeline_image_generation_enabled`, so the name says what it gates (the autonomous pipeline only, never a reviewer's interactive regenerate) | **Applied** 2026-09-14 03:14:10+00. **Order-independent** — it UPDATEs the row if 102 already ran, or INSERTs it off if it lands first. ⚠ The flag is enforced **nowhere in code**; see "Deferred" | Not applied |
 
+### Text Model Gateway (branch `feature/text-model-gateway`; not yet merged into `dev`)
+
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 119 | `text_model_registry` | table `text_model_registry`, one row per text model. `model_config.model_id` and persona `model_overrides[*].modelId` now name a `model_key` here. Touch trigger, RLS with no policies, 12 seed rows: 8 Gemini enabled, 4 OpenAI/OpenRouter disabled | **Applied** 2026-09-14 05:27:43+00. Verified against the schema, not only the ledger: 18 columns, every CHECK, the trigger, RLS with 0 policies, 12 seed rows with the right enabled flags. **Frozen** — changes ship as 120 | **Not applied.** First run `select task_key, model_id from public.model_config order by task_key;` — a text `model_id` with no seeded row runs on its task default once 119 lands. A server that is already running needs a redeploy afterwards (see GOTCHAS "Text models") |
+
 #### Promoting the agentic system to production — checklist
 
 **The executable version of this is [../production-promotion-runbook.md](../production-promotion-runbook.md)** —
@@ -623,6 +629,28 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   automatic writer repair conflicts with D9 ("a model call may never be the sole cause of an automatic
   consequence"). Amend or scope around D9 before building it. Existing bounded behaviour is unchanged: beat and
   seed generation get one code-validated repair retry; agent evaluation stays advisory.
+- **The text generation server actions are open RPCs.** The four wrappers in `app/actions/text-model-proxy.ts`
+  are `'use server'` exports any caller can invoke, exactly as the Gemini proxy was before. The gateway now
+  limits them to enabled registry models, but nothing limits who calls them or how often. Pre-existing; a fix
+  means moving the story path server-side or adding auth and rate limits.
+- **Three text calls record no cost event:** options regeneration, story bible and discovery metadata. No
+  activity key fits them, so `/admin/cost` undercounts those tokens.
+- **Options regeneration shows gateway error text to the reader.** The message names the provider and model
+  key (never a secret); before the gateway it showed the raw Gemini SDK message. Swap in a generic message
+  when that file is next touched.
+- **Gemini `finishReason` / `promptFeedback.blockReason` are not mapped** to gateway error categories. A
+  blocked Gemini response still surfaces as empty or invalid output, as it did before.
+- **Slow reasoning models vs function duration.** Luna's row allows 120s. Only the API routes and the test lab
+  set `maxDuration = 300`; page server actions, including beat generation, run under the project default.
+  Check the Vercel plan's default before pointing a reader-facing task at Luna.
+- **`app/actions/playground.ts` is dead code** (nothing imports it) and was deliberately not migrated.
+- **"Used by" on Text Models counts task assignments only**, not agent persona overrides.
+- **OpenRouter reasoning can't be switched off from the admin form.** The adapter honours
+  `default_params.reasoningEnabled = false`, but the edit form only exposes effort and max tokens. It matters for
+  Qwen 3.7 Flash: in the live smoke it spent 324 output tokens on a one-word JSON reply, where Luna spent 16.
+- **Qwen 3.7 Flash on OpenRouter returned HTTP 429 under back-to-back calls** in the live smoke, then passed on
+  its own. The gateway reports `rate_limited` and never retries. Fine for advisory evaluation, which already
+  tolerates a failed model call; not yet suitable for anything a reader waits on.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.
@@ -680,8 +708,11 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
 
 ## Roadmap notes
 
-- **Text Model Gateway — in progress on `feature/text-model-gateway`** (started 2026-09-14). Registry-backed
-  text models across Gemini, OpenAI and OpenRouter. Start at
+- **Text Model Gateway — code-complete on `feature/text-model-gateway`** (2026-09-14), **not yet merged into
+  `dev`**. Registry-backed text models across Gemini, OpenAI and OpenRouter, an admin Text Models page with task
+  assignments, and a live smoke test on all three providers. Nothing routes off Gemini until an admin enables a
+  row and assigns it. Verification, routing and follow-ups:
+  [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
   [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
