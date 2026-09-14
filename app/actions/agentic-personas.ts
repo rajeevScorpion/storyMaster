@@ -22,6 +22,8 @@
 import { verifyAdmin, createAdminClient } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
 import { buildSearchOrFilter } from '@/lib/gallery/search-query';
+import { validatePersonaModelOverrides } from '@/lib/agentic/routing.shared';
+import { getTextModelRegistry } from '@/lib/ai/text-models';
 import {
   buildClonedPersonaInput,
   isMissingPersonaSchemaError,
@@ -68,6 +70,15 @@ async function requireCreatorEnabled(): Promise<void> {
       'The Agentic Creator System is currently disabled. Turn on the master switch on the Agents Overview page before editing personas.'
     );
   }
+}
+
+/** Throws a readable error for a malformed or unroutable model_overrides bag before it's ever
+ * written -- see lib/agentic/routing.shared.ts's validatePersonaModelOverrides. */
+async function assertValidModelOverrides(modelOverrides: Record<string, unknown> | undefined): Promise<void> {
+  if (!modelOverrides || Object.keys(modelOverrides).length === 0) return;
+  const registry = await getTextModelRegistry();
+  const issue = validatePersonaModelOverrides(modelOverrides, registry);
+  if (issue) throw new Error(issue);
 }
 
 interface PersonaMemoryRow {
@@ -243,6 +254,7 @@ export async function getPersonaMemory(id: string): Promise<AgentPersonaMemory |
 export async function createPersona(input: AgentPersonaInput): Promise<AgentPersona> {
   await verifyAdmin();
   await requireCreatorEnabled();
+  await assertValidModelOverrides(input.modelOverrides);
   return insertPersonaRow(input);
 }
 
@@ -250,6 +262,7 @@ export async function updatePersona(id: string, patch: Partial<AgentPersonaInput
   await verifyAdmin();
   await requireCreatorEnabled();
   if (personasSchemaUnavailable) throw new Error(SCHEMA_UNAVAILABLE_MESSAGE);
+  await assertValidModelOverrides(patch.modelOverrides);
 
   const supabase = createAdminClient();
   const { data, error } = await supabase

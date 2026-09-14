@@ -1,6 +1,7 @@
 import 'server-only';
 
-import { callGeminiReferenceAnalysis, type InlineImagePart } from '@/app/actions/gemini-proxy';
+import type { InlineImagePart } from '@/app/actions/gemini-proxy';
+import { callTextModelReferenceAnalysis } from '@/app/actions/text-model-proxy';
 import { getModelConfig } from '@/lib/ai/model-config';
 import { buildCharacterAnalysisPrompt, buildWorldAnalysisPrompt } from '@/lib/ai/reference-adoption-prompts';
 import {
@@ -51,7 +52,7 @@ export async function analyzeCharacterReference(input: {
   telemetry?: CostTelemetryContext;
 }): Promise<CharacterReferenceDescription> {
   const { model, temperature } = await getModelConfig('reference_character_analysis');
-  const raw = await callGeminiReferenceAnalysis({
+  const raw = await callTextModelReferenceAnalysis({
     task: 'reference_character_analysis',
     model,
     prompt: buildCharacterAnalysisPrompt(),
@@ -103,7 +104,7 @@ export async function analyzeWorldReference(input: {
   telemetry?: CostTelemetryContext;
 }): Promise<WorldReferenceDescription> {
   const { model, temperature } = await getModelConfig('reference_world_analysis');
-  const raw = await callGeminiReferenceAnalysis({
+  const raw = await callTextModelReferenceAnalysis({
     task: 'reference_world_analysis',
     model,
     prompt: buildWorldAnalysisPrompt(),

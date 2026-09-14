@@ -1,7 +1,7 @@
 // Beat text + storyboard-plan orchestration, shared by the client runtime
 // (app/actions/story-runtime.ts) and the server beat bundle
 // (app/actions/beat-bundle.ts). No 'use client'/'use server' directive on
-// purpose: the imported server actions (callGeminiText, reel moods) resolve to
+// purpose: the imported server actions (callTextModel, reel moods) resolve to
 // POST references in the browser and to direct calls on the server — the same
 // dual behavior story-runtime.ts has always relied on. Keep browser-only APIs
 // (canvas, FileReader) out of this module.
@@ -9,7 +9,7 @@
 import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import type { Character } from '@/lib/types/story';
 import type { CompilerEngine, PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
-import { callGeminiText } from '@/app/actions/gemini-proxy';
+import { callTextModel } from '@/app/actions/text-model-proxy';
 import { getCharacterNoveltyContextAction } from '@/app/actions/character-novelty';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
@@ -500,12 +500,14 @@ export async function generateStoryBeat(
         language: lang,
       },
       async () => {
-        const text = await callGeminiText({
+        const text = await callTextModel({
           task: 'story_generation',
           model: modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
           prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
           temperature: modelOverrides?.storyTemperature ?? 0.7,
-          telemetry: costTelemetry,
+          telemetry: costTelemetry
+            ? { ...costTelemetry, metadata: { ...costTelemetry.metadata, attempt: repairNote ? 2 : 1 } }
+            : undefined,
         });
         try {
           return JSON.parse(text) as StoryBeat;
@@ -718,7 +720,7 @@ export async function composeStoryboardPlan(
 
       let text = '';
       try {
-        text = await callGeminiText({
+        text = await callTextModel({
           task: promptTask,
           model: isReel
             ? modelOverrides?.reelComposerModel || modelOverrides?.composerModel || DEFAULT_TEXT_MODEL_ID

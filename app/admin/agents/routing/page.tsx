@@ -3,6 +3,8 @@ import AdminPageHeader from '@/components/admin/AdminPageHeader';
 import { AGENT_TASK_KEYS, AGENT_TASK_ROLES, type AgentTaskKey, type AgentTaskRole } from '@/lib/agentic/routing.shared';
 import { TASK_DEFINITIONS } from '@/lib/ai/model-config.shared';
 import { getModelConfig } from '@/lib/ai/model-config';
+import { getTextModelRegistry } from '@/lib/ai/text-models';
+import { TEXT_PROVIDER_LABELS, validateTextModelSelection } from '@/lib/ai/text-models.shared';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,12 +33,20 @@ function taskLabel(taskKey: AgentTaskKey): string {
  * exactly like every other agentic surface rather than 500ing.
  */
 export default async function AgenticRoutingPage() {
+  const registry = await getTextModelRegistry();
   const resolved = await Promise.all(
-    AGENT_TASK_KEYS.map(async (taskKey) => ({
-      taskKey,
-      role: AGENT_TASK_ROLES[taskKey],
-      ...(await getModelConfig(taskKey)),
-    }))
+    AGENT_TASK_KEYS.map(async (taskKey) => {
+      const config = await getModelConfig(taskKey);
+      const record = registry?.find((candidate) => candidate.modelKey === config.model);
+      return {
+        taskKey,
+        role: AGENT_TASK_ROLES[taskKey],
+        ...config,
+        modelLabel: record ? `${record.displayName} — ${TEXT_PROVIDER_LABELS[record.providerKey]}` : null,
+        // Same rule the runtime applies: a non-null problem means this task actually runs on its default.
+        problem: validateTextModelSelection(taskKey, config.model, registry),
+      };
+    })
   );
 
   return (
@@ -85,7 +95,11 @@ export default async function AgenticRoutingPage() {
                       {ROLE_LABELS[row.role]}
                     </span>
                   </td>
-                  <td className="px-4 py-4 font-mono text-neutral-300">{row.model}</td>
+                  <td className="px-4 py-4">
+                    {row.modelLabel && <p className="text-neutral-200">{row.modelLabel}</p>}
+                    <p className="font-mono text-xs text-neutral-400">{row.model}</p>
+                    {row.problem && <p className="mt-1 text-xs text-amber-300">Runs on fallback: {row.problem}</p>}
+                  </td>
                   <td className="px-4 py-4 text-neutral-400">{row.temperature ?? '—'}</td>
                 </tr>
               ))}

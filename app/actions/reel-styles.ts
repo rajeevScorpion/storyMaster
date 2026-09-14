@@ -23,7 +23,8 @@ import {
 } from '@/lib/reel/styles';
 import type { PlanKey } from '@/lib/types/pricing';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
-import { callGeminiVisionText, callGeminiImage } from '@/app/actions/gemini-proxy';
+import { callGeminiImage } from '@/app/actions/gemini-proxy';
+import { callTextModelVision } from '@/app/actions/text-model-proxy';
 import { getModelConfig } from '@/lib/ai/model-config';
 
 export interface SaveReelVisualStyleInput {
@@ -292,7 +293,7 @@ export async function extractGraphicStyleFromImageAction(input: {
   if (!base64Data) throw new Error('Reference image data is empty.');
 
   const modelConfig = await getModelConfig('graphic_style_extraction');
-  const rawText = await callGeminiVisionText({
+  const rawText = await callTextModelVision({
     task: 'graphic_style_extraction',
     model: modelConfig.model,
     prompt: 'Analyze the visual style of this reference image and describe it in plain text, ≤150 words. Focus only on style — not subject or scene.',

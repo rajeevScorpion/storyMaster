@@ -8,6 +8,7 @@ import { isR2Reference } from '@/lib/media/r2-reference';
 import { signMixedUrls } from '@/lib/media/storage-url-signing';
 import { getPricingRuntimeContext } from '@/app/actions/pricing-runtime';
 import { getFeatureFlag } from '@/lib/ai/model-config';
+import { readerSafeImageError } from '@/lib/media/image-failure.shared';
 import type { ReferenceImage } from '@/app/actions/story-runtime';
 import type {
   BeatImageJobReference,
@@ -231,7 +232,7 @@ export async function getStoryImageJobStatuses(storyId: string): Promise<StoryIm
       nodeId: row.node_id,
       status: row.status as ImageGenerationJobStatus,
       beatImageStatus: jobStatusToBeatImageStatus(row.status as ImageGenerationJobStatus),
-      error: row.error,
+      error: readerSafeImageError(row.error) ?? null,
       updatedAt: row.updated_at,
     });
   }
@@ -312,7 +313,7 @@ export async function getReadyBeatImages(storyId: string, nodeIds: string[]): Pr
     nodeId: beat.node_id,
     imageUrl: beat.image_url ? (signed.get(beat.image_url) ?? beat.image_url) : null,
     imageStatus: beat.image_status,
-    imageError: beat.image_error,
+    imageError: readerSafeImageError(beat.image_error) ?? null,
   }));
 }
 

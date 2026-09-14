@@ -335,6 +335,51 @@ applied, the doorway restored, and both route layouts relaxed. Recorded in full 
 it's one lookup, not an excavation; design rationale is in
 [docs/agentic-creator-phase10-plan.md](../agentic-creator-phase10-plan.md), section 2 (D23).
 
+## Text models
+
+### A text model id is a registry key — never trust one from the client
+
+Every text call runs through the gateway (`lib/ai/text-gateway/router.ts`), and the model id it is handed is a
+`text_model_registry.model_key`, not a provider id. On the reader path that id comes from the browser — the
+client fetches task model ids and passes them back into server actions — so treat it as attacker-controlled.
+The gateway runs only an **enabled** registry row; anything else drops to the task's Gemini default with a
+`[text-gateway] fallback` warning. Never pass a raw id straight to a provider adapter, and never widen the
+legacy branch of `resolveTextModel` beyond a bare `gemini-*` id: with migration 119 absent, that regex is the
+only thing between a client-supplied string and a paid OpenRouter call.
+
+Related traps from the same build:
+- **Never rename a `model_key`.** Tasks and persona overrides point at it by string, so a rename silently sends
+  all of them to their fallback. Add a new row and move the tasks.
+- **A process that saw 119 missing stays Gemini-only until it restarts.** The registry read latches legacy
+  mode; after applying 119 the server needs a redeploy (or dev-server restart) before Text Models shows rows.
+- **Gemini output is validated observe-only; OpenAI and OpenRouter strictly.** A schema mismatch on Gemini
+  only warns, preserving production behaviour; the same mismatch elsewhere throws `malformed_output`. Changing
+  either direction is a live behaviour change, not a tidy-up.
+- **Capabilities are load-bearing.** GPT-5.6 Luna rejects `temperature` (HTTP 400) and Qwen 3.7 Flash has JSON
+  mode only, no strict schema. A wrong checkbox in an admin edit makes every call on that model fail.
+- **Remove a registry row only after moving what points at it.** Tasks and persona overrides hold the key as a
+  string; delete first and they silently run their code default. Migration 120 moves, then deletes.
+
+### Thinking levels, temperature and failure text (migration 120)
+
+- **A thinking level is never taken from the request.** The gateway reads the task's level from
+  `model_config.reasoning_level` on the server and applies it only when the call runs on that task's assigned
+  model and the model lists the level; otherwise the model's default, otherwise nothing is sent. A model's
+  levels are a load-bearing capability: Gemini 3 cannot switch thinking off and 3.8 Flash rejects `minimal`.
+- **Gemini text calls always send temperature 1.0** — Google's Gemini 3 guidance (lower values risk looping) and
+  an owner decision. Task temperatures apply to OpenAI and OpenRouter models only. Not an oversight.
+- **Gemini thinking tokens count as output.** Usage adds `thoughtsTokenCount` to output tokens, as Google bills
+  it. Gemini cost rows from before this change understate thinking-heavy tasks; don't compare across it.
+- **`TextGatewayError.message` is for readers, `detail` is for you.** The message is a fixed sentence with no
+  provider, model or task name. Logs, admin screens and agent run records read `errorDetail(error)`. Returning
+  `error.message` from a server action is safe for gateway errors, not for arbitrary ones — allow-list the
+  error classes you return. Image failures have no gateway, so readers get `readerSafeImageError(...)` at every
+  point `beats.image_error` or a job error leaves the server.
+- **`model_config.reasoning_level` has its own latch.** A process that saw the column missing sends no task
+  thinking levels until it restarts; model assignments are unaffected.
+
+---
+
 ## Product decisions worth not re-deriving
 
 - **`/gallery` is a 307, not a 308.** A cached permanent redirect would make moving the gallery back very hard.

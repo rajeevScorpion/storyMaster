@@ -20,6 +20,8 @@ import {
   Upload,
 } from 'lucide-react';
 import { getActiveModelConfigs } from '@/app/actions/admin';
+import { getTextModelOptions, type TextModelOption } from '@/app/actions/text-models';
+import FilterDropdown from '@/components/ui/FilterDropdown';
 import {
   applyModelToProduction,
   getPromptPlaygroundStateAction,
@@ -315,21 +317,6 @@ function formatProductionConfig(modelId: string | undefined, temperature: number
   return `${modelId} | temp ${temperature}`;
 }
 
-function ModelDropdown({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: string[] }) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full appearance-none rounded-lg border border-white/10 bg-neutral-800 px-3 py-2 pr-8 text-sm text-neutral-100"
-      >
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-      <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400" />
-    </div>
-  );
-}
-
 function StatCard({ icon: Icon, label, value, color = 'text-neutral-300' }: { icon: React.ComponentType<{ size?: number; className?: string }>; label: string; value: string; color?: string }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-white/5 bg-neutral-800/50 p-3">
@@ -384,6 +371,8 @@ export default function PlaygroundStudio({
     initialTask && isPromptTaskKey(initialTask) ? initialTask : visibleTaskKeys[0] ?? 'story_generation'
   );
   const [selectedModel, setSelectedModel] = useState('');
+  // null = not a text task, or the registry call failed: fall back to the static KNOWN_MODELS list.
+  const [textModelOptions, setTextModelOptions] = useState<TextModelOption[] | null>(null);
   const [temperature, setTemperature] = useState(0.7);
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [promptState, setPromptState] = useState<PlaygroundPromptState | null>(null);
@@ -415,6 +404,7 @@ export default function PlaygroundStudio({
     taskKey: selectedTask,
     modelId: defaultConfig.modelId,
     temperature: defaultConfig.temperature,
+    reasoningLevel: null,
     updatedAt: '',
   };
   const taskDef = TASK_DEFINITIONS.find((task) => task.key === selectedTask)!;
@@ -427,6 +417,16 @@ export default function PlaygroundStudio({
     if (!supportsPrompt || !draftPrompt) return '';
     return resolvePromptTemplate(draftPrompt, inputs);
   }, [supportsPrompt, draftPrompt, inputs]);
+  const modelOptions = useMemo(() => {
+    const base = textModelOptions ?? getModelsForTask(selectedTask).map((id) => ({ value: id, label: id }));
+    // Always show what production is set to, even when the registry no longer offers it --
+    // otherwise the picker would display a different model than the one the runtime falls back from.
+    if (!selectedModel || base.some((option) => option.value === selectedModel)) return base;
+    return [...base, { value: selectedModel, label: `${selectedModel} (disabled or unknown: runs on fallback)` }];
+  }, [textModelOptions, selectedTask, selectedModel]);
+  const selectedTextModelOption = textModelOptions?.find((option) => option.value === selectedModel);
+  const modelIgnoresTemperature = selectedTextModelOption?.temperature === false;
+  const modelIgnoresTemperatureIsGemini = selectedTextModelOption?.providerKey === 'gemini';
 
   useEffect(() => {
     getActiveModelConfigs()
@@ -464,6 +464,24 @@ export default function PlaygroundStudio({
   useEffect(() => {
     setApplyStatus('idle');
   }, [selectedModel, temperature, selectedTask]);
+
+  useEffect(() => {
+    if (!taskHasTemperature(selectedTask)) {
+      setTextModelOptions(null);
+      return;
+    }
+    let cancelled = false;
+    getTextModelOptions(selectedTask)
+      .then((options) => {
+        if (!cancelled) setTextModelOptions(options);
+      })
+      .catch(() => {
+        if (!cancelled) setTextModelOptions(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTask]);
 
   useEffect(() => {
     if (selectedTask !== 'reel_image_generation') return;
@@ -863,12 +881,17 @@ export default function PlaygroundStudio({
             <div className="grid gap-4 lg:grid-cols-2">
               <div>
                 <label className="mb-1.5 block text-xs text-neutral-400">Model</label>
-                <ModelDropdown value={selectedModel} onChange={setSelectedModel} options={getModelsForTask(selectedTask)} />
+                <FilterDropdown value={selectedModel} options={modelOptions} onChange={setSelectedModel} fullWidth />
               </div>
               {taskHasTemperature(selectedTask) && (
                 <div>
                   <label className="mb-1.5 block text-xs text-neutral-400">Temperature: {temperature.toFixed(2)}</label>
-                  <input type="range" min={0} max={1} step={0.05} value={temperature} onChange={(event) => setTemperature(parseFloat(event.target.value))} className="mt-2 w-full accent-emerald-500" />
+                  <input type="range" min={0} max={1} step={0.05} value={temperature} disabled={modelIgnoresTemperature} onChange={(event) => setTemperature(parseFloat(event.target.value))} className="mt-2 w-full accent-emerald-500 disabled:opacity-40" />
+                  {modelIgnoresTemperature && (
+                    <p className="mt-1 text-xs text-amber-300">
+                      {modelIgnoresTemperatureIsGemini ? 'Gemini always runs at temperature 1.0.' : 'This model does not accept temperature; the value is not sent.'}
+                    </p>
+                  )}
                 </div>
               )}
             </div>

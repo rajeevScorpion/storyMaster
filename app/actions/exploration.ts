@@ -11,6 +11,7 @@ import { deriveVisualStyleSummary, normalizeStoryConfig } from '@/lib/ai/story-c
 import { normalizeBeatMediaFields } from '@/lib/types/beat-media';
 import { repairMissingReadyBeatImageUrls } from '@/app/actions/persistence';
 import { normalizeStoryEffectConfig } from '@/lib/story-effects/settings';
+import { readerSafeImageError } from '@/lib/media/image-failure.shared';
 
 /**
  * Convert a DbBeat row back into a StoryNode for the client StoryMap.
@@ -32,7 +33,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageUrl: beat.image_url || undefined,
     imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
-    imageError: beat.image_error || undefined,
+    imageError: readerSafeImageError(beat.image_error),
     imageGallery: Array.isArray(beat.image_gallery)
       ? beat.image_gallery.map((entry) => ({
           url: entry.url,
@@ -128,7 +129,7 @@ function mergeStoryMapBeatFallback(beat: StoryBeat, fallback?: StoryBeat): Story
     imageUrl: beat.imageUrl || fallback.imageUrl,
     persistedImageUrl: beat.persistedImageUrl || fallback.persistedImageUrl || fallback.imageUrl,
     imageStatus: beat.imageStatus || fallback.imageStatus,
-    imageError: beat.imageError || fallback.imageError,
+    imageError: beat.imageError || readerSafeImageError(fallback.imageError),
     audioUrl: beat.audioUrl || fallback.audioUrl,
     audioStatus: beat.audioStatus || fallback.audioStatus,
     audioError: beat.audioError || fallback.audioError,
@@ -228,7 +229,7 @@ export async function loadStoryTree(storyId: string): Promise<StorySession> {
               ? { imageStatus: jsonbNode.data.imageStatus }
               : {}),
             ...(!storyMap.nodes[nodeId].data.imageError && jsonbNode.data.imageError
-              ? { imageError: jsonbNode.data.imageError }
+              ? { imageError: readerSafeImageError(jsonbNode.data.imageError) }
               : {}),
             ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
               ? { audioUrl: jsonbNode.data.audioUrl }
@@ -557,7 +558,7 @@ export async function loadStorylineWithBeats(
         imageUrl: hqRefByNode.get(b.node_id) ?? (b.image_url || undefined),
         imageVersion: b.image_synced_at || undefined,
         imageStatus: b.image_status,
-        imageError: b.image_error || undefined,
+        imageError: readerSafeImageError(b.image_error),
         audioUrl: b.audio_url || undefined,
         audioVersion: b.audio_synced_at || undefined,
         audioStatus: b.audio_status,
@@ -726,7 +727,7 @@ export async function refreshStorylineSignedUrls(storylineId: string): Promise<S
         imageUrl: b.image_url || undefined,
         imageVersion: b.image_synced_at || undefined,
         imageStatus: b.image_status,
-        imageError: b.image_error || undefined,
+        imageError: readerSafeImageError(b.image_error),
         audioUrl: b.audio_url || undefined,
         audioVersion: b.audio_synced_at || undefined,
         audioStatus: b.audio_status,

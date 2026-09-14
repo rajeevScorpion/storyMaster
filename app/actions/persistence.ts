@@ -11,6 +11,7 @@ import type { StorySession, StoryMap, StoryBeat, StoryNode, Character, BeatImage
 import type { DbStory, DbBeat } from '@/lib/types/database';
 import type { StorylineShareCoverSource } from '@/lib/types/database';
 import type { BeatMediaStatus } from '@/lib/types/beat-media';
+import { readerSafeImageError } from '@/lib/media/image-failure.shared';
 import {
   normalizeBeatMediaFields,
   BEAT_ROW_NOT_FOUND_MESSAGE,
@@ -393,7 +394,7 @@ function beatRowToNode(beat: DbBeat, childNodeIds: string[]): StoryNode {
     imageUrl: beat.image_url || undefined,
     imageVersion: beat.image_synced_at || undefined,
     imageStatus: beat.image_status,
-    imageError: beat.image_error || undefined,
+    imageError: readerSafeImageError(beat.image_error),
     imageProviderKey: beat.image_provider_key || undefined,
     imageModelKey: beat.image_model_key || undefined,
     imageGenerationMetadata: beat.image_generation_metadata || undefined,
@@ -614,7 +615,7 @@ export async function loadStory(storyId: string): Promise<StorySession> {
               ? { imageStatus: jsonbNode.data.imageStatus }
               : {}),
             ...(!storyMap.nodes[nodeId].data.imageError && jsonbNode.data.imageError
-              ? { imageError: jsonbNode.data.imageError }
+              ? { imageError: readerSafeImageError(jsonbNode.data.imageError) }
               : {}),
             ...(!storyMap.nodes[nodeId].data.audioUrl && jsonbNode.data.audioUrl
               ? { audioUrl: jsonbNode.data.audioUrl }
@@ -1401,7 +1402,7 @@ export async function autoPublishStoryline(
       endingForecast: b.ending_forecast,
       imageUrl: b.image_url,
       imageStatus: b.image_status,
-      imageError: b.image_error || undefined,
+      imageError: readerSafeImageError(b.image_error),
       audioUrl: b.audio_url,
       audioStatus: b.audio_status,
       audioError: b.audio_error || undefined,
@@ -1539,7 +1540,7 @@ export async function autoPublishStoryline(
     endingForecast: b.ending_forecast,
     imageUrl: b.image_url,
     imageStatus: b.image_status,
-    imageError: b.image_error || undefined,
+    imageError: readerSafeImageError(b.image_error),
     audioUrl: b.audio_url,
     audioStatus: b.audio_status,
     audioError: b.audio_error || undefined,

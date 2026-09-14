@@ -36,6 +36,7 @@ import {
 import { authorizeCoinOperationForUser, quoteCoinOperationForUser } from '@/lib/pricing/coin-economy';
 import { getMediaPipelineSettings } from '@/lib/media/processing-mode';
 import { processAndStoreImageVariants } from '@/lib/media/variant-pipeline';
+import { IMAGE_FAILURE_MESSAGE } from '@/lib/media/image-failure.shared';
 import { parseR2Reference } from '@/lib/media/r2-reference';
 import type { PlanKey } from '@/lib/types/pricing';
 import {
@@ -763,7 +764,7 @@ async function reconcileJob(admin: AdminClient, job: BatchJobRow): Promise<void>
         .update({ status: 'failed', error: result?.error ?? 'No result for item.' })
         .eq('id', item.id);
       await admin.from('beats')
-        .update({ image_status: 'failed', image_error: result?.error ?? 'Batch produced no image.' })
+        .update({ image_status: 'failed', image_error: IMAGE_FAILURE_MESSAGE })
         .eq('story_id', job.story_id).eq('node_id', item.node_id);
       return;
     }
@@ -1291,7 +1292,7 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
         error instanceof Error ? error.stack ?? error.message : error
       );
       await admin.from('image_batch_items').update({ status: 'failed', error: message }).eq('id', item.id);
-      await admin.from('beats').update({ image_status: 'failed', image_error: message })
+      await admin.from('beats').update({ image_status: 'failed', image_error: IMAGE_FAILURE_MESSAGE })
         .eq('story_id', job.story_id).eq('node_id', item.node_id);
     }
   }

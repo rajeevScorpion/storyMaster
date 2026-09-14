@@ -24,9 +24,10 @@ import 'server-only';
 
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getModelConfig } from '@/lib/ai/model-config';
-import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
+import { callTextModelAgenticJson } from '@/app/actions/text-model-proxy';
 import { isMissingPersonaSchemaError, type AgentPersonaStatus } from '@/lib/agentic/personas.shared';
 import { isMissingMemorySchemaError } from '@/lib/agentic/memory.shared';
+import { errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import {
   GAP_SHORTLIST_SIZE,
   MAX_COMMISSIONS_PER_TICK,
@@ -296,7 +297,7 @@ export async function proposeCommissions(limit: number = MAX_COMMISSIONS_PER_TIC
 
   let raw: unknown;
   try {
-    const text = await callGeminiAgenticJson({
+    const text = await callTextModelAgenticJson({
       task: 'agent_supervisor_planning',
       model: config.model,
       prompt,
@@ -306,7 +307,7 @@ export async function proposeCommissions(limit: number = MAX_COMMISSIONS_PER_TIC
   } catch (error) {
     return {
       accepted: [],
-      rejected: [{ reason: `Planning model call or JSON parse failed: ${error instanceof Error ? error.message : 'unknown error'}`, raw: null }],
+      rejected: [{ reason: `Planning model call or JSON parse failed: ${errorDetail(error, 'unknown error')}`, raw: null }],
     };
   }
 

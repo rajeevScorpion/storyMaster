@@ -88,7 +88,7 @@ import {
 import { resolveImagePromptCompilerRuntime } from '@/lib/ai/prompt-compiler/mode';
 import { getStoryModelOverrides } from '@/app/actions/admin';
 import { saveStoryForUser } from '@/lib/story/save-story';
-import { callGeminiAgenticJson } from '@/app/actions/gemini-proxy';
+import { callTextModelAgenticJson } from '@/app/actions/text-model-proxy';
 import { getModelConfig } from '@/lib/ai/model-config';
 import { authorizeBillableAction, finalizeBillableAction, releaseBillableAction } from '@/lib/pricing/enforcement';
 import type { PricingActionKey } from '@/lib/types/pricing';
@@ -103,6 +103,7 @@ import {
   type StoryNarrationVoiceSelection,
 } from '@/lib/ai/narration-voices';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
+import { errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import type {
   Character,
   CharacterNameSource,
@@ -438,7 +439,7 @@ async function releaseAgenticSpend(reservationId: string | null, reason: string)
 function toFailure(error: unknown, metadata?: Record<string, unknown>): StageExecutionOutcome {
   return {
     kind: 'failed',
-    message: error instanceof Error ? error.message : 'Unknown error during story assembly.',
+    message: errorDetail(error, 'Unknown error during story assembly.'),
     metadata,
     error,
   };
@@ -561,7 +562,7 @@ async function generateStoryBrief(
     const config = await getModelConfig('agent_story_brief');
     const memoryBlock = await loadPersonaMemoryBlockForBrief(persona.id);
     const prompt = buildStoryBriefPrompt(persona, task, memoryBlock, avoidTitles);
-    const raw = await callGeminiAgenticJson({
+    const raw = await callTextModelAgenticJson({
       task: 'agent_story_brief',
       model: config.model,
       prompt,
@@ -915,7 +916,7 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
     try {
       const config = await getModelConfig('agent_seed_story_writing');
       const prompt = buildSeedSourcePrompt(persona, brief, targetBeatCount, beatLength);
-      const raw = await callGeminiAgenticJson({
+      const raw = await callTextModelAgenticJson({
         task: 'agent_seed_story_writing',
         model: config.model,
         prompt,
@@ -1160,7 +1161,7 @@ async function runStoryGeneratedStage(run: AgentRun, task: AgentTask, persona: A
     buildSeededStoryMap(completedBeats);
   } catch (error) {
     if (error instanceof SeededStoryMapError) {
-      return { kind: 'failed', message: error.message, error };
+      return { kind: 'failed', message: errorDetail(error), error };
     }
     throw error;
   }
@@ -1321,7 +1322,7 @@ async function runDraftCreatedStage(run: AgentRun, task: AgentTask, persona: Age
     storyMap = buildSeededStoryMap(progress.completedBeats);
   } catch (error) {
     if (error instanceof SeededStoryMapError) {
-      return { kind: 'failed', message: error.message, error };
+      return { kind: 'failed', message: errorDetail(error), error };
     }
     throw error;
   }
