@@ -5,6 +5,27 @@ Branch `feature/text-model-gateway` off `dev`. Pack: `prompt-packs/kisago_text_m
 
 ---
 
+## Session 3 — 2026-09-14: thinking control, Gemini refresh, reader-safe errors, card layout
+
+**Current state — supersedes "Current state" under Session 2.** Owner reopened the branch before merge with
+five decisions (plan section 0): no provider/model names in reader errors (text and image); thinking per model
+plus per task; add Gemini 3.8 Flash and remove Gemini text models older than 3.5 Flash; Gemini always at
+temperature 1.0; card-grid layout on `/admin/text-models`.
+
+- Plan: [text-model-thinking-plan.md](text-model-thinking-plan.md) — self-contained, incl. migration 120 SQL.
+- **Delegated in parallel to Sonnet** (disjoint files, path-scoped commits): Phase A reader-safe errors
+  (commit `fix(errors): never show provider or model names…`) and Phase B thinking data layer + migration 120
+  (commits `feat(text-models): migration 120 …` then `feat(text-models): thinking levels per model and per
+  task…`). If this session ends mid-way, review those diffs before anything else.
+- **Migration 120 not yet confirmed against the plan.** Owner told not to apply it until Opus checks the
+  committed file matches plan section 3 verbatim.
+- Next: review A and B diffs → Phase C (gateway) and D (admin page) in parallel → Phase E (live smoke, full
+  gate, docs).
+- Production `model_config` could not be read from this session (permission denied); the plan carries a
+  read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
+
+---
+
 ## Session 2 — 2026-09-14 (usage 10% at start)
 
 - **P4a (`311d019`) reviewed by Opus: passes.** Playground tests are strict; production apply and persona saves
