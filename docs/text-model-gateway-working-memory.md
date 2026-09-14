@@ -19,8 +19,28 @@ non-abort network failure is `provider_error`, not `timeout`.
 - Gemini `finishReason` / `promptFeedback.blockReason` are not mapped (the old code didn't either).
 - `.env.local` has an empty `OPENROUTER_API_KEY=""` placeholder for the owner to fill.
 
-**Next session:** ask the owner for a usage reading, then delegate P4a (plan section 5) to Sonnet with the
-gaps above added to its brief. Then P4b, then P5. Migration 119 is still unapplied everywhere.
+**Update, still session 1 (usage 79%):**
+- **Migration 119 applied on dev** by the owner and verified live against the file (18 columns, all
+  constraints, trigger, RLS with 0 policies, 12 seed rows with correct enabled flags, ledger row).
+  **Frozen** — any change ships as 120. Not applied on prod.
+- `OPENROUTER_API_KEY` is now set in `.env.local`, so the P5 smoke can cover all three providers.
+- **P4a delegated to Sonnet** with the telemetry gap above in its brief. Next session: if a
+  `feat(text-models): route every text call…` commit exists, review its diff first; otherwise check
+  `git status` for partial work.
+
+**Next session — start here:**
+1. Ask the owner for a usage reading.
+2. **P4a landed as `311d019`** after session 1's usage cap — agent reports tsc/lint clean, 1117/1117 tests,
+   15 new. **Not yet reviewed by Opus.** Its stated deviations: beat-control/episodes/discovery call the
+   gateway directly (their schemas aren't in the wrapper map); their manual `GEMINI_API_KEY` pre-checks were
+   removed in favour of the gateway's credential check; dead `buildResult` removed from prompt-playground.
+   **Review its diff** against plan 5/P4a (Opus reads the diff, not the agent report). Check specifically: the playground
+   test runner uses `strictModel`; `applyModelToProduction` and persona saves reject disabled/unknown keys;
+   narration keeps its telemetry; image/TTS branches untouched; wrappers pass `telemetryMetadata`.
+   If no such commit, `git status` shows partial P4a work — finish it against the same checklist.
+3. Then delegate **P4b** (admin Text Models page, registry-backed dropdowns, nav, routing page) and **P5**
+   (env-gated smoke on all three providers, full gate incl. `build:verify` + e2e, PROJECT_STATE ledger row
+   "119 applied on dev", GOTCHAS entry, final report per pack template 12).
 
 ---
 
@@ -65,4 +85,6 @@ P4a (plan 5) to Sonnet. P4b after, then P5.
 
 ### Usage log
 - 2026-09-14 start of implementation: 16%.
-- After P2 (two discovery agents + P2 cost ~47 points): 63%. During P3: 76% — delegation stopped after P3.
+- After P2 (two discovery agents + P2 cost ~47 points): 63%. During P3: 76%. Owner allowed P4a at 79%; 90% reached during P4a — session 1 closed, handoff written.
+- Budget lesson: each Sonnet phase costs roughly 10–15 points of the 5-hour window. Plan two phases per
+  session, not four.
