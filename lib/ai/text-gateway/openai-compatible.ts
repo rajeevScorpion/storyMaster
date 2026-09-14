@@ -10,6 +10,18 @@ const BASE_URL: Record<'openai' | 'openrouter', string> = {
   openrouter: 'https://openrouter.ai/api/v1',
 };
 
+/** Only `error.message`, truncated -- never the raw body, which on some hosts can echo the
+ * request. Without this a 400 like "Unsupported parameter: temperature" is undiagnosable. */
+async function readProviderErrorMessage(response: Response): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: { message?: unknown } };
+    const message = typeof body?.error?.message === 'string' ? body.error.message.trim() : '';
+    return message ? `: ${message.slice(0, 300)}` : '';
+  } catch {
+    return '';
+  }
+}
+
 function describeCall(record: TextModelRecord, taskKey: string): string {
   return `${TEXT_PROVIDER_LABELS[record.providerKey]} model "${record.modelKey}" (task ${taskKey})`;
 }
@@ -50,7 +62,7 @@ export async function callOpenAiCompatible(
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError';
     throw new TextGatewayError({
-      category: 'timeout',
+      category: aborted ? 'timeout' : 'provider_error',
       providerKey,
       modelKey: record.modelKey,
       retryable: false,
@@ -64,14 +76,13 @@ export async function callOpenAiCompatible(
 
   if (!response.ok) {
     const { category, retryable } = classifyHttpError(response.status);
-    // Never read/log the body here -- it can echo the prompt back.
     throw new TextGatewayError({
       category,
       providerKey,
       modelKey: record.modelKey,
       status: response.status,
       retryable,
-      message: `${describeCall(record, request.taskKey)} failed with HTTP ${response.status}.`,
+      message: `${describeCall(record, request.taskKey)} failed with HTTP ${response.status}${await readProviderErrorMessage(response)}.`,
     });
   }
 

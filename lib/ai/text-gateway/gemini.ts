@@ -3,7 +3,7 @@ import 'server-only';
 import { GoogleGenAI } from '@google/genai';
 import type { TextModelRecord } from '@/lib/ai/text-models.shared';
 import { TextGatewayError, type TextGenerationRequest } from './types.shared';
-import type { ParsedChatCompletionsResponse } from './openai-compatible.shared';
+import { classifyHttpError, type ParsedChatCompletionsResponse } from './openai-compatible.shared';
 
 /**
  * No httpOptions.retryOptions: @google/genai 2.x only retries a call when that option is
@@ -79,12 +79,18 @@ export async function callGemini(
     );
   } catch (err) {
     if (err instanceof TextGatewayError) throw err;
+    // Keep the SDK's status and message: before the gateway they reached callers and logs
+    // verbatim, and they are the only way to tell a 429 from a bad model id.
+    const status = typeof (err as { status?: unknown })?.status === 'number' ? (err as { status: number }).status : undefined;
+    const { category, retryable } = status ? classifyHttpError(status) : { category: 'provider_error' as const, retryable: false };
+    const upstream = err instanceof Error && err.message ? `: ${err.message.slice(0, 300)}` : '';
     throw new TextGatewayError({
-      category: 'provider_error',
+      category,
       providerKey: 'gemini',
       modelKey: record.modelKey,
-      retryable: false,
-      message: `Gemini model "${record.modelKey}" request failed for task ${request.taskKey}.`,
+      status,
+      retryable,
+      message: `Gemini model "${record.modelKey}" request failed for task ${request.taskKey}${upstream}`,
     });
   }
 
