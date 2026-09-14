@@ -1,9 +1,10 @@
 import 'server-only';
 
 import { GoogleGenAI } from '@google/genai';
-import type { TextModelRecord } from '@/lib/ai/text-models.shared';
+import type { TextModelRecord, TextReasoningLevel } from '@/lib/ai/text-models.shared';
 import { TextGatewayError, type TextGenerationRequest } from './types.shared';
 import { classifyHttpError, type ParsedChatCompletionsResponse } from './openai-compatible.shared';
+import { buildGeminiConfig, parseGeminiUsage } from './gemini.shared';
 
 /**
  * No httpOptions.retryOptions: @google/genai 2.x only retries a call when that option is
@@ -40,7 +41,8 @@ export async function callGemini(
   record: TextModelRecord,
   request: TextGenerationRequest,
   apiKey: string,
-  timeoutMs: number
+  timeoutMs: number,
+  reasoningLevel: TextReasoningLevel | undefined
 ): Promise<ParsedChatCompletionsResponse> {
   const ai = getGeminiClient(apiKey);
 
@@ -55,20 +57,7 @@ export async function callGemini(
       }]
     : request.prompt;
 
-  const config: Record<string, unknown> = {};
-  if (request.systemInstruction) config.systemInstruction = request.systemInstruction;
-  if (request.schema) {
-    config.responseMimeType = 'application/json';
-    config.responseSchema = request.schema;
-  } else if (request.expectJson) {
-    config.responseMimeType = 'application/json';
-  } else {
-    config.responseMimeType = 'text/plain';
-  }
-  if (typeof request.temperature === 'number') config.temperature = request.temperature;
-  if (typeof record.defaultParams.maxOutputTokens === 'number' && record.defaultParams.maxOutputTokens > 0) {
-    config.maxOutputTokens = record.defaultParams.maxOutputTokens;
-  }
+  const config = buildGeminiConfig(record, request, reasoningLevel);
 
   let response: Awaited<ReturnType<typeof ai.models.generateContent>>;
   try {
@@ -108,12 +97,7 @@ export async function callGemini(
   return {
     text,
     refusal: false,
-    usage: {
-      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
-      cachedInputTokens: response.usageMetadata?.cachedContentTokenCount ?? undefined,
-      costUsd: null,
-    },
+    usage: parseGeminiUsage(response.usageMetadata),
     actualModel: record.providerModelId,
   };
 }

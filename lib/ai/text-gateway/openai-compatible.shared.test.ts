@@ -113,23 +113,36 @@ describe('buildChatCompletionsBody', () => {
     expect(buildChatCompletionsBody(positive, makeRequest()).max_completion_tokens).toBe(512);
   });
 
-  it('OpenAI reasoningLevel becomes reasoning_effort; OpenRouter becomes reasoning.effort, including "none"', () => {
-    const openaiRecord = makeRecord({ providerKey: 'openai', defaultParams: { reasoningLevel: 'low' } });
-    expect(buildChatCompletionsBody(openaiRecord, makeRequest()).reasoning_effort).toBe('low');
-
-    const openrouterRecord = makeRecord({ defaultParams: { reasoningLevel: 'low' } });
-    expect(buildChatCompletionsBody(openrouterRecord, makeRequest()).reasoning).toEqual({ effort: 'low' });
-
-    const openrouterNone = makeRecord({ defaultParams: { reasoningLevel: 'none' } });
-    expect(buildChatCompletionsBody(openrouterNone, makeRequest()).reasoning).toEqual({ effort: 'none' });
+  it('OpenAI: the passed reasoningLevel becomes reasoning_effort, for every level', () => {
+    const openaiRecord = makeRecord({ providerKey: 'openai' });
+    for (const level of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(buildChatCompletionsBody(openaiRecord, makeRequest(), level).reasoning_effort).toBe(level);
+    }
   });
 
-  it('neither provider sends a reasoning field when the model has no default level', () => {
-    const openaiRecord = makeRecord({ providerKey: 'openai', defaultParams: {} });
-    expect('reasoning_effort' in buildChatCompletionsBody(openaiRecord, makeRequest())).toBe(false);
+  it('OpenRouter: the passed reasoningLevel becomes reasoning.effort, including "none"', () => {
+    const openrouterRecord = makeRecord();
+    for (const level of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      expect(buildChatCompletionsBody(openrouterRecord, makeRequest(), level).reasoning).toEqual({ effort: level });
+    }
+  });
 
-    const openrouterRecord = makeRecord({ defaultParams: {} });
+  it('neither provider sends a reasoning field when reasoningLevel is undefined', () => {
+    const openaiRecord = makeRecord({ providerKey: 'openai' });
+    expect('reasoning_effort' in buildChatCompletionsBody(openaiRecord, makeRequest())).toBe(false);
+    expect('reasoning_effort' in buildChatCompletionsBody(openaiRecord, makeRequest(), undefined)).toBe(false);
+
+    const openrouterRecord = makeRecord();
     expect('reasoning' in buildChatCompletionsBody(openrouterRecord, makeRequest())).toBe(false);
+    expect('reasoning' in buildChatCompletionsBody(openrouterRecord, makeRequest(), undefined)).toBe(false);
+  });
+
+  it('a record.defaultParams.reasoningLevel is ignored -- only the passed parameter is used', () => {
+    // Guards against regressing to the Phase B stopgap of reading record.defaultParams directly,
+    // which would silently ignore a task's own override.
+    const openaiRecord = makeRecord({ providerKey: 'openai', defaultParams: { reasoningLevel: 'high' } });
+    expect('reasoning_effort' in buildChatCompletionsBody(openaiRecord, makeRequest())).toBe(false);
+    expect(buildChatCompletionsBody(openaiRecord, makeRequest(), 'low').reasoning_effort).toBe('low');
   });
 
   it('a "none" structuredOutput model gets no response_format, and the schema shape is described in the prompt instead', () => {

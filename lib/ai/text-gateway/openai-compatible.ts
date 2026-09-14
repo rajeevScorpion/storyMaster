@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { TextModelRecord } from '@/lib/ai/text-models.shared';
+import type { TextModelRecord, TextReasoningLevel } from '@/lib/ai/text-models.shared';
 import { TEXT_PROVIDER_LABELS } from '@/lib/ai/text-models.shared';
 import { TextGatewayError, type TextGenerationRequest } from './types.shared';
 import { buildChatCompletionsBody, classifyHttpError, parseChatCompletionsResponse, type ParsedChatCompletionsResponse } from './openai-compatible.shared';
@@ -35,10 +35,11 @@ export async function callOpenAiCompatible(
   record: TextModelRecord,
   request: TextGenerationRequest,
   apiKey: string,
-  timeoutMs: number
+  timeoutMs: number,
+  reasoningLevel: TextReasoningLevel | undefined
 ): Promise<ParsedChatCompletionsResponse> {
   const providerKey = record.providerKey as 'openai' | 'openrouter';
-  const body = buildChatCompletionsBody(record, request);
+  const body = buildChatCompletionsBody(record, request, reasoningLevel);
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,

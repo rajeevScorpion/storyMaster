@@ -1,14 +1,16 @@
 import 'server-only';
 
-import { getFeatureFlagValue } from '@/lib/ai/model-config';
+import { getFeatureFlagValue, getModelConfig } from '@/lib/ai/model-config';
 import { getMissingEnvVars, getTextModelRegistry } from '@/lib/ai/text-models';
 import {
   TEXT_PROVIDER_ENV_VARS,
   TEXT_PROVIDER_LABELS,
   TEXT_PROVIDER_TELEMETRY_KEYS,
+  resolveReasoningLevel,
   resolveTextModel,
   type TextModelRecord,
   type TextModelResolution,
+  type TextReasoningLevel,
 } from '@/lib/ai/text-models.shared';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import { computeTextCostUsd } from './cost.shared';
@@ -53,11 +55,12 @@ function apiKeyFor(record: TextModelRecord): string {
 async function callProvider(
   record: TextModelRecord,
   request: TextGenerationRequest,
-  timeoutMs: number
+  timeoutMs: number,
+  reasoningLevel: TextReasoningLevel | undefined
 ): Promise<ParsedChatCompletionsResponse> {
   return record.providerKey === 'gemini'
-    ? callGemini(record, request, apiKeyFor(record), timeoutMs)
-    : callOpenAiCompatible(record, request, apiKeyFor(record), timeoutMs);
+    ? callGemini(record, request, apiKeyFor(record), timeoutMs, reasoningLevel)
+    : callOpenAiCompatible(record, request, apiKeyFor(record), timeoutMs, reasoningLevel);
 }
 
 /** Parses provider output, validates it against request.schema per model provider, and
@@ -139,11 +142,23 @@ export async function generateText(request: TextGenerationRequest): Promise<Text
   // it never touches process.env.
   assertCredentials(record);
 
+  // getModelConfig already fails closed to DEFAULT_MODELS (reasoningLevel: null) on any error --
+  // a lookup failure here must never fail the call, and it doesn't. taskConfig.model is the
+  // model the task is CURRENTLY configured to run on, which resolveReasoningLevel compares
+  // against the resolved record's own key so a task override never leaks onto a persona
+  // override's model or the emergency fallback record (both of which can legitimately differ).
+  const taskConfig = await getModelConfig(request.taskKey);
+  const { level: reasoningLevel, source: reasoningSource } = resolveReasoningLevel({
+    record,
+    taskReasoningLevel: taskConfig.reasoningLevel,
+    taskConfiguredKey: taskConfig.model,
+  });
+
   const timeoutMs = await resolveTimeoutMs(record);
   const startedAt = nowMs();
   let providerResult: ParsedChatCompletionsResponse;
   try {
-    providerResult = await callProvider(record, request, timeoutMs);
+    providerResult = await callProvider(record, request, timeoutMs, reasoningLevel);
   } catch (error) {
     logTiming(request.taskKey, record, nowMs() - startedAt, false, error);
     throw error;
@@ -153,6 +168,10 @@ export async function generateText(request: TextGenerationRequest): Promise<Text
 
   const { text, schemaIssueCount } = finalizeOutputText(providerResult.text.trim(), record, request);
   const costUsd = computeTextCostUsd(record, providerResult.usage);
+  const temperatureApplied = record.capabilities.temperature && typeof request.temperature === 'number';
+  // Gemini always sends 1 regardless of capabilities.temperature/request.temperature (O-T4);
+  // every other provider sends the same value temperatureApplied describes, or nothing.
+  const temperatureSent = record.providerKey === 'gemini' ? 1 : temperatureApplied ? (request.temperature as number) : null;
 
   if (request.telemetry) {
     await recordModelCostEvent({
@@ -172,7 +191,10 @@ export async function generateText(request: TextGenerationRequest): Promise<Text
         cachedTokens: providerResult.usage.cachedInputTokens,
         reasoningTokens: providerResult.usage.reasoningTokens,
         finishReason: providerResult.finishReason,
-        temperatureApplied: record.capabilities.temperature && typeof request.temperature === 'number',
+        temperatureApplied,
+        temperatureSent,
+        reasoningLevel: reasoningLevel ?? null,
+        reasoningSource,
         resolutionSource: resolution.source,
         fallbackReason: resolution.fallbackReason,
         requestedModelKey: request.modelKey,
@@ -196,7 +218,9 @@ function logTiming(taskKey: string, record: TextModelRecord, durationMs: number,
 }
 
 /** Admin "Test" button (P4b): runs one tiny prompt against a specific row, bypassing task
- * resolution entirely since the admin already picked the exact record to test. No telemetry. */
+ * resolution entirely since the admin already picked the exact record to test. No telemetry.
+ * Thinking uses the model's own default only -- there is no task in play to have an override,
+ * so both resolveReasoningLevel inputs that key off a task are null. */
 export async function testTextModel(record: TextModelRecord, prompt?: string): Promise<TextGenerationResult> {
   assertCredentials(record);
   const timeoutMs = await resolveTimeoutMs(record);
@@ -205,7 +229,8 @@ export async function testTextModel(record: TextModelRecord, prompt?: string): P
     modelKey: record.modelKey,
     prompt: prompt ?? 'Reply with the single word "ok".',
   };
-  const providerResult = await callProvider(record, request, timeoutMs);
+  const { level: reasoningLevel } = resolveReasoningLevel({ record, taskReasoningLevel: null, taskConfiguredKey: null });
+  const providerResult = await callProvider(record, request, timeoutMs, reasoningLevel);
   return {
     text: providerResult.text.trim(),
     usage: providerResult.usage,

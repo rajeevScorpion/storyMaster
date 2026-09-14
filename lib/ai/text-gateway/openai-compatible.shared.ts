@@ -1,11 +1,15 @@
 // Pure Chat Completions request/response shaping, shared by the OpenAI and OpenRouter
 // adapters (openai-compatible.ts). See docs/text-model-gateway-plan.md section 3.3.
 
-import type { TextModelRecord } from '@/lib/ai/text-models.shared';
+import type { TextModelRecord, TextReasoningLevel } from '@/lib/ai/text-models.shared';
 import type { TextGatewayErrorCategory, TextGenerationRequest, TextUsage } from './types.shared';
 import { geminiSchemaToJsonSchema, type GeminiSchemaNode } from './json-schema.shared';
 
-export function buildChatCompletionsBody(record: TextModelRecord, request: TextGenerationRequest): Record<string, unknown> {
+export function buildChatCompletionsBody(
+  record: TextModelRecord,
+  request: TextGenerationRequest,
+  reasoningLevel?: TextReasoningLevel
+): Record<string, unknown> {
   const wantsJson = Boolean(request.schema) || Boolean(request.expectJson);
   let systemText = request.systemInstruction ?? '';
   let responseFormat: Record<string, unknown> | undefined;
@@ -65,15 +69,17 @@ export function buildChatCompletionsBody(record: TextModelRecord, request: TextG
     body.max_completion_tokens = record.defaultParams.maxOutputTokens;
   }
 
-  // Phase B reads only the model's own default thinking level; Phase C threads the resolved
-  // per-request level (task override or model default, per resolveReasoningLevel) through a
-  // parameter here instead. 'none' is a real, sendable level for both providers -- it is not
-  // falsy-equivalent to "absent" since TextReasoningLevel is always a non-empty string.
-  if (record.providerKey === 'openai' && record.defaultParams.reasoningLevel) {
-    body.reasoning_effort = record.defaultParams.reasoningLevel;
+  // `reasoningLevel` is the per-request level the router already resolved (task override or
+  // model default, per resolveReasoningLevel) -- never `record.defaultParams.reasoningLevel`
+  // read directly, which would ignore a task's own override. 'none' is a real, sendable level
+  // for both providers -- it is not falsy-equivalent to "absent" since TextReasoningLevel is
+  // always a non-empty string, so `reasoningLevel` (the parameter) being `undefined` is the only
+  // "send nothing" case.
+  if (record.providerKey === 'openai' && reasoningLevel) {
+    body.reasoning_effort = reasoningLevel;
   }
-  if (record.providerKey === 'openrouter' && record.defaultParams.reasoningLevel) {
-    body.reasoning = { effort: record.defaultParams.reasoningLevel };
+  if (record.providerKey === 'openrouter' && reasoningLevel) {
+    body.reasoning = { effort: reasoningLevel };
   }
 
   if (responseFormat) {

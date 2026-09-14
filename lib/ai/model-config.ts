@@ -153,7 +153,21 @@ export async function getModelConfig(
     const supabase = createAdminClient();
     const { data, error } = await selectModelConfigRow(supabase, task);
 
+    if (error?.code === 'PGRST116') {
+      // No row for this task_key -- this is the ordinary DEFAULT_MODELS fallback (most agent_*
+      // tasks, story bible, discovery metadata never get an explicit row), not a migration or
+      // connectivity problem, so it is safe -- and worth doing -- to cache like any other
+      // resolved config. Without this, a task with no row hits the database on every single
+      // call the router makes for it, defeating the point of the 60s TTL cache below.
+      const fallback = DEFAULT_MODELS[task];
+      setCache({ taskKey: task, modelId: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null, updatedAt: new Date().toISOString() });
+      return { model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null };
+    }
+
     if (error || !data) {
+      // Any other error (missing column already handled inside selectModelConfigRow, transient
+      // DB errors, etc.) falls back to defaults WITHOUT caching -- a real problem should be
+      // retried on the very next call, not papered over for a minute.
       const fallback = DEFAULT_MODELS[task];
       return { model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null };
     }

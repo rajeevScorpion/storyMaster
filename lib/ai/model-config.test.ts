@@ -186,6 +186,33 @@ describe('getModelConfig', () => {
     expect(await getModelConfig('story_generation')).toEqual({ model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null });
     expect(calls.narrowSingle).toBe(0);
   });
+
+  it('a PGRST116 ("no row") result is cached for the normal TTL: a second call for the same task makes no query', async () => {
+    const { client, calls } = makeAdminClient({
+      wideSingle: () => ({ data: null, error: { code: 'PGRST116', message: 'no rows' } }),
+    });
+    adminState.client = client;
+    const { getModelConfig } = await import('@/lib/ai/model-config');
+    const fallback = DEFAULT_MODELS.story_generation;
+
+    expect(await getModelConfig('story_generation')).toEqual({ model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null });
+    expect(await getModelConfig('story_generation')).toEqual({ model: fallback.modelId, temperature: fallback.temperature, reasoningLevel: null });
+
+    expect(calls.wideSingle).toBe(1); // second call served from cache
+  });
+
+  it('a non-PGRST116 error is NOT cached: a second call for the same task queries again', async () => {
+    const { client, calls } = makeAdminClient({
+      wideSingle: () => ({ data: null, error: { code: '57014', message: 'statement timeout' } }),
+    });
+    adminState.client = client;
+    const { getModelConfig } = await import('@/lib/ai/model-config');
+
+    await getModelConfig('story_generation');
+    await getModelConfig('story_generation');
+
+    expect(calls.wideSingle).toBe(2); // not cached -- both calls hit the database
+  });
 });
 
 describe('getAllModelConfigs', () => {

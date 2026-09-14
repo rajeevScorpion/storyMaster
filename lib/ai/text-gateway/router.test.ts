@@ -4,11 +4,12 @@ import { optionsRegenerationSchema } from '@/lib/ai/generation-schemas';
 
 vi.mock('server-only', () => ({}));
 
-const { generateContentMock, getTextModelRegistryMock, getMissingEnvVarsMock, getFeatureFlagValueMock, recordModelCostEventMock } = vi.hoisted(() => ({
+const { generateContentMock, getTextModelRegistryMock, getMissingEnvVarsMock, getFeatureFlagValueMock, getModelConfigMock, recordModelCostEventMock } = vi.hoisted(() => ({
   generateContentMock: vi.fn(),
   getTextModelRegistryMock: vi.fn(),
   getMissingEnvVarsMock: vi.fn(),
   getFeatureFlagValueMock: vi.fn(),
+  getModelConfigMock: vi.fn(),
   recordModelCostEventMock: vi.fn(),
 }));
 
@@ -29,6 +30,7 @@ vi.mock('@/lib/ai/text-models', () => ({
 
 vi.mock('@/lib/ai/model-config', () => ({
   getFeatureFlagValue: getFeatureFlagValueMock,
+  getModelConfig: getModelConfigMock,
 }));
 
 vi.mock('@/lib/ai/cost-telemetry', () => ({
@@ -85,6 +87,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   getMissingEnvVarsMock.mockReturnValue([]);
   getFeatureFlagValueMock.mockResolvedValue(null);
+  // A model key that never matches a fixture's modelKey below -- resolveReasoningLevel's task
+  // branch then never fires unless a test deliberately configures otherwise, matching
+  // getModelConfig's real "no row configured for this task" fallback shape.
+  getModelConfigMock.mockResolvedValue({ model: 'unconfigured-task-default', temperature: null, reasoningLevel: null });
   recordModelCostEventMock.mockResolvedValue(undefined);
 });
 
@@ -283,6 +289,181 @@ describe('generateText', () => {
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect('max_completion_tokens' in body).toBe(false);
+  });
+});
+
+describe('thinking level resolution', () => {
+  it('sends the task override to the adapter when the resolved record is the model the task is configured to run on', async () => {
+    getTextModelRegistryMock.mockResolvedValue([
+      makeRecord({ capabilities: { structuredOutput: 'json', vision: true, temperature: true, reasoningLevels: ['low', 'medium'] } }),
+    ]);
+    getModelConfigMock.mockResolvedValue({ model: 'openrouter:qwen/qwen3.7-flash', temperature: null, reasoningLevel: 'low' });
+    const fetchMock = vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateText({ taskKey: 'story_generation', modelKey: 'openrouter:qwen/qwen3.7-flash', prompt: 'hi' });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.reasoning).toEqual({ effort: 'low' });
+  });
+
+  it('falls back to the model default level when the task has no override', async () => {
+    getTextModelRegistryMock.mockResolvedValue([
+      makeRecord({
+        defaultParams: { reasoningLevel: 'medium' },
+        capabilities: { structuredOutput: 'json', vision: true, temperature: true, reasoningLevels: ['low', 'medium'] },
+      }),
+    ]);
+    getModelConfigMock.mockResolvedValue({ model: 'openrouter:qwen/qwen3.7-flash', temperature: null, reasoningLevel: null });
+    const fetchMock = vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateText({ taskKey: 'story_generation', modelKey: 'openrouter:qwen/qwen3.7-flash', prompt: 'hi' });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.reasoning).toEqual({ effort: 'medium' });
+  });
+
+  it('sends nothing when the resolved record lists no reasoning levels at all', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]); // no capabilities.reasoningLevels
+    getModelConfigMock.mockResolvedValue({ model: 'openrouter:qwen/qwen3.7-flash', temperature: null, reasoningLevel: 'low' });
+    const fetchMock = vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await generateText({ taskKey: 'story_generation', modelKey: 'openrouter:qwen/qwen3.7-flash', prompt: 'hi' });
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect('reasoning' in body).toBe(false);
+  });
+
+  it('a fallback resolution does not inherit the thinking level meant for the originally configured (now-disabled) model', async () => {
+    const disabledRecord = makeRecord({
+      isEnabled: false,
+      capabilities: { structuredOutput: 'json', vision: true, temperature: true, reasoningLevels: ['low', 'medium', 'high'] },
+    });
+    const geminiFallback = {
+      ...GEMINI_DEFAULT_RECORD,
+      capabilities: { structuredOutput: 'native' as const, vision: true, temperature: true, reasoningLevels: ['minimal', 'low', 'medium', 'high'] as const },
+    };
+    getTextModelRegistryMock.mockResolvedValue([disabledRecord, geminiFallback]);
+    // The task is (still) configured to the now-disabled key, with a 'high' override -- that
+    // override belongs to the disabled record, not to whatever fallback record actually runs.
+    getModelConfigMock.mockResolvedValue({ model: 'openrouter:qwen/qwen3.7-flash', temperature: null, reasoningLevel: 'high' });
+    generateContentMock.mockResolvedValue({
+      text: 'plain text',
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await generateText({ taskKey: 'story_generation', modelKey: 'openrouter:qwen/qwen3.7-flash', prompt: 'hi' });
+
+    const callArgs = generateContentMock.mock.calls[0][0] as { config: Record<string, unknown> };
+    expect(callArgs.config.thinkingConfig).toBeUndefined();
+  });
+});
+
+describe('telemetry: reasoning and temperature metadata', () => {
+  it('records reasoningLevel and reasoningSource "task" alongside the level actually sent', async () => {
+    getTextModelRegistryMock.mockResolvedValue([
+      makeRecord({ capabilities: { structuredOutput: 'json', vision: true, temperature: true, reasoningLevels: ['low', 'medium'] } }),
+    ]);
+    getModelConfigMock.mockResolvedValue({ model: 'openrouter:qwen/qwen3.7-flash', temperature: null, reasoningLevel: 'low' });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    })));
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      temperature: 0.5,
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          reasoningLevel: 'low',
+          reasoningSource: 'task',
+          temperatureApplied: true,
+          temperatureSent: 0.5,
+        }),
+      })
+    );
+  });
+
+  it('records reasoningLevel: null and reasoningSource "provider_default" when nothing resolves', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    })));
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ reasoningLevel: null, reasoningSource: 'provider_default' }),
+      })
+    );
+  });
+
+  it('records temperatureSent: 1 for Gemini regardless of the request temperature, and temperatureApplied: false', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    generateContentMock.mockResolvedValue({
+      text: 'hello',
+      usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 5 },
+    });
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'gemini-3.5-flash',
+      prompt: 'hi',
+      temperature: 0.2,
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ temperatureSent: 1 }),
+      })
+    );
+  });
+
+  it('records temperatureSent: null for a non-Gemini provider when no temperature was applied', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    })));
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ temperatureApplied: false, temperatureSent: null }),
+      })
+    );
   });
 });
 
