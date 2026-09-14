@@ -48,6 +48,11 @@ test.describe('text models admin surface (authenticated)', () => {
     expect(body, `${ROUTE.path} -> rendered Forbidden (not recognised as admin)`).not.toMatch(/forbidden/i);
     expect(body, `${ROUTE.path} -> client/server error boundary`).not.toMatch(/application error|unhandled runtime|digest:/i);
     expect(body, `${ROUTE.path} -> rendered, but no ${ROUTE.heading} content found`).toMatch(ROUTE.heading);
+
+    // Card-grid layout (Phase D): the task assignments section, with a per-task Thinking
+    // control, is the admin surface for migration 120's per-task thinking override.
+    await expect(page.getByRole('heading', { name: /task assignments/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Thinking for Story Generation', exact: true })).toBeVisible();
   });
 });
 

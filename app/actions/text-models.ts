@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { verifyAdmin } from '@/lib/supabase/admin';
-import { getAllModelConfigs, updateModelConfig } from '@/lib/ai/model-config';
+import { getAllModelConfigs, isReasoningLevelColumnAvailable, updateModelConfig, updateTaskReasoningLevel } from '@/lib/ai/model-config';
 import { DEFAULT_MODELS, KNOWN_MODELS, TASK_DEFINITIONS, type TaskKey } from '@/lib/ai/model-config.shared';
 import {
   createTextModelRecord,
@@ -15,8 +15,12 @@ import {
 } from '@/lib/ai/text-models';
 import {
   TEXT_PROVIDER_LABELS,
+  TEXT_REASONING_LEVELS,
   isTextModelTask,
+  validateTaskReasoningLevel,
   validateTextModelSelection,
+  type TextProviderKey,
+  type TextReasoningLevel,
   type TextModelRecord,
 } from '@/lib/ai/text-models.shared';
 import { testTextModel } from '@/lib/ai/text-gateway/router';
@@ -36,12 +40,16 @@ export interface TextTaskModelStatus {
   configuredKey: string;
   /** null when the configured key runs as-is; otherwise why the runtime falls back to the task default. */
   problem: string | null;
+  /** The task's thinking-level override, or null when it has none (or migration 120 is absent). */
+  reasoningLevel: TextReasoningLevel | null;
 }
 
 export interface AdminTextModelRegistryState {
   available: boolean;
   records: AdminTextModelRecord[];
   taskStatus: TextTaskModelStatus[];
+  /** Whether model_config.reasoning_level (migration 120) can be read/written in this process. */
+  reasoningOverridesAvailable: boolean;
 }
 
 export interface TextModelOption {
@@ -49,6 +57,7 @@ export interface TextModelOption {
   label: string;
   vision: boolean;
   temperature: boolean;
+  providerKey: TextProviderKey;
 }
 
 export interface AdminTextModelTestResult {
@@ -71,14 +80,16 @@ async function freshRegistry(): Promise<TextModelRecord[] | null> {
 
 async function buildTaskStatus(registry: TextModelRecord[] | null): Promise<TextTaskModelStatus[]> {
   const configs = await getAllModelConfigs();
-  const byTask = new Map(configs.map((config) => [config.taskKey, config.modelId]));
+  const byTask = new Map(configs.map((config) => [config.taskKey, config]));
   return TASK_DEFINITIONS.filter((task) => isTextModelTask(task.key)).map((task) => {
-    const configuredKey = byTask.get(task.key) ?? DEFAULT_MODELS[task.key].modelId;
+    const config = byTask.get(task.key);
+    const configuredKey = config?.modelId ?? DEFAULT_MODELS[task.key].modelId;
     return {
       taskKey: task.key,
       label: task.label,
       configuredKey,
       problem: validateTextModelSelection(task.key, configuredKey, registry),
+      reasoningLevel: config?.reasoningLevel ?? null,
     };
   });
 }
@@ -90,6 +101,7 @@ export async function getAdminTextModelRegistry(): Promise<AdminTextModelRegistr
     available: registry !== null,
     records: (registry ?? []).map((record) => ({ ...record, missingEnvVars: getMissingEnvVars(record) })),
     taskStatus: await buildTaskStatus(registry),
+    reasoningOverridesAvailable: await isReasoningLevelColumnAvailable(),
   };
 }
 
@@ -112,8 +124,48 @@ export async function assignTextModelToTask(taskKey: TaskKey, modelKey: string):
   const current = configs.find((config) => config.taskKey === taskKey);
   const temperature = current?.temperature ?? DEFAULT_MODELS[taskKey].temperature;
   await updateModelConfig(taskKey, modelKey, temperature);
+
+  // A thinking override belongs to the model it was set for. If the newly assigned model
+  // doesn't list that level, it would silently stop applying (resolveReasoningLevel checks
+  // record.modelKey === taskConfiguredKey) -- clear it explicitly instead of leaving a dead
+  // override behind.
+  if (current?.reasoningLevel) {
+    const newRecord = registry.find((record) => record.modelKey === modelKey);
+    const acceptedLevels = newRecord?.capabilities.reasoningLevels ?? [];
+    if (!acceptedLevels.includes(current.reasoningLevel) && (await isReasoningLevelColumnAvailable())) {
+      await updateTaskReasoningLevel(taskKey, null);
+    }
+  }
+
   revalidatePath(TEXT_MODELS_PATH);
   revalidatePath('/admin/agents/routing');
+}
+
+/** Sets (or clears, with `null`) a task's thinking-level override. Runtime-validated because the
+ * browser is untrusted: neither `taskKey` nor `level` is guaranteed to be real by the time this
+ * runs. `null` always clears the override; a concrete level must be one the task's currently
+ * configured model actually lists. */
+export async function setTaskReasoningLevel(taskKey: TaskKey, level: TextReasoningLevel | null): Promise<void> {
+  await verifyAdmin();
+  if (!isTextModelTask(taskKey)) {
+    throw new Error(`"${taskKey}" is not a text task and cannot have a thinking override.`);
+  }
+  if (level !== null && !(TEXT_REASONING_LEVELS as readonly string[]).includes(level)) {
+    throw new Error(`"${level}" is not a known thinking level.`);
+  }
+
+  if (level !== null) {
+    const registry = await freshRegistry();
+    const configs = await getAllModelConfigs();
+    const configuredKey = configs.find((config) => config.taskKey === taskKey)?.modelId ?? DEFAULT_MODELS[taskKey].modelId;
+    const configuredRecord = registry?.find((record) => record.modelKey === configuredKey);
+    if (!configuredRecord) throw new Error(`"${configuredKey}" is not a known text model.`);
+    const problem = validateTaskReasoningLevel(level, configuredRecord);
+    if (problem) throw new Error(problem);
+  }
+
+  await updateTaskReasoningLevel(taskKey, level);
+  revalidatePath(TEXT_MODELS_PATH);
 }
 
 export async function createAdminTextModel(input: CreateTextModelInput): Promise<void> {
@@ -168,7 +220,7 @@ export async function getTextModelOptions(taskKey: TaskKey): Promise<TextModelOp
   await verifyAdmin();
   const registry = await getTextModelRegistry();
   if (!registry) {
-    return KNOWN_MODELS.text.map((id) => ({ value: id, label: id, vision: true, temperature: true }));
+    return KNOWN_MODELS.text.map((id) => ({ value: id, label: id, vision: true, temperature: true, providerKey: 'gemini' as const }));
   }
   return registry
     .filter((record) => record.isEnabled && validateTextModelSelection(taskKey, record.modelKey, registry) === null)
@@ -177,5 +229,6 @@ export async function getTextModelOptions(taskKey: TaskKey): Promise<TextModelOp
       label: `${record.displayName} — ${TEXT_PROVIDER_LABELS[record.providerKey]}`,
       vision: record.capabilities.vision,
       temperature: record.capabilities.temperature,
+      providerKey: record.providerKey,
     }));
 }

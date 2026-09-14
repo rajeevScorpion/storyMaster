@@ -424,7 +424,9 @@ export default function PlaygroundStudio({
     if (!selectedModel || base.some((option) => option.value === selectedModel)) return base;
     return [...base, { value: selectedModel, label: `${selectedModel} (disabled or unknown: runs on fallback)` }];
   }, [textModelOptions, selectedTask, selectedModel]);
-  const modelIgnoresTemperature = textModelOptions?.find((option) => option.value === selectedModel)?.temperature === false;
+  const selectedTextModelOption = textModelOptions?.find((option) => option.value === selectedModel);
+  const modelIgnoresTemperature = selectedTextModelOption?.temperature === false;
+  const modelIgnoresTemperatureIsGemini = selectedTextModelOption?.providerKey === 'gemini';
 
   useEffect(() => {
     getActiveModelConfigs()
@@ -885,7 +887,11 @@ export default function PlaygroundStudio({
                 <div>
                   <label className="mb-1.5 block text-xs text-neutral-400">Temperature: {temperature.toFixed(2)}</label>
                   <input type="range" min={0} max={1} step={0.05} value={temperature} disabled={modelIgnoresTemperature} onChange={(event) => setTemperature(parseFloat(event.target.value))} className="mt-2 w-full accent-emerald-500 disabled:opacity-40" />
-                  {modelIgnoresTemperature && <p className="mt-1 text-xs text-amber-300">This model does not accept temperature; the value is not sent.</p>}
+                  {modelIgnoresTemperature && (
+                    <p className="mt-1 text-xs text-amber-300">
+                      {modelIgnoresTemperatureIsGemini ? 'Gemini always runs at temperature 1.0.' : 'This model does not accept temperature; the value is not sent.'}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
