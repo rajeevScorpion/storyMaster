@@ -542,7 +542,7 @@ export default function TextModelRegistryStudio() {
                   {record.description && <p className="mt-1 text-xs text-neutral-500">{record.description}</p>}
                   <p className="mt-1 text-xs text-neutral-500">
                     {record.capabilities.structuredOutput} output · {record.capabilities.vision ? 'images' : 'text only'} ·{' '}
-                    {record.capabilities.temperature ? 'temperature' : 'no temperature'} · {formatPrice(record)}
+                    {record.providerKey === 'gemini' ? 'temperature fixed at 1.0' : record.capabilities.temperature ? 'temperature' : 'no temperature'} · {formatPrice(record)}
                     {record.timeoutMs ? ` · ${record.timeoutMs}ms timeout` : ''}
                   </p>
                   <p className="mt-1 text-xs text-neutral-500">{defaultThinkingLine}</p>

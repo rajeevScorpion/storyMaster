@@ -357,6 +357,26 @@ Related traps from the same build:
   either direction is a live behaviour change, not a tidy-up.
 - **Capabilities are load-bearing.** GPT-5.6 Luna rejects `temperature` (HTTP 400) and Qwen 3.7 Flash has JSON
   mode only, no strict schema. A wrong checkbox in an admin edit makes every call on that model fail.
+- **Remove a registry row only after moving what points at it.** Tasks and persona overrides hold the key as a
+  string; delete first and they silently run their code default. Migration 120 moves, then deletes.
+
+### Thinking levels, temperature and failure text (migration 120)
+
+- **A thinking level is never taken from the request.** The gateway reads the task's level from
+  `model_config.reasoning_level` on the server and applies it only when the call runs on that task's assigned
+  model and the model lists the level; otherwise the model's default, otherwise nothing is sent. A model's
+  levels are a load-bearing capability: Gemini 3 cannot switch thinking off and 3.8 Flash rejects `minimal`.
+- **Gemini text calls always send temperature 1.0** — Google's Gemini 3 guidance (lower values risk looping) and
+  an owner decision. Task temperatures apply to OpenAI and OpenRouter models only. Not an oversight.
+- **Gemini thinking tokens count as output.** Usage adds `thoughtsTokenCount` to output tokens, as Google bills
+  it. Gemini cost rows from before this change understate thinking-heavy tasks; don't compare across it.
+- **`TextGatewayError.message` is for readers, `detail` is for you.** The message is a fixed sentence with no
+  provider, model or task name. Logs, admin screens and agent run records read `errorDetail(error)`. Returning
+  `error.message` from a server action is safe for gateway errors, not for arbitrary ones — allow-list the
+  error classes you return. Image failures have no gateway, so readers get `readerSafeImageError(...)` at every
+  point `beats.image_error` or a job error leaves the server.
+- **`model_config.reasoning_level` has its own latch.** A process that saw the column missing sends no task
+  thinking levels until it restarts; model assignments are unaffected.
 
 ---
 

@@ -132,6 +132,7 @@ for what has actually run.
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
 | 119 | `text_model_registry` | table `text_model_registry`, one row per text model. `model_config.model_id` and persona `model_overrides[*].modelId` now name a `model_key` here. Touch trigger, RLS with no policies, 12 seed rows: 8 Gemini enabled, 4 OpenAI/OpenRouter disabled | **Applied** 2026-09-14 05:27:43+00. Verified against the schema, not only the ledger: 18 columns, every CHECK, the trigger, RLS with 0 policies, 12 seed rows with the right enabled flags. **Frozen** — changes ship as 120 | **Not applied.** First run `select task_key, model_id from public.model_config order by task_key;` — a text `model_id` with no seeded row runs on its task default once 119 lands. A server that is already running needs a redeploy afterwards (see GOTCHAS "Text models") |
+| 120 | `text_model_thinking` | column `model_config.reasoning_level` (CHECK on the level vocabulary); `capabilities.reasoningLevels` on every remaining registry row; Gemini rows stop accepting a task temperature; row `gemini-3.8-flash`. Moves text tasks and persona overrides off seven removed Gemini text models (the three economy tasks at Low thinking), records the move in `model_config_history`, then deletes those rows | **Applied** 2026-09-14 17:45:48+00. Verified against the schema: column and CHECK, 6 registry rows with levels, `graphic_style_extraction` and `voice_selection` moved to 3.8 Flash at Low with history rows, `agent_novelty_assessment` row inserted at Low, image and TTS rows untouched. **Frozen** — changes ship as 121 | **Not applied.** Needs 119 first. Run the read-only pre-apply check in `docs/text-model-thinking-plan.md` section 3 to see which tasks will move. Redeploy afterwards |
 
 #### Promoting the agentic system to production — checklist
 
@@ -635,9 +636,6 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   means moving the story path server-side or adding auth and rate limits.
 - **Three text calls record no cost event:** options regeneration, story bible and discovery metadata. No
   activity key fits them, so `/admin/cost` undercounts those tokens.
-- **Options regeneration shows gateway error text to the reader.** The message names the provider and model
-  key (never a secret); before the gateway it showed the raw Gemini SDK message. Swap in a generic message
-  when that file is next touched.
 - **Gemini `finishReason` / `promptFeedback.blockReason` are not mapped** to gateway error categories. A
   blocked Gemini response still surfaces as empty or invalid output, as it did before.
 - **Slow reasoning models vs function duration.** Luna's row allows 120s. Only the API routes and the test lab
@@ -645,9 +643,15 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   Check the Vercel plan's default before pointing a reader-facing task at Luna.
 - **`app/actions/playground.ts` is dead code** (nothing imports it) and was deliberately not migrated.
 - **"Used by" on Text Models counts task assignments only**, not agent persona overrides.
-- **OpenRouter reasoning can't be switched off from the admin form.** The adapter honours
-  `default_params.reasoningEnabled = false`, but the edit form only exposes effort and max tokens. It matters for
-  Qwen 3.7 Flash: in the live smoke it spent 324 output tokens on a one-word JSON reply, where Luna spent 16.
+- **Gemini 3.8 Flash's introductory price ends 2026-12-31.** From 2027-01-01 it is $1.50 / $7.50 per 1M
+  (cached $0.15). Update its entry in `lib/ai/pricing.ts` then, or Gemini cost rows understate by half.
+- **Thinking level is not settable in the Story Playground or on agent persona overrides.** The playground
+  tests a model at its own default level; a persona override runs at the model's default, never the task's
+  level (by design — the task level belongs to the task's assigned model).
+- **Admin Story Playground shows a masked error in production when a test fails.** `runPlaygroundTest` throws
+  instead of returning the failure, so Next hides the detail. Pre-existing; return `errorDetail(error)` instead.
+- **Thinking levels for Qwen 3.7 Flash and DeepSeek V4 Flash were seeded from OpenRouter's general docs**, not
+  per-model confirmation. DeepSeek has had no live call at any level.
 - **Qwen 3.7 Flash on OpenRouter returned HTTP 429 under back-to-back calls** in the live smoke, then passed on
   its own. The gateway reports `rate_limited` and never retries. Fine for advisory evaluation, which already
   tolerates a failed model call; not yet suitable for anything a reader waits on.
