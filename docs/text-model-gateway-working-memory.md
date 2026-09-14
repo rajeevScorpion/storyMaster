@@ -17,8 +17,10 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
   (commit `fix(errors): never show provider or model names…`) and Phase B thinking data layer + migration 120
   (commits `feat(text-models): migration 120 …` then `feat(text-models): thinking levels per model and per
   task…`). If this session ends mid-way, review those diffs before anything else.
-- **Migration 120 not yet confirmed against the plan.** Owner told not to apply it until Opus checks the
-  committed file matches plan section 3 verbatim.
+- **Migration 120 committed as `7702e34`, byte-identical to plan section 3, and applied to dev by the owner.
+  Frozen: any change ships as 121.** Usage 56% at that point.
+- **Phase A landed as `45e32a1`, reviewed by Opus: passes.** Also covered two legacy `story_map` fallback paths
+  the plan missed. Opus fix `7c9c941`: empty image error stays "no error".
 - Next: review A and B diffs → Phase C (gateway) and D (admin page) in parallel → Phase E (live smoke, full
   gate, docs).
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
