@@ -32,7 +32,11 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
 - **Phase D landed as `0cf116f`, reviewed by Opus: passes** (tsc, lint, build:verify, e2e 30/30 incl. the new
   Thinking control assertion). Opus nit: Gemini model cards say "temperature fixed at 1.0". GOTCHAS and
   PROJECT_STATE (120 row, deferred list) updated.
-- Left: smoke results → final report addendum → owner click-through → merge into `dev` `--no-ff`.
+- Full `npm test` after D: 118 files, 1216 tests, all green.
+- **Usage 83%** — no new delegations this session. Left: smoke results (agent already running; if this session
+  ends, look for commit `test(text-models): live smoke per thinking level…`, else rerun
+  `TEXT_GATEWAY_SMOKE=1 npm run test:text-gateway-smoke`) → `npx tsc --noEmit` → report addendum in
+  `text-model-gateway-report.md` → owner click-through → merge into `dev` `--no-ff`.
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
   read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
 
