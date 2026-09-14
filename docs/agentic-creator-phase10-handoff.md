@@ -1,7 +1,9 @@
-# Handoff — Phase 10 is done; Round 5 is scoped and partly started
+# Handoff — Phases 1-11 are done and merged to `dev`
 
-Updated 2026-09-14. Rounds 1, 1b, 3 and 4 are complete and gated. Round 2 is the owner's to run.
-Round 5 is scoped (section 4) and its one substantial item is in flight.
+Updated 2026-09-14. Rounds 1, 1b, 3, 4 and 5 are complete and gated. **Migrations 102-118 are all applied
+on dev** (verified against `schema_migration_ledger` 2026-09-14), and the branch was merged into `dev`
+with `--no-ff` for online testing. Round 2 is still the owner's to run.
+Production has none of the agentic schema — see the promotion checklist in PROJECT_STATE.
 
 **The plan is the source of truth: [agentic-creator-phase10-plan.md](agentic-creator-phase10-plan.md)** —
 but see section 5, which lists places the plan is now known to be wrong. Where a document and the code
@@ -36,15 +38,16 @@ Three more landed after that, all gated at **108 files / 1017 tests**, e2e 28/28
 **Phase 11 is complete. Phases 1-11 are done.** What remains is verification the owner owes (section 2)
 and two design-sized items nobody has started (section 4).
 
-**Migrations 116, 117 and 118 are all written and applied NOWHERE.** Next free number is **119**.
+**Migrations 116, 117 and 118 are applied on dev** (2026-09-13/14, confirmed against the ledger).
+Production has none of 102-118. Next free number is **119**.
 
 ---
 
 ## 2. What the OWNER owes
 
-1. **Apply migration 116** (115 is already applied on dev). The check that matters: load `/` **signed
-   out** and confirm the gallery rails populate. If they go empty, the rollback restores the old policy
-   exactly.
+1. ~~**Apply migration 116.**~~ **DONE** — 116, 117 and 118 all applied on dev 2026-09-13/14. The check
+   that still matters and is not yet reported: load `/` **signed out** and confirm the gallery rails
+   populate. If they go empty, 116's rollback restores the old policy exactly.
 2. **Round 4's proof, in the database, not by reasoning.** Press "Regenerate image..." as `testuser` on
    an agent draft. Confirm the charge landed on the agent account with `agenticBypass true`, the reviewer
    paid nothing, **and the image actually persisted**. That last clause is the point — the narration fix
@@ -147,8 +150,8 @@ implementing it.
   routing the entitlement gate to it would refuse reviewers a submit that works today.
 - **The gallery reads `storylines`, never `stories` directly** — but joins `stories` as an INNER join on
   the anonymous client, which is why anonymous visibility cannot simply be revoked.
-- **Migrations 113, 114, 115 are applied on dev. 116 is written and applied nowhere.** Next number is
-  **117**. Production still has no agentic schema.
+- **Migrations 102-118 are applied on dev** (no 109 exists; the gap is deliberate). Next number is
+  **119**. Production still has no agentic schema.
 - Dev flags unchanged: reviewer workflow on, agent billing bypass on, pricing hard enforcement on, agent
   image generation off, beat bundle on.
 

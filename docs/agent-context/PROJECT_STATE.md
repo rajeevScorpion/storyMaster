@@ -83,9 +83,9 @@ select exists (select 1 from public.schema_migration_ledger where migration_numb
 
 Everything up to 068 is long-applied.
 
-### Agentic Creator System (branch `feat/agentic-creator`, not yet merged to `dev`)
+### Agentic Creator System (merged into `dev` 2026-09-14, `--no-ff`; **not** on `main`)
 
-**102-108 and 110-114 applied to dev; 115 written but NOT applied anywhere.** 102-107
+**102-108 and 110-118 are all applied to dev; production still has none of them.** 102-107
 verified against `schema_migration_ledger` on 2026-09-07; **108 applied 2026-09-08** and verified against
 the schema itself rather than only its ledger row — 12 columns, RLS on, `anon`/`authenticated` denied
 SELECT, 0 rows, and `idx_agent_evaluations_pipeline_run` confirmed UNIQUE *and* partial. **111 and 112
@@ -122,13 +122,16 @@ for what has actually run.
 | 112 | `agent_review_decisions` | table `agent_review_decisions` — Phase 9's append-only reviewer decision trail (Unit 9e) | **Applied** 2026-09-09 17:53:20+00. Schema verified directly, not just the ledger row: 9 columns, the `decision` CHECK carrying all four values (`approved`/`rejected`/`rewrite_requested`/`published`), 4 FKs (`run_id` CASCADE; `story_id`, `reviewer_id`, `storyline_id` SET NULL), RLS on with **0 policies**, 2 indexes. `reviewer_id` is nullable by design, with `reviewer_label` snapshotting the name at decision time so the trail survives an account deletion | Not applied |
 | 113 | `agent_reviewer_roles` | `agent_reviewers` gains `role` (`reviewer`\|`editor`, CHECK-constrained), the `age_groups`/`languages`/`genres` coverage arrays, and `updated_by`; **drops `can_publish` and `can_trigger_media`** — Phase 9b's D17, capability derived from role by pure functions rather than stored twice | **Applied** 2026-09-10 03:07:27+00. Schema verified directly, not just the ledger row: 12 columns, `role` NOT NULL DEFAULT `'reviewer'` with CHECK `('reviewer','editor')`, the three arrays NOT NULL DEFAULT `'{}'`, `updated_by` FK SET NULL, both booleans confirmed **gone**, **0 rows**. Dropping the booleans was only safe because the table was empty and prod has no agentic schema at all | Not applied |
 | 114 | `agent_review_assignments` | table `agent_review_assignments` — Phase 9b's D18, TASK-level manual reviewer assignment (Unit 9i). `source` (`manual`\|`auto`) and `status` (`active`\|`released`\|`superseded`) CHECK-constrained, a partial UNIQUE index enforcing at most one `active` row per task, `reviewer_id`/`assigned_by` both `ON DELETE SET NULL` | **Applied** 2026-09-10 08:07:22+00 (this row said "Not applied" until 2026-09-11 — the ledger and the live schema both disagreed with it). Verified directly, not just the ledger row: `agent_review_assignments_one_active_idx` is UNIQUE and partial (`WHERE status = 'active'`), which is the load-bearing part — it is what makes Unit 9J's auto-assignment idempotent | Not applied |
-| 115 | `beats_owner_only_writes` | narrows `beats` INSERT/UPDATE RLS from `003_normalize_beats.sql` by ANDing `s.user_id = auth.uid()` onto both policies — the database half of D23, shared branching going dormant. Must be applied only *after* the Phase 10 Round 1 application-level gates (doorway removed, `/story/[id]` + `/explore/[id]` layouts, pre-authorize refusal — plan section 3.2) are confirmed live, never before: applying it first alone would let a non-owner's continuation be charged and generated before the write is refused at the database — the charge-and-write-nothing defect class this phase keeps finding. Until applied, the original 003 policies still govern, and the four application-level layers (see "Shared branching" below) are what actually stop an explorer's write. Reviewer writes are unaffected either way — they run on the admin client and bypass RLS entirely | **Not applied.** | **Not applied.** |
+| 115 | `beats_owner_only_writes` | narrows `beats` INSERT/UPDATE RLS from `003_normalize_beats.sql` by ANDing `s.user_id = auth.uid()` onto both policies — the database half of D23, shared branching going dormant. Must be applied only *after* the Phase 10 Round 1 application-level gates (doorway removed, `/story/[id]` + `/explore/[id]` layouts, pre-authorize refusal — plan section 3.2) are confirmed live, never before: applying it first alone would let a non-owner's continuation be charged and generated before the write is refused at the database — the charge-and-write-nothing defect class this phase keeps finding. Until applied, the original 003 policies still govern, and the four application-level layers (see "Shared branching" below) are what actually stop an explorer's write. Reviewer writes are unaffected either way — they run on the admin client and bypass RLS entirely | **Applied** 2026-09-12 16:59:55+00, after the Round 1 application-level gates were confirmed live. | **Not applied.** |
+| 116 | `narrow_anonymous_stories_read` | narrows 003's anon `stories` SELECT policy — which had no auth predicate and no `TO` clause — to rows backing a **public** storyline, scoped `TO anon` so the separate authenticated policy is untouched | **Applied** 2026-09-13 18:23:20+00. The check that matters is loading `/` **signed out** and confirming the gallery rails populate: `gallery.ts` joins `stories!inner(...)` on the anon client, so over-narrowing renders an empty gallery rather than erroring | Not applied |
+| 117 | `agent_review_decisions_reviewer_index` | additive index `idx_agent_review_decisions_reviewer` on `(reviewer_id, created_at DESC)` — 112 indexed only `run_id`, so "this reviewer's own history" full-scanned | **Applied** 2026-09-14 03:13:50+00 | Not applied |
+| 118 | `rename_agentic_pipeline_image_flag` | renames flag `agentic_image_generation_enabled` → `agentic_pipeline_image_generation_enabled`, so the name says what it gates (the autonomous pipeline only, never a reviewer's interactive regenerate) | **Applied** 2026-09-14 03:14:10+00. **Order-independent** — it UPDATEs the row if 102 already ran, or INSERTs it off if it lands first. ⚠ The flag is enforced **nowhere in code**; see "Deferred" | Not applied |
 
 #### Promoting the agentic system to production — checklist
 
 Migrations are only one of three things prod needs. All three, in this order:
 
-1. **Apply migrations 102-107 by hand, in numeric order.** 103 must precede 104, 105 and 106.
+1. **Apply migrations 102-118 by hand, in numeric order** (there is no 109 — see above). 103 must precede 104, 105 and 106.
 2. **Create a separate `AGENTIC_SYSTEM_USER_ID` auth user in the production Supabase project**, and set
    its UUID as a Vercel environment variable. It is a *different* UUID from dev's — copying dev's value
    across is wrong. This user owns every agent-generated story.
@@ -439,6 +442,25 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Agentic Creator (branch `feat/agentic-creator`)**
+
+- **DEFERRED BY THE OWNER, 2026-09-14 — assignment notifications.** When a draft is auto- or
+  manually assigned to a reviewer, nothing tells them. There is **no notification infrastructure in
+  this codebase at all** — no email sender, no in-app inbox, no table, no digest job — so this is a
+  from-scratch design job (delivery channel, opt-out, digest vs. per-event), not a feature to bolt on.
+  The owner's explicit call while promoting Phases 1-11 to `dev`: ship the promotion, design this
+  later. Do not start implementing it as part of unrelated work.
+- **DEFERRED BY THE OWNER, 2026-09-14 — role-change audit history.** `agent_reviewers` records only
+  `updated_by` (a "last editor" field), so promoting, demoting or suspending a reviewer overwrites
+  the previous value and the history is gone. Reconstructing who changed a role, when, and from what
+  is impossible after the fact. Needs a design decision plus a new append-only table and migration —
+  the shape `agent_review_decisions` (112) already models. Deferred alongside notifications, same call.
+- **The pipeline image-generation flag is enforced NOWHERE.** `agentic_pipeline_image_generation_enabled`
+  (renamed by 118) is read by the admin toggle and referenced in doc comments, and by nothing else —
+  no pipeline stage checks it, and nothing combines it with a persona's own `allow_image_generation`
+  despite a comment claiming it does. **An admin can switch it on or off and behaviour does not
+  change.** Pre-existing, surfaced by the 118 rename and deliberately left alone: wiring it up is a
+  behaviour change, not a cleanup. Decide what it should actually gate — pipeline-only kill switch,
+  or ANDed with the persona permission — before implementing.
 - **A reviewer who triggers narration on an agent draft is not recorded on the job row.** Unit 9d (D13)
   re-stamps `narration_batch_jobs.user_id` with the story owner so the agentic billing bypass can fire,
   which is correct — but the table has no metadata column (migrations 068 and 069 are its whole schema),
