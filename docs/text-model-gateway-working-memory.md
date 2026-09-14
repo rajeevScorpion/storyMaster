@@ -28,6 +28,15 @@ non-abort network failure is `provider_error`, not `timeout`.
   `feat(text-models): route every text call…` commit exists, review its diff first; otherwise check
   `git status` for partial work.
 
+**P4b progress (Opus, directly, at 93% usage — no delegation):**
+- `2d6e3f7` admin Text Models page (`/admin/text-models`, nav under Studio): list, enable/disable (refused
+  server-side while the provider key is missing), edit, add (saved disabled), live Test, fallback-task banner.
+- Story/Reel Playground model picker now reads enabled registry models via `FilterDropdown` (native `<select>`
+  removed); shows the production key even when disabled/unknown; disables the temperature slider for models
+  that reject it. Committed right after this note (`feat(text-models): registry-backed playground picker`).
+- **Still open in P4b:** persona drawer help text listing enabled keys; `/admin/agents/routing` showing
+  resolution/fallback. Both small. **Nothing in P4b is browser-verified** — tsc and lint only.
+
 **Next session — start here:**
 1. Ask the owner for a usage reading.
 2. **P4a landed as `311d019`** after session 1's usage cap — agent reports tsc/lint clean, 1117/1117 tests,
