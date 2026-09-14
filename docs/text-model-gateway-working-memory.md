@@ -33,10 +33,17 @@ temperature 1.0; card-grid layout on `/admin/text-models`.
   Thinking control assertion). Opus nit: Gemini model cards say "temperature fixed at 1.0". GOTCHAS and
   PROJECT_STATE (120 row, deferred list) updated.
 - Full `npm test` after D: 118 files, 1216 tests, all green.
-- **Usage 83%** — no new delegations this session. Left: smoke results (agent already running; if this session
-  ends, look for commit `test(text-models): live smoke per thinking level…`, else rerun
-  `TEXT_GATEWAY_SMOKE=1 npm run test:text-gateway-smoke`) → `npx tsc --noEmit` → report addendum in
-  `text-model-gateway-report.md` → owner click-through → merge into `dev` `--no-ff`.
+- **Usage 83%** — no new delegations this session.
+- **Live smoke landed as `4d337fa`: 10/10.** Thinking levels demonstrably reach every provider (3.8 Flash 35 vs 196
+  thinking tokens at Low vs Medium; Qwen 0 vs 604 at Off vs default; Luna 0 vs 27). Agent also fixed the smoke's
+  `model-config` mock, which Phase C's new `getModelConfig` call would have broken. Results in the report,
+  section K.
+
+### Current state — supersedes everything above
+**Code-complete on `feature/text-model-gateway`; not merged into `dev`.** Migrations 119 and 120 applied on dev.
+Owner next: (1) sign in, try a task's Thinking dropdown and a model's Edit / Test / Enable on `/admin/text-models`;
+(2) decide whether the economy tasks stay on 3.8 Flash Low or go to 3.5 Flash Minimal (PROJECT_STATE deferred);
+(3) merge into `dev` `--no-ff`; (4) production: pre-apply check, 119, 120, redeploy.
 - Production `model_config` could not be read from this session (permission denied); the plan carries a
   read-only pre-apply check for the owner. Prod has no `agent_personas` table and no 119.
 

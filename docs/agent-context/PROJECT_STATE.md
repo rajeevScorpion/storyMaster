@@ -654,7 +654,11 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   per-model confirmation. DeepSeek has had no live call at any level.
 - **Qwen 3.7 Flash on OpenRouter returned HTTP 429 under back-to-back calls** in the live smoke, then passed on
   its own. The gateway reports `rate_limited` and never retries. Fine for advisory evaluation, which already
-  tolerates a failed model call; not yet suitable for anything a reader waits on.
+  tolerates a failed model call; not yet suitable for anything a reader waits on. A second run the same day,
+  with 3s between OpenRouter calls, saw no 429.
+- **Economy tasks may be cheaper on 3.5 Flash at Minimal than 3.8 Flash at Low.** 3.8 Flash's floor is Low; in
+  the live smoke a one-word answer cost $0.000169 on 3.8 Low against $0.000077 on 3.5 Minimal. Migration 120 put
+  graphic style extraction, voice selection and novelty assessment on 3.8 Low — compare on real calls.
 
 **Billing and cost**
 - The Story Bible LLM call is **unbilled** — it consumes tokens without a coin charge.

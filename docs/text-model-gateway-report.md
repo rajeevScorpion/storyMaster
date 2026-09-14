@@ -136,3 +136,45 @@ enables the live smoke test.
 - The rest are recorded in PROJECT_STATE "Deferred / known gaps → Text models": open text RPCs, three calls with
   no cost events, gateway error text shown on options regeneration, unmapped Gemini block reasons, function
   duration for slow reasoning models, dead `playground.ts`, and the deferred repair loop.
+
+## K. Follow-up — thinking control, Gemini refresh, reader-safe errors, card layout (2026-09-14)
+
+Plan: [text-model-thinking-plan.md](text-model-thinking-plan.md). Commits `7702e34` (migration 120) through `4d337fa`.
+
+- **Reader-safe errors:** a failed text call shows readers a fixed sentence with no provider, model or task
+  name; the full text stays in `detail` for logs, admin screens and agent run records. Image failures are
+  replaced where readers receive them: job status polls, beat loads, batch writes, placeholder metadata.
+- **Thinking:** each model lists the levels it accepts and a default; each task can override it
+  (`model_config.reasoning_level`, migration 120). The gateway resolves the level on the server per call and
+  applies a task's level only on that task's assigned model. Gemini `thinkingLevel`, OpenAI `reasoning_effort`,
+  OpenRouter `reasoning.effort`.
+- **Gemini:** 3.8 Flash added; seven older Gemini text models removed; graphic style extraction, legacy voice
+  selection and novelty assessment moved to 3.8 Flash at Low. Every Gemini text call runs at temperature 1.0.
+  Thinking tokens now count as output — **Gemini cost was under-recorded before this change**.
+- **Admin page:** task assignments and models as card grids; a Thinking dropdown per task; accepted levels and
+  a default per model.
+- **Checks:** full unit suite 118 files / 1216 tests; `build:verify` and e2e 30/30 at `0cf116f`; tsc and lint
+  clean; live smoke 10/10.
+
+**Live smoke** — one short logic question, every answer correct ("Crow"). One run each: indicative, not a
+benchmark.
+
+| Model | Thinking | Tokens in / out | Of which thinking | Cost | Latency |
+|---|---|---|---|---|---|
+| Gemini 3.8 Flash | Low | 45 / 36 | 35 | $0.000169 | 3.3s |
+| Gemini 3.8 Flash | Default (Medium) | 45 / 197 | 196 | $0.000772 | 2.0s |
+| Gemini 3.5 Flash | Minimal | 45 / 1 | 0 | $0.000077 | 1.1s |
+| Qwen 3.7 Flash (OpenRouter) | Off | 55 / 1 | 0 | $0.000002 | 0.9s |
+| Qwen 3.7 Flash (OpenRouter) | Default | 53 / 607 | 604 | $0.000081 | 8.8s |
+| GPT-5.6 Luna (OpenAI) | Off | 49 / 4 | 0 | $0.000015 | 2.8s |
+| GPT-5.6 Luna (OpenAI) | Low | 49 / 37 | 27 | $0.000054 | 1.6s |
+
+What it shows:
+- The thinking level decides the bill. The same answer cost 4.6× more at Medium than Low on 3.8 Flash, and 40×
+  more at Qwen's default than Off.
+- **3.8 Flash cannot go below Low**, so on this small call 3.5 Flash at Minimal cost less than half as much.
+  Measure the three economy tasks before assuming 3.8 Flash is the cheaper home for them.
+- Qwen at Off was cheapest by far. No 429 this run, with 3s between OpenRouter calls.
+
+Not verified: admin Save / Test / Enable / Thinking changes clicked in a real browser; DeepSeek at any thinking
+level; production (119 and 120 not applied).
