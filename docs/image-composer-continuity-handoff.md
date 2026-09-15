@@ -15,8 +15,8 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 |---|---|---|
 | 1 log cleanup | `c5800a0` + restore fix | done; review restored the "Story beat generation failed" error log — the browser store calls beat generation directly, and the bundle only logs gateway errors |
 | 2 Unicode-safe relevance and scene spec | `cf28089` | done; 1334 unit tests; no snapshot change. `findWholeName` uses a regex lookbehind in browser code — within Next 16's default browser floor |
-| 3 English composer plan | | in progress |
-| 4a compiler-v2 core (pure) | | pending — split from Unit 4: capability, migration 122, scene spec 1.1, sections, budget tiers, English gate |
+| 3 English composer plan | `33c25f4`, `1f502e0`, smoke `4c191c9` | done; 1373 unit tests. Review blanked the fallback plan's per-panel anchors (they repeated the whole visual intent four times). Live smoke passed on Luna and Gemini 3.8 Flash |
+| 4a compiler-v2 core (pure) | | in progress — split from Unit 4: capability, migration 122, scene spec 1.1, sections, budget tiers, English gate; plus humanized snake_case camera values |
 | 4b compiler-v2 runtime wiring | | pending — split from Unit 4: reference lines inside the budget with English names, call sites, R9 gaps |
 | 5 continuity model | | pending |
 | 6 docs | | pending |
