@@ -108,7 +108,11 @@ async function buildTaskStatus(registry: TextModelRecord[] | null): Promise<Text
       problem: validateTextModelSelection(task.key, configuredKey, registry),
       reasoningLevel: config?.reasoningLevel ?? null,
       contentBlockFallbackKey,
-      contentBlockFallbackProblem: contentBlockFallbackKey ? validateTextModelSelection(task.key, contentBlockFallbackKey, registry) : null,
+      contentBlockFallbackProblem: !contentBlockFallbackKey
+        ? null
+        : contentBlockFallbackKey === configuredKey
+          ? 'Same as the model this task runs on, so it is never used.'
+          : validateTextModelSelection(task.key, contentBlockFallbackKey, registry),
     };
   });
 }
@@ -155,6 +159,12 @@ export async function assignTextModelToTask(taskKey: TaskKey, modelKey: string):
     if (!acceptedLevels.includes(current.reasoningLevel) && (await isReasoningLevelColumnAvailable())) {
       await updateTaskReasoningLevel(taskKey, null);
     }
+  }
+
+  // Same for a content-block fallback that is now the task's own model: the gateway skips it,
+  // so it would sit there looking configured while never running.
+  if ((await getAllContentBlockFallbacks()).get(taskKey) === modelKey) {
+    await updateTaskContentBlockFallback(taskKey, null);
   }
 
   revalidatePath(TEXT_MODELS_PATH);
