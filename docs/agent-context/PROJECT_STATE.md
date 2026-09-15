@@ -638,9 +638,13 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   activity key fits them, so `/admin/cost` undercounts those tokens.
 - **Gemini `finishReason` / `promptFeedback.blockReason` are not mapped** to gateway error categories. A
   blocked Gemini response still surfaces as empty or invalid output, as it did before.
-- **Slow reasoning models vs function duration.** Luna's row allows 120s. Only the API routes and the test lab
-  set `maxDuration = 300`; page server actions, including beat generation, run under the project default.
-  Check the Vercel plan's default before pointing a reader-facing task at Luna.
+- **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
+  compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
+  the test lab set 300 explicitly; a dashboard override was not readable from the tools). Luna's row caps a call
+  at 120s, so one call cannot hit the function limit; a call past 120s fails that beat, and a repair retry
+  doubles the wait. The real constraint is the reader: Gemini 3.5 Flash beats on dev ran ~12s median, ~20s p90,
+  up to 35s, with no thinking level set. No Luna call on a real task was recorded as of that date — measure
+  per-beat latency (`ai_cost_events.latency_ms`) before settling a reader-facing task on Luna above Low.
 - **`app/actions/playground.ts` is dead code** (nothing imports it) and was deliberately not migrated.
 - **"Used by" on Text Models counts task assignments only**, not agent persona overrides.
 - **Gemini 3.8 Flash's introductory price ends 2026-12-31.** From 2027-01-01 it is $1.50 / $7.50 per 1M
@@ -716,12 +720,16 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
 
 ## Roadmap notes
 
-- **Text Model Gateway — code-complete on `feature/text-model-gateway`** (2026-09-14), **not yet merged into
-  `dev`**. Registry-backed text models across Gemini, OpenAI and OpenRouter, an admin Text Models page with task
-  assignments, and a live smoke test on all three providers. Nothing routes off Gemini until an admin enables a
-  row and assigns it. Verification, routing and follow-ups:
+- **Text Model Gateway — merged into `dev`** (2026-09-14, `a10a8fc`); not on production (119 and 120 unapplied
+  there). Registry-backed text models across Gemini, OpenAI and OpenRouter, an admin Text Models page with task
+  assignments and per-task thinking, and a live smoke test on all three providers. Nothing routes off Gemini
+  until an admin enables a row and assigns it. Verification, routing and follow-ups:
   [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
   [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
+- **Text task guidance — on `feature/text-task-guidance`** (2026-09-15), not merged. Each Task assignments card
+  says what the task does, whether a user waits on it and how often it runs, and suggests a thinking level with
+  a reason; a note shows when the setting is two or more steps off. Judgment, not measurement. Code-only copy:
+  no migration, no flag. Plan: [../text-task-guidance-plan.md](../text-task-guidance-plan.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
   or independent providers per task. Much of this has since been overtaken by the real multi-provider image

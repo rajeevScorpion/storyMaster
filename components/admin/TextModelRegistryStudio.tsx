@@ -19,6 +19,7 @@ import {
   TEXT_PROVIDER_LABELS,
   TEXT_REASONING_LEVELS,
   TEXT_REASONING_LEVEL_LABELS,
+  resolveReasoningLevel,
   suggestModelKey,
   validateTextModelSelection,
   type TextModelDefaultParams,
@@ -26,6 +27,13 @@ import {
   type TextReasoningLevel,
   type TextStructuredOutputSupport,
 } from '@/lib/ai/text-models.shared';
+import {
+  SUGGESTED_THINKING_STEPS,
+  compareToSuggestion,
+  getTextTaskGuidance,
+  nearestOfferedLevel,
+  type TextTaskGuidance,
+} from '@/lib/ai/text-task-guidance.shared';
 
 interface FormState {
   providerKey: TextProviderKey;
@@ -195,6 +203,34 @@ function TaskThinkingControl({
         size="form"
         ariaLabel={`Thinking for ${task.label}`}
       />
+    </div>
+  );
+}
+
+/** The "Suggested thinking" bar for one task card: four lit/unlit segments up to the suggested
+ * step, the level name, the one-line reason, and -- when the assigned model doesn't offer the
+ * suggested level -- the closest level it does offer. Advisory only; the segments are decoration
+ * and the adjacent text carries the meaning. */
+function SuggestedThinking({ guidance, record }: { guidance: TextTaskGuidance; record: AdminTextModelRecord | undefined }) {
+  const offered = record?.capabilities.reasoningLevels ?? [];
+  const suggestedIndex = SUGGESTED_THINKING_STEPS.indexOf(guidance.suggested);
+  const closest = offered.length > 0 ? nearestOfferedLevel(guidance.suggested, offered) : null;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-neutral-400">Suggested thinking</span>
+        <span className="flex items-center gap-0.5" aria-hidden="true">
+          {SUGGESTED_THINKING_STEPS.map((step, index) => (
+            <span key={step} className={`h-1.5 w-5 rounded-sm ${index <= suggestedIndex ? 'bg-emerald-400/80' : 'bg-white/10'}`} />
+          ))}
+        </span>
+        <span className="text-xs text-emerald-300">{TEXT_REASONING_LEVEL_LABELS[guidance.suggested]}</span>
+      </div>
+      <p className="text-[11px] leading-snug text-neutral-500">{guidance.why}</p>
+      {closest && closest !== guidance.suggested && (
+        <p className="text-[11px] leading-snug text-neutral-500">Closest this model offers: {TEXT_REASONING_LEVEL_LABELS[closest]}</p>
+      )}
     </div>
   );
 }
@@ -371,19 +407,44 @@ export default function TextModelRegistryStudio() {
             <h2 className="text-lg font-medium text-neutral-100">Task assignments</h2>
             <p className="mt-1 text-sm text-neutral-400">
               Point any text task at any enabled model, including the agentic tasks (story evaluation, novelty
-              assessment, and the rest) which otherwise have no picker of their own.
+              assessment, and the rest) which otherwise have no picker of their own. Each card suggests a thinking
+              level from what the task does. It is a starting point, not a measurement.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
             {data.taskStatus.map((task) => {
               const record = data.records.find((candidate) => candidate.modelKey === task.configuredKey);
+              const guidance = getTextTaskGuidance(task.taskKey);
+              // Same rule the gateway applies per call, so the note never judges a task override the
+              // assigned model would ignore.
+              const effectiveLevel = record
+                ? resolveReasoningLevel({ record, taskReasoningLevel: task.reasoningLevel, taskConfiguredKey: task.configuredKey }).level ?? null
+                : null;
+              const comparison =
+                guidance && data.reasoningOverridesAvailable
+                  ? compareToSuggestion(effectiveLevel, guidance.suggested, record?.capabilities.reasoningLevels ?? [])
+                  : null;
               return (
                 <div key={task.taskKey} className="flex flex-col gap-2 rounded-lg border border-white/5 bg-neutral-950/40 p-3">
                   <div className="min-w-0">
                     <p className="text-sm text-neutral-200">{task.label}</p>
+                    {guidance && <p className="mt-1 text-xs text-neutral-400">{guidance.summary}</p>}
+                    {guidance && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <span
+                          className={`rounded px-2 py-0.5 text-[11px] ${
+                            guidance.userWaiting ? 'bg-indigo-500/15 text-indigo-300' : 'bg-neutral-700/60 text-neutral-400'
+                          }`}
+                        >
+                          {guidance.userWaiting ? 'User waiting' : 'Background'}
+                        </span>
+                        <span className="rounded px-2 py-0.5 text-[11px] bg-neutral-700/60 text-neutral-400">{guidance.cadence}</span>
+                      </div>
+                    )}
                     {task.problem && <p className="mt-1 text-xs text-amber-300">{task.problem}</p>}
                   </div>
-                  <div className={busy ? 'pointer-events-none opacity-50' : ''}>
+                  {guidance && <SuggestedThinking guidance={guidance} record={record} />}
+                  <div className={`mt-auto ${busy ? 'pointer-events-none opacity-50' : ''}`}>
                     <Field label="Model">
                       <FilterDropdown
                         value={task.configuredKey}
@@ -404,6 +465,13 @@ export default function TextModelRegistryStudio() {
                       onChange={(level) => run(() => setTaskReasoningLevel(task.taskKey, level))}
                     />
                   </Field>
+                  {comparison && (
+                    <p className="-mt-1 text-[11px] text-amber-300/80">
+                      {comparison === 'above'
+                        ? 'Well above the suggestion: slower and costlier on every call.'
+                        : 'Well below the suggestion: may miss rules this task has to keep.'}
+                    </p>
+                  )}
                 </div>
               );
             })}
