@@ -735,17 +735,20 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
   until an admin enables a row and assigns it. Verification, routing and follow-ups:
   [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
   [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
-- **Text task guidance — on `feature/text-task-guidance`** (2026-09-15), not merged. Each Task assignments card
+- **Image composer continuity — on `feature/image-composer-continuity`** (2026-09-15), in progress. English-only
+  image prompts, a 3,000-character target with a 5,000 hard cap, non-Latin text surviving the compiler, and
+  attribute-specific continuity (LOCKED / EVOLVE / FREE) instead of sameness. Handoff:
+  [../image-composer-continuity-handoff.md](../image-composer-continuity-handoff.md); spec:
+  [../visual-composer-continuity-framework.md](../visual-composer-continuity-framework.md).
+- **Text task guidance — merged into `dev`** (2026-09-15, `e1dd637`). Each Task assignments card
   says what the task does, whether a user waits on it and how often it runs, and suggests a thinking level with
   a reason; a note shows when the setting is two or more steps off. Judgment, not measurement. Code-only copy:
   no migration, no flag. Plan: [../text-task-guidance-plan.md](../text-task-guidance-plan.md).
-- **Content-block fallback — on `feature/content-block-fallback`** (2026-09-15), cut from the guidance branch, not
-  merged. Content-safety blocks are named (`content_blocked`) instead of "empty response"; every failed text call
+- **Content-block fallback — merged into `dev`** (2026-09-15, `8df40e2`); migration 121 applied on dev. Content-safety blocks are named (`content_blocked`) instead of "empty response"; every failed text call
   is a `failed` cost row; a blocked call retries once on the task's fallback model (migration 121, per-task
   dropdown on the card); readers see the content-safety cause when a beat still can't be written, and a note when
   a storyboard used the backup plan. Plan: [../content-block-fallback-plan.md](../content-block-fallback-plan.md).
-- **Beat length allowance — on `feature/beat-length-allowance`** (2026-09-15), cut from the content-block branch,
-  not merged. Word count never retries or fails a story beat, seeded beat or seed plan; a beat far off length is
+- **Beat length allowance — merged into `dev`** (2026-09-15, `a70c93f`). Word count never retries or fails a story beat, seeded beat or seed plan; a beat far off length is
   kept and logged. Length ranges scale with the target and are no longer clipped at Brief and Immersive; the
   model is told one range plus a per-panel guide. The admin default length shows every audience's words. Code
   only: no migration, no flag. Plan: [../beat-length-allowance-plan.md](../beat-length-allowance-plan.md).
