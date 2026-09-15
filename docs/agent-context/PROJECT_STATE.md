@@ -716,12 +716,16 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
 
 ## Roadmap notes
 
-- **Text Model Gateway — code-complete on `feature/text-model-gateway`** (2026-09-14), **not yet merged into
-  `dev`**. Registry-backed text models across Gemini, OpenAI and OpenRouter, an admin Text Models page with task
-  assignments, and a live smoke test on all three providers. Nothing routes off Gemini until an admin enables a
-  row and assigns it. Verification, routing and follow-ups:
+- **Text Model Gateway — merged into `dev`** (2026-09-14, `a10a8fc`); not on production (119 and 120 unapplied
+  there). Registry-backed text models across Gemini, OpenAI and OpenRouter, an admin Text Models page with task
+  assignments and per-task thinking, and a live smoke test on all three providers. Nothing routes off Gemini
+  until an admin enables a row and assigns it. Verification, routing and follow-ups:
   [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
   [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
+- **Text task guidance — on `feature/text-task-guidance`** (2026-09-15), not merged. Each Task assignments card
+  says what the task does, whether a user waits on it and how often it runs, and suggests a thinking level with
+  a reason; a note shows when the setting is two or more steps off. Judgment, not measurement. Code-only copy:
+  no migration, no flag. Plan: [../text-task-guidance-plan.md](../text-task-guidance-plan.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
   or independent providers per task. Much of this has since been overtaken by the real multi-provider image

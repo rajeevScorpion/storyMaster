@@ -19,6 +19,7 @@ import {
   TEXT_PROVIDER_LABELS,
   TEXT_REASONING_LEVELS,
   TEXT_REASONING_LEVEL_LABELS,
+  resolveReasoningLevel,
   suggestModelKey,
   validateTextModelSelection,
   type TextModelDefaultParams,
@@ -414,7 +415,11 @@ export default function TextModelRegistryStudio() {
             {data.taskStatus.map((task) => {
               const record = data.records.find((candidate) => candidate.modelKey === task.configuredKey);
               const guidance = getTextTaskGuidance(task.taskKey);
-              const effectiveLevel = task.reasoningLevel ?? record?.defaultParams.reasoningLevel ?? null;
+              // Same rule the gateway applies per call, so the note never judges a task override the
+              // assigned model would ignore.
+              const effectiveLevel = record
+                ? resolveReasoningLevel({ record, taskReasoningLevel: task.reasoningLevel, taskConfiguredKey: task.configuredKey }).level ?? null
+                : null;
               const comparison =
                 guidance && data.reasoningOverridesAvailable
                   ? compareToSuggestion(effectiveLevel, guidance.suggested, record?.capabilities.reasoningLevels ?? [])
@@ -459,14 +464,14 @@ export default function TextModelRegistryStudio() {
                       busy={busy}
                       onChange={(level) => run(() => setTaskReasoningLevel(task.taskKey, level))}
                     />
-                    {comparison && (
-                      <p className="mt-1 text-[11px] text-amber-300/80">
-                        {comparison === 'above'
-                          ? 'Well above the suggestion: slower and costlier on every call.'
-                          : 'Well below the suggestion: may miss rules this task has to keep.'}
-                      </p>
-                    )}
                   </Field>
+                  {comparison && (
+                    <p className="-mt-1 text-[11px] text-amber-300/80">
+                      {comparison === 'above'
+                        ? 'Well above the suggestion: slower and costlier on every call.'
+                        : 'Well below the suggestion: may miss rules this task has to keep.'}
+                    </p>
+                  )}
                 </div>
               );
             })}
