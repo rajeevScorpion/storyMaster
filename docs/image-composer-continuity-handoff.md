@@ -13,8 +13,8 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 ### Progress
 | Unit | Commit | Status |
 |---|---|---|
-| 1 log cleanup | | pending |
-| 2 Unicode-safe relevance and scene spec | | pending |
+| 1 log cleanup | `c5800a0` + restore fix | done; review restored the "Story beat generation failed" error log — the browser store calls beat generation directly, and the bundle only logs gateway errors |
+| 2 Unicode-safe relevance and scene spec | | in progress — brief adds `\p{M}` to the tokenizer and name boundaries (Devanagari matras/virama are marks), substring matching for no-space scripts (CJK, Thai), and a text fallback when composer names don't resolve |
 | 3 English composer plan | | pending |
 | 4 compiler-v2 | | pending |
 | 5 continuity model | | pending |

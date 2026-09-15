@@ -573,8 +573,7 @@ export async function generateStoryBeat(
 
     return finalBeat;
   } catch (error) {
-    // Not logged here -- app/actions/beat-bundle.ts already logs this failure
-    // (its `Beat bundle core text call failed` line) when it propagates up.
+    console.error('Story beat generation failed:', error);
     throw error;
   }
 }
