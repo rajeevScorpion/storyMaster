@@ -14,6 +14,7 @@ import {
   type ScenePanel,
   type DiagnosticItem,
   type PanelPosition,
+  findWholeName,
 } from './scene-spec.shared';
 import { filterAndDedupScene } from './relevance.shared';
 import type { PromptCompilerCapability, PromptCompilerAdapterVersion } from './capability.shared';
@@ -170,7 +171,7 @@ function renderPanel(
     .filter((key) => !presentSet.has(key))
     .map((key) => keyToName.get(key))
     .filter((name): name is string => Boolean(name))
-    .filter((name) => !new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(panel.action));
+    .filter((name) => findWholeName(panel.action, name) === -1);
   if (absent.length > 0) {
     parts.push(`${joinNames(absent)} ${absent.length === 1 ? 'is' : 'are'} absent.`);
   }

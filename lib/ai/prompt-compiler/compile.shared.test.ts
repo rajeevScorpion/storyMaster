@@ -2,7 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { compileImagePrompt, COMPILER_VERSION } from './compile.shared';
 import { buildCanonicalImageScene } from './scene-spec.shared';
 import type { PromptCompilerCapability } from './capability.shared';
-import { MEDIEVAL_MARKET_INPUT, MINIMAL_INPUT, LEGACY_TEXT_INPUT } from './__fixtures__/scenes';
+import {
+  MEDIEVAL_MARKET_INPUT,
+  MINIMAL_INPUT,
+  LEGACY_TEXT_INPUT,
+  HINDI_VILLAGE_INPUT,
+  HINDI_VILLAGE_PLAN,
+  RAGHAV,
+} from './__fixtures__/scenes';
 
 const NEUTRAL: PromptCompilerCapability = {
   enabled: true,
@@ -99,6 +106,21 @@ describe('compileImagePrompt compression', () => {
     expect(result.warnings).toContain('over_budget_after_max_compression');
     // Identity anchor is still present (not blindly truncated away).
     expect(result.fullPrompt).toContain('xxxxx');
+  });
+});
+
+describe('compileImagePrompt non-Latin scenes', () => {
+  it('renders the auto absent-character line with a Devanagari name', () => {
+    const plan = structuredClone(HINDI_VILLAGE_PLAN);
+    // Bottom-right's action must not name राघव itself, so it is the
+    // compiler's own absence detection — not the composer's text — that has
+    // to add the line via a Unicode-aware name match.
+    plan.bottomRight.description = 'अन्वी अकेली बरगद के पेड़ के नीचे बैठी किताब पढ़ रही है।';
+    plan.bottomRight.charactersPresent = ['अन्वी'];
+    const scene = buildCanonicalImageScene({ ...HINDI_VILLAGE_INPUT, storyboardPlan: plan });
+    const { sections } = compileImagePrompt(scene, NEUTRAL);
+    const bottomRight = sections.panels.find((p) => p.startsWith('Bottom-right'))!;
+    expect(bottomRight).toContain(`${RAGHAV.name} is absent`);
   });
 });
 

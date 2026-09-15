@@ -29,9 +29,11 @@ export const SCENE_LIMITS = {
   // Story visual direction is a structured four-axis profile (rendering,
   // atmosphere, color/light, richness). Preserve all four admin definers.
   style: 2000,
-  negativeConstraint: 60,
+  negativeConstraint: 120,
   negativeConstraints: 24,
   userDirective: 400,
+  shot: 160,
+  continuityAnchor: 160,
 } as const;
 
 // Baseline negative constraints always present for a storyboard grid. Merged
@@ -146,11 +148,83 @@ export function stripControlChars(value: string): string {
   return value.replace(/[\u0000-\u001F\u007F]/g, ' ');
 }
 
-/** Strip control chars, collapse whitespace, trim and cap length. */
+/** Index of the last whitespace char at or before `limit`, or -1 if none. */
+function lastIndexOfWhitespace(value: string, limit: number): number {
+  const end = Math.min(limit, value.length);
+  for (let i = end - 1; i >= 0; i -= 1) {
+    if (/\s/.test(value[i])) return i;
+  }
+  return -1;
+}
+
+/** End of the last whole `Intl.Segmenter` word segment that fits within `maxLength`. */
+function findWordCutoff(value: string, maxLength: number): string | null {
+  if (typeof Intl === 'undefined' || typeof Intl.Segmenter !== 'function') return null;
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
+  let result = '';
+  for (const { segment } of segmenter.segment(value)) {
+    if (result.length + segment.length > maxLength) break;
+    result += segment;
+  }
+  return result || null;
+}
+
+/**
+ * End of the last whole grapheme cluster that fits within `maxLength`, via
+ * `Intl.Segmenter`. Falls back to a code-point cut (never splits a surrogate
+ * pair) when `Intl.Segmenter` is unavailable.
+ */
+function findGraphemeCutoff(value: string, maxLength: number): string {
+  if (typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function') {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    let result = '';
+    for (const { segment } of segmenter.segment(value)) {
+      if (result.length + segment.length > maxLength) break;
+      result += segment;
+    }
+    return result;
+  }
+  let result = '';
+  for (const ch of Array.from(value)) {
+    if (result.length + ch.length > maxLength) break;
+    result += ch;
+  }
+  return result;
+}
+
+// Non-breaking hyphen, en dash, em dash, plain hyphen-minus (kept last in the
+// class so it can never be misread as a range operator) — the dash forms most
+// likely to appear as a dangling separator after a word-boundary cut.
+const DANGLING_SEPARATOR_RE = /[\s,;:‑–—-]+$/;
+
+/** Strip trailing whitespace and dangling separators (,;: and dashes). */
+function stripDanglingSeparators(value: string): string {
+  return value.replace(DANGLING_SEPARATOR_RE, '');
+}
+
+/**
+ * Strip control chars, collapse whitespace, trim and cap length. The
+ * over-length branch cuts at a word boundary, never mid-word or mid-cluster:
+ *   1. the last whitespace at/before maxLength, if it's at least halfway in;
+ *   2. otherwise the end of the last Intl.Segmenter word that fits;
+ *   3. otherwise the last grapheme boundary that fits (or a code-point cut).
+ */
 export function sanitizeText(value: string | undefined | null, maxLength: number): string {
   if (!value) return '';
   const cleaned = stripControlChars(value).replace(/\s+/g, ' ').trim();
-  return cleaned.length > maxLength ? cleaned.slice(0, maxLength).trimEnd() : cleaned;
+  if (cleaned.length <= maxLength) return cleaned;
+
+  const wsIndex = lastIndexOfWhitespace(cleaned, maxLength);
+  if (wsIndex >= maxLength / 2) {
+    return stripDanglingSeparators(cleaned.slice(0, wsIndex).trimEnd());
+  }
+
+  const wordCut = findWordCutoff(cleaned, maxLength);
+  if (wordCut) {
+    return stripDanglingSeparators(wordCut.trimEnd());
+  }
+
+  return stripDanglingSeparators(findGraphemeCutoff(cleaned, maxLength).trimEnd());
 }
 
 function sanitizeList(values: string[] | undefined | null, maxItems: number, maxItemLength: number): string[] {
@@ -214,23 +288,63 @@ function buildSceneCharacters(characters: Character[]): SceneCharacter[] {
 
 const ABSENCE_PATTERN = /(is\s+)?(not\s+present|absent|omitted|missing)/i;
 
+// Scripts conventionally written without spaces between words. A whole-"word"
+// boundary check is meaningless for these — a name is routinely followed
+// directly by a particle or another character with no separator (e.g.
+// Japanese さくらは). Detected on the NAME being searched for, not the haystack.
+const NO_SPACE_SCRIPT_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
+
+/**
+ * Unicode-aware, case-insensitive whole-name search. Returns the match index
+ * in `haystack.normalize('NFC')`, or -1 if not found.
+ *
+ * For names in space-delimited scripts (Latin, Devanagari, Arabic, Cyrillic,
+ * ...), matches on a real letter/mark/number boundary so e.g. "Leo" doesn't
+ * match inside "Leonard" and Devanagari "अन्व" doesn't match inside "अन्वी"
+ * (the trailing vowel sign is a combining mark, \p{M}, so it must be included
+ * in the boundary check alongside \p{L}/\p{N}).
+ *
+ * For names containing characters from scripts conventionally written without
+ * spaces (CJK, Thai, Lao, Khmer, Myanmar), a boundary check is meaningless —
+ * use a plain substring match instead.
+ */
+export function findWholeName(haystack: string, name: string): number {
+  const normHaystack = haystack.normalize('NFC');
+  const normName = name.normalize('NFC').trim();
+  if (!normName) return -1;
+  if (NO_SPACE_SCRIPT_RE.test(normName)) {
+    return normHaystack.toLowerCase().indexOf(normName.toLowerCase());
+  }
+  const pattern = new RegExp(
+    `(?<![\\p{L}\\p{M}\\p{N}])${escapeRegExp(normName)}(?![\\p{L}\\p{M}\\p{N}])`,
+    'iu'
+  );
+  const match = pattern.exec(normHaystack);
+  return match ? match.index : -1;
+}
+
+// Sentence terminators across scripts: Latin . ! ?, Devanagari danda/double
+// danda, Arabic question mark, and the CJK full stop.
+const SENTENCE_SPLIT_RE = /[.!?।॥؟。]/u;
+
 /**
  * Best-effort presence detection for legacy plans that don't declare which
- * characters appear in a frame. Whole-word, case-insensitive name match on the
- * action + visual focus, with a small negation guard so "<name> is absent" does
- * not count as present. The composer-supplied `charactersPresent` field is the
- * primary path; this is only the fallback.
+ * characters appear in a frame. Whole-name, case-insensitive, Unicode-aware
+ * match on the action + visual focus, with a small negation guard so "<name>
+ * is absent" does not count as present. The composer-supplied
+ * `charactersPresent` field is the primary path; this is only the fallback.
  */
 export function deriveCharactersPresent(haystack: string, characters: SceneCharacter[]): string[] {
+  const normHaystack = haystack.normalize('NFC');
   const present: string[] = [];
   for (const character of characters) {
     const name = character.displayName.trim();
     if (!name) continue;
-    const wordMatch = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'i');
-    const match = wordMatch.exec(haystack);
-    if (!match) continue;
+    const idx = findWholeName(normHaystack, name);
+    if (idx === -1) continue;
     // Negation guard: within the same sentence after the name.
-    const tail = haystack.slice(match.index + name.length).split(/[.!?]/)[0] ?? '';
+    const tail = normHaystack.slice(idx + name.normalize('NFC').length).split(SENTENCE_SPLIT_RE)[0] ?? '';
     if (ABSENCE_PATTERN.test(tail)) continue;
     present.push(character.key);
   }
@@ -243,20 +357,25 @@ function resolvePanelCharacters(
   visualFocus: string[],
   characters: SceneCharacter[]
 ): string[] {
-  const byDisplayName = new Map(characters.map((c) => [c.displayName.toLowerCase(), c.key]));
+  const byDisplayName = new Map(
+    characters.map((c) => [c.displayName.normalize('NFC').toLowerCase(), c.key])
+  );
   // Primary path: composer supplied explicit presence by display name.
   if (Array.isArray(frame.charactersPresent) && frame.charactersPresent.length > 0) {
     const keys: string[] = [];
     const seen = new Set<string>();
     for (const raw of frame.charactersPresent) {
-      const name = sanitizeText(raw, 80).toLowerCase();
+      const name = sanitizeText(raw, 80).normalize('NFC').toLowerCase();
       const key = byDisplayName.get(name);
       if (key && !seen.has(key)) {
         seen.add(key);
         keys.push(key);
       }
     }
-    return keys;
+    // The composer named characters but none resolved to a known display name
+    // (e.g. a transliteration mismatch) — fall back to text derivation rather
+    // than silently returning an empty panel.
+    if (keys.length > 0) return keys;
   }
   // Fallback: derive from free text.
   const haystack = [action, ...visualFocus].join(' ');
@@ -367,12 +486,14 @@ export function buildCanonicalImageScene(input: BuildCanonicalSceneInput): Canon
     const visualFocus = sanitizeList(frame.visualFocus || [], SCENE_LIMITS.visualFocusItems, SCENE_LIMITS.visualFocusItem);
     return {
       position,
-      shot: sanitizeText(frame.cameraAngle, 80),
+      shot: sanitizeText(frame.cameraAngle, SCENE_LIMITS.shot),
       action,
       emotion: sanitizeText(frame.emotion, SCENE_LIMITS.emotion),
       visualFocus,
       charactersPresent: resolvePanelCharacters(frame, action, visualFocus, characters),
-      ...(frame.continuityAnchor ? { continuityAnchor: sanitizeText(frame.continuityAnchor, 160) } : {}),
+      ...(frame.continuityAnchor
+        ? { continuityAnchor: sanitizeText(frame.continuityAnchor, SCENE_LIMITS.continuityAnchor) }
+        : {}),
     };
   });
 

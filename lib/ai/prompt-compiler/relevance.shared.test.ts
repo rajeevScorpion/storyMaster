@@ -7,12 +7,27 @@ import {
   phraseKey,
 } from './relevance.shared';
 import { buildCanonicalImageScene } from './scene-spec.shared';
-import { MEDIEVAL_MARKET_INPUT, MINIMAL_INPUT } from './__fixtures__/scenes';
+import { MEDIEVAL_MARKET_INPUT, MINIMAL_INPUT, HINDI_VILLAGE_INPUT } from './__fixtures__/scenes';
 
 describe('phraseKey', () => {
   it('folds synonyms and ignores order/case/punctuation', () => {
     expect(phraseKey('Warm, golden palette.')).toBe(phraseKey('warm gold tone'));
     expect(phraseKey('speech balloons')).toBe(phraseKey('Speech Bubbles'));
+  });
+
+  it('does not collapse distinct non-Latin phrases to the empty key', () => {
+    // अन्वी (a name) and अन्व (a truncation of it) must produce distinct,
+    // non-empty keys — the old ASCII-only tokenizer mapped both to ''.
+    const anvi = phraseKey('अन्वी');
+    const anv = phraseKey('अन्व');
+    expect(anvi).not.toBe('');
+    expect(anv).not.toBe('');
+    expect(anvi).not.toBe(anv);
+  });
+
+  it('keeps Devanagari combining marks so words are not shredded', () => {
+    expect(phraseKey('बरगद का पेड़')).not.toBe('');
+    expect(phraseKey('बरगद का पेड़')).toBe(phraseKey('पेड़ का बरगद'));
   });
 });
 
@@ -36,6 +51,13 @@ describe('canonicalizeNegativeConstraints', () => {
     expect(a.kept).toEqual(b.kept);
     expect(a.kept).toEqual([...a.kept].sort((x, y) => x.localeCompare(y)));
   });
+
+  it('keeps distinct Hindi negatives instead of collapsing them to one', () => {
+    // None of these match an English canonical bucket, so they used to all
+    // tokenize to the empty key and collapse into a single survivor.
+    const result = canonicalizeNegativeConstraints(['टेक्स्ट', 'कैप्शन', 'आधुनिक वस्तुएँ', 'डुप्लिकेट पात्र']);
+    expect(result.kept).toHaveLength(4);
+  });
 });
 
 describe('dedupPhrases', () => {
@@ -43,6 +65,23 @@ describe('dedupPhrases', () => {
     const result = dedupPhrases(['Warm golden palette', 'warm gold palette', 'cobblestone streets'], 'world.invariants');
     expect(result.kept).toEqual(['Warm golden palette', 'cobblestone streets']);
     expect(result.excluded).toHaveLength(1);
+  });
+
+  it('does not let a punctuation/emoji-only phrase swallow other phrases', () => {
+    // "..." and "!!" both tokenize to the empty phraseKey. Before the raw
+    // fallback, the second would be excluded as a "duplicate" of the first.
+    const result = dedupPhrases(['...', '!!', 'a real phrase'], 'world.invariants');
+    expect(result.kept).toEqual(['...', '!!', 'a real phrase']);
+    expect(result.excluded).toHaveLength(0);
+  });
+
+  it('keeps distinct non-Latin phrases (Hindi) that used to share the empty key', () => {
+    const result = dedupPhrases(
+      ['धुंधली सुबह की रोशनी खेतों पर फैली हुई है', 'गाँव के घरों की मिट्टी की दीवारें और खपरैल छतें'],
+      'world.invariants'
+    );
+    expect(result.kept).toHaveLength(2);
+    expect(result.excluded).toHaveLength(0);
   });
 });
 
@@ -108,5 +147,48 @@ describe('filterAndDedupScene', () => {
     const topRight = filtered.panels.find((p) => p.position === 'top-right')!;
     expect(topRight.visualFocus.some((f) => /leo|elrick/i.test(f))).toBe(false);
     expect(diagnostics.excluded.some((e) => e.reason === 'redundant-character-name')).toBe(true);
+  });
+
+  describe('non-Latin scenes (Hindi)', () => {
+    it('keeps every distinct world invariant, visual-focus item and negative', () => {
+      const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+      const { scene: filtered } = filterAndDedupScene(scene);
+      // All 4 invariants are distinct topics — none should be dropped as a
+      // "duplicate" of another via the empty phraseKey.
+      expect(filtered.world.invariants).toHaveLength(4);
+      // Every panel's visual-focus items are distinct within that panel and
+      // none of them is only a character's name.
+      for (const panel of filtered.panels) {
+        expect(panel.visualFocus.length).toBeGreaterThan(0);
+      }
+      const topRight = filtered.panels.find((p) => p.position === 'top-right')!;
+      // "अन्वी की पीली फ्रॉक" and "राघव की मुस्कान" are not bare names, so they
+      // survive the redundant-character-name filter.
+      expect(topRight.visualFocus).toHaveLength(2);
+      // Negatives: the 13 baseline English negatives canonicalize into 4
+      // buckets (text/gutters/panels/duplicates); the 4 Hindi negatives match
+      // no English bucket and must each survive distinctly (8 total) rather
+      // than collapsing into one via the empty phraseKey.
+      expect(filtered.negativeConstraints).toHaveLength(8);
+    });
+
+    it('still dedups genuinely identical Hindi phrases', () => {
+      const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+      scene.world.invariants = [...scene.world.invariants, scene.world.invariants[0]];
+      const { scene: filtered, diagnostics } = filterAndDedupScene(scene);
+      expect(filtered.world.invariants).toHaveLength(4);
+      expect(diagnostics.excluded.some((e) => e.field === 'world.invariants' && e.reason === 'duplicate')).toBe(true);
+    });
+
+    it('does not hoist or drop a Hindi focus item unless it really is only a character name', () => {
+      const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+      // Make a genuine bare-name focus item ("राघव") appear in >= 3 panels —
+      // it must be dropped as redundant-character-name, not hoisted.
+      for (const panel of scene.panels) panel.visualFocus.push('राघव');
+      const { scene: filtered, diagnostics } = filterAndDedupScene(scene);
+      expect(filtered.world.invariants.some((i) => i === 'राघव')).toBe(false);
+      expect(filtered.panels.every((p) => !p.visualFocus.includes('राघव'))).toBe(true);
+      expect(diagnostics.excluded.some((e) => e.reason === 'redundant-character-name' && e.detail === 'राघव')).toBe(true);
+    });
   });
 });

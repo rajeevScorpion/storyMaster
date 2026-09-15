@@ -48,8 +48,12 @@ const SYNONYM_TOKENS: Record<string, string> = {
 
 function tokenize(phrase: string): string[] {
   return phrase
+    .normalize('NFC')
     .toLowerCase()
-    .replace(/[^a-z0-9\s]+/g, ' ')
+    // Keep \p{L} (letters), \p{M} (combining marks — Devanagari vowel signs,
+    // virama, Arabic harakat, etc.) and \p{N} (digits). Dropping \p{M} would
+    // shred every Hindi/Arabic word into fragments.
+    .replace(/[^\p{L}\p{M}\p{N}\s]+/gu, ' ')
     .split(/\s+/)
     .filter(Boolean)
     .map((t) => SYNONYM_TOKENS[t] ?? t)
@@ -59,6 +63,22 @@ function tokenize(phrase: string): string[] {
 /** Order-independent, synonym-folded comparison key for a phrase. */
 export function phraseKey(phrase: string): string {
   return Array.from(new Set(tokenize(phrase))).sort().join(' ');
+}
+
+/**
+ * Fallback key for phrases whose phraseKey() is empty — punctuation/emoji-only
+ * text, or text that tokenizes to nothing. Never treat '' as a shared key: two
+ * unrelated empty-key phrases must not collide (and must not be treated as a
+ * name or hoist candidate — callers handle that separately).
+ */
+function rawFallbackKey(phrase: string): string {
+  return `raw:${phrase.normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim()}`;
+}
+
+/** phraseKey() with a raw fallback so an empty key never causes false dedup. */
+function dedupKey(phrase: string): string {
+  const key = phraseKey(phrase);
+  return key === '' ? rawFallbackKey(phrase) : key;
 }
 
 // --- Conflict detection ---------------------------------------------------
@@ -149,7 +169,7 @@ export function canonicalizeNegativeConstraints(list: string[]): NegativeCanonic
       }
       continue;
     }
-    const key = phraseKey(term);
+    const key = dedupKey(term);
     if (keptSet.has(key)) {
       excluded.push({ field: 'negativeConstraints', reason: 'duplicate', detail: term });
     } else {
@@ -176,7 +196,7 @@ export function dedupPhrases(list: string[], field: string): PhraseDedupResult {
   for (const raw of list) {
     const phrase = raw.trim();
     if (!phrase) continue;
-    const key = phraseKey(phrase);
+    const key = dedupKey(phrase);
     const existing = seen.get(key);
     if (existing) {
       // Same key implies same normalized meaning; keep the longer phrasing.
@@ -240,15 +260,21 @@ export function filterAndDedupScene(scene: CanonicalImageScene): {
   invariants = remainingInvariants;
 
   // Character names are handled by the identity section — never treat them as
-  // world invariants or hoist candidates.
-  const characterNameKeys = new Set(scene.characters.map((c) => phraseKey(c.displayName)));
+  // world invariants or hoist candidates. A name that tokenizes to nothing
+  // (fully non-Latin, punctuation-only) must never contribute the empty key —
+  // that would make characterNameKeys.has('') true and drop unrelated content.
+  const characterNameKeys = new Set(
+    scene.characters.map((c) => phraseKey(c.displayName)).filter((k) => k !== '')
+  );
 
   // 2) Hoist a visualFocus item shared by >= 3 panels to a global invariant.
+  // An empty key (punctuation/emoji-only phrase) is never a hoist candidate.
   const focusCounts = new Map<string, { count: number; sample: string }>();
   for (const panel of panels) {
-    const uniqueKeys = new Set(panel.visualFocus.map(phraseKey));
+    const uniqueKeys = new Set(panel.visualFocus.map(phraseKey).filter((k) => k !== ''));
     for (const item of panel.visualFocus) {
       const key = phraseKey(item);
+      if (key === '') continue;
       if (!uniqueKeys.has(key)) continue;
       uniqueKeys.delete(key);
       if (characterNameKeys.has(key)) continue;

@@ -3,16 +3,25 @@ import {
   buildCanonicalImageScene,
   validateCanonicalImageScene,
   deriveCharactersPresent,
+  findWholeName,
+  sanitizeText,
   slugifyCharacterKey,
   SCENE_SCHEMA_VERSION,
   SCENE_LIMITS,
   type CanonicalImageScene,
+  type SceneCharacter,
 } from './scene-spec.shared';
 import {
   MEDIEVAL_MARKET_INPUT,
   MEDIEVAL_MARKET_PLAN,
   MINIMAL_INPUT,
   LEGACY_TEXT_INPUT,
+  HINDI_VILLAGE_PLAN,
+  HINDI_VILLAGE_INPUT,
+  ANVI,
+  RAGHAV,
+  LAYLA,
+  SAKURA,
   ELRICK,
   LEO,
 } from './__fixtures__/scenes';
@@ -128,14 +137,130 @@ describe('slugifyCharacterKey', () => {
   });
 });
 
+function sceneChar(key: string, displayName: string): SceneCharacter {
+  return { key, displayName, visualIdentity: '', hasReference: false, continuityPriority: 'critical' };
+}
+
+describe('findWholeName', () => {
+  it('matches Devanagari names on a real word boundary', () => {
+    expect(findWholeName(`${RAGHAV.name} अपने खेत की मेड़ पर खड़े हैं।`, RAGHAV.name)).toBe(0);
+  });
+
+  it('does not match a name that is a prefix of a longer Devanagari word', () => {
+    // अन्वी = अन्व + ी, and ी (U+0940) is a combining mark (\p{M}), not a
+    // letter — the boundary check must include \p{M} or this would wrongly match.
+    const truncated = ANVI.name.slice(0, -1); // अन्व
+    expect(findWholeName(`${ANVI.name} दौड़ रही है।`, truncated)).toBe(-1);
+    expect(findWholeName(`${ANVI.name} दौड़ रही है।`, ANVI.name)).toBe(0);
+  });
+
+  it('matches Arabic names', () => {
+    expect(findWholeName(`${LAYLA.name} تجلس في الحديقة.`, LAYLA.name)).toBe(0);
+  });
+
+  it('matches a Japanese name immediately followed by a particle (no space)', () => {
+    expect(findWholeName(`${SAKURA.name}は学校に行った。`, SAKURA.name)).toBe(0);
+  });
+
+  it('English regression: Leo does not match inside Leonard', () => {
+    expect(findWholeName('Leonard walked in.', 'Leo')).toBe(-1);
+    expect(findWholeName('Leo walked in.', 'Leo')).toBe(0);
+  });
+
+  it('is case-insensitive and returns -1 when absent', () => {
+    expect(findWholeName('LEO walked in.', 'Leo')).toBe(0);
+    expect(findWholeName('A quiet empty street.', 'Leo')).toBe(-1);
+  });
+});
+
 describe('deriveCharactersPresent', () => {
   it('matches whole words and respects absence', () => {
-    const chars = [
-      { key: 'leo', displayName: 'Leo', visualIdentity: '', hasReference: false, continuityPriority: 'critical' as const },
-      { key: 'master-elrick', displayName: 'Master Elrick', visualIdentity: '', hasReference: false, continuityPriority: 'critical' as const },
-    ];
+    const chars = [sceneChar('leo', 'Leo'), sceneChar('master-elrick', 'Master Elrick')];
     expect(deriveCharactersPresent('Master Elrick tosses an apple. Leo is absent.', chars).sort()).toEqual(['master-elrick']);
     expect(deriveCharactersPresent('A quiet empty street.', chars)).toEqual([]);
+  });
+
+  it('finds Devanagari, Arabic and Japanese names', () => {
+    const chars = [
+      sceneChar('raghav', RAGHAV.name),
+      sceneChar('anvi', ANVI.name),
+      sceneChar('layla', LAYLA.name),
+      sceneChar('sakura', SAKURA.name),
+    ];
+    expect(deriveCharactersPresent(`${RAGHAV.name} अपने खेत की मेड़ पर खड़े हैं।`, chars)).toEqual(['raghav']);
+    expect(deriveCharactersPresent(`${LAYLA.name} تجلس في الحديقة.`, chars)).toEqual(['layla']);
+    expect(deriveCharactersPresent(`${SAKURA.name}は学校に行った。`, chars)).toEqual(['sakura']);
+  });
+
+  it('does not treat a name-prefix as present inside a longer Devanagari word', () => {
+    const truncated = ANVI.name.slice(0, -1); // अन्व, a prefix of अन्वी
+    const chars = [sceneChar('anv', truncated), sceneChar('anvi', ANVI.name)];
+    expect(deriveCharactersPresent(`${ANVI.name} दौड़ रही है।`, chars)).toEqual(['anvi']);
+  });
+
+  it('the Hindi danda (।) negation guard excludes an absent character', () => {
+    const chars = [sceneChar('anvi', ANVI.name)];
+    expect(deriveCharactersPresent(`${ANVI.name} is absent।`, chars)).toEqual([]);
+  });
+});
+
+describe('resolvePanelCharacters fallback (via buildCanonicalImageScene)', () => {
+  it('falls back to text derivation when explicit charactersPresent resolves to nothing', () => {
+    const strippedPlan = structuredClone(HINDI_VILLAGE_PLAN);
+    strippedPlan.topRight.charactersPresent = ['Some Unresolvable Transliteration'];
+    const scene = buildCanonicalImageScene({ ...HINDI_VILLAGE_INPUT, storyboardPlan: strippedPlan });
+    const raghavKey = scene.characters.find((c) => c.displayName === 'राघव')!.key;
+    const anviKey = scene.characters.find((c) => c.displayName === 'अन्वी')!.key;
+    const topRight = scene.panels.find((p) => p.position === 'top-right')!;
+    // The composer's name didn't resolve, so this falls back to deriving from
+    // the Hindi action text, which names both characters.
+    expect(topRight.charactersPresent.sort()).toEqual([anviKey, raghavKey].sort());
+  });
+});
+
+describe('sanitizeText', () => {
+  it('never exceeds the cap', () => {
+    const long = 'The quick brown fox jumps over the lazy dog and then runs away quickly. '.repeat(5);
+    for (const cap of [10, 30, 80, 160]) {
+      expect(sanitizeText(long, cap).length).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it('does not end mid-word for Latin input with spaces', () => {
+    const text = 'The quick brown fox jumps over the lazy dog and then runs away quickly';
+    const cap = 30;
+    const result = sanitizeText(text, cap);
+    expect(result.length).toBeLessThanOrEqual(cap);
+    const sourceWords = text.split(/\s+/);
+    for (const word of result.split(/\s+/).filter(Boolean)) {
+      expect(sourceWords).toContain(word.replace(/[.,;:]+$/, ''));
+    }
+  });
+
+  it('does not end mid-word for Hindi input with spaces', () => {
+    const text = 'धुंधली सुबह की रोशनी खेतों पर फैली हुई है और गाँव जाग उठा है';
+    const cap = 35;
+    const result = sanitizeText(text, cap);
+    expect(result.length).toBeLessThanOrEqual(cap);
+    const sourceWords = text.split(/\s+/);
+    for (const word of result.split(/\s+/).filter(Boolean)) {
+      expect(sourceWords).toContain(word);
+    }
+  });
+
+  it('does not split a surrogate pair for emoji input', () => {
+    const text = '🎉🎊🎈🎆🎇🧨✨🎃👻💀☠️👽🤖🎭🖼️ celebration party festival'.repeat(3);
+    const cap = 12;
+    const result = sanitizeText(text, cap);
+    expect(result.length).toBeLessThanOrEqual(cap);
+    const lastCode = result.length > 0 ? result.charCodeAt(result.length - 1) : 0;
+    // A lone leading (high) surrogate at the very end means a pair was split.
+    expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+  });
+
+  it('is deterministic for a given runtime', () => {
+    const text = 'धुंधली सुबह की रोशनी खेतों पर फैली हुई है और गाँव जाग उठा है';
+    expect(sanitizeText(text, 35)).toBe(sanitizeText(text, 35));
   });
 });
 
