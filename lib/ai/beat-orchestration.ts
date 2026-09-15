@@ -11,6 +11,7 @@ import type { Character } from '@/lib/types/story';
 import type { CompilerEngine, PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { callTextModelForReader } from '@/lib/ai/text-gateway/reader-call';
 import { isContentBlockedError } from '@/lib/ai/text-gateway/outcome.shared';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 import { getCharacterNoveltyContextAction } from '@/app/actions/character-novelty';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
@@ -345,14 +346,14 @@ export async function timeRuntimeStep<T>(
   const startedAt = runtimeNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(runtimeNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(runtimeNowMs() - startedAt),
       success: false,
       ...meta,
@@ -543,7 +544,7 @@ export async function generateStoryBeat(
       console.info('[timing:story_runtime.generate_story_beat.validation_retry]', {
         beatNumber,
         issueCount: issuesWithLength.length,
-        issues: issuesWithLength,
+        issues: issuesWithLength.join('; ').slice(0, 200),
       });
       beat = await generateAttempt(buildValidationRepairNote(issuesWithLength));
       const retryIssues = validateAttempt(beat);
@@ -572,7 +573,8 @@ export async function generateStoryBeat(
 
     return finalBeat;
   } catch (error) {
-    console.error('Story beat generation failed:', error);
+    // Not logged here -- app/actions/beat-bundle.ts already logs this failure
+    // (its `Beat bundle core text call failed` line) when it propagates up.
     throw error;
   }
 }

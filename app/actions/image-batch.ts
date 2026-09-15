@@ -1124,12 +1124,15 @@ async function processStatefulJob(admin: AdminClient, job: BatchJobRow): Promise
 
   // [diag] Which path is this job actually taking? Names provider + resolved
   // strategy so a per-beat failure can be attributed to the stateful-responses
-  // path vs the resend_refs/edit path.
-  console.log(
-    `[stateful:diag] job=${job.id} provider=${snapshot.providerKey} model=${snapshot.providerModelId} ` +
-    `requested=provider_stateful resolved=${continuityResolution.strategy} ` +
-    `statefulEnabled=${runtimePricing?.enabled ?? false} episodic=${job.episodic}`
-  );
+  // path vs the resend_refs/edit path. Routine, so behind the timing flag --
+  // the failure branch below (console.error) always logs regardless.
+  if (process.env.NEXT_PUBLIC_LOG_TIMING === '1') {
+    console.log(
+      `[stateful:diag] job=${job.id} provider=${snapshot.providerKey} model=${snapshot.providerModelId} ` +
+      `requested=provider_stateful resolved=${continuityResolution.strategy} ` +
+      `statefulEnabled=${runtimePricing?.enabled ?? false} episodic=${job.episodic}`
+    );
+  }
 
   // In the resend_refs fallback, ensure portraits exist (needed for continuity on a
   // non-stateful provider) and gather them once to attach to every beat.

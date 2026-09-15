@@ -10,6 +10,7 @@ import {
 } from '@/lib/pricing/runtime-context-cache';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getAgenticFlags } from '@/lib/agentic/flags';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 import type {
   DbBeatGrant,
   DbBeatSpendReservation,
@@ -149,14 +150,14 @@ async function timeEnforcementStep<T>(
   const startedAt = enforcementNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(enforcementNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(enforcementNowMs() - startedAt),
       success: false,
       ...meta,

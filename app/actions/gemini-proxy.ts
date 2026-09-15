@@ -7,6 +7,7 @@ import { getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { GeminiImageSize } from '@/lib/ai/pricing';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 
 const GEMINI_IMAGE_TIMEOUT_MS = 90_000;
 const GEMINI_TTS_TIMEOUT_MS = 120_000;
@@ -25,14 +26,14 @@ async function timeGeminiStep<T>(
   const startedAt = geminiNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(geminiNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(geminiNowMs() - startedAt),
       success: false,
       ...meta,
