@@ -242,6 +242,18 @@ export function formatAudienceVisualContract(ageGroup: unknown): string {
   ].join('\n');
 }
 
+/**
+ * One-line audience visual direction for a sharedVisualInvariants entry. Unlike
+ * formatAudienceVisualContract (the multi-line contract appended to the composer's
+ * *input* prompt, header and meta-instructions included), this is the single
+ * invariant carried into the *output* plan and ultimately the image prompt --
+ * see beat-orchestration.ts composeStoryboardPlan and buildFallbackStoryboardPlan.
+ */
+export function formatAudienceImageDirection(ageGroup: unknown): string {
+  const profile = getStoryAudienceProfile(ageGroup);
+  return `Audience (${profile.label}): ${profile.visualDirection}`;
+}
+
 export function formatAudienceNarrationDirection(ageGroup: unknown): string {
   const profile = getStoryAudienceProfile(ageGroup);
   return `Audience delivery (${profile.label}): ${profile.narrationDirection}`;
