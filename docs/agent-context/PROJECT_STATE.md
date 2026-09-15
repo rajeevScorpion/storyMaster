@@ -638,9 +638,13 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   activity key fits them, so `/admin/cost` undercounts those tokens.
 - **Gemini `finishReason` / `promptFeedback.blockReason` are not mapped** to gateway error categories. A
   blocked Gemini response still surfaces as empty or invalid output, as it did before.
-- **Slow reasoning models vs function duration.** Luna's row allows 120s. Only the API routes and the test lab
-  set `maxDuration = 300`; page server actions, including beat generation, run under the project default.
-  Check the Vercel plan's default before pointing a reader-facing task at Luna.
+- **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
+  compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
+  the test lab set 300 explicitly; a dashboard override was not readable from the tools). Luna's row caps a call
+  at 120s, so one call cannot hit the function limit; a call past 120s fails that beat, and a repair retry
+  doubles the wait. The real constraint is the reader: Gemini 3.5 Flash beats on dev ran ~12s median, ~20s p90,
+  up to 35s, with no thinking level set. No Luna call on a real task was recorded as of that date — measure
+  per-beat latency (`ai_cost_events.latency_ms`) before settling a reader-facing task on Luna above Low.
 - **`app/actions/playground.ts` is dead code** (nothing imports it) and was deliberately not migrated.
 - **"Used by" on Text Models counts task assignments only**, not agent persona overrides.
 - **Gemini 3.8 Flash's introductory price ends 2026-12-31.** From 2027-01-01 it is $1.50 / $7.50 per 1M
