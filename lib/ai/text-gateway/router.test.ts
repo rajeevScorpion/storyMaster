@@ -4,12 +4,21 @@ import { optionsRegenerationSchema } from '@/lib/ai/generation-schemas';
 
 vi.mock('server-only', () => ({}));
 
-const { generateContentMock, getTextModelRegistryMock, getMissingEnvVarsMock, getFeatureFlagValueMock, getModelConfigMock, recordModelCostEventMock } = vi.hoisted(() => ({
+const {
+  generateContentMock,
+  getTextModelRegistryMock,
+  getMissingEnvVarsMock,
+  getFeatureFlagValueMock,
+  getModelConfigMock,
+  getContentBlockFallbackModelMock,
+  recordModelCostEventMock,
+} = vi.hoisted(() => ({
   generateContentMock: vi.fn(),
   getTextModelRegistryMock: vi.fn(),
   getMissingEnvVarsMock: vi.fn(),
   getFeatureFlagValueMock: vi.fn(),
   getModelConfigMock: vi.fn(),
+  getContentBlockFallbackModelMock: vi.fn(),
   recordModelCostEventMock: vi.fn(),
 }));
 
@@ -31,6 +40,7 @@ vi.mock('@/lib/ai/text-models', () => ({
 vi.mock('@/lib/ai/model-config', () => ({
   getFeatureFlagValue: getFeatureFlagValueMock,
   getModelConfig: getModelConfigMock,
+  getContentBlockFallbackModel: getContentBlockFallbackModelMock,
 }));
 
 vi.mock('@/lib/ai/cost-telemetry', () => ({
@@ -91,6 +101,7 @@ beforeEach(() => {
   // branch then never fires unless a test deliberately configures otherwise, matching
   // getModelConfig's real "no row configured for this task" fallback shape.
   getModelConfigMock.mockResolvedValue({ model: 'unconfigured-task-default', temperature: null, reasoningLevel: null });
+  getContentBlockFallbackModelMock.mockResolvedValue(null);
   recordModelCostEventMock.mockResolvedValue(undefined);
 });
 
@@ -467,6 +478,103 @@ describe('telemetry: reasoning and temperature metadata', () => {
   });
 });
 
+describe('failed-attempt cost logging', () => {
+  it('a Gemini content block records one failed cost event with category, providerReason and usage', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    generateContentMock.mockResolvedValue({
+      text: '',
+      promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+      usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 0 },
+    });
+
+    await expect(generateText({
+      taskKey: 'story_generation',
+      modelKey: 'gemini-3.5-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    })).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledTimes(1);
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        inputTokens: 8,
+        outputTokens: 0,
+        metadata: expect.objectContaining({
+          errorCategory: 'content_blocked',
+          providerReason: 'prompt_blocked:PROHIBITED_CONTENT',
+        }),
+      })
+    );
+  });
+
+  it('a non-Gemini malformed_output failure records the tokens the response already spent', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'not json' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 40, completion_tokens: 15 },
+    })));
+
+    await expect(generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      schema: optionsRegenerationSchema,
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    })).rejects.toMatchObject({ category: 'malformed_output' });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        inputTokens: 40,
+        outputTokens: 15,
+        metadata: expect.objectContaining({ errorCategory: 'malformed_output' }),
+      })
+    );
+  });
+
+  it('a throwing cost recorder never replaces the original error', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchFail(429)));
+    recordModelCostEventMock.mockRejectedValueOnce(new Error('cost log is down'));
+
+    await expect(generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    })).rejects.toMatchObject({ category: 'rate_limited' });
+  });
+
+  it('no telemetry on the request means no cost event is recorded for a failed attempt', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchFail(429)));
+
+    await expect(generateText({ taskKey: 'story_generation', modelKey: 'openrouter:qwen/qwen3.7-flash', prompt: 'hi' }))
+      .rejects.toMatchObject({ category: 'rate_limited' });
+    expect(recordModelCostEventMock).not.toHaveBeenCalled();
+  });
+
+  it('a successful attempt still records exactly one event, with no failed status -- success path unchanged', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    })));
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledTimes(1);
+    const call = recordModelCostEventMock.mock.calls[0][0];
+    expect(call.status).toBeUndefined();
+  });
+});
+
 describe('TextGatewayError', () => {
   it('is the class instance thrown for auth_missing', async () => {
     getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
@@ -477,5 +585,198 @@ describe('TextGatewayError', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(TextGatewayError);
     }
+  });
+});
+
+describe('content-block fallback (Phase B)', () => {
+  function blockedGeminiResponse() {
+    return {
+      text: '',
+      promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+      usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 0 },
+    };
+  }
+
+  it('a blocked primary retries the configured fallback: two cost events, the second carrying contentBlockFallback', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD, makeRecord()]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:qwen/qwen3.7-flash');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'gemini-3.5-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(result.text).toBe('hello');
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(recordModelCostEventMock).toHaveBeenCalledTimes(2);
+    expect(recordModelCostEventMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ status: 'failed', modelId: 'gemini-3.5-flash', metadata: expect.objectContaining({ errorCategory: 'content_blocked' }) })
+    );
+    expect(recordModelCostEventMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        modelId: 'openrouter:qwen/qwen3.7-flash',
+        metadata: expect.objectContaining({ contentBlockFallback: true, blockedModelKey: 'gemini-3.5-flash', blockedReason: 'prompt_blocked:PROHIBITED_CONTENT' }),
+      })
+    );
+  });
+
+  it('a fallback that is itself blocked throws that SECOND error, not the original', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD, makeRecord()]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:qwen/qwen3.7-flash');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: '' }, finish_reason: 'content_filter' }],
+      usage: { prompt_tokens: 10, completion_tokens: 0 },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked', modelKey: 'openrouter:qwen/qwen3.7-flash' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a fallback that fails a different way throws the ORIGINAL content-block error', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD, makeRecord()]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:qwen/qwen3.7-flash');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn().mockResolvedValue(fetchFail(429));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked', modelKey: 'gemini-3.5-flash' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('no fallback configured -- exactly one provider call, no fetch', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    getContentBlockFallbackModelMock.mockResolvedValue(null);
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked', modelKey: 'gemini-3.5-flash' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fallback key equal to the blocked model -- exactly one provider call', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    getContentBlockFallbackModelMock.mockResolvedValue('gemini-3.5-flash');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fallback key disabled -- exactly one provider call', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD, makeRecord({ isEnabled: false })]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:qwen/qwen3.7-flash');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fallback key not in the registry (invalid) -- exactly one provider call', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:does-not-exist');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('fallback missing its required env var -- exactly one provider call', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD, makeRecord()]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:qwen/qwen3.7-flash');
+    // First call is the primary attempt's own credential check (must pass); second is the
+    // fallback's, inside attemptContentBlockFallback.
+    getMissingEnvVarsMock.mockReturnValueOnce([]).mockReturnValueOnce(['OPENROUTER_API_KEY']);
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi' })
+    ).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('strictModel never attempts a fallback -- exactly one provider call, fallback never even queried', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({ taskKey: 'story_generation', modelKey: 'gemini-3.5-flash', prompt: 'hi', strictModel: true })
+    ).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getContentBlockFallbackModelMock).not.toHaveBeenCalled();
+  });
+
+  it('images requested but the fallback has no vision -- exactly one provider call', async () => {
+    getTextModelRegistryMock.mockResolvedValue([
+      GEMINI_DEFAULT_RECORD,
+      makeRecord({ capabilities: { structuredOutput: 'json', vision: false, temperature: true } }),
+    ]);
+    getContentBlockFallbackModelMock.mockResolvedValue('openrouter:qwen/qwen3.7-flash');
+    generateContentMock.mockResolvedValue(blockedGeminiResponse());
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      generateText({
+        taskKey: 'story_generation',
+        modelKey: 'gemini-3.5-flash',
+        prompt: 'hi',
+        images: [{ mimeType: 'image/png', data: 'abc' }],
+      })
+    ).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

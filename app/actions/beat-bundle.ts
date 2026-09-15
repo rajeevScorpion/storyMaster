@@ -19,6 +19,8 @@ import {
   withGeneratedOrigin,
   type StoryModelOverrides,
 } from '@/lib/ai/beat-orchestration';
+import { ReaderFacingTextError } from '@/lib/ai/text-gateway/outcome.shared';
+import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
 import { assembleFinalImagePrompt } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
@@ -95,6 +97,8 @@ export type GenerateBeatCoreResult =
   | { status: 'legacy' }
   /** Authorization did not allow generation (denied). No work was done. */
   | { status: 'blocked'; authorization: PricingBillableActionAuthorization }
+  /** A text gateway failure reached here — reservation already released; message is reader-safe. */
+  | { status: 'failed'; message: string }
   | {
       status: 'ok';
       beat: StoryBeat;
@@ -179,6 +183,15 @@ export async function generateBeatCore(input: GenerateBeatCoreInput): Promise<Ge
         reservationId,
         reason: 'beat_bundle_core_failed',
       }).catch((releaseError) => console.error('Failed to release reservation after core failure:', releaseError));
+    }
+    // Expected gateway failure (e.g. content_blocked): return its reader-safe
+    // message as data per Next.js's Server Function error-handling guidance,
+    // instead of relying on a thrown message reaching the browser. On this
+    // server path the orchestration throws TextGatewayError directly (see
+    // lib/ai/text-gateway/reader-call.ts), so log its detail before dropping it.
+    if (error instanceof TextGatewayError || error instanceof ReaderFacingTextError) {
+      console.error('Beat bundle core text call failed:', errorDetail(error));
+      return { status: 'failed', message: error.message };
     }
     throw error;
   }

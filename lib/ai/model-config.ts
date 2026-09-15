@@ -261,6 +261,165 @@ export async function updateTaskReasoningLevel(taskKey: TaskKey, level: TextReas
   invalidateCache();
 }
 
+// ── model_config.content_block_fallback_model_id column-availability latch (migration 121) ──
+//
+// Deliberately separate from the reasoning_level latch above -- see the migration's own comment:
+// this column must never join the wide select that latch guards, or a database missing only 121
+// would look like one missing 120 too, and every task thinking level would silently stop
+// applying. Same 42703 / PGRST204 classification as above, but only for queries whose one 121
+// column is content_block_fallback_model_id -- per GOTCHAS.md "Column-availability latches are
+// per migration group", classify by which query ran, never by the error text alone.
+let contentBlockFallbackColumnUnavailable = false;
+let contentBlockFallbackColumnChecked = false;
+
+function isMissingContentBlockFallbackColumnError(error: { code?: string } | null | undefined): boolean {
+  return error?.code === '42703' || error?.code === 'PGRST204';
+}
+
+function markContentBlockFallbackColumnAvailable() {
+  contentBlockFallbackColumnChecked = true;
+}
+
+function markContentBlockFallbackColumnUnavailable() {
+  contentBlockFallbackColumnUnavailable = true;
+  contentBlockFallbackColumnChecked = true;
+}
+
+type ContentBlockFallbackRow = { task_key: string; content_block_fallback_model_id: string | null };
+
+// Own 60s cache, independent of the ModelConfig cache above -- this reads one column that cache
+// never carries.
+let contentBlockFallbackCache: Map<TaskKey, { data: string | null; ts: number }> = new Map();
+
+function getCachedContentBlockFallback(key: TaskKey): { data: string | null } | undefined {
+  const entry = contentBlockFallbackCache.get(key);
+  return entry && Date.now() - entry.ts < CACHE_TTL ? entry : undefined;
+}
+
+function setCachedContentBlockFallback(key: TaskKey, data: string | null) {
+  contentBlockFallbackCache.set(key, { data, ts: Date.now() });
+}
+
+function invalidateContentBlockFallbackCache() {
+  contentBlockFallbackCache.clear();
+}
+
+/**
+ * One task's configured content-block fallback model key, or null when it has none, migration
+ * 121 is absent, or the read failed. Own 60s cache. Never throws -- a lookup failure here must
+ * never fail the call that is asking whether to retry.
+ */
+export async function getContentBlockFallbackModel(taskKey: TaskKey): Promise<string | null> {
+  const cached = getCachedContentBlockFallback(taskKey);
+  if (cached) return cached.data;
+  if (contentBlockFallbackColumnUnavailable) return null;
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('model_config')
+      .select('task_key, content_block_fallback_model_id')
+      .eq('task_key', taskKey)
+      .maybeSingle<ContentBlockFallbackRow>();
+
+    if (error) {
+      if (isMissingContentBlockFallbackColumnError(error)) {
+        markContentBlockFallbackColumnUnavailable();
+      }
+      // Not cached -- a real problem should be retried on the very next call.
+      return null;
+    }
+
+    markContentBlockFallbackColumnAvailable();
+    const value = data?.content_block_fallback_model_id ?? null;
+    setCachedContentBlockFallback(taskKey, value);
+    return value;
+  } catch (err) {
+    console.error('model-config: getContentBlockFallbackModel failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Every task's configured content-block fallback, as a Map skipping tasks with none set. Same
+ * fail-closed behaviour as getContentBlockFallbackModel: any problem returns an empty map.
+ */
+export async function getAllContentBlockFallbacks(): Promise<Map<TaskKey, string>> {
+  if (contentBlockFallbackColumnUnavailable) return new Map();
+
+  try {
+    const supabase = createAdminClient();
+    const { data, error } = await supabase
+      .from('model_config')
+      .select('task_key, content_block_fallback_model_id')
+      .order('task_key');
+
+    if (error) {
+      if (isMissingContentBlockFallbackColumnError(error)) {
+        markContentBlockFallbackColumnUnavailable();
+      }
+      return new Map();
+    }
+
+    markContentBlockFallbackColumnAvailable();
+    const result = new Map<TaskKey, string>();
+    for (const row of (data ?? []) as ContentBlockFallbackRow[]) {
+      const key = row.task_key as TaskKey;
+      setCachedContentBlockFallback(key, row.content_block_fallback_model_id ?? null);
+      if (row.content_block_fallback_model_id) result.set(key, row.content_block_fallback_model_id);
+    }
+    return result;
+  } catch (err) {
+    console.error('model-config: getAllContentBlockFallbacks failed:', err);
+    return new Map();
+  }
+}
+
+/** Whether model_config.content_block_fallback_model_id (migration 121) can be read/written in
+ * this process. Probes once (via getAllContentBlockFallbacks) if not yet known either way. */
+export async function isContentBlockFallbackColumnAvailable(): Promise<boolean> {
+  if (!contentBlockFallbackColumnChecked) {
+    await getAllContentBlockFallbacks();
+  }
+  return !contentBlockFallbackColumnUnavailable;
+}
+
+/**
+ * Sets (or clears, with `null`) a task's content-block fallback model. Throws when migration 121
+ * is absent rather than silently writing nothing, mirroring updateTaskReasoningLevel. Upserts the
+ * full row so a write never blanks model_id/temperature: it carries forward the existing row's
+ * values, or this task's code defaults when no row exists yet.
+ */
+export async function updateTaskContentBlockFallback(taskKey: TaskKey, modelKey: string | null): Promise<void> {
+  const available = await isContentBlockFallbackColumnAvailable();
+  if (!available) {
+    throw new Error('Migration 121 is not applied.');
+  }
+
+  const supabase = createAdminClient();
+  const { data: existing } = await supabase
+    .from('model_config')
+    .select('model_id, temperature')
+    .eq('task_key', taskKey)
+    .single();
+
+  const fallback = DEFAULT_MODELS[taskKey];
+  const modelId = existing?.model_id ?? fallback.modelId;
+  const temperature = existing ? existing.temperature : fallback.temperature;
+
+  const { error } = await supabase.from('model_config').upsert({
+    task_key: taskKey,
+    model_id: modelId,
+    temperature,
+    content_block_fallback_model_id: modelKey,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (error) throw new Error(`Failed to update content-block fallback: ${error.message}`);
+  invalidateCache();
+  invalidateContentBlockFallbackCache();
+}
+
 // ── Feature Flags ──────────────────────────────────────────────
 
 let flagCache: Map<string, { data: boolean; ts: number }> = new Map();

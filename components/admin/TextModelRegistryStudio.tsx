@@ -6,6 +6,7 @@ import {
   assignTextModelToTask,
   createAdminTextModel,
   getAdminTextModelRegistry,
+  setTaskContentBlockFallback,
   setTaskReasoningLevel,
   testAdminTextModel,
   updateAdminTextModel,
@@ -139,6 +140,23 @@ function buildTaskAssignmentOptions(task: TextTaskModelStatus, records: AdminTex
   return options;
 }
 
+/** Options for a task's content-block fallback dropdown: 'No fallback' plus every model that
+ * would validly run this task (buildTaskAssignmentOptions' own set), minus the model the task is
+ * currently assigned to -- a model cannot be its own fallback. The task's current fallback key is
+ * kept visible, with the same disabled/unknown suffix buildTaskAssignmentOptions uses, even when
+ * it no longer qualifies (disabled, removed, or now equal to the task's own model). */
+function buildContentBlockFallbackOptions(task: TextTaskModelStatus, records: AdminTextModelRecord[]) {
+  const options = buildTaskAssignmentOptions(task, records).filter((option) => option.value !== task.configuredKey);
+
+  if (task.contentBlockFallbackKey && !options.some((option) => option.value === task.contentBlockFallbackKey)) {
+    const fallbackRecord = records.find((record) => record.modelKey === task.contentBlockFallbackKey);
+    const suffix = fallbackRecord ? ' (disabled)' : ' (not in registry)';
+    options.push({ value: task.contentBlockFallbackKey, label: `${task.contentBlockFallbackKey}${suffix}` });
+  }
+
+  return [{ value: '', label: 'No fallback' }, ...options];
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
@@ -202,6 +220,52 @@ function TaskThinkingControl({
         fullWidth
         size="form"
         ariaLabel={`Thinking for ${task.label}`}
+      />
+    </div>
+  );
+}
+
+/** The content-block fallback control for one task card: 'No fallback' plus every model that
+ * could stand in for a content-safety block, the current fallback kept visible even when it is
+ * disabled or has been removed from the registry, or a disabled placeholder when migration 121
+ * hasn't run. Kept separate for the same reason as TaskThinkingControl above. */
+function TaskContentBlockFallbackControl({
+  task,
+  records,
+  contentBlockFallbackAvailable,
+  busy,
+  onChange,
+}: {
+  task: TextTaskModelStatus;
+  records: AdminTextModelRecord[];
+  contentBlockFallbackAvailable: boolean;
+  busy: boolean;
+  onChange: (modelKey: string | null) => void;
+}) {
+  if (!contentBlockFallbackAvailable) {
+    return (
+      <div className="pointer-events-none opacity-50">
+        <FilterDropdown
+          value=""
+          options={[{ value: '', label: 'Needs migration 121' }]}
+          onChange={() => {}}
+          fullWidth
+          size="form"
+          ariaLabel={`Content-block fallback for ${task.label}`}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className={busy ? 'pointer-events-none opacity-50' : ''}>
+      <FilterDropdown
+        value={task.contentBlockFallbackKey ?? ''}
+        options={buildContentBlockFallbackOptions(task, records)}
+        onChange={(value) => onChange(value || null)}
+        fullWidth
+        size="form"
+        ariaLabel={`Content-block fallback for ${task.label}`}
       />
     </div>
   );
@@ -408,7 +472,8 @@ export default function TextModelRegistryStudio() {
             <p className="mt-1 text-sm text-neutral-400">
               Point any text task at any enabled model, including the agentic tasks (story evaluation, novelty
               assessment, and the rest) which otherwise have no picker of their own. Each card suggests a thinking
-              level from what the task does. It is a starting point, not a measurement.
+              level from what the task does. It is a starting point, not a measurement. If a model refuses a task
+              on content-safety grounds, it is retried once on that task&apos;s fallback.
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
@@ -471,6 +536,18 @@ export default function TextModelRegistryStudio() {
                         ? 'Well above the suggestion: slower and costlier on every call.'
                         : 'Well below the suggestion: may miss rules this task has to keep.'}
                     </p>
+                  )}
+                  <Field label="If blocked, retry on">
+                    <TaskContentBlockFallbackControl
+                      task={task}
+                      records={data.records}
+                      contentBlockFallbackAvailable={data.contentBlockFallbackAvailable}
+                      busy={busy}
+                      onChange={(modelKey) => run(() => setTaskContentBlockFallback(task.taskKey, modelKey))}
+                    />
+                  </Field>
+                  {task.contentBlockFallbackProblem && (
+                    <p className="text-[11px] text-amber-300/80">{task.contentBlockFallbackProblem}</p>
                   )}
                 </div>
               );

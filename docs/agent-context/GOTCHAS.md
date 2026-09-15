@@ -375,6 +375,19 @@ Related traps from the same build:
   `error.message` from a server action is safe for gateway errors, not for arbitrary ones — allow-list the
   error classes you return. Image failures have no gateway, so readers get `readerSafeImageError(...)` at every
   point `beats.image_error` or a job error leaves the server.
+- **Browser callers get gateway failures as data, server callers as `TextGatewayError`.** Next.js recommends
+  returning expected errors from server functions; don't rely on a thrown action's message reaching the browser
+  in production. Beat, storyboard and seed calls go through `callTextModelForReader`, which returns data in the
+  browser and calls straight through on the server — so agent run records keep `detail`. Routing server callers
+  through the data path too loses it: they record only the reader sentence.
+- **A content-safety block is `content_blocked`, with the reason in `providerReason`.** Gemini answers HTTP 200
+  with no text plus a `promptFeedback.blockReason` or a content `finishReason`; OpenAI and OpenRouter refuse or
+  return a policy error. The gateway retries once on the task's `content_block_fallback_model_id` (121), never
+  for strict-model (admin playground) calls. Every failed call, blocks included, is a `status: 'failed'` row in
+  `ai_cost_events` with `errorCategory` and `errorDetail` in its metadata.
+- **`content_block_fallback_model_id` has its own latch (121).** Never add it to the `model_config` select that
+  carries `reasoning_level`: a database without 121 would look like one without 120, and every task thinking
+  level would silently stop applying.
 - **`model_config.reasoning_level` has its own latch.** A process that saw the column missing sends no task
   thinking levels until it restarts; model assignments are unaffected.
 

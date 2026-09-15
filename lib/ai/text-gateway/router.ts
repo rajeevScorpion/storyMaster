@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { getFeatureFlagValue, getModelConfig } from '@/lib/ai/model-config';
+import { getContentBlockFallbackModel, getFeatureFlagValue, getModelConfig } from '@/lib/ai/model-config';
 import { getMissingEnvVars, getTextModelRegistry } from '@/lib/ai/text-models';
 import {
   TEXT_PROVIDER_ENV_VARS,
@@ -8,6 +8,7 @@ import {
   TEXT_PROVIDER_TELEMETRY_KEYS,
   resolveReasoningLevel,
   resolveTextModel,
+  validateTextModelSelection,
   type TextModelRecord,
   type TextModelResolution,
   type TextReasoningLevel,
@@ -18,7 +19,7 @@ import { extractJsonText, stripNullOptionals, validateAgainstGeminiSchema, type 
 import { callGemini } from './gemini';
 import { callOpenAiCompatible } from './openai-compatible';
 import type { ParsedChatCompletionsResponse } from './openai-compatible.shared';
-import { TextGatewayError, errorDetail, type TextGenerationRequest, type TextGenerationResult } from './types.shared';
+import { TextGatewayError, errorDetail, type TextGenerationRequest, type TextGenerationResult, type TextUsage } from './types.shared';
 
 const DEFAULT_TEXT_GATEWAY_TIMEOUT_MS = 30_000;
 
@@ -137,74 +138,243 @@ export async function generateText(request: TextGenerationRequest): Promise<Text
     });
   }
 
-  const { record } = resolution;
-  // Credential check before any network call -- resolveTextModel only picks the row,
-  // it never touches process.env.
-  assertCredentials(record);
-
   // getModelConfig already fails closed to DEFAULT_MODELS (reasoningLevel: null) on any error --
   // a lookup failure here must never fail the call, and it doesn't. taskConfig.model is the
-  // model the task is CURRENTLY configured to run on, which resolveReasoningLevel compares
-  // against the resolved record's own key so a task override never leaks onto a persona
-  // override's model or the emergency fallback record (both of which can legitimately differ).
+  // model the task is CURRENTLY configured to run on, which resolveReasoningLevel (inside
+  // runTextAttempt) compares against the resolved record's own key so a task override never
+  // leaks onto a persona override's model or the emergency fallback record (both of which can
+  // legitimately differ). Resolved once here so a Phase B fallback attempt reuses the same
+  // task-level config rather than re-reading it for a record it doesn't describe.
   const taskConfig = await getModelConfig(request.taskKey);
+
+  try {
+    return await runTextAttempt(resolution.record, resolution, request, taskConfig);
+  } catch (error) {
+    // Content-block fallback (Phase B): a strict-model call (the admin playground) must never
+    // silently run a different model than the one requested, and only a content safety block --
+    // never any other failure category -- is worth spending a second call on.
+    if (request.strictModel || !(error instanceof TextGatewayError) || error.category !== 'content_blocked') {
+      throw error;
+    }
+    return attemptContentBlockFallback(error, resolution, request, taskConfig, registry);
+  }
+}
+
+/**
+ * Runs once, only after the first attempt threw a content-safety block. Retries the call on the
+ * task's configured content-block fallback model when one is usable for this call; otherwise
+ * rethrows the original block. See docs/content-block-fallback-plan.md Phase B.
+ *
+ * A successful fallback is returned as-is. A fallback that is itself blocked throws that SECOND
+ * error (its message/detail describe what actually happened on the model that ran last). A
+ * fallback that fails any other way (timeout, auth, etc.) throws the ORIGINAL content-block
+ * error instead -- that is still the reader-relevant cause, and the fallback's own failure is
+ * already in the cost log for admins.
+ */
+async function attemptContentBlockFallback(
+  blockedError: TextGatewayError,
+  resolution: TextModelResolution,
+  request: TextGenerationRequest,
+  taskConfig: { model: string; temperature: number | null; reasoningLevel: TextReasoningLevel | null },
+  registry: TextModelRecord[] | null
+): Promise<TextGenerationResult> {
+  const fallbackKey = registry ? await getContentBlockFallbackModel(request.taskKey) : null;
+
+  const skip = (reason: string): never => {
+    // Only warn when an admin actually configured a fallback that turned out unusable -- no key
+    // configured at all is the ordinary "no fallback" case, not a misconfiguration.
+    if (fallbackKey) {
+      console.warn('[text-gateway] content-block fallback skipped', { taskKey: request.taskKey, fallbackKey, reason });
+    }
+    throw blockedError;
+  };
+
+  if (!registry) skip('no registry');
+  if (!fallbackKey) skip('no fallback configured');
+  if (fallbackKey === resolution.record.modelKey) skip('fallback is the same as the blocked model');
+
+  const problem = validateTextModelSelection(request.taskKey, fallbackKey as string, registry);
+  if (problem) skip(problem);
+
+  const fallbackRecord = (registry as TextModelRecord[]).find((record) => record.modelKey === fallbackKey);
+  if (!fallbackRecord) skip('fallback model not found in registry');
+
+  const missingEnv = getMissingEnvVars(fallbackRecord as TextModelRecord);
+  if (missingEnv.length > 0) skip(`fallback missing environment variable(s): ${missingEnv.join(', ')}`);
+
+  if ((request.images?.length ?? 0) > 0 && !(fallbackRecord as TextModelRecord).capabilities.vision) {
+    skip('fallback model does not support vision, which this call requires');
+  }
+
+  console.info('[text-gateway] content-block fallback', {
+    taskKey: request.taskKey,
+    blockedModelKey: resolution.record.modelKey,
+    fallbackKey,
+    blockedReason: blockedError.providerReason,
+  });
+
+  try {
+    return await runTextAttempt(
+      fallbackRecord as TextModelRecord,
+      { record: fallbackRecord as TextModelRecord, source: 'registry' },
+      request,
+      taskConfig,
+      { contentBlockFallback: true, blockedModelKey: resolution.record.modelKey, blockedReason: blockedError.providerReason }
+    );
+  } catch (fallbackError) {
+    if (fallbackError instanceof TextGatewayError && fallbackError.category === 'content_blocked') {
+      throw fallbackError;
+    }
+    throw blockedError;
+  }
+}
+
+/**
+ * Runs one attempt against a resolved model record: credential check, thinking-level
+ * resolution, the timed provider call, output finalization, and cost-event recording for
+ * either outcome. Split out of generateText so a content-safety block can retry once on a
+ * fallback model (Phase B) without duplicating any of this.
+ */
+async function runTextAttempt(
+  record: TextModelRecord,
+  resolution: TextModelResolution,
+  request: TextGenerationRequest,
+  taskConfig: { model: string; temperature: number | null; reasoningLevel: TextReasoningLevel | null },
+  extraMetadata?: Record<string, unknown>
+): Promise<TextGenerationResult> {
   const { level: reasoningLevel, source: reasoningSource } = resolveReasoningLevel({
     record,
     taskReasoningLevel: taskConfig.reasoningLevel,
     taskConfiguredKey: taskConfig.model,
   });
 
-  const timeoutMs = await resolveTimeoutMs(record);
   const startedAt = nowMs();
-  let providerResult: ParsedChatCompletionsResponse;
+  let providerResult: ParsedChatCompletionsResponse | undefined;
+
   try {
-    providerResult = await callProvider(record, request, timeoutMs, reasoningLevel);
+    // Credential check before any network call -- resolveTextModel only picks the row,
+    // it never touches process.env.
+    assertCredentials(record);
+    const timeoutMs = await resolveTimeoutMs(record);
+
+    try {
+      providerResult = await callProvider(record, request, timeoutMs, reasoningLevel);
+    } catch (error) {
+      logTiming(request.taskKey, record, nowMs() - startedAt, false, error);
+      throw error;
+    }
+    const latencyMs = nowMs() - startedAt;
+    logTiming(request.taskKey, record, latencyMs, true);
+
+    const { text, schemaIssueCount } = finalizeOutputText(providerResult.text.trim(), record, request);
+    const costUsd = computeTextCostUsd(record, providerResult.usage);
+    const temperatureApplied = record.capabilities.temperature && typeof request.temperature === 'number';
+    // Gemini always sends 1 regardless of capabilities.temperature/request.temperature (O-T4);
+    // every other provider sends the same value temperatureApplied describes, or nothing.
+    const temperatureSent = record.providerKey === 'gemini' ? 1 : temperatureApplied ? (request.temperature as number) : null;
+
+    if (request.telemetry) {
+      await recordModelCostEvent({
+        context: request.telemetry,
+        taskKey: request.taskKey,
+        modelId: record.modelKey,
+        provider: TEXT_PROVIDER_TELEMETRY_KEYS[record.providerKey],
+        inputTokens: providerResult.usage.inputTokens,
+        outputTokens: providerResult.usage.outputTokens,
+        latencyMs,
+        estimatedCostUsdOverride: costUsd ?? undefined,
+        metadata: {
+          ...(request.telemetryMetadata ?? {}),
+          providerModelId: record.providerModelId,
+          actualModel: providerResult.actualModel,
+          requestId: providerResult.requestId,
+          cachedTokens: providerResult.usage.cachedInputTokens,
+          reasoningTokens: providerResult.usage.reasoningTokens,
+          finishReason: providerResult.finishReason,
+          temperatureApplied,
+          temperatureSent,
+          reasoningLevel: reasoningLevel ?? null,
+          reasoningSource,
+          resolutionSource: resolution.source,
+          fallbackReason: resolution.fallbackReason,
+          requestedModelKey: request.modelKey,
+          schemaIssueCount,
+          costUnknown: costUsd === null,
+          ...(extraMetadata ?? {}),
+        },
+      });
+    }
+
+    return { text, usage: providerResult.usage, resolution };
   } catch (error) {
-    logTiming(request.taskKey, record, nowMs() - startedAt, false, error);
+    await recordFailedAttempt({
+      error,
+      record,
+      request,
+      resolution,
+      reasoningLevel,
+      reasoningSource,
+      latencyMs: nowMs() - startedAt,
+      // finalizeOutputText can throw after a real response came back -- its TextGatewayError
+      // carries no usage of its own, so the tokens that response already spent come from the
+      // provider result instead.
+      fallbackUsage: providerResult?.usage,
+      extraMetadata,
+    });
     throw error;
   }
-  const latencyMs = nowMs() - startedAt;
-  logTiming(request.taskKey, record, latencyMs, true);
+}
 
-  const { text, schemaIssueCount } = finalizeOutputText(providerResult.text.trim(), record, request);
-  const costUsd = computeTextCostUsd(record, providerResult.usage);
-  const temperatureApplied = record.capabilities.temperature && typeof request.temperature === 'number';
-  // Gemini always sends 1 regardless of capabilities.temperature/request.temperature (O-T4);
-  // every other provider sends the same value temperatureApplied describes, or nothing.
-  const temperatureSent = record.providerKey === 'gemini' ? 1 : temperatureApplied ? (request.temperature as number) : null;
+/**
+ * Writes a `status: 'failed'` cost event for one failed attempt, when the request carries
+ * telemetry. Never throws -- a broken cost recorder must not replace the original error the
+ * caller is about to (re)throw, so every failure here is swallowed and logged instead.
+ */
+async function recordFailedAttempt(input: {
+  error: unknown;
+  record: TextModelRecord;
+  request: TextGenerationRequest;
+  resolution: TextModelResolution;
+  reasoningLevel: TextReasoningLevel | undefined;
+  reasoningSource: string;
+  latencyMs: number;
+  fallbackUsage?: TextUsage;
+  extraMetadata?: Record<string, unknown>;
+}): Promise<void> {
+  const { error, record, request, resolution, reasoningLevel, reasoningSource, latencyMs, fallbackUsage, extraMetadata } = input;
+  const telemetry = request.telemetry;
+  if (!telemetry) return;
 
-  if (request.telemetry) {
+  try {
+    const gatewayError = error instanceof TextGatewayError ? error : undefined;
+    const usage = gatewayError?.usage ?? fallbackUsage;
+
     await recordModelCostEvent({
-      context: request.telemetry,
+      context: telemetry,
       taskKey: request.taskKey,
       modelId: record.modelKey,
       provider: TEXT_PROVIDER_TELEMETRY_KEYS[record.providerKey],
-      inputTokens: providerResult.usage.inputTokens,
-      outputTokens: providerResult.usage.outputTokens,
+      status: 'failed',
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
       latencyMs,
-      estimatedCostUsdOverride: costUsd ?? undefined,
+      estimatedCostUsdOverride: usage ? computeTextCostUsd(record, usage) ?? 0 : 0,
       metadata: {
         ...(request.telemetryMetadata ?? {}),
         providerModelId: record.providerModelId,
-        actualModel: providerResult.actualModel,
-        requestId: providerResult.requestId,
-        cachedTokens: providerResult.usage.cachedInputTokens,
-        reasoningTokens: providerResult.usage.reasoningTokens,
-        finishReason: providerResult.finishReason,
-        temperatureApplied,
-        temperatureSent,
+        errorCategory: gatewayError?.category ?? 'provider_error',
+        errorDetail: errorDetail(error).slice(0, 500),
+        providerReason: gatewayError?.providerReason,
         reasoningLevel: reasoningLevel ?? null,
         reasoningSource,
         resolutionSource: resolution.source,
-        fallbackReason: resolution.fallbackReason,
         requestedModelKey: request.modelKey,
-        schemaIssueCount,
-        costUnknown: costUsd === null,
+        ...(extraMetadata ?? {}),
       },
     });
+  } catch (recordError) {
+    console.error('[text-gateway] failed to record failed text-call cost event', errorDetail(recordError));
   }
-
-  return { text, usage: providerResult.usage, resolution };
 }
 
 function logTiming(taskKey: string, record: TextModelRecord, durationMs: number, success: boolean, error?: unknown): void {

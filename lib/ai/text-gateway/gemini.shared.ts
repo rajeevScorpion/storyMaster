@@ -92,3 +92,42 @@ export function parseGeminiUsage(usageMetadata: GeminiUsageMetadata | undefined)
     costUsd: null,
   };
 }
+
+/** `candidates[0].finishReason` values that mean the model refused to produce content on
+ * content-safety grounds, as opposed to a mundane stop (STOP, MAX_TOKENS, LANGUAGE, OTHER,
+ * etc). Mirrors @google/genai's `FinishReason` enum -- kept as a plain string list (rather than
+ * importing the SDK enum) so this file stays free of any @google/genai dependency. */
+export const GEMINI_CONTENT_FINISH_REASONS = [
+  'SAFETY',
+  'RECITATION',
+  'BLOCKLIST',
+  'PROHIBITED_CONTENT',
+  'SPII',
+  'IMAGE_SAFETY',
+  'IMAGE_PROHIBITED_CONTENT',
+  'IMAGE_RECITATION',
+] as const;
+
+/**
+ * Classifies a Gemini response that came back with no text. `blockReason` and `finishReason`
+ * are read from `response.promptFeedback.blockReason` and `response.candidates[0].finishReason`
+ * respectively -- see gemini.ts. A block reason (other than the unspecified placeholder) means
+ * the prompt itself was refused before generation started; a content finish reason means
+ * generation started and was cut short on safety grounds. Anything else -- MAX_TOKENS, LANGUAGE,
+ * OTHER, or genuinely nothing -- is an ordinary `provider_error`, not a content block.
+ */
+export function classifyGeminiEmptyResponse(input: {
+  blockReason?: string;
+  finishReason?: string;
+}): { category: 'content_blocked' | 'provider_error'; providerReason?: string } {
+  if (input.blockReason && input.blockReason !== 'BLOCKED_REASON_UNSPECIFIED') {
+    return { category: 'content_blocked', providerReason: `prompt_blocked:${input.blockReason}` };
+  }
+  if (input.finishReason && (GEMINI_CONTENT_FINISH_REASONS as readonly string[]).includes(input.finishReason)) {
+    return { category: 'content_blocked', providerReason: `finish:${input.finishReason}` };
+  }
+  return {
+    category: 'provider_error',
+    providerReason: input.finishReason ? `finish:${input.finishReason}` : undefined,
+  };
+}

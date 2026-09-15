@@ -3,13 +3,13 @@
 // which re-exports this module's API so existing imports keep working) and
 // Phase 6 agentic story generation, which calls these functions directly with
 // no cookie session. No 'use client'/'use server' directive on purpose: the
-// imported server actions (callTextModel) resolve to POST references in the
+// imported server actions (text calls) resolve to POST references in the
 // browser and to direct calls on the server — the same dual behavior
 // story-runtime.ts has always relied on. Keep browser-only APIs (canvas,
 // FileReader) out of this module.
 
 import { StorySession, StoryBeat, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig } from '@/lib/types/story';
-import { callTextModel } from '@/app/actions/text-model-proxy';
+import { callTextModelForReader } from '@/lib/ai/text-gateway/reader-call';
 import {
   buildValidationRepairNote,
   validateGeneratedBeat,
@@ -141,7 +141,7 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
   );
 
   const generatePlanAttempt = async (repairNote?: string): Promise<SeedPlan> => {
-    const text = await callTextModel({
+    const text = await callTextModelForReader({
       task: 'seed_plan_generation',
       model: input.modelOverrides?.seedPlanModel || DEFAULT_TEXT_MODEL_ID,
       prompt: repairNote ? `${prompt}\n\nQuality Repair Note:\n${repairNote}` : prompt,
@@ -232,7 +232,7 @@ export async function materializeSeededBeat(
   ) + `\n\n${formatAudienceNarrativeContract(storyConfig.ageGroup, storyConfig.beatLength?.level)}`;
 
   const generateAttempt = async (repairNote?: string): Promise<StoryBeat> => {
-    const text = await callTextModel({
+    const text = await callTextModelForReader({
       task: 'seeded_beat_materialization',
       model: modelOverrides?.seededBeatModel || DEFAULT_TEXT_MODEL_ID,
       prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,

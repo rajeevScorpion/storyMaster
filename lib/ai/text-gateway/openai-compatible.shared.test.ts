@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { TextModelRecord } from '@/lib/ai/text-models.shared';
 import { optionsRegenerationSchema, storylineDiscoveryMetadataSchema } from '@/lib/ai/generation-schemas';
-import { buildChatCompletionsBody, classifyHttpError, parseChatCompletionsResponse } from './openai-compatible.shared';
+import { buildChatCompletionsBody, classifyHttpError, isProviderContentPolicyError, parseChatCompletionsResponse } from './openai-compatible.shared';
 import type { TextGenerationRequest } from './types.shared';
 
 const NOW = new Date().toISOString();
@@ -182,14 +182,27 @@ describe('parseChatCompletionsResponse', () => {
     expect(parsed.requestId).toBe('req-123');
   });
 
-  it('treats message.refusal as a refusal', () => {
+  it('treats message.refusal as a refusal, with refusalReason "refusal"', () => {
     const parsed = parseChatCompletionsResponse({ choices: [{ message: { refusal: 'blocked' } }] });
     expect(parsed.refusal).toBe(true);
+    expect(parsed.refusalReason).toBe('refusal');
   });
 
-  it('treats finish_reason content_filter as a refusal', () => {
+  it('treats finish_reason content_filter as a refusal, with refusalReason "content_filter"', () => {
     const parsed = parseChatCompletionsResponse({ choices: [{ message: {}, finish_reason: 'content_filter' }] });
     expect(parsed.refusal).toBe(true);
+    expect(parsed.refusalReason).toBe('content_filter');
+  });
+
+  it('prefers refusalReason "refusal" when both message.refusal and finish_reason content_filter are set', () => {
+    const parsed = parseChatCompletionsResponse({ choices: [{ message: { refusal: 'blocked' }, finish_reason: 'content_filter' }] });
+    expect(parsed.refusalReason).toBe('refusal');
+  });
+
+  it('a normal completion has refusal: false and no refusalReason', () => {
+    const parsed = parseChatCompletionsResponse({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] });
+    expect(parsed.refusal).toBe(false);
+    expect(parsed.refusalReason).toBeUndefined();
   });
 
   it('reports finishReason "length" only for that finish reason', () => {
@@ -225,5 +238,39 @@ describe('classifyHttpError', () => {
 
   it.each(cases)('status %i -> %s (retryable: %s)', (status, category, retryable) => {
     expect(classifyHttpError(status)).toEqual({ category, retryable });
+  });
+});
+
+describe('isProviderContentPolicyError', () => {
+  it('is true for OpenAI\'s content_policy_violation code', () => {
+    expect(isProviderContentPolicyError({ status: 400, code: 'content_policy_violation' })).toBe(true);
+  });
+
+  it('is true for a content_filter code', () => {
+    expect(isProviderContentPolicyError({ status: 400, code: 'content_filter' })).toBe(true);
+  });
+
+  it('is true for an OpenRouter 403 with non-empty moderation reasons', () => {
+    expect(isProviderContentPolicyError({ status: 403, moderationReasons: ['violence'] })).toBe(true);
+  });
+
+  it('is false for a 403 with empty or missing moderation reasons', () => {
+    expect(isProviderContentPolicyError({ status: 403, moderationReasons: [] })).toBe(false);
+    expect(isProviderContentPolicyError({ status: 403 })).toBe(false);
+  });
+
+  it('is true for a 400 whose message reads as a content/usage-policy rejection', () => {
+    expect(isProviderContentPolicyError({ status: 400, message: 'Your request was rejected by our usage policy.' })).toBe(true);
+    expect(isProviderContentPolicyError({ status: 400, message: 'This content policy violation was flagged.' })).toBe(true);
+    expect(isProviderContentPolicyError({ status: 400, message: 'flagged as unsafe' })).toBe(true);
+  });
+
+  it('is false for an ordinary 400 with an unrelated message', () => {
+    expect(isProviderContentPolicyError({ status: 400, message: 'Unsupported parameter: temperature' })).toBe(false);
+  });
+
+  it('is false for a 429 or 500 with no code and no matching message', () => {
+    expect(isProviderContentPolicyError({ status: 429 })).toBe(false);
+    expect(isProviderContentPolicyError({ status: 500, message: 'internal error' })).toBe(false);
   });
 });

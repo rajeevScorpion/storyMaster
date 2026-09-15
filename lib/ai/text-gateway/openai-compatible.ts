@@ -3,22 +3,46 @@ import 'server-only';
 import type { TextModelRecord, TextReasoningLevel } from '@/lib/ai/text-models.shared';
 import { TEXT_PROVIDER_LABELS } from '@/lib/ai/text-models.shared';
 import { TextGatewayError, type TextGenerationRequest } from './types.shared';
-import { buildChatCompletionsBody, classifyHttpError, parseChatCompletionsResponse, type ParsedChatCompletionsResponse } from './openai-compatible.shared';
+import {
+  buildChatCompletionsBody,
+  classifyHttpError,
+  isProviderContentPolicyError,
+  parseChatCompletionsResponse,
+  type ParsedChatCompletionsResponse,
+} from './openai-compatible.shared';
 
 const BASE_URL: Record<'openai' | 'openrouter', string> = {
   openai: 'https://api.openai.com/v1',
   openrouter: 'https://openrouter.ai/api/v1',
 };
 
-/** Only `error.message`, truncated -- never the raw body, which on some hosts can echo the
- * request. Without this a 400 like "Unsupported parameter: temperature" is undiagnosable. */
-async function readProviderErrorMessage(response: Response): Promise<string> {
+interface ProviderErrorInfo {
+  /** `: <message>`, truncated -- or '' when there was nothing usable to report. */
+  suffix: string;
+  code?: string;
+  message?: string;
+  moderationReasons?: unknown;
+}
+
+/** Only `error.message`, `error.code` and `error.metadata.reasons` -- never the raw body,
+ * which on some hosts can echo the request. Without `message` a 400 like "Unsupported
+ * parameter: temperature" is undiagnosable; `code`/`moderationReasons` feed
+ * isProviderContentPolicyError. */
+async function readProviderError(response: Response): Promise<ProviderErrorInfo> {
   try {
-    const body = (await response.json()) as { error?: { message?: unknown } };
-    const message = typeof body?.error?.message === 'string' ? body.error.message.trim() : '';
-    return message ? `: ${message.slice(0, 300)}` : '';
+    const body = (await response.json()) as {
+      error?: { message?: unknown; code?: unknown; metadata?: { reasons?: unknown } };
+    };
+    const message = typeof body?.error?.message === 'string' ? body.error.message.trim() : undefined;
+    const code = typeof body?.error?.code === 'string' ? body.error.code : undefined;
+    return {
+      suffix: message ? `: ${message.slice(0, 300)}` : '',
+      code,
+      message,
+      moderationReasons: body?.error?.metadata?.reasons,
+    };
   } catch {
-    return '';
+    return { suffix: '' };
   }
 }
 
@@ -76,6 +100,23 @@ export async function callOpenAiCompatible(
   }
 
   if (!response.ok) {
+    const providerError = await readProviderError(response);
+    if (isProviderContentPolicyError({
+      status: response.status,
+      code: providerError.code,
+      message: providerError.message,
+      moderationReasons: providerError.moderationReasons,
+    })) {
+      throw new TextGatewayError({
+        category: 'content_blocked',
+        providerKey,
+        modelKey: record.modelKey,
+        status: response.status,
+        retryable: false,
+        providerReason: providerError.code ?? 'moderation',
+        detail: `${describeCall(record, request.taskKey)} was blocked by the provider on content-safety grounds (HTTP ${response.status})${providerError.suffix}.`,
+      });
+    }
     const { category, retryable } = classifyHttpError(response.status);
     throw new TextGatewayError({
       category,
@@ -83,7 +124,7 @@ export async function callOpenAiCompatible(
       modelKey: record.modelKey,
       status: response.status,
       retryable,
-      detail: `${describeCall(record, request.taskKey)} failed with HTTP ${response.status}${await readProviderErrorMessage(response)}.`,
+      detail: `${describeCall(record, request.taskKey)} failed with HTTP ${response.status}${providerError.suffix}.`,
     });
   }
 
@@ -91,11 +132,13 @@ export async function callOpenAiCompatible(
   const parsed = parseChatCompletionsResponse(json, response.headers);
   if (parsed.refusal) {
     throw new TextGatewayError({
-      category: 'bad_request',
+      category: 'content_blocked',
       providerKey,
       modelKey: record.modelKey,
       retryable: false,
-      detail: `${describeCall(record, request.taskKey)} was refused by the provider.`,
+      providerReason: parsed.refusalReason,
+      usage: parsed.usage,
+      detail: `${describeCall(record, request.taskKey)} was refused by the provider${parsed.refusalReason ? ` (${parsed.refusalReason})` : ''}.`,
     });
   }
   return parsed;

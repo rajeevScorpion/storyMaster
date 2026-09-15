@@ -5,6 +5,7 @@ import {
   readerSafeTextFailureMessage,
   TEXT_FAILURE_MESSAGE,
   TEXT_BUSY_MESSAGE,
+  TEXT_CONTENT_BLOCKED_MESSAGE,
   type TextGatewayErrorCategory,
 } from './types.shared';
 
@@ -18,6 +19,7 @@ const ALL_CATEGORIES: TextGatewayErrorCategory[] = [
   'rate_limited',
   'provider_error',
   'malformed_output',
+  'content_blocked',
 ];
 
 const PROVIDER_KEY = 'openrouter';
@@ -48,9 +50,16 @@ describe('TextGatewayError', () => {
     expect(new TextGatewayError({ category: 'rate_limited', providerKey: PROVIDER_KEY, modelKey: MODEL_KEY, detail: DETAIL }).message).toBe(TEXT_BUSY_MESSAGE);
   });
 
+  it('uses the content-blocked message for content_blocked, and never names a provider or model', () => {
+    const error = new TextGatewayError({ category: 'content_blocked', providerKey: PROVIDER_KEY, modelKey: MODEL_KEY, detail: DETAIL });
+    expect(error.message).toBe(TEXT_CONTENT_BLOCKED_MESSAGE);
+    expect(error.message.toLowerCase()).not.toContain('openrouter');
+    expect(error.message.toLowerCase()).not.toContain('qwen');
+  });
+
   it('uses the generic failure message for every other category', () => {
     for (const category of ALL_CATEGORIES) {
-      if (category === 'timeout' || category === 'rate_limited') continue;
+      if (category === 'timeout' || category === 'rate_limited' || category === 'content_blocked') continue;
       const error = new TextGatewayError({ category, providerKey: PROVIDER_KEY, modelKey: MODEL_KEY, detail: DETAIL });
       expect(error.message).toBe(TEXT_FAILURE_MESSAGE);
     }
@@ -72,12 +81,30 @@ describe('TextGatewayError', () => {
     expect(error.retryable).toBe(true);
     expect(error.name).toBe('TextGatewayError');
   });
+
+  it('carries providerReason and usage when given, and leaves them undefined otherwise', () => {
+    const withReason = new TextGatewayError({
+      category: 'content_blocked',
+      providerKey: PROVIDER_KEY,
+      modelKey: MODEL_KEY,
+      detail: DETAIL,
+      providerReason: 'prompt_blocked:PROHIBITED_CONTENT',
+      usage: { inputTokens: 12, outputTokens: 0 },
+    });
+    expect(withReason.providerReason).toBe('prompt_blocked:PROHIBITED_CONTENT');
+    expect(withReason.usage).toEqual({ inputTokens: 12, outputTokens: 0 });
+
+    const withoutReason = new TextGatewayError({ category: 'provider_error', providerKey: PROVIDER_KEY, modelKey: MODEL_KEY, detail: DETAIL });
+    expect(withoutReason.providerReason).toBeUndefined();
+    expect(withoutReason.usage).toBeUndefined();
+  });
 });
 
 describe('readerSafeTextFailureMessage', () => {
-  it('maps timeout and rate_limited to the busy message, everything else to the failure message', () => {
+  it('maps timeout and rate_limited to the busy message, content_blocked to its own message, everything else to the failure message', () => {
     expect(readerSafeTextFailureMessage('timeout')).toBe(TEXT_BUSY_MESSAGE);
     expect(readerSafeTextFailureMessage('rate_limited')).toBe(TEXT_BUSY_MESSAGE);
+    expect(readerSafeTextFailureMessage('content_blocked')).toBe(TEXT_CONTENT_BLOCKED_MESSAGE);
     expect(readerSafeTextFailureMessage('provider_error')).toBe(TEXT_FAILURE_MESSAGE);
   });
 });

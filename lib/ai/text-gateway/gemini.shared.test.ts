@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { TextModelRecord } from '@/lib/ai/text-models.shared';
-import { buildGeminiConfig, parseGeminiUsage } from './gemini.shared';
+import { buildGeminiConfig, classifyGeminiEmptyResponse, parseGeminiUsage } from './gemini.shared';
 import type { TextGenerationRequest } from './types.shared';
 
 const NOW = new Date().toISOString();
@@ -132,6 +132,50 @@ describe('parseGeminiUsage', () => {
       reasoningTokens: undefined,
       cachedInputTokens: undefined,
       costUsd: null,
+    });
+  });
+});
+
+describe('classifyGeminiEmptyResponse', () => {
+  it('a present, specified block reason is content_blocked with a prompt_blocked providerReason', () => {
+    expect(classifyGeminiEmptyResponse({ blockReason: 'PROHIBITED_CONTENT' })).toEqual({
+      category: 'content_blocked',
+      providerReason: 'prompt_blocked:PROHIBITED_CONTENT',
+    });
+  });
+
+  it('an unspecified block reason is ignored, falling through to the finish reason check', () => {
+    expect(classifyGeminiEmptyResponse({ blockReason: 'BLOCKED_REASON_UNSPECIFIED' })).toEqual({
+      category: 'provider_error',
+      providerReason: undefined,
+    });
+  });
+
+  it.each(['SAFETY', 'RECITATION', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'IMAGE_SAFETY', 'IMAGE_PROHIBITED_CONTENT', 'IMAGE_RECITATION'])(
+    'finish reason %s (no block reason) is content_blocked with a finish providerReason',
+    (finishReason) => {
+      expect(classifyGeminiEmptyResponse({ finishReason })).toEqual({
+        category: 'content_blocked',
+        providerReason: `finish:${finishReason}`,
+      });
+    }
+  );
+
+  it.each(['LANGUAGE', 'MAX_TOKENS', 'OTHER', 'STOP'])('finish reason %s is an ordinary provider_error, not a content block', (finishReason) => {
+    expect(classifyGeminiEmptyResponse({ finishReason })).toEqual({
+      category: 'provider_error',
+      providerReason: `finish:${finishReason}`,
+    });
+  });
+
+  it('no block reason and no finish reason is provider_error with no providerReason', () => {
+    expect(classifyGeminiEmptyResponse({})).toEqual({ category: 'provider_error', providerReason: undefined });
+  });
+
+  it('a block reason wins over a content finish reason when both are present', () => {
+    expect(classifyGeminiEmptyResponse({ blockReason: 'SAFETY', finishReason: 'RECITATION' })).toEqual({
+      category: 'content_blocked',
+      providerReason: 'prompt_blocked:SAFETY',
     });
   });
 });
