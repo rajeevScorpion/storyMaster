@@ -260,6 +260,17 @@ parse), `lib/ai/prompts.ts`, `lib/utils/story-map.ts`, `lib/types/story.ts`.
 > Note: `app/actions/story.ts` appears in older docs and plans. It was a dead orphan and was **deleted** —
 > the live equivalents are `app/actions/story-runtime.ts` and `app/actions/persistence.ts`.
 
+### Beat length is advisory — never retries, never fails
+
+`validateGeneratedBeat` (`lib/ai/story-bible.ts`) no longer checks word count; only structural issues
+(missing fields, wrong option count, storyTextParts mismatch, character id problems, novelty) can force the
+one retry-then-throw in `generateStoryBeat`, `materializeSeededBeat`, and `generateSeedPlanPreview`. The
+band `resolveStoryBeatLength` returns (`targetMinWords`/`targetMaxWords`) is what the model is told; a
+separate, wider `allowanceMinWords`/`allowanceMaxWords` only decides whether `assessStoryBeatLength` /
+`assessGeneratedBeatLength` (`lib/ai/story-audience.ts`, `lib/ai/story-bible.ts`) logs
+`[story_runtime.beat_length_outside_allowance]`. A length miss must never be made to retry or fail a beat
+on its own — that used to cost a full beat and two paid calls over wording alone.
+
 ### Gemini TTS has no locale parameter
 
 `speechConfig` sets only the voice name. **All accent and language steering is prompt text.** Feeding the raw

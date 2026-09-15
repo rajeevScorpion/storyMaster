@@ -1,9 +1,10 @@
 import type { Character, StoryBeat, StorySession } from '@/lib/types/story';
 import { getPreludeText, normalizeStoryConfig } from '@/lib/ai/story-config';
 import {
-  countStoryWords,
+  assessStoryBeatLength,
   getStoryAudienceProfile,
   resolveStoryBeatLength,
+  type StoryBeatLengthAssessment,
 } from '@/lib/ai/story-audience';
 import { buildWorldAnchorSummaries } from '@/lib/references/reference-routing';
 
@@ -150,10 +151,6 @@ export function validateGeneratedBeat(
   const storyTextParts = Array.isArray(beat.storyTextParts) ? beat.storyTextParts : [];
   const storyConfig = normalizeStoryConfig(sessionState?.storyConfig);
   const audience = getStoryAudienceProfile(storyConfig.ageGroup);
-  const beatLength = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
-  const strictCanonicalSource = beat.originKind === 'seeded_canonical'
-    && storyConfig.authoring.mode === 'seeded'
-    && storyConfig.authoring.sourceFidelity === 'strictly_follow';
 
   if (!beat.title?.trim()) issues.push('title is missing');
   if (!beat.storyText?.trim()) issues.push('storyText is missing');
@@ -165,14 +162,6 @@ export function validateGeneratedBeat(
     normalizeNarrativeContent(storyTextParts.join('')) !== normalizeNarrativeContent(beat.storyText || '')
   ) {
     issues.push('storyTextParts must preserve all storyText content exactly and in order');
-  }
-  if (beat.storyText?.trim() && !strictCanonicalSource) {
-    const wordCount = countStoryWords(beat.storyText);
-    if (wordCount < beatLength.targetMinWords || wordCount > beatLength.targetMaxWords) {
-      issues.push(
-        `storyText has ${wordCount} words; ${audience.label} at ${beatLength.label} must use ${beatLength.targetMinWords}-${beatLength.targetMaxWords} words`
-      );
-    }
   }
   if (!beat.sceneSummary?.trim()) issues.push('sceneSummary is missing');
   if (!beat.imagePrompt?.trim()) issues.push('imagePrompt is missing');
@@ -282,6 +271,23 @@ export function validateGeneratedBeat(
   }
 
   return issues;
+}
+
+/** Length is advisory: callers log it and may add it to a retry that structural issues already forced. Null when there is no text or the beat is verbatim strict source. */
+export function assessGeneratedBeatLength(
+  beat: StoryBeat,
+  sessionState: Partial<StorySession> | null
+): StoryBeatLengthAssessment | null {
+  if (!beat.storyText?.trim()) return null;
+
+  const storyConfig = normalizeStoryConfig(sessionState?.storyConfig);
+  const strictCanonicalSource = beat.originKind === 'seeded_canonical'
+    && storyConfig.authoring.mode === 'seeded'
+    && storyConfig.authoring.sourceFidelity === 'strictly_follow';
+  if (strictCanonicalSource) return null;
+
+  const beatLength = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
+  return assessStoryBeatLength(beat.storyText, beatLength);
 }
 
 export function buildValidationRepairNote(issues: string[]): string {

@@ -71,7 +71,9 @@ import {
 import { STORY_LANGUAGE_OPTIONS } from '@/lib/ai/story-config';
 import type { StoryBeatLengthLevel, StoryLanguage } from '@/lib/types/story';
 import {
+  STORY_AUDIENCE_OPTIONS,
   STORY_BEAT_LENGTH_LABELS,
+  getStoryAudienceProfile,
   resolveStoryBeatLength,
 } from '@/lib/ai/story-audience';
 import { generateNarrationVoiceSamples, getNarrationVoiceSampleStatusesForAdmin } from '@/app/actions/narration';
@@ -2003,8 +2005,12 @@ export default function GlobalSettings({ section = 'overview' }: { section?: Glo
               </div>
               <p className="mt-3 text-xs text-emerald-400">
                 {STORY_BEAT_LENGTH_LABELS[storyBeatLengthDefaultLevel]}
-                {' / '}
-                about {resolveStoryBeatLength('all_ages', storyBeatLengthDefaultLevel).targetWords} words per All Ages beat
+                {' / words per beat: '}
+                {STORY_AUDIENCE_OPTIONS.map(({ value }) => {
+                  const profile = getStoryAudienceProfile(value);
+                  const { targetWords } = resolveStoryBeatLength(value, storyBeatLengthDefaultLevel);
+                  return `${profile.shortLabel}: ${targetWords}`;
+                }).join(' · ')}
               </p>
             </div>
 
