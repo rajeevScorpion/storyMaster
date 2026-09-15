@@ -53,6 +53,7 @@ test.describe('text models admin surface (authenticated)', () => {
     // control, is the admin surface for migration 120's per-task thinking override.
     await expect(page.getByRole('heading', { name: /task assignments/i })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Thinking for Story Generation', exact: true })).toBeVisible();
+    await expect(page.getByText('Suggested thinking').first()).toBeVisible();
   });
 });
 
