@@ -642,6 +642,11 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   `app/actions/story-runtime.ts` still throws across the server-action boundary; the published viewer
   (`StorylinePlayer`) does not show the "simpler plan" note. No unit test covers the browser-versus-server switch
   in `callTextModelForReader`.
+- **Beat length misses are only a console line** (`feature/beat-length-allowance`). When beat generation runs in
+  the browser the warning never reaches server logs, so there is no admin view of how often models run long.
+  Production `prompt_configs` overrides for story, seeded beat and seed plan were not checked; an override keeps
+  the old "short paragraph" rule (the runtime length contract still applies). No unit test covers the
+  retry flow of the three generators.
 - **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
   compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
   the test lab set 300 explicitly; a dashboard override was not readable from the tools). Luna's row caps a call
@@ -739,6 +744,11 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
   is a `failed` cost row; a blocked call retries once on the task's fallback model (migration 121, per-task
   dropdown on the card); readers see the content-safety cause when a beat still can't be written, and a note when
   a storyboard used the backup plan. Plan: [../content-block-fallback-plan.md](../content-block-fallback-plan.md).
+- **Beat length allowance — on `feature/beat-length-allowance`** (2026-09-15), cut from the content-block branch,
+  not merged. Word count never retries or fails a story beat, seeded beat or seed plan; a beat far off length is
+  kept and logged. Length ranges scale with the target and are no longer clipped at Brief and Immersive; the
+  model is told one range plus a per-panel guide. The admin default length shows every audience's words. Code
+  only: no migration, no flag. Plan: [../beat-length-allowance-plan.md](../beat-length-allowance-plan.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
   or independent providers per task. Much of this has since been overtaken by the real multi-provider image
