@@ -54,6 +54,9 @@ test.describe('text models admin surface (authenticated)', () => {
     await expect(page.getByRole('heading', { name: /task assignments/i })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Thinking for Story Generation', exact: true })).toBeVisible();
     await expect(page.getByText('Suggested thinking').first()).toBeVisible();
+
+    // Migration 121 (Phase B): per-task content-block fallback control on the same card.
+    await expect(page.getByRole('button', { name: 'Content-block fallback for Story Generation', exact: true })).toBeVisible();
   });
 });
 

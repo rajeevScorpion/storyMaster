@@ -2,7 +2,15 @@
 
 import { revalidatePath } from 'next/cache';
 import { verifyAdmin } from '@/lib/supabase/admin';
-import { getAllModelConfigs, isReasoningLevelColumnAvailable, updateModelConfig, updateTaskReasoningLevel } from '@/lib/ai/model-config';
+import {
+  getAllContentBlockFallbacks,
+  getAllModelConfigs,
+  isContentBlockFallbackColumnAvailable,
+  isReasoningLevelColumnAvailable,
+  updateModelConfig,
+  updateTaskContentBlockFallback,
+  updateTaskReasoningLevel,
+} from '@/lib/ai/model-config';
 import { DEFAULT_MODELS, KNOWN_MODELS, TASK_DEFINITIONS, type TaskKey } from '@/lib/ai/model-config.shared';
 import {
   createTextModelRecord,
@@ -42,6 +50,11 @@ export interface TextTaskModelStatus {
   problem: string | null;
   /** The task's thinking-level override, or null when it has none (or migration 120 is absent). */
   reasoningLevel: TextReasoningLevel | null;
+  /** The task's content-block fallback model key, or null when it has none (or migration 121 is absent). */
+  contentBlockFallbackKey: string | null;
+  /** null when contentBlockFallbackKey would actually run as configured; otherwise why it wouldn't
+   * (mirrors `problem` above, but validated as a stand-alone selection for this task). */
+  contentBlockFallbackProblem: string | null;
 }
 
 export interface AdminTextModelRegistryState {
@@ -50,6 +63,8 @@ export interface AdminTextModelRegistryState {
   taskStatus: TextTaskModelStatus[];
   /** Whether model_config.reasoning_level (migration 120) can be read/written in this process. */
   reasoningOverridesAvailable: boolean;
+  /** Whether model_config.content_block_fallback_model_id (migration 121) can be read/written in this process. */
+  contentBlockFallbackAvailable: boolean;
 }
 
 export interface TextModelOption {
@@ -80,16 +95,20 @@ async function freshRegistry(): Promise<TextModelRecord[] | null> {
 
 async function buildTaskStatus(registry: TextModelRecord[] | null): Promise<TextTaskModelStatus[]> {
   const configs = await getAllModelConfigs();
+  const contentBlockFallbacks = await getAllContentBlockFallbacks();
   const byTask = new Map(configs.map((config) => [config.taskKey, config]));
   return TASK_DEFINITIONS.filter((task) => isTextModelTask(task.key)).map((task) => {
     const config = byTask.get(task.key);
     const configuredKey = config?.modelId ?? DEFAULT_MODELS[task.key].modelId;
+    const contentBlockFallbackKey = contentBlockFallbacks.get(task.key) ?? null;
     return {
       taskKey: task.key,
       label: task.label,
       configuredKey,
       problem: validateTextModelSelection(task.key, configuredKey, registry),
       reasoningLevel: config?.reasoningLevel ?? null,
+      contentBlockFallbackKey,
+      contentBlockFallbackProblem: contentBlockFallbackKey ? validateTextModelSelection(task.key, contentBlockFallbackKey, registry) : null,
     };
   });
 }
@@ -102,6 +121,7 @@ export async function getAdminTextModelRegistry(): Promise<AdminTextModelRegistr
     records: (registry ?? []).map((record) => ({ ...record, missingEnvVars: getMissingEnvVars(record) })),
     taskStatus: await buildTaskStatus(registry),
     reasoningOverridesAvailable: await isReasoningLevelColumnAvailable(),
+    contentBlockFallbackAvailable: await isContentBlockFallbackColumnAvailable(),
   };
 }
 
@@ -165,6 +185,36 @@ export async function setTaskReasoningLevel(taskKey: TaskKey, level: TextReasoni
   }
 
   await updateTaskReasoningLevel(taskKey, level);
+  revalidatePath(TEXT_MODELS_PATH);
+}
+
+/** Sets (or clears, with `null`) a task's content-block fallback model: retried once, when a
+ * provider blocks a call on content-safety grounds. Runtime-validated because the browser is
+ * untrusted. `null` always clears it. A concrete key must resolve to an enabled registry model
+ * that is valid for this task, and must not be the same model the task already runs on -- a
+ * fallback that is its own blocked model would just be blocked again. */
+export async function setTaskContentBlockFallback(taskKey: TaskKey, modelKey: string | null): Promise<void> {
+  await verifyAdmin();
+  if (!isTextModelTask(taskKey)) {
+    throw new Error(`"${taskKey}" is not a text task and cannot have a content-block fallback.`);
+  }
+
+  if (modelKey !== null) {
+    const registry = await freshRegistry();
+    if (registry === null) {
+      throw new Error('Migration 119 is not applied — the text model registry is unavailable.');
+    }
+    const problem = validateTextModelSelection(taskKey, modelKey, registry);
+    if (problem) throw new Error(problem);
+
+    const configs = await getAllModelConfigs();
+    const configuredKey = configs.find((config) => config.taskKey === taskKey)?.modelId ?? DEFAULT_MODELS[taskKey].modelId;
+    if (modelKey === configuredKey) {
+      throw new Error('The fallback must be a different model from the one the task runs on.');
+    }
+  }
+
+  await updateTaskContentBlockFallback(taskKey, modelKey);
   revalidatePath(TEXT_MODELS_PATH);
 }
 
