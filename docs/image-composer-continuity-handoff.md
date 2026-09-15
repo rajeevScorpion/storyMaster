@@ -10,7 +10,9 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 
 **Production** is behind on several migrations. The owner will ask for the list when promoting; do not chase it before then.
 
-**Usage:** 78% of the 5-hour window at 2026-09-15 ~23:10, with 4a running. Delegation stops at 90%. A fresh session resumes from the first pending row below, using [image-composer-continuity-briefs.md](image-composer-continuity-briefs.md) (the exact per-unit briefs, including the 4a brief in case that run is lost). Review each unit by reading its diff, update this table, then dispatch the next.
+**Stopped delegating at 92% usage (2026-09-15, late).** Unit 4a was still running and was told to commit if gates pass, otherwise leave its changes uncommitted in the working tree. **Next session, first:** run `git log --oneline -3` and `git status`. If a 4a commit (`feat(prompt-compiler): compiler-v2 …`) exists, review its diff against the 4a brief. If not, the working tree holds partial 4a work: review it against the brief, finish the missing items, run the gates, commit. Then dispatch 4b.
+
+**Usage history:** 78% at ~23:10 with 4a running. Delegation stops at 90%. A fresh session resumes from the first pending row below, using [image-composer-continuity-briefs.md](image-composer-continuity-briefs.md) (the exact per-unit briefs, including the 4a brief in case that run is lost). Review each unit by reading its diff, update this table, then dispatch the next.
 
 ### Progress
 | Unit | Commit | Status |
