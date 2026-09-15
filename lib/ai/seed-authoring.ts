@@ -11,6 +11,7 @@
 import { StorySession, StoryBeat, SeedBeatOutline, SeedPlan, SourceFidelity, StoryConfig } from '@/lib/types/story';
 import { callTextModelForReader } from '@/lib/ai/text-gateway/reader-call';
 import {
+  assessGeneratedBeatLength,
   buildValidationRepairNote,
   validateGeneratedBeat,
 } from '@/lib/ai/story-bible';
@@ -44,7 +45,7 @@ import {
   type StoryModelOverrides,
 } from '@/lib/ai/beat-orchestration';
 import {
-  countStoryWords,
+  assessStoryBeatLength,
   formatAudienceNarrativeContract,
   getStoryAudienceProfile,
   resolveStoryBeatLength,
@@ -162,16 +163,7 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
     if (plan.beats.length !== input.beatCount) {
       return [`Seed plan returned ${plan.beats.length} beats, expected ${input.beatCount}.`];
     }
-    if (strictSourceSegments) return [];
-
-    const length = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
-    const audience = getStoryAudienceProfile(storyConfig.ageGroup);
-    return plan.beats.flatMap((beat) => {
-      const words = countStoryWords(beat.storyText);
-      return words >= length.targetMinWords && words <= length.targetMaxWords
-        ? []
-        : [`Beat ${beat.beatIndex} has ${words} words; ${audience.label} at ${length.label} requires ${length.targetMinWords}-${length.targetMaxWords}.`];
-    });
+    return [];
   };
 
   let normalizedPlan = await generatePlanAttempt();
@@ -185,6 +177,20 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
   }
 
   if (!strictSourceSegments) {
+    const length = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
+    for (const beat of normalizedPlan.beats) {
+      const assessment = assessStoryBeatLength(beat.storyText, length);
+      if (!assessment.withinAllowance) {
+        console.warn('[story_runtime.beat_length_outside_allowance]', {
+          task: 'seed_plan_generation',
+          beatIndex: beat.beatIndex,
+          wordCount: assessment.wordCount,
+          targetWords: assessment.targetWords,
+          allowanceMinWords: assessment.allowanceMinWords,
+          allowanceMaxWords: assessment.allowanceMaxWords,
+        });
+      }
+    }
     return normalizedPlan;
   }
 
@@ -258,18 +264,37 @@ export async function materializeSeededBeat(
   let beat = await generateAttempt();
   const issues = validateGeneratedBeat(beat, normalizedSessionState);
   if (issues.length > 0) {
-    beat = await generateAttempt(buildValidationRepairNote(issues));
+    // Word count alone must never force this retry -- only structural issues
+    // do. When one is already forcing a retry, ride the length note along in
+    // the same repair note instead of spending a second call on it.
+    const lengthAssessment = assessGeneratedBeatLength(beat, normalizedSessionState);
+    const issuesWithLength = lengthAssessment?.note ? [...issues, lengthAssessment.note] : issues;
+    beat = await generateAttempt(buildValidationRepairNote(issuesWithLength));
     const retryIssues = validateGeneratedBeat(beat, normalizedSessionState);
     if (retryIssues.length > 0) {
       throw new Error(`Seeded beat validation failed after retry: ${retryIssues.join('; ')}`);
     }
   }
 
-  return normalizeStoryBeatTextParts(applyCharacterNameProvenance(
+  const finalBeat = normalizeStoryBeatTextParts(applyCharacterNameProvenance(
     beat,
     normalizedSessionState,
     getSeedSourceText(storyConfig)
   ));
+
+  const finalLengthAssessment = assessGeneratedBeatLength(finalBeat, normalizedSessionState);
+  if (finalLengthAssessment && !finalLengthAssessment.withinAllowance) {
+    console.warn('[story_runtime.beat_length_outside_allowance]', {
+      task: 'seeded_beat_materialization',
+      beatNumber: finalBeat.beatNumber,
+      wordCount: finalLengthAssessment.wordCount,
+      targetWords: finalLengthAssessment.targetWords,
+      allowanceMinWords: finalLengthAssessment.allowanceMinWords,
+      allowanceMaxWords: finalLengthAssessment.allowanceMaxWords,
+    });
+  }
+
+  return finalBeat;
 }
 
 function mergeSeededBeatWithGeneratedFields(seedBeat: SeedBeatOutline, generatedBeat: StoryBeat): StoryBeat {

@@ -14,6 +14,7 @@ import { isContentBlockedError } from '@/lib/ai/text-gateway/outcome.shared';
 import { getCharacterNoveltyContextAction } from '@/app/actions/character-novelty';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
+  assessGeneratedBeatLength,
   buildPromptCharacterAnchors,
   buildValidationRepairNote,
   formatStoryBible,
@@ -534,23 +535,42 @@ export async function generateStoryBeat(
     const issues = validateAttempt(beat);
 
     if (issues.length > 0) {
+      // Word count alone must never force this retry -- only structural
+      // issues do. When one is already forcing a retry, ride the length note
+      // along in the same repair note instead of spending a second call on it.
+      const lengthAssessment = assessGeneratedBeatLength(normalizeStoryBeatTextParts(beat), normalizedSessionState);
+      const issuesWithLength = lengthAssessment?.note ? [...issues, lengthAssessment.note] : issues;
       console.info('[timing:story_runtime.generate_story_beat.validation_retry]', {
         beatNumber,
-        issueCount: issues.length,
-        issues,
+        issueCount: issuesWithLength.length,
+        issues: issuesWithLength,
       });
-      beat = await generateAttempt(buildValidationRepairNote(issues));
+      beat = await generateAttempt(buildValidationRepairNote(issuesWithLength));
       const retryIssues = validateAttempt(beat);
       if (retryIssues.length > 0) {
         throw new Error(`Story beat validation failed after retry: ${retryIssues.join('; ')}`);
       }
     }
 
-    return normalizeStoryBeatTextParts(applyCharacterNameProvenance(
+    const finalBeat = normalizeStoryBeatTextParts(applyCharacterNameProvenance(
       beat,
       normalizedSessionState,
       [userPrompt, selectedOptionLabel || ''].filter(Boolean).join('\n')
     ));
+
+    const finalLengthAssessment = assessGeneratedBeatLength(finalBeat, normalizedSessionState);
+    if (finalLengthAssessment && !finalLengthAssessment.withinAllowance) {
+      console.warn('[story_runtime.beat_length_outside_allowance]', {
+        task: 'story_generation',
+        beatNumber,
+        wordCount: finalLengthAssessment.wordCount,
+        targetWords: finalLengthAssessment.targetWords,
+        allowanceMinWords: finalLengthAssessment.allowanceMinWords,
+        allowanceMaxWords: finalLengthAssessment.allowanceMaxWords,
+      });
+    }
+
+    return finalBeat;
   } catch (error) {
     console.error('Story beat generation failed:', error);
     throw error;
