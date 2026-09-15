@@ -14,9 +14,10 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 | Unit | Commit | Status |
 |---|---|---|
 | 1 log cleanup | `c5800a0` + restore fix | done; review restored the "Story beat generation failed" error log — the browser store calls beat generation directly, and the bundle only logs gateway errors |
-| 2 Unicode-safe relevance and scene spec | | in progress — brief adds `\p{M}` to the tokenizer and name boundaries (Devanagari matras/virama are marks), substring matching for no-space scripts (CJK, Thai), and a text fallback when composer names don't resolve |
-| 3 English composer plan | | pending — brief ready; refinements below |
-| 4 compiler-v2 | | pending |
+| 2 Unicode-safe relevance and scene spec | `cf28089` | done; 1334 unit tests; no snapshot change. `findWholeName` uses a regex lookbehind in browser code — within Next 16's default browser floor |
+| 3 English composer plan | | in progress |
+| 4a compiler-v2 core (pure) | | pending — split from Unit 4: capability, migration 122, scene spec 1.1, sections, budget tiers, English gate |
+| 4b compiler-v2 runtime wiring | | pending — split from Unit 4: reference lines inside the budget with English names, call sites, R9 gaps |
 | 5 continuity model | | pending |
 | 6 docs | | pending |
 
@@ -25,6 +26,11 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 - **Unit 3 schema:** reels share `storyboardPlanSchema` (`text-model-proxy.ts` `TEXT_SCHEMA_MAP`, `prompt-playground.ts`). The continuity fields go in a separate `storyboardContinuityPlanSchema` for `visual_prompt` only, required there (strict conversion widens optional fields to nullable, which a nullable enum does not allow).
 - **Unit 3 audience contract is not a pure duplicate.** The post-parse append (`beat-orchestration.ts` ~`:759`) is the only path that carries audience visual direction into the image prompt; it is wasteful (header and meta lines become invariants), not redundant. Replace it with one invariant line, `Audience (<label>): <visualDirection>`, rather than deleting it.
 - **Unit 3 English check tolerates canonical names:** `isEnglishText` ignores the story's own character names, so a Devanagari name inside an English description does not force the whole plan to fall back.
+- **Unit 4 gap sites, checked:**
+  - The prompt-only multi-beat path (`story-store.ts` ~`:3812`) is the **reel** flow; reels are out of scope, so it stays legacy and is recorded, not fixed.
+  - The browser job path (`story-store.ts` ~`:4577`) already passes `worldAnchor` to the compiled scene; only its legacy build lacks it.
+  - The agentic path (`lib/agentic/story-assembly.shared.ts` `composeAgentFinalImagePrompt`) does use the compiler, with no world anchor; the stateful batch worker (`image-batch.ts` ~`:1230`) sends `finalImagePromptText` with reference parts but no binding lines.
+  - The admin comparison table (`components/admin/PromptCompilerSettingsPanel.tsx`) shows `compressionLevel`; Unit 4 must keep that number meaningful (e.g. 0 none, 1 lossless passes, 2 over target accepted, 3 lossy trim) alongside any new tier field.
 - **R1 on dev:** `prompt_configs` has no rows for `visual_prompt`, `story_generation`, `image_generation`, `seeded_beat_materialization` or `seed_plan_generation`; dev runs the default templates. Production is unchecked.
 
 ## 1. Owner non-negotiables
