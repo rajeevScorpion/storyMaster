@@ -2632,6 +2632,9 @@ export const useStoryStore = create<StoryState>()(
                 });
                 return true;
               }
+              if (core.status === 'failed') {
+                throw new Error(core.message);
+              }
 
               let beat = enforceReelBeatCap(core.beat, storyConfig);
               const storyboardPlan = core.storyboardPlan;
@@ -4108,6 +4111,9 @@ export const useStoryStore = create<StoryState>()(
                   errorAction: pricingErrorState?.errorAction ?? null,
                 });
                 return true;
+              }
+              if (core.status === 'failed') {
+                throw new Error(core.message);
               }
 
               let beat = enforceReelBeatCap(core.beat, session.storyConfig);

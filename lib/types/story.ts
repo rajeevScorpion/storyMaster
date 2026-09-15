@@ -139,6 +139,8 @@ export interface StoryboardPlan {
   bottomLeft: StoryboardFramePlan;
   bottomRight: StoryboardFramePlan;
   negativeConstraints: string[];
+  /** Set only on the backup plan used because the composer was blocked on content-safety grounds. */
+  fallbackReason?: 'content_blocked';
 }
 
 export interface WordTiming {

@@ -1,7 +1,7 @@
 // Beat text + storyboard-plan orchestration, shared by the client runtime
 // (app/actions/story-runtime.ts) and the server beat bundle
 // (app/actions/beat-bundle.ts). No 'use client'/'use server' directive on
-// purpose: the imported server actions (callTextModel, reel moods) resolve to
+// purpose: the imported server actions (callTextModelOutcome, reel moods) resolve to
 // POST references in the browser and to direct calls on the server — the same
 // dual behavior story-runtime.ts has always relied on. Keep browser-only APIs
 // (canvas, FileReader) out of this module.
@@ -9,7 +9,8 @@
 import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
 import type { Character } from '@/lib/types/story';
 import type { CompilerEngine, PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
-import { callTextModel } from '@/app/actions/text-model-proxy';
+import { callTextModelOutcome } from '@/app/actions/text-model-proxy';
+import { isContentBlockedError, unwrapTextOutcome } from '@/lib/ai/text-gateway/outcome.shared';
 import { getCharacterNoveltyContextAction } from '@/app/actions/character-novelty';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
@@ -500,7 +501,7 @@ export async function generateStoryBeat(
         language: lang,
       },
       async () => {
-        const text = await callTextModel({
+        const text = unwrapTextOutcome(await callTextModelOutcome({
           task: 'story_generation',
           model: modelOverrides?.storyModel || DEFAULT_TEXT_MODEL_ID,
           prompt: repairNote ? `${basePrompt}\n\nQuality Repair Note:\n${repairNote}` : basePrompt,
@@ -508,7 +509,7 @@ export async function generateStoryBeat(
           telemetry: costTelemetry
             ? { ...costTelemetry, metadata: { ...costTelemetry.metadata, attempt: repairNote ? 2 : 1 } }
             : undefined,
-        });
+        }));
         try {
           return JSON.parse(text) as StoryBeat;
         } catch {
@@ -720,7 +721,7 @@ export async function composeStoryboardPlan(
 
       let text = '';
       try {
-        text = await callTextModel({
+        text = unwrapTextOutcome(await callTextModelOutcome({
           task: promptTask,
           model: isReel
             ? modelOverrides?.reelComposerModel || modelOverrides?.composerModel || DEFAULT_TEXT_MODEL_ID
@@ -730,7 +731,7 @@ export async function composeStoryboardPlan(
             ? modelOverrides?.reelComposerTemperature ?? modelOverrides?.composerTemperature ?? 0.5
             : modelOverrides?.composerTemperature ?? 0.5,
           telemetry: costTelemetry,
-        });
+        }));
         const parsedPlan = JSON.parse(text) as StoryboardPlan;
         if (isReel) {
           parsedPlan.portraitTasks = [];
@@ -749,6 +750,9 @@ export async function composeStoryboardPlan(
         const fallback = buildFallbackStoryboardPlan(beat, sessionState, visualStyle);
         if (isReel) {
           fallback.portraitTasks = [];
+        }
+        if (isContentBlockedError(error)) {
+          fallback.fallbackReason = 'content_blocked';
         }
         return fallback;
       }

@@ -6360,6 +6360,14 @@ function StoryScreenInner({
                 </div>
               </div>
             )}
+            {/* Content-safety fallback notice — the composer's detailed plan was
+                blocked, so this image was drawn from the simpler backup plan.
+                Reader-safe: no provider or model name, not dismissible. */}
+            {displayImageUrl && normalizedCurrentBeat.storyboardPlan?.fallbackReason === 'content_blocked' && (
+              <p className="mb-2 w-full text-xs text-neutral-400">
+                The picture for this scene was drawn from a simpler plan, because the detailed plan ran into content safety guidelines.
+              </p>
+            )}
             {/* Card chrome toggles — minimize + prompt-tools popover */}
             <div className={`relative mb-2 w-full items-center gap-2 ${isReelStory ? 'hidden' : 'flex'} ${!isReelStory ? 'md:pl-[3.75rem]' : ''}`}>
               {/* Storyboard panel dots — desktop only (mobile uses the on-image
