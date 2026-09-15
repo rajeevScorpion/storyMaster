@@ -133,6 +133,7 @@ for what has actually run.
 |---|---|---|---|---|
 | 119 | `text_model_registry` | table `text_model_registry`, one row per text model. `model_config.model_id` and persona `model_overrides[*].modelId` now name a `model_key` here. Touch trigger, RLS with no policies, 12 seed rows: 8 Gemini enabled, 4 OpenAI/OpenRouter disabled | **Applied** 2026-09-14 05:27:43+00. Verified against the schema, not only the ledger: 18 columns, every CHECK, the trigger, RLS with 0 policies, 12 seed rows with the right enabled flags. **Frozen** — changes ship as 120 | **Not applied.** First run `select task_key, model_id from public.model_config order by task_key;` — a text `model_id` with no seeded row runs on its task default once 119 lands. A server that is already running needs a redeploy afterwards (see GOTCHAS "Text models") |
 | 120 | `text_model_thinking` | column `model_config.reasoning_level` (CHECK on the level vocabulary); `capabilities.reasoningLevels` on every remaining registry row; Gemini rows stop accepting a task temperature; row `gemini-3.8-flash`. Moves text tasks and persona overrides off seven removed Gemini text models (the three economy tasks at Low thinking), records the move in `model_config_history`, then deletes those rows | **Applied** 2026-09-14 17:45:48+00. Verified against the schema: column and CHECK, 6 registry rows with levels, `graphic_style_extraction` and `voice_selection` moved to 3.8 Flash at Low with history rows, `agent_novelty_assessment` row inserted at Low, image and TTS rows untouched. **Frozen** — changes ship as 121 | **Not applied.** Needs 119 first. Run the read-only pre-apply check in `docs/text-model-thinking-plan.md` section 3 to see which tasks will move. Redeploy afterwards |
+| 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Not applied.** File committed `eb849cd` on `feature/content-block-fallback`; **frozen** — changes ship as 122 | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
 
 #### Promoting the agentic system to production — checklist
 
@@ -636,8 +637,11 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   means moving the story path server-side or adding auth and rate limits.
 - **Three text calls record no cost event:** options regeneration, story bible and discovery metadata. No
   activity key fits them, so `/admin/cost` undercounts those tokens.
-- **Gemini `finishReason` / `promptFeedback.blockReason` are not mapped** to gateway error categories. A
-  blocked Gemini response still surfaces as empty or invalid output, as it did before.
+- **Content-safety transparency covers text beats and storyboard plans only** (`feature/content-block-fallback`).
+  Still open: image-model blocks have no fallback or content message; reel generation in
+  `app/actions/story-runtime.ts` still throws across the server-action boundary; the published viewer
+  (`StorylinePlayer`) does not show the "simpler plan" note. No unit test covers the browser-versus-server switch
+  in `callTextModelForReader`.
 - **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
   compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
   the test lab set 300 explicitly; a dashboard override was not readable from the tools). Luna's row caps a call
@@ -730,6 +734,11 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
   says what the task does, whether a user waits on it and how often it runs, and suggests a thinking level with
   a reason; a note shows when the setting is two or more steps off. Judgment, not measurement. Code-only copy:
   no migration, no flag. Plan: [../text-task-guidance-plan.md](../text-task-guidance-plan.md).
+- **Content-block fallback — on `feature/content-block-fallback`** (2026-09-15), cut from the guidance branch, not
+  merged. Content-safety blocks are named (`content_blocked`) instead of "empty response"; every failed text call
+  is a `failed` cost row; a blocked call retries once on the task's fallback model (migration 121, per-task
+  dropdown on the card); readers see the content-safety cause when a beat still can't be written, and a note when
+  a storyboard used the backup plan. Plan: [../content-block-fallback-plan.md](../content-block-fallback-plan.md).
 - **Model Playground phase 2** — multi-provider support. Phase 1 (Gemini-only per-task model/cost testing) is
   live at `/admin/playground`. Phase 2 was scoped as either a single gateway (Vercel AI Gateway / OpenRouter)
   or independent providers per task. Much of this has since been overtaken by the real multi-provider image
