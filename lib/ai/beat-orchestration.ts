@@ -672,7 +672,9 @@ export function buildFallbackStoryboardPlan(
     cameraAngle: role.cameraAngle,
     visualFocus: role.focus,
     emotion: role.emotion,
-    continuityAnchor: imageIntentEnglish || 'this beat',
+    // Empty on purpose: the visual intent is already one shared invariant, and a
+    // per-panel copy would repeat it four more times in the compiled prompt.
+    continuityAnchor: '',
     storyFunction: role.storyFunction,
     timeRelationToPreviousPanel: 'unknown',
     appearanceChanges: [],
