@@ -4,7 +4,7 @@ import { GoogleGenAI } from '@google/genai';
 import type { TextModelRecord, TextReasoningLevel } from '@/lib/ai/text-models.shared';
 import { TextGatewayError, type TextGenerationRequest } from './types.shared';
 import { classifyHttpError, type ParsedChatCompletionsResponse } from './openai-compatible.shared';
-import { buildGeminiConfig, parseGeminiUsage } from './gemini.shared';
+import { buildGeminiConfig, classifyGeminiEmptyResponse, parseGeminiUsage } from './gemini.shared';
 
 /**
  * No httpOptions.retryOptions: @google/genai 2.x only retries a call when that option is
@@ -85,12 +85,22 @@ export async function callGemini(
 
   const text = response.text;
   if (!text) {
+    const blockReason = response.promptFeedback?.blockReason;
+    const blockReasonMessage = response.promptFeedback?.blockReasonMessage;
+    const finishReason = response.candidates?.[0]?.finishReason;
+    const { category, providerReason } = classifyGeminiEmptyResponse({ blockReason, finishReason });
+    const reasonNote = providerReason ? ` (${providerReason})` : '';
+    const messageNote = blockReasonMessage ? `: ${blockReasonMessage.slice(0, 200)}` : '';
     throw new TextGatewayError({
-      category: 'provider_error',
+      category,
       providerKey: 'gemini',
       modelKey: record.modelKey,
       retryable: false,
-      detail: `Empty response from Gemini model "${record.modelKey}" for task ${request.taskKey}.`,
+      providerReason,
+      usage: parseGeminiUsage(response.usageMetadata),
+      detail: category === 'content_blocked'
+        ? `Gemini model "${record.modelKey}" was blocked for task ${request.taskKey}${reasonNote}${messageNote}.`
+        : `Empty response from Gemini model "${record.modelKey}" for task ${request.taskKey}${reasonNote}.`,
     });
   }
 

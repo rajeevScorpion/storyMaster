@@ -467,6 +467,103 @@ describe('telemetry: reasoning and temperature metadata', () => {
   });
 });
 
+describe('failed-attempt cost logging', () => {
+  it('a Gemini content block records one failed cost event with category, providerReason and usage', async () => {
+    getTextModelRegistryMock.mockResolvedValue([GEMINI_DEFAULT_RECORD]);
+    generateContentMock.mockResolvedValue({
+      text: '',
+      promptFeedback: { blockReason: 'PROHIBITED_CONTENT' },
+      usageMetadata: { promptTokenCount: 8, candidatesTokenCount: 0 },
+    });
+
+    await expect(generateText({
+      taskKey: 'story_generation',
+      modelKey: 'gemini-3.5-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    })).rejects.toMatchObject({ category: 'content_blocked' });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledTimes(1);
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        inputTokens: 8,
+        outputTokens: 0,
+        metadata: expect.objectContaining({
+          errorCategory: 'content_blocked',
+          providerReason: 'prompt_blocked:PROHIBITED_CONTENT',
+        }),
+      })
+    );
+  });
+
+  it('a non-Gemini malformed_output failure records the tokens the response already spent', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'not json' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 40, completion_tokens: 15 },
+    })));
+
+    await expect(generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      schema: optionsRegenerationSchema,
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    })).rejects.toMatchObject({ category: 'malformed_output' });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'failed',
+        inputTokens: 40,
+        outputTokens: 15,
+        metadata: expect.objectContaining({ errorCategory: 'malformed_output' }),
+      })
+    );
+  });
+
+  it('a throwing cost recorder never replaces the original error', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchFail(429)));
+    recordModelCostEventMock.mockRejectedValueOnce(new Error('cost log is down'));
+
+    await expect(generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    })).rejects.toMatchObject({ category: 'rate_limited' });
+  });
+
+  it('no telemetry on the request means no cost event is recorded for a failed attempt', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchFail(429)));
+
+    await expect(generateText({ taskKey: 'story_generation', modelKey: 'openrouter:qwen/qwen3.7-flash', prompt: 'hi' }))
+      .rejects.toMatchObject({ category: 'rate_limited' });
+    expect(recordModelCostEventMock).not.toHaveBeenCalled();
+  });
+
+  it('a successful attempt still records exactly one event, with no failed status -- success path unchanged', async () => {
+    getTextModelRegistryMock.mockResolvedValue([makeRecord()]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fetchOk({
+      choices: [{ message: { content: 'hello' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    })));
+
+    await generateText({
+      taskKey: 'story_generation',
+      modelKey: 'openrouter:qwen/qwen3.7-flash',
+      prompt: 'hi',
+      telemetry: { activityKey: 'continue_story_new_beat' },
+    });
+
+    expect(recordModelCostEventMock).toHaveBeenCalledTimes(1);
+    const call = recordModelCostEventMock.mock.calls[0][0];
+    expect(call.status).toBeUndefined();
+  });
+});
+
 describe('TextGatewayError', () => {
   it('is the class instance thrown for auth_missing', async () => {
     getTextModelRegistryMock.mockResolvedValue([makeRecord()]);

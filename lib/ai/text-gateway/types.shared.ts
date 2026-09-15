@@ -64,7 +64,8 @@ export type TextGatewayErrorCategory =
   | 'timeout'
   | 'rate_limited'
   | 'provider_error'
-  | 'malformed_output';
+  | 'malformed_output'
+  | 'content_blocked';
 
 export interface TextGatewayErrorInput {
   category: TextGatewayErrorCategory;
@@ -73,13 +74,21 @@ export interface TextGatewayErrorInput {
   detail: string;
   status?: number;
   retryable?: boolean;
+  /** Short machine reason, e.g. `prompt_blocked:PROHIBITED_CONTENT`, `finish:SAFETY`,
+   * `refusal`, `finish:content_filter`, `moderation`. Admin-only, like `detail`. */
+  providerReason?: string;
+  /** Tokens the failed call still consumed, when the provider reported any before failing. */
+  usage?: TextUsage;
 }
 
 export const TEXT_FAILURE_MESSAGE = 'Something went wrong while generating this. Please try again.';
 export const TEXT_BUSY_MESSAGE = 'This is taking longer than usual. Please try again in a moment.';
+export const TEXT_CONTENT_BLOCKED_MESSAGE =
+  "This part couldn't be created because it ran into content safety guidelines. Try a different choice or wording.";
 
 /** Reader-safe: never contains a provider, model or task name. */
 export function readerSafeTextFailureMessage(category: TextGatewayErrorCategory): string {
+  if (category === 'content_blocked') return TEXT_CONTENT_BLOCKED_MESSAGE;
   return category === 'timeout' || category === 'rate_limited' ? TEXT_BUSY_MESSAGE : TEXT_FAILURE_MESSAGE;
 }
 
@@ -100,6 +109,8 @@ export class TextGatewayError extends Error {
   status?: number;
   retryable: boolean;
   detail: string;
+  providerReason?: string;
+  usage?: TextUsage;
 
   constructor(input: TextGatewayErrorInput) {
     super(readerSafeTextFailureMessage(input.category));
@@ -110,5 +121,14 @@ export class TextGatewayError extends Error {
     this.status = input.status;
     this.retryable = input.retryable ?? false;
     this.detail = input.detail;
+    this.providerReason = input.providerReason;
+    this.usage = input.usage;
   }
 }
+
+/** Result of a text call that treats expected gateway failures as data instead of a thrown
+ * error -- see callTextModelOutcome in app/actions/text-model-proxy.ts and Next.js's guidance
+ * to return, not throw, expected errors from Server Functions. */
+export type TextCallOutcome =
+  | { ok: true; text: string }
+  | { ok: false; category: TextGatewayErrorCategory; message: string };

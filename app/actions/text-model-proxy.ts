@@ -16,6 +16,7 @@ import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { InlineImagePart } from '@/app/actions/gemini-proxy';
 import { generateText } from '@/lib/ai/text-gateway/router';
+import { TextGatewayError, type TextCallOutcome } from '@/lib/ai/text-gateway/types.shared';
 
 const TEXT_SCHEMA_MAP = {
   story_generation: beatSchema,
@@ -48,6 +49,21 @@ export async function callTextModel(params: TextCallParams): Promise<string> {
     telemetryMetadata: { promptChars: prompt.length, temperature: temperature ?? 0.7 },
   });
   return result.text;
+}
+
+/** Same call, but expected gateway failures come back as data: Next.js recommends returning
+ * expected errors from Server Functions rather than relying on a thrown message reaching the
+ * browser. Only a `TextGatewayError` is caught this way; anything else still throws. */
+export async function callTextModelOutcome(params: TextCallParams): Promise<TextCallOutcome> {
+  try {
+    const text = await callTextModel(params);
+    return { ok: true, text };
+  } catch (error) {
+    if (error instanceof TextGatewayError) {
+      return { ok: false, category: error.category, message: error.message };
+    }
+    throw error;
+  }
 }
 
 export interface VisionTextCallParams {

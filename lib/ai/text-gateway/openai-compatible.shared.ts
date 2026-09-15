@@ -102,6 +102,8 @@ function appendJsonInstruction(systemText: string, schema: unknown, prefix: stri
 export interface ParsedChatCompletionsResponse {
   text: string;
   refusal: boolean;
+  /** Set alongside `refusal: true` -- which shape of refusal it was, for providerReason. */
+  refusalReason?: 'refusal' | 'content_filter';
   finishReason?: 'length';
   usage: TextUsage;
   actualModel?: string;
@@ -135,10 +137,16 @@ export function parseChatCompletionsResponse(
   const usage = (json.usage ?? {}) as Record<string, unknown>;
   const promptTokenDetails = (usage.prompt_tokens_details ?? {}) as Record<string, unknown>;
   const completionTokenDetails = (usage.completion_tokens_details ?? {}) as Record<string, unknown>;
+  const refusalReason: 'refusal' | 'content_filter' | undefined = message.refusal
+    ? 'refusal'
+    : finishReason === 'content_filter'
+      ? 'content_filter'
+      : undefined;
 
   return {
     text: typeof message.content === 'string' ? message.content : '',
-    refusal: Boolean(message.refusal) || finishReason === 'content_filter',
+    refusal: Boolean(refusalReason),
+    refusalReason,
     finishReason: finishReason === 'length' ? 'length' : undefined,
     usage: {
       inputTokens: numberOrUndefined(usage.prompt_tokens) ?? 0,
@@ -166,4 +174,22 @@ export function classifyHttpError(status: number): { category: TextGatewayErrorC
   const match = HTTP_STATUS_CATEGORY.find((entry) => entry.test(status));
   if (match) return { category: match.category, retryable: match.retryable };
   return { category: 'provider_error', retryable: false };
+}
+
+/**
+ * True when a non-ok HTTP response is the provider refusing the call on content-safety
+ * grounds, rather than an ordinary API error -- OpenAI's `content_policy_violation` code,
+ * OpenRouter's `content_filter` code, an OpenRouter 403 carrying non-empty moderation
+ * `reasons`, or a 400 whose message reads as a content/usage-policy rejection.
+ */
+export function isProviderContentPolicyError(input: {
+  status: number;
+  code?: string;
+  message?: string;
+  moderationReasons?: unknown;
+}): boolean {
+  if (input.code === 'content_policy_violation' || input.code === 'content_filter') return true;
+  if (input.status === 403 && Array.isArray(input.moderationReasons) && input.moderationReasons.length > 0) return true;
+  if (input.status === 400 && typeof input.message === 'string' && /(usage|content) polic|flagged/i.test(input.message)) return true;
+  return false;
 }
