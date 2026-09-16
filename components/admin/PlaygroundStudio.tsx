@@ -9,6 +9,7 @@ import {
   Clock,
   Coins,
   Cpu,
+  FileCode2,
   FileText,
   Hash,
   History,
@@ -22,6 +23,7 @@ import {
 import { getActiveModelConfigs } from '@/app/actions/admin';
 import { getTextModelOptions, type TextModelOption } from '@/app/actions/text-models';
 import FilterDropdown from '@/components/ui/FilterDropdown';
+import InfoPopover from '@/components/ui/InfoPopover';
 import {
   applyModelToProduction,
   getPromptPlaygroundStateAction,
@@ -43,6 +45,7 @@ import {
   PROMPT_TASK_DEFINITIONS,
   PROMPT_TASK_KEYS,
   type PromptTaskKey,
+  getDefaultPromptBody,
   isPromptTaskKey,
   resolvePromptTemplate,
   validatePromptTemplate,
@@ -953,10 +956,39 @@ export default function PlaygroundStudio({
                   </div>
                 </div>
 
-                <div className="mt-4 flex flex-wrap gap-3">
-                  <button onClick={handleSaveDraft} disabled={!isDraftDirty || !validation?.isValid || saveStatus === 'saving'} className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm text-neutral-200 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50">{saveStatus === 'saving' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Save Draft</button>
-                  <button onClick={() => { if (promptState) { setDraftPrompt(promptState.published.promptBody); setPromptMessage('Draft reset to the published prompt locally. Save if you want to persist it.'); } }} disabled={!promptState} className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 disabled:opacity-50"><RotateCcw size={15} />Reset to Published</button>
-                  <button onClick={handlePublishDraft} disabled={!validation?.isValid || !isDraftDifferentFromPublished || publishStatus === 'publishing'} className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50">{publishStatus === 'publishing' ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}Publish Draft</button>
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={handleSaveDraft} disabled={!isDraftDirty || !validation?.isValid || saveStatus === 'saving'} className="flex items-center gap-2 rounded-lg bg-white/10 px-4 py-2.5 text-sm text-neutral-200 hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50">{saveStatus === 'saving' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Save Draft</button>
+                    <InfoPopover title="Save Draft" ariaLabel="Show what Save Draft does">
+                      <p>Saves the text in the box above as a private draft on your own admin account. Nothing changes for readers.</p>
+                      <p><span className="text-neutral-200">Publish reads this saved draft from the database, not the text in the box.</span> So if you edit the prompt, save it before publishing or you will publish something else.</p>
+                    </InfoPopover>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => { if (promptState) { setDraftPrompt(promptState.published.promptBody); setPromptMessage('Draft reset to the published prompt locally. Save if you want to persist it.'); } }} disabled={!promptState} className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 disabled:opacity-50"><RotateCcw size={15} />Reset to Published</button>
+                    <InfoPopover title="Reset to Published" ariaLabel="Show what Reset to Published does">
+                      <p>Puts the prompt that is currently live back into the box above, discarding your unsaved edits.</p>
+                      <p>Local only — nothing is saved or published until you click Save Draft.</p>
+                      <p><span className="text-neutral-200">This does not bring back the code template.</span> It restores the published override. Use Reset to Code Default for that.</p>
+                    </InfoPopover>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={() => { if (promptTaskKey) { setDraftPrompt(getDefaultPromptBody(promptTaskKey)); setPromptMessage('Draft reset to the template that ships in the code. Save if you want to persist it.'); } }} disabled={!promptTaskKey} className="flex items-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 text-sm text-neutral-300 hover:bg-white/5 disabled:opacity-50"><FileCode2 size={15} />Reset to Code Default</button>
+                    <InfoPopover title="Reset to Code Default" ariaLabel="Show what Reset to Code Default does">
+                      <p>Puts the template that ships in the code back into the box above — the version developers edit and deploy.</p>
+                      <p>Local only until you Save Draft, then Publish Draft.</p>
+                      <p><span className="text-neutral-200">Publishing it pins a copy in the database, and this task then stops following future code changes.</span> A task follows the code automatically only while it has no published override at all, which is why a freshly set up environment tracks every deploy until someone publishes here.</p>
+                    </InfoPopover>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button onClick={handlePublishDraft} disabled={!validation?.isValid || !isDraftDifferentFromPublished || publishStatus === 'publishing'} className="flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50">{publishStatus === 'publishing' ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}Publish Draft</button>
+                    <InfoPopover title="Publish Draft" ariaLabel="Show what Publish Draft does">
+                      <p>Makes your saved draft the live prompt for every new story on this environment, within about a minute.</p>
+                      <p>It publishes the draft <span className="text-neutral-200">saved in the database</span> — not unsaved text in the box above.</p>
+                      <p>The version it replaces is archived under Published History below, and can be restored from there, so publishing is reversible.</p>
+                      <p>Disabled while the draft matches what is already published.</p>
+                    </InfoPopover>
+                  </div>
                 </div>
 
                 <div className="mt-4 rounded-xl border border-white/10 bg-neutral-900/60 p-4">
