@@ -140,6 +140,7 @@ for what has actually run.
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
 | 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Not applied.** Safe to defer — without it the target stays 2,800 and prompts simply compress a little harder |
+| 123 | `image_prompt_budget_3800` | raises the same target from 3,000 to 3,800 on rows still at 122's value | **Not applied yet.** Pairs with the composer brevity rules in the same change: real beats compile to ~3,150–3,450 characters, so a 3,000 target made `over_target` fire on every beat. Without 123 nothing breaks — prompts just compress a little and keep warning | **Not applied.** Needs 122 first |
 
 #### Promoting the agentic system to production — checklist
 

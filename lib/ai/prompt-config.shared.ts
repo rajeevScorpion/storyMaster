@@ -493,7 +493,7 @@ Core rules:
 8. No text overlays, captions, speech bubbles, subtitles, labels, logos, or watermarks.
 9. Do not invent major props, locations, powers, or character traits that are not grounded in the beat or story bible.
 10. Make the prompts image-ready: cinematic, visually explicit, emotionally legible, and rich in concrete detail.
-11. sharedVisualInvariants should contain concise continuity anchors that must remain true across all four panels -- identity, world, and style, not surface details the transition has already overridden.
+11. sharedVisualInvariants: at most 3 entries, each at most 15 words. Only world and scene facts that must hold across all four panels. Never restate the visual style, a character's appearance or the panel layout -- each of those is supplied to the image model separately, and repeating it wastes the prompt. Never restate a surface detail the transition has already overridden.
 12. portraitTasks should be emitted only for named recurring characters who are new or visually changed in a way that needs a refreshed portrait.
 13. If a new character is clearly minor, unnamed, or a crowd extra, do not create a portraitTask.
 14. Use the Visual Style section as the controlling style direction. Interpret it faithfully instead of replacing it.
@@ -506,7 +506,7 @@ Core rules:
 21. Each frame should visualize the narrative content and emotional beat of its matching storyTextPart. Do not let one part's action drift into a different panel unless the story explicitly requires overlap.
 22. For each frame, set charactersPresent to the exact canonical names (from the Characters section) of the named characters actually visible in that panel. Use an empty array for scenery-only panels. Do not list a character who is absent from the panel, and use the character's canonical name exactly -- never englishName.
 23. Read Seed Authoring Context when present. For a seeded strictly_follow story, visualize the beat literally and faithfully without adding, replacing, or reinterpreting narrative events. Extra visual guidance may clarify appearance, setting, or world details only.
-24. Keep text tight: frame.prompt is one short English sentence; description is at most 50 words; identityAnchors is at most 25 words; currentAppearance is at most 30 words; transition.evidence is at most 15 words. Return exactly one characterVisuals entry per named character who appears in at least one panel.
+24. Keep text tight -- every word below reaches the image model, which has a hard prompt budget. frame.prompt is one short English sentence; description is at most 35 words; identityAnchors at most 18 words; currentAppearance at most 20 words; transition.evidence at most 12 words; emotion at most 10 words; each setting field at most 8 words; visualFocus at most 3 items of at most 5 words; appearanceChanges only for a panel that actually differs from currentAppearance, at most 2 items of at most 8 words; mustNotInherit at most 4 items of at most 5 words. Say each thing once: do not repeat the style, the setting or a character's appearance across description, visualFocus and the invariants. Return exactly one characterVisuals entry per named character who appears in at least one panel.
 
 Frame design rules:
 - topLeft should establish the beat or its opening emotional note
