@@ -140,12 +140,14 @@ for what has actually run.
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
 | 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Not applied.** Safe to defer — without it the target stays 2,800 and prompts simply compress a little harder |
-| 123 | `image_prompt_budget_3800` | raises the same target from 3,000 to 3,800 on rows still at 122's value | **Not applied yet.** Pairs with the composer brevity rules in the same change: real beats compile to ~3,150–3,450 characters, so a 3,000 target made `over_target` fire on every beat. Without 123 nothing breaks — prompts just compress a little and keep warning | **Not applied.** Needs 122 first |
+| 123 | `image_prompt_budget_3800` | raises the same target from 3,000 to 3,800 on rows still at 122's value | **Applied** 2026-09-16 08:50:33+00, verified against the ledger and the data: all 7 budgeted rows now read 3,800. **Frozen.** Pairs with the composer brevity rules in the same change: real beats compile to ~3,150–3,450 characters, so a 3,000 target made `over_target` fire on every beat | **Not applied.** Needs 122 first |
 
 #### Promoting the agentic system to production — checklist
 
 **The executable version of this is [../production-promotion-runbook.md](../production-promotion-runbook.md)** —
-step-by-step, with all 16 migrations in order, the two that must not be applied early, and the
+rewritten 2026-09-16 and now covering **all 21 migrations** prod is missing (102-108, 110-123 — the agentic
+system plus the text model gateway, the content-block fallback and the image prompt budgets), in order, with
+the one that must not be applied early, the two settings decisions that are not migrations, and the
 post-deploy checks. The summary below is kept for context; the runbook is what to work through.
 
 Migrations are only one of three things prod needs. All three, in this order:
@@ -188,10 +190,11 @@ four legal documents (`terms`, `privacy_policy`, `ai_disclosure`, `content_usage
 acceptance are redirected to `/auth/accept-terms`. See `docs/legal-consent-model.md` for the schema and gate
 logic, and `lib/legal/business-config.ts` for the entity/address/contact facts the documents are built from.
 
-Migrations 099, 100 and 101 are now applied on both dev and production. **Before promoting to production:**
-prod's `managed_pages` rows still need the same publish steps run against them as were run on dev, before
-enabling `legal_consent_gate_enabled` there — do not assume enabling the flag on prod can happen in the same
-step as the code promotion; verify prod's documents are actually published first, exactly as was done on dev.
+Migrations 099, 100 and 101 are applied on both dev and production, and **the production half of this is
+done** — verified by query 2026-09-16: all four documents are published on prod at `1.0.0` (effective
+2026-08-29) and `legal_consent_gate_enabled` is on there. The legal pack needs **no action** during the next
+promotion. The publish steps recorded below are kept as the procedure for a future document revision, not as
+outstanding work.
 
 **Phase 8 landed 2026-08-29**: `docs/legal-content-architecture.md` and `docs/auth-legal-release-checklist.md`
 were written, the two remaining unit-test gaps (acceptance-state classification, missing-schema error
@@ -345,7 +348,7 @@ below were verified 2026-08-26; the Runware and Agentic rows were re-verified ag
 | Server-side beat bundle | `beat_bundle_enabled` | on | on |
 | Video export presets | `video_export_presets_json` | on, real preset JSON | on, real preset JSON |
 | Runware image models | rows in `image_model_registry` | seeded, **all 9 disabled** (unverified prices) | seeded, **all 9 disabled** (unverified prices) |
-| Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **off** — migration 099 applied 2026-08-29 (seeds the flag `false`); documents not yet published on prod, do not enable until they are |
+| Legal consent gate | `legal_consent_gate_enabled` | **on** — migrations 099/100 applied, four documents published 2026-08-29 | **on** — verified 2026-09-16. All four documents are published on prod at `doc_version 1.0.0`, effective 2026-08-29, with `terms` requiring acceptance and the other three acknowledged. Earlier revisions of this row said the flag was off and the documents unpublished; both were wrong |
 | Agentic Creator System | six `agentic_*` flags | present; **`agentic_creator_enabled` + `agentic_billing_bypass_enabled` ON** since 2026-09-07, other four off. 102–108 all applied (105 on 2026-09-06, 106/107 on 2026-09-07, 108 on 2026-09-08), 15 personas seeded (all `draft`), **two real drafts generated** and sitting at `awaiting_review` | **absent** — 102–108 not applied |
 | Shared branching (continuing / forking someone else's story) | **none, deliberately (D23)** — the enforcement point is `beats` RLS, and a Postgres policy can't cheaply read `feature_flags`, so a flag here would gate the button while the database kept accepting the write | **dormant, application-level only** — Phase 10 Round 1's gates are code-complete on `feat/agentic-creator` (doorway removed, `/story/[id]` + `/explore/[id]` gated owner-or-reviewer, `continueStory` refuses a non-owner/non-reviewer before `authorize`); the database backstop, **migration 115, is written but not applied** | **still fully live** — none of Round 1 has reached production; the "Explore full story tree" doorway and the original, broader migration-003 `beats` RLS both still work there today |
 
@@ -651,8 +654,9 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   (`BEAT_ROW_NOT_FOUND`). Still owed before promoting 115 to production: count the affected rows and decide
   deliberately whether to leave them, reassign `generated_by` to the story owner, or accept them read-only —
   `select count(*) from beats b join stories s on s.id = b.story_id where b.generated_by <> s.user_id;` This
-  session's Supabase access to production is read-only and this wasn't run; the owner runs it before 115
-  reaches prod.
+  query has now been run: **prod holds 5 such rows** (verified 2026-09-16, read-only). Small enough that
+  leaving them read-only or reassigning `generated_by` to the story owner are both defensible — but the
+  choice is still the owner's, and it is owed before 115 reaches prod, not after.
 
 **Text models**
 - **Evaluate → writer-repair loop deferred** (owner, 2026-09-14). A cheap evaluator whose verdict triggers an
@@ -672,8 +676,12 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   in `callTextModelForReader`.
 - **Beat length misses are only a console line** (`feature/beat-length-allowance`). When beat generation runs in
   the browser the warning never reaches server logs, so there is no admin view of how often models run long.
-  Production `prompt_configs` overrides for story, seeded beat and seed plan were not checked; an override keeps
-  the old "short paragraph" rule (the runtime length contract still applies). No unit test covers the
+  **Production `prompt_configs` has now been checked (2026-09-16) and this is real.** Prod carries exactly one
+  published override — `story_generation`, last touched 2026-04-04 — and it still says "a short paragraph" and
+  carries no series/episode rules. Dev has **no overrides at all**, so every dev verification ran against the
+  default template. Promoting without republishing that row means prod generates on April's instructions; the
+  runtime length contract still applies, but the prompt half does not match what was tested. Decide it during
+  promotion — see the runbook, section 5. No unit test covers the
   retry flow of the three generators.
 - **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
   compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
