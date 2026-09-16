@@ -1,7 +1,17 @@
 # Production promotion runbook — `dev` → `main`
 
 Rewritten 2026-09-16, verified directly against both databases on that date (ledger, flags, `model_config`,
-`image_model_registry`, `prompt_configs`, `managed_pages`). **Nothing here has been executed.**
+`image_model_registry`, `prompt_configs`, `managed_pages`).
+
+> **EXECUTED 2026-09-16.** Migrations 102-114 and 116-123 applied to production, `main` merged `--no-ff` at
+> `084c2ed` and deployed live, signed-out gallery verified populated, and a prompt-only beat generated
+> cleanly on a real account. **Section 2's post-deploy step — migration 115 — is still outstanding**, along
+> with the two settings decisions in section 5. Everything else here is done; kept as the record of what was
+> run and as the procedure for the next promotion.
+>
+> **One thing this runbook did not catch, and the next one should:** 120 was skipped during the hand-run and
+> only surfaced by querying the ledger for the whole expected range. A hand-applied sequence does not
+> self-check — verify the range, not just the last file you ran.
 
 Scope has grown since the 2026-09-14 version of this file, which covered the Agentic Creator system alone
 (16 migrations). `dev` is now **238 commits and 21 migrations** ahead of `main`, carrying four merged packs:
@@ -87,7 +97,7 @@ an assignment since: `select task_key, model_id from public.model_config order b
 
 | # | Migration | Notes |
 |---|---|---|
-| 115 | `beats_owner_only_writes` | ⚠ **RLS. Never before the deploy** |
+| 115 | `beats_owner_only_writes` | ⚠ **RLS. Never before the deploy.** Still outstanding as of 2026-09-16 — the deploy is verified, so it is now cleared to run once the 5-row decision below is made |
 
 **Why 115 waits.** It narrows beat writes to the story owner. The application-level gates that make it safe
 ship in the code. Applying it against the old code means a non-owner's continuation is charged and generated,

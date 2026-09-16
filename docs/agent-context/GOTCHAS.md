@@ -395,10 +395,10 @@ an explicit path back. Creation mode is now owner-or-reviewer only, enforced at 
 - `continueStory`'s authorize step now refuses a non-owner, non-reviewer continuation **before** coins are
   reserved, on both the legacy and bundle paths
 - migration `115_beats_owner_only_writes.sql` narrows `beats` INSERT/UPDATE RLS to also require the story's
-  owner, ANDed onto the existing `003_normalize_beats.sql` predicates — **written, but NOT applied on any
-  environment.** Until the owner applies it by hand, the database keeps the original, broader policy below;
-  the three application-level layers above are what actually stop a direct explorer write in the meantime,
-  not RLS. See `PROJECT_STATE.md`'s migration table (row 115) for where it stands.
+  owner, ANDed onto the existing `003_normalize_beats.sql` predicates — **applied on dev 2026-09-12, NOT yet
+  on production.** Production therefore still keeps the original, broader policy below, and the three
+  application-level layers above are what actually stop a direct explorer write there, not RLS. See
+  `PROJECT_STATE.md`'s migration table (row 115) for where it stands and the 5-row decision it needs first.
 
 ```
 beats INSERT (today, unmigrated)  auth.uid() IS NOT NULL AND generated_by = auth.uid() AND story not archived
