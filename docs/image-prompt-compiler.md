@@ -130,9 +130,11 @@ through the existing failure paths.
   builder and compiler and asserts the finished prompt is English, sectioned, free of the
   story's own script, and inside the hard cap. Skipped unless the env var is set.
   First run (2026-09-16): both providers accepted the schema and detected the time jump and
-  location change; the compiled prompts were 4,683 chars (Luna) and 3,719 (Gemini) — both
-  **tier 2**, i.e. over the 3,000 target and carrying `over_target`. Expect real beats to land
-  there until the composer's brevity limits or the target are tuned.
+  location change; the compiled prompts were 4,683 chars (Luna) and 3,719 (Gemini) — both over the
+  then-3,000 target. Tightening the composer's brevity rules (invariants may no longer restate the
+  style, a character's appearance or the layout, and every field carries a word cap) cut those to
+  **3,422 and 3,162** with no loss of information, and migration 123 moved the target to 3,800 so
+  `over_target` means an unusual beat again rather than every beat.
 - Manual QA after applying migration 081 to dev (ask before launching the dev server):
   shadow → generate → comparison rows; `new_with_legacy_fallback` → verify compiled
   output; back to `shadow`/`legacy`.
