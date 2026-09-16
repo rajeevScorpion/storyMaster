@@ -213,9 +213,24 @@ function renderSettingAndTime(scene: CanonicalImageScene): string {
 
 // --- CHARACTERS ---------------------------------------------------------
 
-function renderCharacters(scene: CanonicalImageScene): string {
-  if (scene.characters.length === 0) return '';
-  const lines = scene.characters.map((c) => {
+/**
+ * Union of character keys present in at least one panel (framework §32:
+ * panel-level presence overrides the global roster). Empty when no panel
+ * declares presence at all -- both renderCharacters and renderPanel then fail
+ * open exactly as before Unit 5: list every character, add no absence lines.
+ */
+function presentCharacterKeys(scene: CanonicalImageScene): Set<string> {
+  const keys = new Set<string>();
+  for (const panel of scene.panels) {
+    for (const key of panel.charactersPresent) keys.add(key);
+  }
+  return keys;
+}
+
+function renderCharacters(scene: CanonicalImageScene, presentKeys: Set<string>): string {
+  const characters = presentKeys.size > 0 ? scene.characters.filter((c) => presentKeys.has(c.key)) : scene.characters;
+  if (characters.length === 0) return '';
+  const lines = characters.map((c) => {
     const bits: string[] = [];
     if (c.identityAnchors) bits.push(`Identity: ${ensureSentence(c.identityAnchors)}`);
     if (c.currentAppearance) bits.push(`Current appearance: ${ensureSentence(c.currentAppearance)}`);
@@ -223,7 +238,7 @@ function renderCharacters(scene: CanonicalImageScene): string {
     if (c.visualIdentity) return `- ${c.imageName} — ${ensureSentence(c.visualIdentity)}`;
     return `- ${c.imageName}.`;
   });
-  const anyReference = scene.characters.some((c) => c.hasReference);
+  const anyReference = characters.some((c) => c.hasReference);
   const referenceNote = anyReference
     ? '\nReference images define identity only — face, skin tone, build and distinguishing features. Hair, clothing, age, pose, setting and camera come from this prompt. Render in the story’s style. Show each named character at most once per panel.'
     : '';
@@ -257,7 +272,7 @@ interface CharacterNameLookup {
 function renderPanel(
   panel: ScenePanel,
   keyToNames: Map<string, CharacterNameLookup>,
-  recurringKeys: Set<string>
+  presentKeys: Set<string>
 ): string {
   const label = POSITION_LABEL[panel.position];
   const parts: string[] = [ensureSentence(panel.storyFunction ? `${label} — ${panel.storyFunction}` : label)];
@@ -275,11 +290,15 @@ function renderPanel(
   if (panel.emotion) parts.push(`Emotion: ${ensureSentence(capitalizeFirst(panel.emotion))}`);
   if (panel.visualFocus.length > 0) parts.push(`Focus: ${panel.visualFocus.join(', ')}.`);
 
-  // Explicit absence only for strongly recurring characters missing here —
-  // this prevents the model from cloning them in, without noising every
-  // panel. Skip any character the action already names.
+  // Explicit absence for every character present somewhere in the storyboard
+  // but missing from THIS panel (framework §32: panel-level presence overrides
+  // the global roster -- Unit 5 replaces the old "recurring in >= 2 panels"
+  // heuristic with "present in >= 1 panel", so a character seen in only one
+  // panel is still called out absent in the other three). presentKeys is empty
+  // when no panel declared presence at all, which fails this open to no lines,
+  // exactly as before. Skip any character the action already names.
   const presentSet = new Set(panel.charactersPresent);
-  const absentNames = [...recurringKeys]
+  const absentNames = [...presentKeys]
     .filter((key) => !presentSet.has(key))
     .map((key) => keyToNames.get(key))
     .filter((n): n is CharacterNameLookup => Boolean(n))
@@ -299,17 +318,11 @@ function renderPanel(
   return parts.join(' ');
 }
 
-function renderPanels(scene: CanonicalImageScene): string[] {
+function renderPanels(scene: CanonicalImageScene, presentKeys: Set<string>): string[] {
   const keyToNames = new Map<string, CharacterNameLookup>(
     scene.characters.map((c) => [c.key, { display: c.displayName, image: c.imageName }])
   );
-  // Recurring = present in at least two panels (at real risk of being cloned).
-  const counts = new Map<string, number>();
-  for (const panel of scene.panels) {
-    for (const key of panel.charactersPresent) counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  const recurringKeys = new Set([...counts.entries()].filter(([, n]) => n >= 2).map(([k]) => k));
-  return scene.panels.map((panel) => renderPanel(panel, keyToNames, recurringKeys));
+  return scene.panels.map((panel) => renderPanel(panel, keyToNames, presentKeys));
 }
 
 // --- CONTINUITY -------------------------------------------------------
@@ -403,12 +416,13 @@ function renderFormat(aspectRatio: StoryAspectRatio): string {
 }
 
 function renderSections(scene: CanonicalImageScene, adapterVersion: PromptCompilerAdapterVersion): RenderedSections {
+  const presentKeys = presentCharacterKeys(scene);
   return {
     format: renderFormat(scene.aspectRatio),
     style: renderStyle(scene),
     settingAndTime: renderSettingAndTime(scene),
-    characters: renderCharacters(scene),
-    panels: renderPanels(scene),
+    characters: renderCharacters(scene, presentKeys),
+    panels: renderPanels(scene, presentKeys),
     continuity: renderContinuity(scene),
     userDirectives: renderUserDirectives(scene),
     negatives: renderNegatives(scene.negativeConstraints, adapterVersion),
@@ -677,6 +691,10 @@ export function compileImagePrompt(
   }
 
   const warnings: string[] = [];
+  // Unit 5: resolveContinuityContradictions's own warnings (e.g.
+  // 'camera_repetition'), computed once at scene-build time and carried
+  // through untouched by every compression pass below.
+  warnings.push(...(scene.planWarnings ?? []));
   const { scene: baseScene, diagnostics } = filterAndDedupScene(scene);
   warnings.push(...diagnostics.warnings);
 

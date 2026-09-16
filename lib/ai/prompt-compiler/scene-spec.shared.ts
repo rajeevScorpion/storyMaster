@@ -18,6 +18,7 @@ import type {
   StoryTimeRelation,
 } from '@/lib/types/story';
 import type { BeatImageRegenerationOptions, StoryboardPanelKey } from '@/lib/ai/image-regeneration.shared';
+import { resolveContinuityContradictions } from '@/lib/ai/storyboard-plan.shared';
 import { isEnglishText } from './language.shared';
 
 export const SCENE_SCHEMA_VERSION = '1.1';
@@ -186,7 +187,10 @@ export interface CanonicalImageScene {
   panels: ScenePanel[];
   continuity: {
     characterIdentity: 'strict';
-    clothing: 'strict';
+    /** Derived per scene from the transition (Unit 5) -- no longer a constant:
+     * 'scene' for a continuous/same_session/unknown transition (clothing holds
+     * for the scene), 'evolve' otherwise (a time/location jump reassesses it). */
+    clothing: 'scene' | 'evolve';
     world: 'strict';
     sequentialMoments: true;
     notes: string[];
@@ -210,6 +214,10 @@ export interface CanonicalImageScene {
   mustNotInherit: string[];
   userDirectives?: SceneUserDirectives;
   negativeConstraints: string[];
+  /** Warnings from resolveContinuityContradictions (Unit 5), e.g.
+   * 'camera_repetition'. Folded into the compiler's own `warnings` array;
+   * never rendered into the prompt text. Absent when there are none. */
+  planWarnings?: string[];
   /** Development/diagnostic provenance — must never be compiled into a prompt. */
   provenance: { source: 'storyboard_plan' | 'legacy_text'; builderVersion: string };
   /** Present only for the legacy conversion path (no storyboard plan). */
@@ -620,13 +628,24 @@ const LAYOUT: CanonicalImageScene['layout'] = {
   divider: 'thin near-black',
 };
 
+// clothing is always overridden per scene by deriveClothingContinuity below --
+// this base value is never observed as-is.
 const CONTINUITY: CanonicalImageScene['continuity'] = {
   characterIdentity: 'strict',
-  clothing: 'strict',
+  clothing: 'scene',
   world: 'strict',
   sequentialMoments: true,
   notes: [],
 };
+
+/** 'scene' (clothing holds within the scene) for continuous/same_session/no-
+ * transition-info; 'evolve' (reassess it) for every other transition,
+ * including a big jump -- Unit 5 hard constraint: this is no longer the
+ * constant 'strict'. */
+function deriveClothingContinuity(timeRelation: StoryTimeRelation | undefined): 'scene' | 'evolve' {
+  const relation = timeRelation ?? 'unknown';
+  return relation === 'continuous' || relation === 'same_session' || relation === 'unknown' ? 'scene' : 'evolve';
+}
 
 /** Split a multi-axis style block (one directional axis per line, e.g. the
  * Rendering/Emotional atmosphere/Color and light/Scene richness/Scope
@@ -704,16 +723,26 @@ function buildScenePanel(
 
 export function buildCanonicalImageScene(input: BuildCanonicalSceneInput): CanonicalImageScene {
   const aspectRatio: StoryAspectRatio = input.aspectRatio === '9:16' ? '9:16' : '16:9';
-  const plan = input.storyboardPlan;
+  // Unit 5: reconcile the plan against its own transition (age locks, must-
+  // not-inherit, prior-state notes, camera repetition) before anything below
+  // reads from it, so every downstream field -- characters' modes,
+  // mustNotInherit, the continuity notes list -- already reflects the
+  // resolution. No-op (and no warnings) when there's no plan to resolve.
+  const continuityResolution = input.storyboardPlan
+    ? resolveContinuityContradictions(input.storyboardPlan, { continuityNotes: input.continuityNotes ?? undefined })
+    : null;
+  const plan = continuityResolution ? continuityResolution.plan : input.storyboardPlan;
+  const effectiveContinuityNotes = continuityResolution ? continuityResolution.continuityNotes : input.continuityNotes;
   // Canonical character names, used to let a character's own name (any
   // script) appear inside an otherwise-English string without failing the
   // English check (see language.shared.ts IsEnglishTextOptions.ignore).
   const ignore = (input.characters || []).map((c) => c.name).filter(Boolean);
   const characters = buildSceneCharacters(input.characters || [], plan, ignore);
   const worldAnchor = sanitizeText(input.worldAnchor, SCENE_LIMITS.worldAnchor);
-  const notes = sanitizeEnglishList(input.continuityNotes, ignore, SCENE_LIMITS.continuityNotes, SCENE_LIMITS.continuityNote);
+  const notes = sanitizeEnglishList(effectiveContinuityNotes, ignore, SCENE_LIMITS.continuityNotes, SCENE_LIMITS.continuityNote);
   const userDirectives = buildUserDirectives(input.regeneration);
   const style = buildStyleAxes(input.visualStyle);
+  const clothing = deriveClothingContinuity(plan?.transition?.timeRelation);
 
   const base: Omit<
     CanonicalImageScene,
@@ -726,7 +755,7 @@ export function buildCanonicalImageScene(input: BuildCanonicalSceneInput): Canon
     layout: LAYOUT,
     style,
     characters,
-    continuity: { ...CONTINUITY, notes },
+    continuity: { ...CONTINUITY, clothing, notes },
     ...(userDirectives ? { userDirectives } : {}),
   };
 
@@ -798,6 +827,9 @@ export function buildCanonicalImageScene(input: BuildCanonicalSceneInput): Canon
     negativeConstraints,
     ...(transition ? { transition } : {}),
     ...(setting ? { setting } : {}),
+    ...(continuityResolution && continuityResolution.warnings.length > 0
+      ? { planWarnings: continuityResolution.warnings }
+      : {}),
     provenance: { source: 'storyboard_plan', builderVersion: SCENE_BUILDER_VERSION },
   };
 }

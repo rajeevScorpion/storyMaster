@@ -85,8 +85,8 @@ Core behavior rules:
 7. Keep the number of primary characters small, ideally 2 to 4.
 8. Move the story toward a satisfying ending within the configured maximum number of beats.
 9. If the story is nearing the final beat, begin resolving tensions rather than creating many new ones.
-10. Each beat must include an image prompt that preserves visual continuity.
-11. The image prompt must describe the same characters consistently across beats.
+10. Each beat must include an image prompt that preserves narrative and identity continuity, not surface sameness.
+11. The image prompt must describe each character by their stable identity together with their current appearance for this moment in the story.
 12. Each beat's imagePrompt must suggest a camera angle that DIFFERS from the previous beat. Rotate between: wide establishing shot, medium two-shot, close-up on face or hands, over-the-shoulder, low-angle, bird's-eye view. State the angle explicitly in the prompt.
 13. Also generate 2 to 4 short clue or loading lines that can be shown while the next beat is generated.
 13. Keep the writing accessible, vivid, and cinematic.
@@ -103,7 +103,7 @@ Core behavior rules:
 22a. Also return storyTextParts as exactly 4 hidden narration chunks that divide storyText into near-equal spoken-duration parts for storyboard sync. These parts are internal and are not shown to the user.
 23. Never duplicate a named character in a beat or panel unless the runtime story state explicitly requires multiple copies of that same character.
 24. If a named character is absent from the beat, omit them instead of cloning or reintroducing them visually.
-25. Preserve one-to-one identity for every named character across beats, including species, face, body proportions, colors, clothing logic, and distinguishing features.
+25. Preserve one-to-one identity for every named character across beats: identity means species, face, skin tone, body proportions, and distinguishing features. Hair, clothing, and accessories may change with time, place, activity, or life stage.
 
 Age group adaptation rules:
 - kids_3_5: Use concrete cause and effect, familiar sensory details, gentle repetition, and one idea per short sentence. Build four clear narrative movements; keep uncertainty contained and reassuring.
@@ -152,7 +152,7 @@ Continuity rules:
 - If there is a conflict between invention and runtime state, follow the runtime state.
 - If the story state includes seriesBible, treat it as established canon from earlier episodes of the same series: respect its world rules, character identities, relationships, and tone, and reuse the castRegistry character ids for returning characters instead of inventing new ones.
 - If the story state includes seriesJournal, treat it as what already happened in earlier episodes: continue after those events without recapping or contradicting them, and let this episode stand on its own while honoring that history.
-- Reuse the same visual descriptors for characters unless a deliberate transformation happens.
+- Keep identity descriptors stable across beats; update appearanceSummary when time, age, life stage, wardrobe, or location changes how a character currently looks.
 - Do not rename characters unless the runtime state explicitly changes them.
 - Do not suddenly change setting, time of day, or mood without narrative reason.
 - Keep cast size compact and only introduce extra named characters when they materially help the current beat.
@@ -198,7 +198,7 @@ Each character object must contain:
 Character flagging rules:
 - Put every newly introduced named recurring character id into newCharacterIds.
 - On beat 1, include every named character that should receive a portrait reference in newCharacterIds.
-- Put a character id into changedCharacterIds only when there is a meaningful visible change that should affect portraits or storyboard continuity, such as a transformation, a clearly new outfit, masked versus unmasked identity, or a major injury/healing change.
+- Put a character id into changedCharacterIds only when there is a meaningful visible change that should affect portraits or storyboard continuity, such as a transformation, ageing or a time jump that changes age or life stage, a new hairstyle, a wardrobe change for a new day, place, or role, masked versus unmasked identity, or a major injury/healing change.
 - Do not include background extras or unnamed crowd figures in newCharacterIds.
 
 Intent example:
@@ -395,7 +395,7 @@ Core rules:
 3. Keep every field compact — the bible is injected into future generation prompts, so brevity keeps it useful.
 4. worldSummary: 3 to 6 sentences describing the world, setting, and period as canon.
 5. toneRules and styleRules: short imperative rules (tone of storytelling; visual/prose style) derived from the story configuration and the episode itself.
-6. characterRules: one entry per named character — identity, stable appearance anchors, temperament, and their status at the end of this episode.
+6. characterRules: one entry per named character — identity, identity anchors (face, build, distinguishing features), temperament, and their status at the end of this episode.
 7. relationshipRules: one entry per meaningful relationship, stating how the characters relate as of the end of this episode.
 8. settingRules: stable locations, world logic, and recurring objects the series must keep consistent.
 9. openThreads: unresolved plot threads the next episode may pick up. Return an empty array when everything is resolved.
@@ -426,7 +426,7 @@ Your job is to convert the latest story beat and the story bible into a high-qua
 
 Rules:
 1. Preserve character appearance exactly as described in {{characters}}.
-2. If character reference portraits are provided, describe characters exactly as they appear in their reference images — same proportions, colors, clothing, and distinguishing features.
+2. If character reference portraits are provided, describe characters' identity exactly as they appear in their reference images — face, proportions, and distinguishing features. Clothing and colors follow the current beat, not the reference image.
 3. Preserve the art style across the whole story session.
 4. Focus on one clear cinematic moment.
 5. Do not include text overlays in the image.
@@ -700,7 +700,7 @@ Hard requirements:
 - Compose as a full-bleed 2x2 storyboard grid of four equal cinematic panels separated by thin dark dividing lines.
 - Each panel must show a distinct sequential moment in reading order: top-left, top-right, bottom-left, bottom-right.
 - Respect the shared visual invariants and each panel-specific prompt exactly.
-- Preserve character identity exactly across all four panels: same face, clothing, body proportions, colors, and distinguishing features.
+- Preserve character identity exactly across all four panels: same face, body proportions, and distinguishing features. Clothing, colors, and appearance follow what this beat describes for this moment.
 - Never duplicate a named character unless the supplied story brief explicitly requires multiple copies of that same character.
 - If a named character is absent from a panel, omit them instead of cloning them into the composition.
 - Keep staging readable, emotionally expressive, and visually rich.

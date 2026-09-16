@@ -133,6 +133,65 @@ describe('buildCanonicalImageScene', () => {
   });
 });
 
+describe('buildCanonicalImageScene — Unit 5 continuity resolution', () => {
+  it('derives continuity.clothing "scene" for a continuous/no-transition scene', () => {
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    expect(scene.continuity.clothing).toBe('scene');
+  });
+
+  it('derives continuity.clothing "evolve" for a years_later transition', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    plan.transition = { timeRelation: 'years_later', locationRelation: 'same_exact', evidence: 'years later' };
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
+    expect(scene.continuity.clothing).toBe('evolve');
+  });
+
+  it('applies resolveContinuityContradictions before building the scene: LOCKED age becomes EVOLVE and mustNotInherit is populated', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    plan.transition = { timeRelation: 'years_later', locationRelation: 'same_exact', evidence: 'years later' };
+    plan.characterVisuals = [
+      {
+        name: 'Master Elrick',
+        englishName: 'Elrick',
+        identityAnchors: 'long white beard, spectacles',
+        currentAppearance: 'elderly scholar',
+        modes: { age: 'LOCKED', hair: 'EVOLVE', wardrobe: 'FREE', accessories: 'FREE' },
+      },
+    ];
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
+    const elrick = scene.characters.find((c) => c.displayName === 'Master Elrick')!;
+    expect(elrick.modes?.age).toBe('EVOLVE');
+    expect(scene.mustNotInherit).toEqual(expect.arrayContaining(['previous wardrobe', 'previous hairstyle']));
+  });
+
+  it('drops a wardrobe/hair-referencing continuityNotes entry on a big time jump, keeping an unrelated one', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    plan.transition = { timeRelation: 'years_later', locationRelation: 'same_exact', evidence: 'years later' };
+    const scene = buildCanonicalImageScene({
+      ...MEDIEVAL_MARKET_INPUT,
+      storyboardPlan: plan,
+      continuityNotes: ['Leo always wears his blue jacket.', 'Leo is endlessly curious.'],
+    });
+    expect(scene.continuity.notes).toEqual(['Leo is endlessly curious.']);
+  });
+
+  it('carries camera_repetition as a planWarnings entry when three panels share a shot with no echo', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    for (const key of ['topLeft', 'topRight', 'bottomLeft'] as const) {
+      plan[key].shotScale = 'medium shot';
+      plan[key].cameraHeight = 'eye level';
+      plan[key].visualEcho = false;
+    }
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
+    expect(scene.planWarnings).toContain('camera_repetition');
+  });
+
+  it('omits planWarnings entirely when there is nothing to warn about', () => {
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    expect(scene.planWarnings).toBeUndefined();
+  });
+});
+
 describe('slugifyCharacterKey', () => {
   it('slugifies and dedupes', () => {
     expect(slugifyCharacterKey('Master Elrick')).toBe('master-elrick');

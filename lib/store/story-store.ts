@@ -19,6 +19,7 @@ import {
   type GeneratedImageResult,
 } from '@/app/actions/story-runtime';
 import { buildFinalPortraitPrompt } from '@/lib/ai/portrait-prompt.shared';
+import { deriveOpenThreads } from '@/lib/store/open-threads.shared';
 import { selectRelevantWorld } from '@/lib/references/reference-routing';
 import {
   synthesizeDirectPortraitTasks,
@@ -101,6 +102,11 @@ import {
 } from '@/lib/ai/image-regeneration.shared';
 import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
 import { buildCanonicalImageScene, resolveImageFacingNames } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import {
+  filterCharacterReferencesByPresence,
+  presentCharacterNames,
+  shouldAttachPreviousStoryboardReference,
+} from '@/lib/ai/storyboard-plan.shared';
 import {
   assembleFinalImagePrompt,
   type ImagePromptCompilerRuntime,
@@ -403,16 +409,6 @@ function buildCharacterRegistry(beats: StoryBeat[], fallbackCharacters: Characte
   return Array.from(registry.values());
 }
 
-function deriveOpenThreads(beats: StoryBeat[]): string[] {
-  const threads = beats
-    .filter((beat) => !beat.isEnding)
-    .flatMap((beat) => [beat.nextBeatGoal, ...(beat.continuityNotes || [])])
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-
-  return Array.from(new Set(threads)).slice(-6);
-}
-
 function sanitizeCharactersForPersistence(characters: Character[]): Character[] {
   return characters.map((character) => ({
     ...character,
@@ -581,10 +577,17 @@ function resolveBeatWorldRouting(
   return result;
 }
 
+/**
+ * `portraitReferences` MUST already be presence-filtered (see
+ * restrictReferencesToPresentCharacters) so `shouldAttachPreviousStoryboardReference`'s
+ * presentCharacterHasReference check reflects only the characters actually in
+ * this beat, not every character the story has ever introduced.
+ */
 function buildStoryboardReferenceImages(
   beat: StoryBeat,
-  previousStoryboardUrl?: string,
-  portraitReferences: ReferenceImage[] = []
+  previousStoryboardUrl: string | undefined,
+  portraitReferences: ReferenceImage[] = [],
+  storyboardPlan?: StoryboardPlan | null
 ): ReferenceImage[] {
   if (beat.beatNumber === 1) {
     return portraitReferences;
@@ -592,11 +595,30 @@ function buildStoryboardReferenceImages(
 
   const references: ReferenceImage[] = [];
   references.push(...portraitReferences);
-  const sceneReference = buildReferenceFromValue('scene', previousStoryboardUrl);
-  if (sceneReference) {
-    references.push(sceneReference);
+  // Q4 / R8 (Unit 5): a big time jump or location change skips the previous
+  // beat's storyboard as a reference -- it otherwise freezes wardrobe, pose
+  // and staging the new beat is meant to reconsider -- unless no present
+  // character has a reference image of their own to anchor identity instead.
+  const presentCharacterHasReference = portraitReferences.some((ref) => ref.type === 'character');
+  if (shouldAttachPreviousStoryboardReference(storyboardPlan, { presentCharacterHasReference })) {
+    const sceneReference = buildReferenceFromValue('scene', previousStoryboardUrl);
+    if (sceneReference) {
+      references.push(sceneReference);
+    }
   }
   return references;
+}
+
+/** Restricts a reference list to characters present somewhere in the beat
+ * (Unit 5): `presentCharacterNames` returns null (don't restrict) for a
+ * fallback plan or a plan with no presence data, matching pre-Unit-5
+ * behaviour exactly. */
+function restrictReferencesToPresentCharacters(
+  refs: ReferenceImage[],
+  storyboardPlan: StoryboardPlan | null | undefined,
+  characters: Character[]
+): ReferenceImage[] {
+  return filterCharacterReferencesByPresence(refs, presentCharacterNames(storyboardPlan, characters));
 }
 
 function referenceKey(reference: ReferenceImage): string {
@@ -3078,11 +3100,15 @@ export const useStoryStore = create<StoryState>()(
           const beatWorldRouting = resolveBeatWorldRouting(initialSession, beat);
           const portraitRefs = initialSession.enableReferenceImages && !promptOnly
             ? applyImageFacingReferenceNames(
-                mergeReferenceImages(
-                  collectBeatPortraitReferences(beat),
-                  portraitGenerationResult.references,
-                  directFallbackRefs,
-                  beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+                restrictReferencesToPresentCharacters(
+                  mergeReferenceImages(
+                    collectBeatPortraitReferences(beat),
+                    portraitGenerationResult.references,
+                    directFallbackRefs,
+                    beatWorldRouting.worldReference ? [beatWorldRouting.worldReference] : []
+                  ),
+                  beat.storyboardPlan,
+                  beat.characters
                 ),
                 beat.characters,
                 beat.storyboardPlan
@@ -4586,9 +4612,10 @@ export const useStoryStore = create<StoryState>()(
           }
 
           const worldRouting = resolveBeatWorldRouting(session, beat);
+          const presentPortraitRefs = restrictReferencesToPresentCharacters(portraitRefs, storyboardPlan, beat.characters);
           const referenceImages = applyImageFacingReferenceNames(
             mergeReferenceImages(
-              buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, portraitRefs),
+              buildStoryboardReferenceImages(beat, currentNode.data.imageUrl, presentPortraitRefs, storyboardPlan),
               worldRouting.worldReference ? [worldRouting.worldReference] : []
             ),
             beat.characters,
@@ -6334,12 +6361,22 @@ export const useStoryStore = create<StoryState>()(
           }
 
           const worldRouting = resolveBeatWorldRouting(session, beatForRender);
+          // Filtered only for the attach list -- the gate above (deciding
+          // whether to generate NEW portraits) intentionally keeps reading the
+          // unfiltered portraitReferences, so presence restriction never
+          // itself triggers a fresh generation call.
+          const presentPortraitReferences = restrictReferencesToPresentCharacters(
+            portraitReferences,
+            storyboardPlan,
+            beatForRender.characters
+          );
           const referenceImages = applyImageFacingReferenceNames(
             mergeReferenceImages(
               buildStoryboardReferenceImages(
                 beatForRender,
                 parentNode?.data.imageUrl || (parentNode ? getBeatPersistedImageUrl(parentNode.data) ?? undefined : undefined),
-                portraitReferences
+                presentPortraitReferences,
+                storyboardPlan
               ),
               worldRouting.worldReference ? [worldRouting.worldReference] : []
             ),

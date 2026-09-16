@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { compileImagePrompt, COMPILER_VERSION } from './compile.shared';
-import { buildCanonicalImageScene } from './scene-spec.shared';
+import { buildCanonicalImageScene, type BuildCanonicalSceneInput } from './scene-spec.shared';
 import { PROMPT_HARD_MAX_CHARS, type PromptCompilerCapability } from './capability.shared';
 import { buildReferenceBindingLines, estimateReferenceBindingChars } from '../reference-binding';
+import type { Character, StoryboardFramePlan, StoryboardPlan } from '@/lib/types/story';
 import {
   MEDIEVAL_MARKET_INPUT,
   MEDIEVAL_MARKET_PLAN,
@@ -337,14 +338,113 @@ describe('compileImagePrompt CONTINUITY', () => {
       locationRelation: 'new_location',
       evidence: 'Years have passed since the last scene.',
     };
-    plan.mustNotInherit = ['previous wardrobe', 'previous hairstyle'];
+    // mustNotInherit is intentionally left unset -- Unit 5's
+    // resolveContinuityContradictions (called inside buildCanonicalImageScene)
+    // derives it from the transition itself: wardrobe/hairstyle from the big
+    // time jump, location architecture from the location change.
     const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
     const result = compileImagePrompt(scene, NEUTRAL);
     expect(result.sections.continuity).toContain(
       'reassess age, hair, clothing and setting for this point in the story'
     );
     expect(result.sections.continuity).not.toContain('within this continuous scene keep identity, clothing');
-    expect(result.sections.continuity).toContain('Do not carry over: previous wardrobe; previous hairstyle.');
+    expect(result.sections.continuity).toContain('Do not carry over:');
+    expect(result.sections.continuity).toContain('previous wardrobe');
+    expect(result.sections.continuity).toContain('previous hairstyle');
+    expect(result.sections.continuity).toContain('previous location architecture');
+  });
+});
+
+describe('compileImagePrompt presence (Unit 5, replacing the recurring-in->=2 rule)', () => {
+  function presenceFrame(description: string, charactersPresent: string[]): StoryboardFramePlan {
+    return {
+      description,
+      prompt: '',
+      cameraAngle: 'medium shot',
+      visualFocus: [],
+      emotion: '',
+      continuityAnchor: '',
+      charactersPresent,
+      appearanceChanges: [],
+      shotScale: '',
+      cameraHeight: '',
+      visualEcho: false,
+    };
+  }
+
+  const ADA: Character = { id: 'a1', name: 'Ada', type: 'human', appearanceSummary: 'a young woman', personalitySummary: '' };
+  const BEN: Character = { id: 'b1', name: 'Ben', type: 'human', appearanceSummary: 'an older man', personalitySummary: '' };
+
+  function presenceInput(plan: StoryboardPlan): BuildCanonicalSceneInput {
+    return { storyboardPlan: plan, characters: [ADA, BEN], visualStyle: 'flat vector', aspectRatio: '16:9' };
+  }
+
+  it('a character present in exactly one panel is rendered absent in the other three', () => {
+    const plan: StoryboardPlan = {
+      sharedVisualInvariants: [],
+      portraitTasks: [],
+      topLeft: presenceFrame('A quiet street corner.', ['Ada']),
+      topRight: presenceFrame('A busy market stall.', []),
+      bottomLeft: presenceFrame('A rooftop at dusk.', []),
+      bottomRight: presenceFrame('A cosy kitchen.', []),
+      negativeConstraints: [],
+    };
+    const scene = buildCanonicalImageScene(presenceInput(plan));
+    const result = compileImagePrompt(scene, NEUTRAL);
+    const byLabel = (label: string) => result.sections.panels.find((p) => p.startsWith(label))!;
+    expect(byLabel('Top-left')).not.toContain('absent');
+    expect(byLabel('Top-right')).toContain('Ada is absent');
+    expect(byLabel('Bottom-left')).toContain('Ada is absent');
+    expect(byLabel('Bottom-right')).toContain('Ada is absent');
+  });
+
+  it('a character present in no panel is not listed in CHARACTERS', () => {
+    const plan: StoryboardPlan = {
+      sharedVisualInvariants: [],
+      portraitTasks: [],
+      topLeft: presenceFrame('A quiet street corner.', ['Ada']),
+      topRight: presenceFrame('A busy market stall.', ['Ada']),
+      bottomLeft: presenceFrame('A rooftop at dusk.', ['Ada']),
+      bottomRight: presenceFrame('A cosy kitchen.', ['Ada']),
+      negativeConstraints: [],
+    };
+    const scene = buildCanonicalImageScene(presenceInput(plan));
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.sections.characters).toContain('Ada');
+    expect(result.sections.characters).not.toContain('Ben');
+    // Ada is present everywhere, so no absence line fires anywhere either.
+    for (const panel of result.sections.panels) expect(panel).not.toContain('absent');
+  });
+
+  it('fails open (lists everyone, no absence lines) when no panel declares presence at all', () => {
+    const plan: StoryboardPlan = {
+      sharedVisualInvariants: [],
+      portraitTasks: [],
+      topLeft: presenceFrame('A quiet street corner.', []),
+      topRight: presenceFrame('A busy market stall.', []),
+      bottomLeft: presenceFrame('A rooftop at dusk.', []),
+      bottomRight: presenceFrame('A cosy kitchen.', []),
+      negativeConstraints: [],
+    };
+    const scene = buildCanonicalImageScene(presenceInput(plan));
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.sections.characters).toContain('Ada');
+    expect(result.sections.characters).toContain('Ben');
+    for (const panel of result.sections.panels) expect(panel).not.toContain('absent');
+  });
+});
+
+describe('compileImagePrompt planWarnings (Unit 5)', () => {
+  it('folds resolveContinuityContradictions warnings (camera_repetition) into the compiled warnings', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    for (const key of ['topLeft', 'topRight', 'bottomLeft'] as const) {
+      plan[key].shotScale = 'medium shot';
+      plan[key].cameraHeight = 'eye level';
+      plan[key].visualEcho = false;
+    }
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.warnings).toContain('camera_repetition');
   });
 });
 

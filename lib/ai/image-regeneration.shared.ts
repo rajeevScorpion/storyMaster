@@ -81,7 +81,7 @@ export function buildRegenerationInstructionBlock(input: RegenerationInstruction
   lines.push('');
   lines.push('STRICT REGENERATION RULES:');
   lines.push('- Preserve the exact story event and narrative meaning described in the beat text.');
-  lines.push('- Preserve named character identities, appearance references, and costumes unless the user explicitly asks for a visual costume change.');
+  lines.push('- Preserve named character identities exactly, and keep appearance, costumes, and setting as this beat describes them, unless the user explicitly asks for a visual change.');
   lines.push('- Preserve the established visual style unless the user specifically requests a style shift.');
   if (input.isStoryboard) {
     lines.push('- Preserve the exact panel count and storyboard layout.');

@@ -22,6 +22,11 @@ import {
 import { ReaderFacingTextError } from '@/lib/ai/text-gateway/outcome.shared';
 import { TextGatewayError, errorDetail } from '@/lib/ai/text-gateway/types.shared';
 import { buildCanonicalImageScene, resolveImageFacingNames } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import {
+  filterCharacterReferencesByPresence,
+  presentCharacterNames,
+  shouldAttachPreviousStoryboardReference,
+} from '@/lib/ai/storyboard-plan.shared';
 import { assembleFinalImagePrompt } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { estimateReferenceBindingChars } from '@/lib/ai/reference-binding';
 import { resolveImagePromptCompilerRuntimeAction } from '@/app/actions/prompt-compiler';
@@ -356,13 +361,25 @@ export async function processBeatVisuals(input: ProcessBeatVisualsInput): Promis
     collectCharacterPortraitReferences(beat.characters),
     portraitResult.references
   );
+  // Unit 5 (Q4/R8): attach character references only for characters present
+  // somewhere in the beat, and skip the previous beat's storyboard as a
+  // reference on a big time jump/location change unless no present character
+  // has a reference image to anchor identity instead. presentCharacterNames
+  // returns null (don't restrict) for a fallback plan or one with no presence
+  // data, matching pre-Unit-5 behaviour exactly.
+  const presentNames = presentCharacterNames(storyboardPlan, beat.characters);
+  const presentPortraitReferences = filterCharacterReferencesByPresence(portraitReferences, presentNames);
+  const presentCharacterHasReference = presentPortraitReferences.some((ref) => ref.type === 'character');
+  const attachPreviousStoryboard = shouldAttachPreviousStoryboardReference(storyboardPlan, {
+    presentCharacterHasReference,
+  });
   const references: ServerReferenceImage[] = applyImageFacingReferenceNames(
     mergeServerReferenceImages(
       beat.beatNumber === 1
-        ? portraitReferences
+        ? presentPortraitReferences
         : [
-            ...portraitReferences,
-            ...(input.previousImageUrl
+            ...presentPortraitReferences,
+            ...(input.previousImageUrl && attachPreviousStoryboard
               ? [
                   input.previousImageUrl.startsWith('data:')
                     ? { type: 'scene' as const, dataUrl: input.previousImageUrl }
