@@ -14,6 +14,7 @@ import {
   type TextReasoningLevel,
 } from '@/lib/ai/text-models.shared';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 import { computeTextCostUsd } from './cost.shared';
 import { extractJsonText, stripNullOptionals, validateAgainstGeminiSchema, type GeminiSchemaNode } from './json-schema.shared';
 import { callGemini } from './gemini';
@@ -378,7 +379,7 @@ async function recordFailedAttempt(input: {
 }
 
 function logTiming(taskKey: string, record: TextModelRecord, durationMs: number, success: boolean, error?: unknown): void {
-  console.info(`[timing:text_gateway.${taskKey}]`, {
+  logTimingEvent(`text_gateway.${taskKey}`, {
     durationMs: Math.round(durationMs),
     success,
     provider: record.providerKey,

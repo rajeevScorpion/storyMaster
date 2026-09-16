@@ -29,7 +29,10 @@ export async function POST(request: Request): Promise<Response> {
   after(async () => {
     try {
       const result = await runReferenceAdoptionJobs({ jobId });
-      if (result.processed > 0 || result.failed > 0 || result.remaining > 0) {
+      if (
+        process.env.NEXT_PUBLIC_LOG_TIMING === '1' &&
+        (result.processed > 0 || result.failed > 0 || result.remaining > 0)
+      ) {
         console.log(
           `Reference adoption worker: processed=${result.processed} failed=${result.failed} remaining=${result.remaining}`
         );

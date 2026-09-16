@@ -35,17 +35,39 @@ Pipeline (all pure/isomorphic — `lib/ai/prompt-compiler/*.shared.ts`):
    synonym-folded key, hoists a focus shared by ≥3 panels to global, demotes a global
    that names one panel, drops focus items that restate a present character, and warns
    (never merges) on conflicting color/temperature/time/shot/emotion.
-3. **Compiler** — `compile.shared.ts` `compileImagePrompt(scene, capability)` renders
-   sections in the fixed priority (layout → identity+references → panel action →
-   continuity → world/scene → style → negatives), states each fact once, adds explicit
-   absence only for strongly-recurring characters the action doesn't already name, and
-   applies a model-aware budget with priority-aware compression levels 0–3 (never
-   dropping identity, present characters, actions, layout, user deltas or critical
-   negatives; warns instead of blind-truncating at level 3). A final redaction pass
-   scrubs uuids/`r2://`/urls/storage keys/control chars. Adapters: `neutral-v1`
-   (bulleted negatives) and `gemini-v1` (one "Avoid: …" sentence). Deterministic.
+3. **Compiler (v2)** — `compile.shared.ts` `compileImagePrompt(scene, capability,
+   {reservedChars})` renders eight headed sections, separated by blank lines, in a fixed
+   order: `FORMAT`, `STYLE`, `SETTING AND TIME`, `CHARACTERS`, `PANELS`, `CONTINUITY`,
+   `USER DIRECTIVES` (only with regeneration deltas) and `AVOID`. Every string is English:
+   a character appears under its image-facing name (the composer's romanized `englishName`,
+   else the display name when it already reads as English, else `Character N`), and the
+   prompt is checked at the end — a failure records the warning `non_english_prompt` rather
+   than shipping mixed-script text silently. The redaction pass scrubs
+   uuids/`r2://`/urls/storage keys and control characters **except newlines**, which carry
+   the section breaks; stripping them is what used to collapse the whole prompt into one
+   block. Adapters: `neutral-v1` (bulleted negatives) and `gemini-v1` (one "Avoid: …"
+   sentence). Deterministic: the same scene, capability and `reservedChars` always produce
+   byte-identical output.
 4. **Assembler** — `assemble.shared.ts` `assembleFinalImagePrompt({runtime, scene,
-   legacyBuild})` decides per mode and returns the final prompt + diagnostics.
+   legacyBuild, reservedChars})` decides per mode and returns the final prompt +
+   diagnostics (including `budgetTier`, `targetChars` and `reservedChars`).
+
+### Budget policy
+
+`promptBudgetChars` is a **target**, not a ceiling; `PROMPT_HARD_MAX_CHARS` (5,000) is the
+ceiling and is never exceeded. Reference-image binding lines are measured first
+(`estimateReferenceBindingChars`) and subtracted from both limits, so the prompt plus its
+binding lines still fits. `compressionLevel` records which tier was reached:
+
+| Tier | Meaning |
+|---|---|
+| 0 | The full render fit the target. |
+| 1 | Lossless passes reached it: focus items already named in the action, anchors that repeat an invariant, the long style scope line, surplus continuity notes, non-canonical negatives. |
+| 2 | Over target but within the hard cap — accepted, warning `over_target`. |
+| 3 | Over the hard cap — lossy trimming (world anchor, invariants, emotion, focus, proportionally shortened actions), warning `lossy_trim`, and a final word-boundary cut (`hard_cut`) if anything remains. |
+
+Never removed at any tier: the format block, character identity, who is present or absent,
+camera, the transition sentence, "do not carry over" and the canonical negative buckets.
 
 Capability (`capability.shared.ts`) is read from `image_model_registry.capabilities.
 promptCompiler` and normalized fail-closed. Mode (`mode.ts`, server-only) is read from
@@ -68,8 +90,8 @@ mirroring `media_processing_mode`; the server bundle path resolves it directly.
 ## Configuration
 
 - **Flag** `image_prompt_compiler_mode` (value: `legacy|shadow|new|new_with_legacy_fallback`) — admin at `Admin → Global Settings → Image prompt compiler`, or the DB `feature_flags` row.
-- **Per-model capability** `capabilities.promptCompiler` (`enabled`, `promptBudgetChars`, `supportsNegativePrompt`, `adapterVersion`) — admin at `Admin → Image Models` (per-row "Prompt compiler" editor).
-- **Diagnostics** land in `beats.image_generation_metadata.promptCompiler` on both the inline and server-pipeline paths; the admin comparison view reads them.
+- **Per-model capability** `capabilities.promptCompiler` (`enabled`, `promptBudgetChars`, `supportsNegativePrompt`, `adapterVersion`) — admin at `Admin → Image Models` (per-row "Prompt compiler" editor). `promptBudgetChars` is the **target** (clamped 1,200–5,000); the 5,000 hard cap is fixed in code, not per model. Do not lower the target to make room for reference-image lines — the compiler already reserves those.
+- **Diagnostics** land in `beats.image_generation_metadata.promptCompiler` on both the inline and server-pipeline paths; the admin comparison view reads them. `compressionLevel` is the budget tier (see above).
 
 ## Migration
 
@@ -77,6 +99,8 @@ Apply **manually in the Supabase dashboard** (never the CLI):
 `supabase/migrations/081_image_prompt_compiler.sql` seeds the flag at `shadow` and
 enables the Gemini `image_generation` capability (2800-char budget, `gemini-v1`).
 `081_image_prompt_compiler_rollback.sql` reverts it.
+`supabase/migrations/122_image_prompt_budget_target.sql` raises every row still at the 081
+default to a 3,000-char target (applied on dev 2026-09-16; **not** on production).
 
 ## Rollout runbook
 
@@ -100,6 +124,15 @@ through the existing failure paths.
 - `npm test` — full suite (compiler unit/snapshot/determinism/redaction/assemble/compare).
 - `npm run compare:image-prompts` — prints legacy vs compiled char counts for the fixtures.
 - `npx tsc --noEmit` — type check.
+- **Live, paid, opt-in:** `COMPOSER_SCHEMA_SMOKE=1 npx vitest run --config vitest.smoke.config.ts scripts/composer-schema.smoke.ts`
+  sends the real composer template to GPT-5.6 Luna and Gemini 3.8 Flash for an invented Hindi
+  beat set twelve years after a childhood scene, then runs the returned plan through the scene
+  builder and compiler and asserts the finished prompt is English, sectioned, free of the
+  story's own script, and inside the hard cap. Skipped unless the env var is set.
+  First run (2026-09-16): both providers accepted the schema and detected the time jump and
+  location change; the compiled prompts were 4,683 chars (Luna) and 3,719 (Gemini) — both
+  **tier 2**, i.e. over the 3,000 target and carrying `over_target`. Expect real beats to land
+  there until the composer's brevity limits or the target are tuned.
 - Manual QA after applying migration 081 to dev (ask before launching the dev server):
   shadow → generate → comparison rows; `new_with_legacy_fallback` → verify compiled
   output; back to `shadow`/`legacy`.

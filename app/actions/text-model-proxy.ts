@@ -10,7 +10,7 @@
 // 'use server' files may only export async functions -- interfaces are erased at compile
 // time and are fine (gemini-proxy.ts already relies on this).
 
-import { beatSchema, reelDraftSchema, seedPlanSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, reelDraftSchema, seedPlanSchema, storyboardPlanSchema, storyboardContinuityPlanSchema } from '@/lib/ai/generation-schemas';
 import { LOCKED_PROMPT_GUARDRAILS } from '@/lib/ai/prompt-config.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
@@ -23,7 +23,10 @@ const TEXT_SCHEMA_MAP = {
   reel_story_generation: reelDraftSchema,
   seed_plan_generation: seedPlanSchema,
   seeded_beat_materialization: beatSchema,
-  visual_prompt: storyboardPlanSchema,
+  // Reels keep storyboardPlanSchema unchanged; the continuity fields (transition,
+  // setting, characterVisuals, mustNotInherit, per-panel storyFunction, etc.) are
+  // non-reel only -- see generation-schemas.ts for why they live in a separate schema.
+  visual_prompt: storyboardContinuityPlanSchema,
   reel_visual_prompt: storyboardPlanSchema,
 } as const;
 

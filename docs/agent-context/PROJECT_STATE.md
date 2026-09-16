@@ -133,7 +133,13 @@ for what has actually run.
 |---|---|---|---|---|
 | 119 | `text_model_registry` | table `text_model_registry`, one row per text model. `model_config.model_id` and persona `model_overrides[*].modelId` now name a `model_key` here. Touch trigger, RLS with no policies, 12 seed rows: 8 Gemini enabled, 4 OpenAI/OpenRouter disabled | **Applied** 2026-09-14 05:27:43+00. Verified against the schema, not only the ledger: 18 columns, every CHECK, the trigger, RLS with 0 policies, 12 seed rows with the right enabled flags. **Frozen** — changes ship as 120 | **Not applied.** First run `select task_key, model_id from public.model_config order by task_key;` — a text `model_id` with no seeded row runs on its task default once 119 lands. A server that is already running needs a redeploy afterwards (see GOTCHAS "Text models") |
 | 120 | `text_model_thinking` | column `model_config.reasoning_level` (CHECK on the level vocabulary); `capabilities.reasoningLevels` on every remaining registry row; Gemini rows stop accepting a task temperature; row `gemini-3.8-flash`. Moves text tasks and persona overrides off seven removed Gemini text models (the three economy tasks at Low thinking), records the move in `model_config_history`, then deletes those rows | **Applied** 2026-09-14 17:45:48+00. Verified against the schema: column and CHECK, 6 registry rows with levels, `graphic_style_extraction` and `voice_selection` moved to 3.8 Flash at Low with history rows, `agent_novelty_assessment` row inserted at Low, image and TTS rows untouched. **Frozen** — changes ship as 121 | **Not applied.** Needs 119 first. Run the read-only pre-apply check in `docs/text-model-thinking-plan.md` section 3 to see which tasks will move. Redeploy afterwards |
-| 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Not applied.** File committed `eb849cd` on `feature/content-block-fallback`; **frozen** — changes ship as 122 | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
+| 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Applied** on dev (owner, 2026-09-15); merged into `dev` as `8df40e2`. **Frozen** — further changes ship as a new migration, not 122 (that number is the image prompt budget target) | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
+
+### Image composer continuity (`feature/image-composer-continuity`, not merged)
+
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Not applied.** Safe to defer — without it the target stays 2,800 and prompts simply compress a little harder |
 
 #### Promoting the agentic system to production — checklist
 
@@ -451,6 +457,27 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 
 ## Deferred / known gaps
 
+### Image composer continuity — deferred on purpose
+
+Framework phases 3–4 (`docs/visual-composer-continuity-framework.md`): prop lifecycle, physical-state and
+environment-state tracking, relationship geometry, and vision-based evaluation of a generated image with
+targeted regeneration. Also deferred: putting reels and portraits on the compiler (both still take the legacy
+path, so portrait prompts still carry a character's canonical, possibly non-Latin, name), and per-provider
+adapter tuning beyond negatives.
+
+Known limits of what shipped:
+
+- The continuity schema was live-tested on **GPT-5.6 Luna and Gemini 3.8 Flash only**; Qwen is untested.
+- **Provider-stateful image mode carries earlier images implicitly** (R10). The continuity rules cannot suppress
+  what the provider's own thread remembers.
+- Regenerating an old beat whose **stored plan predates the English rule** keeps its non-English panel action —
+  deliberately, so the image still depicts the event — and records a `non_english_prompt` warning.
+- The continue-story `promptOnly` legacy build still omits `worldAnchor`. It feeds diagnostics and the
+  shadow/error-fallback prompt only, never the compiled prompt that ships.
+- **Open decision:** real beats compile to ~3,700–4,700 characters against a 3,000 target, so `over_target`
+  fires on essentially every beat and Luna sits ~300 characters under the 5,000 hard cap. Either tighten the
+  composer's brevity limits, raise the target with a new migration, or accept the warning as noise.
+
 Deliberate decisions, not oversights. Don't "fix" them without checking why.
 
 **Agentic Creator (branch `feat/agentic-creator`)**
@@ -511,7 +538,7 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   this; it remains scoped to worker media-state patches.
 - **The evaluator's restricted-theme check is effectively English-only against beat text.** All 15 seeded
   personas store `restricted_themes` as ENGLISH phrases ("graphic violence", "self-harm"), including the 12
-  that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `` is defined over
+  that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `\b` is defined over
   `[A-Za-z0-9_]` and never holds beside a Devanagari/Bengali/Gujarati/Arabic character, and the English
   phrase would not appear in that prose anyway. The `briefThemes` half works for every persona, because
   `buildStoryBriefPrompt` asks for themes "in English" while the prose goes in the target language. It fails
@@ -735,17 +762,20 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
   until an admin enables a row and assigns it. Verification, routing and follow-ups:
   [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
   [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
-- **Text task guidance — on `feature/text-task-guidance`** (2026-09-15), not merged. Each Task assignments card
+- **Image composer continuity — on `feature/image-composer-continuity`** (2026-09-15), in progress. English-only
+  image prompts, a 3,000-character target with a 5,000 hard cap, non-Latin text surviving the compiler, and
+  attribute-specific continuity (LOCKED / EVOLVE / FREE) instead of sameness. Handoff:
+  [../image-composer-continuity-handoff.md](../image-composer-continuity-handoff.md); spec:
+  [../visual-composer-continuity-framework.md](../visual-composer-continuity-framework.md).
+- **Text task guidance — merged into `dev`** (2026-09-15, `e1dd637`). Each Task assignments card
   says what the task does, whether a user waits on it and how often it runs, and suggests a thinking level with
   a reason; a note shows when the setting is two or more steps off. Judgment, not measurement. Code-only copy:
   no migration, no flag. Plan: [../text-task-guidance-plan.md](../text-task-guidance-plan.md).
-- **Content-block fallback — on `feature/content-block-fallback`** (2026-09-15), cut from the guidance branch, not
-  merged. Content-safety blocks are named (`content_blocked`) instead of "empty response"; every failed text call
+- **Content-block fallback — merged into `dev`** (2026-09-15, `8df40e2`); migration 121 applied on dev. Content-safety blocks are named (`content_blocked`) instead of "empty response"; every failed text call
   is a `failed` cost row; a blocked call retries once on the task's fallback model (migration 121, per-task
   dropdown on the card); readers see the content-safety cause when a beat still can't be written, and a note when
   a storyboard used the backup plan. Plan: [../content-block-fallback-plan.md](../content-block-fallback-plan.md).
-- **Beat length allowance — on `feature/beat-length-allowance`** (2026-09-15), cut from the content-block branch,
-  not merged. Word count never retries or fails a story beat, seeded beat or seed plan; a beat far off length is
+- **Beat length allowance — merged into `dev`** (2026-09-15, `a70c93f`). Word count never retries or fails a story beat, seeded beat or seed plan; a beat far off length is
   kept and logged. Length ranges scale with the target and are no longer clipped at Brief and Immersive; the
   model is told one range plus a per-panel guide. The admin default length shows every audience's words. Code
   only: no migration, no flag. Plan: [../beat-length-allowance-plan.md](../beat-length-allowance-plan.md).

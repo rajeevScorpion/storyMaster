@@ -46,6 +46,10 @@ export interface PromptCompilerBeatMetadata {
   fallbackReason?: string;
   /** Shadow mode only: a truncated copy of the compiled prompt for comparison. */
   compiledPreview?: string;
+  /** compiler-v2 budget diagnostics (compile.shared.ts CompiledImagePrompt.budget). */
+  budgetTier?: number;
+  targetChars?: number;
+  reservedChars?: number;
 }
 
 export class ImagePromptCompileError extends Error {
@@ -59,6 +63,10 @@ export interface AssembleInput {
   runtime: ImagePromptCompilerRuntime | null;
   scene: CanonicalImageScene | null;
   legacyBuild: () => string;
+  /** Characters already spent on reference-image binding lines (Unit 4b),
+   * subtracted from the compiler's target and hard cap. Defaults to 0, which
+   * keeps every existing caller working unchanged until 4b wires it up. */
+  reservedChars?: number;
 }
 
 export interface AssembleResult {
@@ -87,6 +95,9 @@ function metaFromCompiled(
     compressionActions: compiled.compressionActions,
     removedInformation: compiled.removedInformation,
     warnings: compiled.warnings,
+    budgetTier: compiled.budget.tier,
+    targetChars: compiled.budget.targetChars,
+    reservedChars: compiled.budget.reservedChars,
     ...(includePreview ? { compiledPreview: truncatePreview(compiled.fullPrompt) } : {}),
   };
 }
@@ -99,7 +110,7 @@ function metaFromCompiled(
  * - new_with_legacy_fallback                  -> compiled prompt; legacy fallback on failure.
  */
 export function assembleFinalImagePrompt(input: AssembleInput): AssembleResult {
-  const { runtime, scene, legacyBuild } = input;
+  const { runtime, scene, legacyBuild, reservedChars } = input;
   const mode = runtime?.mode ?? 'legacy';
   const capability = runtime?.capability;
 
@@ -120,7 +131,7 @@ export function assembleFinalImagePrompt(input: AssembleInput): AssembleResult {
   try {
     const validation = validateCanonicalImageScene(scene);
     if (!validation.ok) throw new ImagePromptCompileError(`invalid scene: ${validation.errors.join('; ')}`);
-    compiled = compileImagePrompt(scene, capability);
+    compiled = compileImagePrompt(scene, capability, { reservedChars });
   } catch (err) {
     compileError = err instanceof Error ? err.message : 'compile failed';
   }

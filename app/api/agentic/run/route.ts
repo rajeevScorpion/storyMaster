@@ -41,7 +41,7 @@ export async function POST(request: Request): Promise<Response> {
   after(async () => {
     try {
       const processed = await drainAgentRuns();
-      if (processed > 0) {
+      if (processed > 0 && process.env.NEXT_PUBLIC_LOG_TIMING === '1') {
         console.log(`Agentic run worker: processed=${processed}`);
       }
     } catch (error) {

@@ -14,6 +14,7 @@ import { getFeatureFlag, getFeatureFlagValue } from '@/lib/ai/model-config';
 import { recordModelCostEvent } from '@/lib/ai/cost-telemetry';
 import { estimateElevenLabsModelCostUsd } from '@/lib/ai/provider-costs';
 import { generateText } from '@/lib/ai/text-gateway/router';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
 import type { CostTelemetryContext } from '@/lib/ai/cost-telemetry.shared';
 import type { TaskKey } from '@/lib/ai/model-config.shared';
 import type { StoryBeat, WordTiming } from '@/lib/types/story';
@@ -182,14 +183,14 @@ async function timeNarrationStep<T>(
   const startedAt = narrationNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(narrationNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(narrationNowMs() - startedAt),
       success: false,
       ...meta,
@@ -703,19 +704,6 @@ async function callGeminiTTS(
       if (taskKey !== 'reel_tts') {
         ttsPrompt = `${ttsPrompt}\n\n${formatAudienceNarrationDirection(options.audience)}`;
       }
-      // TEMP DEBUG: prints the exact prompt sent to Gemini TTS so we can verify the
-      // accent instruction actually reaches the model on the live path. Remove once
-      // accent behavior is confirmed.
-      console.info('[narration.tts_prompt_debug]', {
-        taskKey,
-        language,
-        promptLanguage,
-        voiceName,
-        requestedAccent: options.accent ?? null,
-        accentApplied: Boolean(accentInstruction),
-        accentInstruction: accentInstruction || null,
-        resolvedPrompt: ttsPrompt,
-      });
       const ttsFlagVal = await getFeatureFlagValue('gemini_tts_timeout_ms');
       const ttsTimeoutMs = (ttsFlagVal ? parseInt(ttsFlagVal, 10) : 0) || GEMINI_TTS_TIMEOUT_MS;
 
@@ -2128,7 +2116,9 @@ export async function resolveNarrationVoiceServer(input: {
     decision.warnings.push(`Fell back to ${voiceId} because no narration voice was resolved.`);
   }
 
-  console.info('[narration.voice_resolver]', {
+  // A resolution with warnings (e.g. a voice fallback) is worth always seeing;
+  // a clean resolution is routine and stays behind the timing flag.
+  const voiceResolverLogPayload = {
     storyId: input.savedStoryId ?? null,
     mode: decision.mode,
     voiceId,
@@ -2136,7 +2126,12 @@ export async function resolveNarrationVoiceServer(input: {
     accent,
     usedLegacySelector,
     warnings: decision.warnings,
-  });
+  };
+  if (decision.warnings.length > 0) {
+    console.warn('[narration.voice_resolver]', voiceResolverLogPayload);
+  } else if (process.env.NEXT_PUBLIC_LOG_TIMING === '1') {
+    console.info('[narration.voice_resolver]', voiceResolverLogPayload);
+  }
 
   return {
     voiceId,

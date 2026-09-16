@@ -14,7 +14,7 @@ import {
   resolvePromptTemplate,
   validatePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
-import { beatSchema, reelDraftSchema, seedPlanSchema, storyBibleGenerationSchema, storyboardPlanSchema } from '@/lib/ai/generation-schemas';
+import { beatSchema, reelDraftSchema, seedPlanSchema, storyBibleGenerationSchema, storyboardPlanSchema, storyboardContinuityPlanSchema } from '@/lib/ai/generation-schemas';
 import {
   getPromptPlaygroundState,
   getPublishedPrompt,
@@ -368,7 +368,7 @@ async function runVisualPromptTest(
 
   return runTextGatewayTest('visual_prompt', modelId, temperature, prompt, 'json', {
     systemInstruction: LOCKED_PROMPT_GUARDRAILS.visual_prompt,
-    schema: storyboardPlanSchema,
+    schema: storyboardContinuityPlanSchema,
   });
 }
 

@@ -116,6 +116,51 @@ export interface PortraitReferenceConfig {
   quality: PortraitReferenceQuality;
 }
 
+// Continuity framework (docs/visual-composer-continuity-framework.md sections 3,
+// 6, 7, 14): the transition between beats and the per-character LOCKED/EVOLVE/FREE
+// classification the composer reasons about before compiling the image prompt.
+// All additive/optional so old stored beats (which lack these fields) still load.
+export type StoryTimeRelation =
+  | 'continuous'
+  | 'same_session'
+  | 'hours_later'
+  | 'next_day'
+  | 'days_weeks_later'
+  | 'months_later'
+  | 'years_later'
+  | 'flashback'
+  | 'memory'
+  | 'dream'
+  | 'unknown';
+
+export type StoryLocationRelation =
+  | 'same_exact'
+  | 'same_building_different_area'
+  | 'same_category_different_location'
+  | 'new_location'
+  | 'unknown';
+
+/** Attribute-specific continuity state (framework section 3): LOCKED must persist,
+ * EVOLVE should stay recognizable while changing naturally, FREE is fully open. */
+export type ContinuityMode = 'LOCKED' | 'EVOLVE' | 'FREE';
+
+/** Per-panel dramatic function (framework section 19), used to derive camera
+ * treatment instead of picking shot scale mechanically. */
+export type PanelStoryFunction =
+  | 'ESTABLISH'
+  | 'REVEAL'
+  | 'ESCALATE'
+  | 'HESITATE'
+  | 'REACT'
+  | 'CHOOSE'
+  | 'ACT'
+  | 'TRANSFORM'
+  | 'CONNECT'
+  | 'ISOLATE'
+  | 'RESOLVE'
+  | 'FORESHADOW'
+  | 'CONTRAST';
+
 export interface StoryboardFramePlan {
   description: string;
   prompt: string;
@@ -129,6 +174,19 @@ export interface StoryboardFramePlan {
   // deriving presence from free text. Backward compatible: absent on legacy
   // plans, where the scene builder falls back to name matching.
   charactersPresent?: string[];
+  /** This panel's dramatic function; drives camera derivation (framework §19). */
+  storyFunction?: PanelStoryFunction;
+  /** Time jump relative to the previous panel -- jumps can happen inside a beat,
+   * not only between beats (framework §6, "child -> adult between panels 2 and 3"). */
+  timeRelationToPreviousPanel?: StoryTimeRelation;
+  /** English, per-panel: how a character's look differs from characterVisuals's
+   * currentAppearance for this specific panel. */
+  appearanceChanges?: string[];
+  shotScale?: string;
+  cameraHeight?: string;
+  /** True only for a deliberate repeated framing (framework §21); otherwise
+   * repeated shotScale/cameraHeight across panels is a diversity-check failure. */
+  visualEcho?: boolean;
 }
 
 export interface StoryboardPlan {
@@ -141,6 +199,43 @@ export interface StoryboardPlan {
   negativeConstraints: string[];
   /** Set only on the backup plan used because the composer was blocked on content-safety grounds. */
   fallbackReason?: 'content_blocked';
+  /** Temporal/spatial relationship from the previous beat to this one (framework §6, §10). */
+  transition?: {
+    timeRelation: StoryTimeRelation;
+    locationRelation: StoryLocationRelation;
+    /** English, short: what in the beat text signals this transition. */
+    evidence: string;
+  };
+  /** English. Current scene setting, independent of any previous beat's setting. */
+  setting?: {
+    location: string;
+    timeOfDay: string;
+    era: string;
+  };
+  /** One entry per named character visible in at least one panel (framework §7:
+   * identity anchors are separate from current, recomputed appearance state). */
+  characterVisuals?: Array<{
+    /** Canonical name exactly as given in the Characters section, any script. */
+    name: string;
+    /** Romanized spelling used for this character in the image-facing prompt. */
+    englishName: string;
+    /** LOCKED identity: face, skin tone, build, distinguishing marks. Never clothing. */
+    identityAnchors: string;
+    /** EVOLVE/FREE current state: age/life stage, hair, wardrobe, accessories, physical state. */
+    currentAppearance: string;
+    /** Each mode is undefined when the composer's raw value did not match ContinuityMode. */
+    modes: {
+      age?: ContinuityMode;
+      hair?: ContinuityMode;
+      wardrobe?: ContinuityMode;
+      accessories?: ContinuityMode;
+    };
+  }>;
+  /** Explicit "do not inherit" list (framework §14), e.g. "previous wardrobe". */
+  mustNotInherit?: string[];
+  /** True when the composer's raw output was non-English and buildFallbackStoryboardPlan's
+   * English-only fallback was substituted in its place. Runtime-only: never in the schema. */
+  languageFallback?: boolean;
 }
 
 export interface WordTiming {

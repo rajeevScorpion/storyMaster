@@ -178,18 +178,17 @@ export async function generateSeedPlanPreview(input: SeedPlanPreviewInput): Prom
 
   if (!strictSourceSegments) {
     const length = resolveStoryBeatLength(storyConfig.ageGroup, storyConfig.beatLength?.level);
-    for (const beat of normalizedPlan.beats) {
-      const assessment = assessStoryBeatLength(beat.storyText, length);
-      if (!assessment.withinAllowance) {
-        console.warn('[story_runtime.beat_length_outside_allowance]', {
-          task: 'seed_plan_generation',
-          beatIndex: beat.beatIndex,
-          wordCount: assessment.wordCount,
-          targetWords: assessment.targetWords,
-          allowanceMinWords: assessment.allowanceMinWords,
-          allowanceMaxWords: assessment.allowanceMaxWords,
-        });
-      }
+    // One summary line for the whole plan rather than one console.warn per beat --
+    // a 12-beat plan used to print 12 near-identical lines.
+    const outsideAllowanceBeatIndexes = normalizedPlan.beats
+      .filter((beat) => !assessStoryBeatLength(beat.storyText, length).withinAllowance)
+      .map((beat) => beat.beatIndex);
+    if (outsideAllowanceBeatIndexes.length > 0) {
+      console.warn('[story_runtime.beat_length_outside_allowance]', {
+        task: 'seed_plan_generation',
+        beatCount: outsideAllowanceBeatIndexes.length,
+        beatIndexes: outsideAllowanceBeatIndexes,
+      });
     }
     return normalizedPlan;
   }

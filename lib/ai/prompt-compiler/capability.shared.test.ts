@@ -34,7 +34,7 @@ describe('normalizePromptCompilerCapability', () => {
       'neutral-v1'
     );
     expect(normalizePromptCompilerCapability({ promptCompiler: { promptBudgetChars: NaN } }).promptBudgetChars).toBe(
-      2800
+      3000
     );
   });
 

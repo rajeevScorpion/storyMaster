@@ -7,10 +7,13 @@
 // (canvas, FileReader) out of this module.
 
 import { StorySession, StoryBeat, StoryboardPlan, StoryConfig, type StoryAspectRatio, type StoryTextParts } from '@/lib/types/story';
-import type { Character } from '@/lib/types/story';
+import type { Character, PanelStoryFunction, StoryboardFramePlan } from '@/lib/types/story';
 import type { CompilerEngine, PromptCompilerBeatMetadata } from '@/lib/ai/prompt-compiler/assemble.shared';
 import { callTextModelForReader } from '@/lib/ai/text-gateway/reader-call';
 import { isContentBlockedError } from '@/lib/ai/text-gateway/outcome.shared';
+import { logTiming as logTimingEvent } from '@/lib/logging/timing.shared';
+import { isEnglishText } from '@/lib/ai/prompt-compiler/language.shared';
+import { normalizeStoryboardPlan } from '@/lib/ai/storyboard-plan.shared';
 import { getCharacterNoveltyContextAction } from '@/app/actions/character-novelty';
 import { getPublishedReelMoodsForRuntime } from '@/app/actions/reel-moods';
 import {
@@ -60,6 +63,7 @@ import {
   validateCharacterNovelty,
 } from '@/lib/ai/character-novelty.shared';
 import {
+  formatAudienceImageDirection,
   formatAudienceNarrativeContract,
   formatAudienceVisualContract,
   getStoryAudienceProfile,
@@ -345,14 +349,14 @@ export async function timeRuntimeStep<T>(
   const startedAt = runtimeNowMs();
   try {
     const result = await fn();
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(runtimeNowMs() - startedAt),
       success: true,
       ...meta,
     });
     return result;
   } catch (error) {
-    console.info(`[timing:${scope}]`, {
+    logTimingEvent(scope, {
       durationMs: Math.round(runtimeNowMs() - startedAt),
       success: false,
       ...meta,
@@ -543,7 +547,7 @@ export async function generateStoryBeat(
       console.info('[timing:story_runtime.generate_story_beat.validation_retry]', {
         beatNumber,
         issueCount: issuesWithLength.length,
-        issues: issuesWithLength,
+        issues: issuesWithLength.join('; ').slice(0, 200),
       });
       beat = await generateAttempt(buildValidationRepairNote(issuesWithLength));
       const retryIssues = validateAttempt(beat);
@@ -577,50 +581,114 @@ export async function generateStoryBeat(
   }
 }
 
+interface FallbackPanelRole {
+  storyFunction: PanelStoryFunction;
+  roleText: string;
+  cameraAngle: string;
+  shotScale: string;
+  cameraHeight: string;
+  emotion: string;
+  focus: string[];
+}
+
+// One short English sentence per panel role, plus a distinct shotScale/cameraHeight
+// per panel so the camera never accidentally repeats across the four fallback
+// frames (framework §20-21). No character JSON, sceneSummary, or storyText is
+// ever embedded here -- see buildFallbackStoryboardPlan below.
+const FALLBACK_PANEL_ROLES: readonly FallbackPanelRole[] = [
+  {
+    storyFunction: 'ESTABLISH',
+    roleText: 'Establish the opening moment of this beat.',
+    cameraAngle: 'wide establishing shot',
+    shotScale: 'wide shot',
+    cameraHeight: 'eye level',
+    emotion: 'anticipation',
+    focus: ['setting', 'main characters', 'opening action'],
+  },
+  {
+    storyFunction: 'REVEAL',
+    roleText: 'Reveal how the moment develops.',
+    cameraAngle: 'medium character shot',
+    shotScale: 'medium shot',
+    cameraHeight: 'high angle',
+    emotion: 'discovery',
+    focus: ['character reaction', 'relationship', 'story tension'],
+  },
+  {
+    storyFunction: 'ACT',
+    roleText: 'Show the key action of this beat.',
+    cameraAngle: 'dynamic close-up',
+    shotScale: 'close-up',
+    cameraHeight: 'low angle',
+    emotion: 'focus',
+    focus: ['key action', 'hands or faces', 'turning point'],
+  },
+  {
+    storyFunction: 'RESOLVE',
+    roleText: 'Land the resolution of this beat.',
+    cameraAngle: 'cinematic payoff shot',
+    shotScale: 'full shot',
+    cameraHeight: "bird's-eye view",
+    emotion: 'resolution',
+    focus: ['emotional payoff', 'consequence', 'next-story hook'],
+  },
+];
+
+/**
+ * English-only backup plan (framework: continuity ≠ sameness, but a fallback
+ * must first and foremost never leak story-language prose into an image
+ * prompt). Used whenever composeStoryboardPlan's model call throws, and now
+ * also whenever normalizeStoryboardPlan reports needsLanguageFallback.
+ *
+ * Every string here is either a hardcoded English sentence or beat content
+ * that already passed isEnglishText -- never beat.sceneSummary or beat.storyText
+ * (story-language prose for a non-English story), and never a sliced character
+ * JSON blob (could land mid-string). Character identity/appearance still
+ * reaches the final prompt through beat.characters directly, not through this
+ * plan's text.
+ */
 export function buildFallbackStoryboardPlan(
   beat: StoryBeat,
   sessionState: Partial<StorySession> | null,
   visualStyle: string
 ): StoryboardPlan {
   const storyConfig = normalizeStoryConfig(sessionState?.storyConfig);
-  const scene = compactPromptText(beat.sceneSummary || beat.imagePrompt || beat.storyText, 220);
-  const imageIntent = compactPromptText(beat.imagePrompt || beat.sceneSummary || beat.storyText, 260);
-  const characterAnchors = compactPromptText(buildPromptCharacterAnchors(beat.characters), 700);
-  const storyTextParts = normalizeStoryTextParts(beat.storyTextParts, beat.storyText)
-    .map((part) => compactPromptText(part, 180));
-  const sharedPrompt = [
-    imageIntent,
-    `Scene: ${scene}`,
-    `Characters: ${characterAnchors}`,
-    `Visual style: ${visualStyle}`,
-    'No text, captions, speech bubbles, logos, or watermarks.',
-  ].join('\n');
-
-  const makeFrame = (
-    description: string,
-    cameraAngle: string,
-    emotion: string,
-    focus: string[]
-  ) => ({
-    description,
-    prompt: `${sharedPrompt}\nPanel moment: ${description}\nCamera: ${cameraAngle}.`,
-    cameraAngle,
-    visualFocus: focus,
-    emotion,
-    continuityAnchor: scene,
-  });
+  const imageIntentEnglish = isEnglishText(beat.imagePrompt) ? compactPromptText(beat.imagePrompt, 260) : '';
+  const continuityNotesEnglish = (beat.continuityNotes || [])
+    .filter((note) => isEnglishText(note))
+    .slice(0, 2)
+    .map((note) => compactPromptText(note, 160));
+  const narrationParts = normalizeStoryTextParts(beat.storyTextParts, beat.storyText)
+    .map((part) => (isEnglishText(part) ? compactPromptText(part, 180) : ''));
 
   const newCharacterIds = new Set(resolveNewCharacterIds(beat, sessionState));
   const changedCharacterIds = new Set(resolveChangedCharacterIds(beat));
 
+  const makeFrame = (role: FallbackPanelRole, narrationPart: string): StoryboardFramePlan => ({
+    // charactersPresent is deliberately omitted -- the scene builder falls back
+    // to name matching against the description/narration text (scene-spec.shared.ts).
+    description: [role.roleText, narrationPart].filter(Boolean).join(' '),
+    prompt: role.roleText,
+    cameraAngle: role.cameraAngle,
+    visualFocus: role.focus,
+    emotion: role.emotion,
+    // Empty on purpose: the visual intent is already one shared invariant, and a
+    // per-panel copy would repeat it four more times in the compiled prompt.
+    continuityAnchor: '',
+    storyFunction: role.storyFunction,
+    timeRelationToPreviousPanel: 'unknown',
+    appearanceChanges: [],
+    shotScale: role.shotScale,
+    cameraHeight: role.cameraHeight,
+  });
+
   return {
     sharedVisualInvariants: [
-      scene,
-      'Maintain the same character identities, clothing, proportions, colors, and visual style across all four panels.',
+      'Keep each character recognizable by face, skin tone, build, and distinguishing features; use one consistent art style across all four panels.',
       'Use a full-bleed four-panel 2x2 storyboard composition in reading order with no outer padding or white gutters.',
-      ...(!isReelStoryConfig(storyConfig)
-        ? formatAudienceVisualContract(storyConfig.ageGroup).split('\n')
-        : []),
+      ...(!isReelStoryConfig(storyConfig) ? [formatAudienceImageDirection(storyConfig.ageGroup)] : []),
+      ...(imageIntentEnglish ? [`Visual intent: ${imageIntentEnglish}`] : []),
+      ...continuityNotesEnglish,
     ],
     portraitTasks: beat.characters
       .filter((character) => newCharacterIds.has(character.id) || changedCharacterIds.has(character.id))
@@ -630,45 +698,28 @@ export function buildFallbackStoryboardPlan(
         reason: changedCharacterIds.has(character.id) ? 'visual_change' as const : 'new_character' as const,
         prompt: [
           `${character.name}, ${character.type}.`,
-          character.appearanceSummary,
-          `Personality: ${character.personalitySummary}.`,
+          isEnglishText(character.appearanceSummary) ? character.appearanceSummary : '',
+          isEnglishText(character.personalitySummary) ? `Personality: ${character.personalitySummary}.` : '',
           `Reference style: ${visualStyle}.`,
           'Single-character reference, clean background, no text.',
-        ].join(' '),
+        ].filter(Boolean).join(' '),
       })),
-    topLeft: makeFrame(
-      `Opening storyboard moment aligned to narration part 1: ${storyTextParts[0] || scene}`,
-      'wide establishing shot',
-      'anticipation',
-      ['setting', 'main characters', 'opening action']
-    ),
-    topRight: makeFrame(
-      `Second storyboard moment aligned to narration part 2: ${storyTextParts[1] || scene}`,
-      'medium character shot',
-      'discovery',
-      ['character reaction', 'relationship', 'story tension']
-    ),
-    bottomLeft: makeFrame(
-      `Third storyboard moment aligned to narration part 3: ${storyTextParts[2] || scene}`,
-      'dynamic close-up',
-      'focus',
-      ['key action', 'hands or faces', 'turning point']
-    ),
-    bottomRight: makeFrame(
-      `Final storyboard moment aligned to narration part 4: ${storyTextParts[3] || scene}`,
-      'cinematic payoff shot',
-      'resolution',
-      ['emotional payoff', 'consequence', 'next-story hook']
-    ),
+    topLeft: makeFrame(FALLBACK_PANEL_ROLES[0], narrationParts[0]),
+    topRight: makeFrame(FALLBACK_PANEL_ROLES[1], narrationParts[1]),
+    bottomLeft: makeFrame(FALLBACK_PANEL_ROLES[2], narrationParts[2]),
+    bottomRight: makeFrame(FALLBACK_PANEL_ROLES[3], narrationParts[3]),
     negativeConstraints: [
       'no captions',
       'no text overlays',
       'no speech bubbles',
       'no logos',
       'no watermarks',
-      'no character redesign',
       'no white gutters, cream gutters, empty gaps, outer margins, matting, or page-like borders between or around panels',
     ],
+    transition: { timeRelation: 'unknown', locationRelation: 'unknown', evidence: '' },
+    setting: { location: '', timeOfDay: '', era: '' },
+    characterVisuals: [],
+    mustNotInherit: [],
   };
 }
 
@@ -752,16 +803,31 @@ export async function composeStoryboardPlan(
             : modelOverrides?.composerTemperature ?? 0.5,
           telemetry: costTelemetry,
         });
-        const parsedPlan = JSON.parse(text) as StoryboardPlan;
+
         if (isReel) {
+          const parsedPlan = JSON.parse(text) as StoryboardPlan;
           parsedPlan.portraitTasks = [];
-        } else {
-          parsedPlan.sharedVisualInvariants = [
-            ...(Array.isArray(parsedPlan.sharedVisualInvariants) ? parsedPlan.sharedVisualInvariants : []),
-            ...formatAudienceVisualContract(storyConfig.ageGroup).split('\n'),
-          ];
+          return parsedPlan;
         }
-        return parsedPlan;
+
+        const { plan: normalizedPlan, needsLanguageFallback } = normalizeStoryboardPlan(JSON.parse(text), {
+          characterNames: beat.characters.map((character) => character.name),
+        });
+        if (needsLanguageFallback) {
+          console.warn('[storyboard_plan.language_fallback]', {
+            beatNumber: beat.beatNumber,
+            reason: 'composer output was not English',
+          });
+          const fallback = buildFallbackStoryboardPlan(beat, sessionState, visualStyle);
+          fallback.languageFallback = true;
+          return fallback;
+        }
+
+        normalizedPlan.sharedVisualInvariants = [
+          ...normalizedPlan.sharedVisualInvariants,
+          formatAudienceImageDirection(storyConfig.ageGroup),
+        ];
+        return normalizedPlan;
       } catch (error) {
         console.error('Storyboard plan composition failed; using fallback storyboard plan:', {
           message: error instanceof Error ? error.message : 'Unknown storyboard plan error',

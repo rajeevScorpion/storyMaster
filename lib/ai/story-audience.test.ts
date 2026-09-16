@@ -6,9 +6,11 @@ import {
   assessStoryBeatLength,
   countStoryWords,
   formatAudienceBranchingContract,
+  formatAudienceImageDirection,
   formatAudienceNarrationDirection,
   formatAudienceNarrativeContract,
   formatAudienceVisualContract,
+  getStoryAudienceProfile,
   normalizeAgeGroup,
   normalizeStoredAgeGroup,
   normalizeStoryBeatLengthLevel,
@@ -72,6 +74,13 @@ describe('story audience profiles', () => {
     expect(formatAudienceBranchingContract('teens')).toContain('something a character says');
     expect(formatAudienceVisualContract('adults')).toContain('must not dictate a fixed palette');
     expect(formatAudienceNarrationDirection('kids_3_5')).toContain('Never use baby talk');
+  });
+
+  it('formats a single-line audience image direction invariant', () => {
+    const profile = getStoryAudienceProfile('teens');
+    const line = formatAudienceImageDirection('teens');
+    expect(line.split('\n')).toHaveLength(1);
+    expect(line).toBe(`Audience (${profile.label}): ${profile.visualDirection}`);
   });
 });
 

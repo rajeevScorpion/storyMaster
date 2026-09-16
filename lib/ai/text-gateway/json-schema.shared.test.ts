@@ -7,6 +7,7 @@ import {
   reelDraftSchema,
   seedPlanSchema,
   storyboardPlanSchema,
+  storyboardContinuityPlanSchema,
 } from '@/lib/ai/generation-schemas';
 import {
   geminiSchemaToJsonSchema,
@@ -24,6 +25,7 @@ const ALL_SCHEMAS: Record<string, GeminiSchemaNode> = {
   reelDraftSchema,
   seedPlanSchema,
   storyboardPlanSchema,
+  storyboardContinuityPlanSchema,
 } as unknown as Record<string, GeminiSchemaNode>;
 
 function collectObjectNodes(node: Record<string, unknown>, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
@@ -61,6 +63,33 @@ describe('geminiSchemaToJsonSchema', () => {
     expect(result.required).toEqual(['intro']);
     const properties = result.properties as Record<string, { type: unknown }>;
     expect(properties.genre.type).toBe('string');
+  });
+
+  it('keeps every storyboardContinuityPlanSchema field required and non-nullable under strict (Unit 3)', () => {
+    const result = geminiSchemaToJsonSchema(storyboardContinuityPlanSchema, { strict: true });
+    expect(result.required).toEqual(
+      expect.arrayContaining(['transition', 'setting', 'characterVisuals', 'mustNotInherit', 'topLeft'])
+    );
+    const properties = result.properties as Record<string, { type: unknown; properties?: Record<string, { type: unknown }> }>;
+    // Required fields must stay their plain type -- never widened to [type, 'null'].
+    expect(properties.transition.type).toBe('object');
+    expect(properties.transition.properties?.timeRelation.type).toBe('string');
+    expect(properties.setting.type).toBe('object');
+    expect(properties.mustNotInherit.type).toBe('array');
+
+    const topLeft = properties.topLeft.properties as Record<string, { type: unknown }>;
+    expect(topLeft.storyFunction.type).toBe('string');
+    expect(topLeft.timeRelationToPreviousPanel.type).toBe('string');
+    expect(topLeft.visualEcho.type).toBe('boolean');
+  });
+
+  it('passes each new enum field through as a plain JSON Schema enum', () => {
+    const result = geminiSchemaToJsonSchema(storyboardContinuityPlanSchema, { strict: true });
+    const properties = result.properties as Record<string, { properties?: Record<string, { enum?: string[] }> }>;
+    expect(properties.transition.properties?.timeRelation.enum).toContain('years_later');
+    expect(properties.transition.properties?.locationRelation.enum).toContain('new_location');
+    const topLeft = properties.topLeft.properties as Record<string, { enum?: string[] }>;
+    expect(topLeft.storyFunction.enum).toContain('ESTABLISH');
   });
 
   it('sets additionalProperties: false on every object node, for every schema, strict and non-strict', () => {
