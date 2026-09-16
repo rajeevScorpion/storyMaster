@@ -135,7 +135,7 @@ for what has actually run.
 | 120 | `text_model_thinking` | column `model_config.reasoning_level` (CHECK on the level vocabulary); `capabilities.reasoningLevels` on every remaining registry row; Gemini rows stop accepting a task temperature; row `gemini-3.8-flash`. Moves text tasks and persona overrides off seven removed Gemini text models (the three economy tasks at Low thinking), records the move in `model_config_history`, then deletes those rows | **Applied** 2026-09-14 17:45:48+00. Verified against the schema: column and CHECK, 6 registry rows with levels, `graphic_style_extraction` and `voice_selection` moved to 3.8 Flash at Low with history rows, `agent_novelty_assessment` row inserted at Low, image and TTS rows untouched. **Frozen** — changes ship as 121 | **Not applied.** Needs 119 first. Run the read-only pre-apply check in `docs/text-model-thinking-plan.md` section 3 to see which tasks will move. Redeploy afterwards |
 | 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Applied** on dev (owner, 2026-09-15); merged into `dev` as `8df40e2`. **Frozen** — further changes ship as a new migration, not 122 (that number is the image prompt budget target) | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
 
-### Image composer continuity (`feature/image-composer-continuity`, not merged)
+### Image composer continuity (merged into `dev` 2026-09-16, `f556e31`; not on production)
 
 | # | File | Introduces | dev | production |
 |---|---|---|---|---|
@@ -762,7 +762,7 @@ used. `app/actions/story.ts` was a dead orphan and has been deleted.
   until an admin enables a row and assigns it. Verification, routing and follow-ups:
   [../text-model-gateway-report.md](../text-model-gateway-report.md); handoff:
   [../text-model-gateway-working-memory.md](../text-model-gateway-working-memory.md).
-- **Image composer continuity — on `feature/image-composer-continuity`** (2026-09-15), in progress. English-only
+- **Image composer continuity — merged into `dev`** (2026-09-16, `f556e31`). English-only
   image prompts, a 3,000-character target with a 5,000 hard cap, non-Latin text surviving the compiler, and
   attribute-specific continuity (LOCKED / EVOLVE / FREE) instead of sameness. Handoff:
   [../image-composer-continuity-handoff.md](../image-composer-continuity-handoff.md); spec:
