@@ -56,6 +56,11 @@ import {
   resolvePromptTemplate,
 } from '@/lib/ai/prompt-config.shared';
 import { normalizeStoryboardPlan } from '@/lib/ai/storyboard-plan.shared';
+import { buildCanonicalImageScene } from '@/lib/ai/prompt-compiler/scene-spec.shared';
+import { compileImagePrompt } from '@/lib/ai/prompt-compiler/compile.shared';
+import { PROMPT_HARD_MAX_CHARS, type PromptCompilerCapability } from '@/lib/ai/prompt-compiler/capability.shared';
+import { isEnglishText } from '@/lib/ai/prompt-compiler/language.shared';
+import type { Character } from '@/lib/types/story';
 
 const fileEnv = loadEnv('development', process.cwd(), '');
 function ensureEnv(name: string): string {
@@ -121,6 +126,15 @@ const OPENAI_RECORD = mapTextModelRow(
     required_env_vars: ['OPENAI_API_KEY'],
   })
 );
+
+// The dev Gemini storyboard row's compiler capability (migration 081 + 122): 3,000-character
+// target, gemini-v1 adapter, no separate negative channel.
+const GEMINI_CAPABILITY: PromptCompilerCapability = {
+  enabled: true,
+  promptBudgetChars: 3000,
+  supportsNegativePrompt: false,
+  adapterVersion: 'gemini-v1',
+};
 
 // Invented beat: Anvi was a frightened child at a village lotus pond (beat 1); twelve years
 // later she coaches a frightened boy at a city swimming pool (beat 2). Story text is Hindi;
@@ -225,6 +239,36 @@ async function runComposerSmoke(modelKey: string): Promise<void> {
   for (const key of FRAME_KEYS) {
     expect(plan[key].storyFunction).toBeDefined();
   }
+
+  // End-to-end: the real plan through the real compiler. Unit tests cover the
+  // compiler on fixtures; this proves the prompt an actual model response
+  // produces is English, sectioned and inside the hard cap.
+  const scene = buildCanonicalImageScene({
+    storyboardPlan: plan,
+    continuityNotes: ['Anvi wore yellow hair clips as a child'],
+    characters: CHARACTERS as unknown as Character[],
+    visualStyle: VISUAL_STYLE,
+    aspectRatio: '16:9',
+  });
+  const compiled = compileImagePrompt(scene, GEMINI_CAPABILITY);
+
+  console.info(
+    `[composer schema smoke] ${modelKey} compiled: chars=${compiled.characterCount} tier=${compiled.compressionLevel} `
+    + `warnings=${compiled.warnings.join('|') || 'none'}`
+  );
+  console.info(`[composer schema smoke] ${modelKey} compiled prompt:\n${compiled.fullPrompt}`);
+
+  expect(compiled.characterCount).toBeLessThanOrEqual(PROMPT_HARD_MAX_CHARS);
+  expect(compiled.fullPrompt).toContain('\n\n');
+  for (const heading of ['FORMAT', 'STYLE', 'SETTING AND TIME', 'CHARACTERS', 'PANELS', 'CONTINUITY']) {
+    expect(compiled.fullPrompt).toContain(heading);
+  }
+  expect(isEnglishText(compiled.fullPrompt)).toBe(true);
+  // No Devanagari anywhere in the prompt: canonical names must be replaced by
+  // their English image-facing names. Built from a string so this file never
+  // holds the literal characters.
+  expect(new RegExp('[\\u0900-\\u097F]').test(compiled.fullPrompt)).toBe(false);
+  expect(compiled.warnings).not.toContain('non_english_prompt');
 }
 
 describe.skipIf(!SHOULD_RUN)('composer continuity schema live smoke (COMPOSER_SCHEMA_SMOKE=1)', () => {
