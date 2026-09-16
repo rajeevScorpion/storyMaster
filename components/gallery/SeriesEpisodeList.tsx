@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { BookOpen, Check, Play } from 'lucide-react';
+import { useSignInBeforeWatching } from '@/lib/hooks/useSignInBeforeWatching';
 import type { GalleryEpisodeSummary } from '@/lib/types/database';
 
 interface SeriesEpisodeListProps {
@@ -24,6 +25,8 @@ export default function SeriesEpisodeList({
   activeStorylineId,
   onOpen,
 }: SeriesEpisodeListProps) {
+  const gateOnSignIn = useSignInBeforeWatching();
+
   if (episodes.length === 0) return null;
 
   return (
@@ -36,7 +39,7 @@ export default function SeriesEpisodeList({
           <li key={episode.storylineId}>
             <Link
               href={`/storyline/${episode.storylineId}`}
-              onClick={() => onOpen(episode)}
+              onClick={(event) => { onOpen(episode); gateOnSignIn(event, `/storyline/${episode.storylineId}`); }}
               prefetch={false}
               aria-current={isActive ? 'true' : undefined}
               className={`group/ep flex items-center gap-2 rounded-lg px-2 py-1.5 text-[11px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/70 ${

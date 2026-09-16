@@ -239,9 +239,11 @@ Still outstanding on production after that promotion:
   the image composer continuity work is live. 122/123 raised a budget nothing currently reads. Both
   preconditions for flipping to `new` are already met: the `image_generation` model
   (`gemini-3.1-flash-image`) has `promptCompiler.enabled = true` at a 3,800 budget on the `gemini-v1` adapter.
-- **One published `prompt_configs` override** — `story_generation`, last touched 2026-04-04 — still carries
-  the old "short paragraph" wording and no series rules. Dev has **no** overrides, so every test and
-  verification ran against the default template. Republish from seed or keep it deliberately.
+- ~~One published `prompt_configs` override~~ — **RESOLVED 2026-09-16.** The `story_generation` override was
+  deleted on production, verified by query: `prompt_configs` is now **empty on both environments**, so every
+  text task reads the code default and prompt changes ship with deploys. The April 2026 prompt survives in
+  `prompt_history` (id `9a140d4d…`, 6,840 chars) and can be restored from the playground's Published History
+  if it is ever wanted back.
 - **`AGENTIC_SYSTEM_USER_ID` is not set on Vercel** unless done since; the agentic flags are all off, so this
   is inert until the system is switched on, and it fails closed if stale.
 
@@ -437,6 +439,14 @@ with the branch.
 
 Work that is built and merged but has **not** been QA'd in a browser. The owner does this manually.
 
+- **Storyline sign-in return** (`fix/storyline-signin-return`, merged into `dev` 2026-09-16; not on production;
+  plan `docs/storyline-signin-return-plan.md`). A signed-out visitor picking a story now gets the sign-in dialog
+  on the gallery with no loader, and lands on the story after signing in; a direct storyline link opens the
+  dialog by itself. E2E-proven for email/password (`e2e/storyline-signin-return.spec.ts`). **Owner to check by
+  hand:** Google sign-in on dev and prod, and the email-confirmation link for a new sign-up. If Google still lands
+  on `/`, the cause is Supabase Auth URL configuration, not code — Supabase silently falls back to the Site URL
+  when the callback address isn't allowed. Both environments need `/auth/callback` allowed for every host
+  actually served (`kissago.cc` **and** `www.kissago.cc` on prod; localhost on dev), e.g. `https://kissago.cc/**`.
 - **Gallery OTT pack** (rails, hero billboard, kids mode, viewer profiles) — browser QA never done.
 - **Expanding rail cards + series/episodes** — hover-expand, touch-tap, series collapse, next-episode
   countdown. Note: only one published storyline currently has a `series_id`, so the Series rail correctly
@@ -478,6 +488,10 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 ---
 
 ## Deferred / known gaps
+
+- **Sign-up confirmation opened on a different device** can't finish signing in (Supabase's code exchange
+  needs the browser that started sign-up). The visitor lands on the story's sign-in dialog rather than `/`,
+  and their email is already confirmed, so signing in there works. Accepted, not fixed.
 
 ### Image composer continuity — deferred on purpose
 
@@ -694,12 +708,13 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   in `callTextModelForReader`.
 - **Beat length misses are only a console line** (`feature/beat-length-allowance`). When beat generation runs in
   the browser the warning never reaches server logs, so there is no admin view of how often models run long.
-  **Production `prompt_configs` has now been checked (2026-09-16) and this is real.** Prod carries exactly one
-  published override — `story_generation`, last touched 2026-04-04 — and it still says "a short paragraph" and
-  carries no series/episode rules. Dev has **no overrides at all**, so every dev verification ran against the
-  default template. Promoting without republishing that row means prod generates on April's instructions; the
-  runtime length contract still applies, but the prompt half does not match what was tested. Decide it during
-  promotion — see the runbook, section 5. No unit test covers the
+  **Checked and then fixed on 2026-09-16.** Production had carried one published override since 2026-04-04
+  (`story_generation`) that still said "a short paragraph" and had no series rules, while dev had none — so
+  production had been generating on April's instructions and no dev verification ever exercised it. The row
+  was deleted; `prompt_configs` is now **empty on both environments**, and the April prompt is retained in
+  `prompt_history` for restore. **The rule worth keeping:** a task follows the code template only while it has
+  *no* published row. Publishing from the playground pins a copy, and that task stops tracking deploys until
+  the row is removed. No unit test covers the
   retry flow of the three generators.
 - **Slow reasoning models vs reader wait.** Checked 2026-09-15: the Vercel project is on Hobby with Fluid
   compute, so page server actions, including beat generation, get the 300s default and maximum (API routes and
@@ -757,7 +772,9 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
 **Content**
 - `discovery_intro` was NULL on all published storylines as of 2026-08-10, so intro search and expanded-card
   blurbs have nothing to show until intros are generated.
-- Published `story_generation` prompts need a **republish** to pick up series rules.
+- ~~Published `story_generation` prompts need a **republish** to pick up series rules.~~ Moot as of
+  2026-09-16: neither environment has a published override, so both read the code template directly. It
+  becomes true again the moment anyone publishes from the playground.
 - Auto-build stories reject character mixing.
 - `/blog` (`page_key: blog_news`) is unlinked from the whole app since the Help & Legal rework (2026-08-28) —
   the legal/auth UX pack is explicit that News does not belong in a legal destination, and there is no

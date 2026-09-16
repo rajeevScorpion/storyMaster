@@ -155,7 +155,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
   }, [finishAuthFlow, supabase.auth]);
 
   const signUpWithPassword = useCallback(async (email: string, password: string): Promise<AuthActionResult> => {
-    const redirectTo = `${window.location.origin}/`;
+    const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(pendingReturnTo ?? '/')}`;
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -182,7 +182,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     return { message: 'Check your email to confirm your account before signing in.' };
-  }, [finishAuthFlow, supabase.auth]);
+  }, [finishAuthFlow, pendingReturnTo, supabase.auth]);
 
   const sendPasswordReset = useCallback(async (email: string): Promise<AuthActionResult> => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {

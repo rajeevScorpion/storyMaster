@@ -181,9 +181,13 @@ beat-length work moved out of the prompt and into the runtime length contract, a
 episode rules**. Shipping without touching it means prod keeps April's prompt while every test and every dev
 verification ran against the current default.
 
-Decide one of: republish `story_generation` from seed after the deploy (bringing prod in line with what was
-tested), or keep the override deliberately and accept that prod generates on different instructions. Do not
-leave it undecided by default.
+**RESOLVED 2026-09-16 — the override was deleted**, so production now reads the code template like dev, and
+prompt changes ship with deploys. Verified by query: `prompt_configs` is empty on both environments. The April
+prompt is retained in `prompt_history` and restorable from the playground's Published History.
+
+**For the next promotion, check this first:** `select task_key from public.prompt_configs;` on both
+environments. Any row there means that task is pinned and has silently stopped following the code — which is
+how production drifted for five months without anyone noticing.
 
 ### Leave alone, deliberately
 

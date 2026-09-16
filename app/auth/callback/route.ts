@@ -30,6 +30,6 @@ export async function GET(request: Request) {
     }
   }
 
-  // Auth error — redirect to home
-  return NextResponse.redirect(`${origin}/`);
+  // Auth error — redirect to the sanitized destination rather than dropping it
+  return NextResponse.redirect(`${origin}${next}`);
 }
