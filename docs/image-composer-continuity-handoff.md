@@ -16,6 +16,8 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 
 **Still open when this was written:** Unit 6 is mostly done already (`docs/image-prompt-compiler.md`, five GOTCHAS entries, the migration ledger); what remains is the continuity/presence/reference documentation that depends on Unit 5's final shape, plus PROJECT_STATE's deferred list. After Unit 5: run the full gate suite directly (don't trust an agent report), then recommend the `--no-ff` merge into `dev`. **Owner decision pending:** real prompts compile to ~3,700–4,700 chars against a 3,000 target, so `over_target` fires on every beat — leave it, tighten the composer's brevity limits, or raise the target with a new migration. A fresh session resumes from the first pending row below, using [image-composer-continuity-briefs.md](image-composer-continuity-briefs.md) (the exact per-unit briefs, including the 4a brief in case that run is lost). Review each unit by reading its diff, update this table, then dispatch the next.
 
+**Branch complete and independently gated at `9ebbdde`** (2026-09-16, run by the reviewing session, not an agent report): `tsc` clean, `lint` clean, **1430 unit tests**, `build:verify` clean, **30/30 e2e**. Ready for a `--no-ff` merge into `dev` once the owner says so; migration 122 is already applied there. Production needs 119, 120, 121 and 122 before this ships.
+
 ### Progress
 | Unit | Commit | Status |
 |---|---|---|
