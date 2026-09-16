@@ -117,6 +117,18 @@ describe('buildCanonicalImageScene', () => {
     expect(scene.characters[0].visualIdentity.length).toBeLessThanOrEqual(SCENE_LIMITS.visualIdentity);
     expect(scene.characters[0].displayName).toBe('Weird Name with control');
   });
+
+  it('humanizes snake_case camera fields (Gemini returns medium_long_shot, eye_level)', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    plan.topLeft.cameraAngle = 'medium_long_shot';
+    plan.topLeft.shotScale = 'medium_long_shot';
+    plan.topLeft.cameraHeight = 'eye_level';
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
+    const topLeft = scene.panels.find((p) => p.position === 'top-left')!;
+    expect(topLeft.shot).toBe('medium long shot');
+    expect(topLeft.shotScale).toBe('medium long shot');
+    expect(topLeft.cameraHeight).toBe('eye level');
+  });
 });
 
 describe('slugifyCharacterKey', () => {
@@ -138,7 +150,16 @@ describe('slugifyCharacterKey', () => {
 });
 
 function sceneChar(key: string, displayName: string): SceneCharacter {
-  return { key, displayName, visualIdentity: '', hasReference: false, continuityPriority: 'critical' };
+  return {
+    key,
+    displayName,
+    imageName: displayName,
+    visualIdentity: '',
+    identityAnchors: '',
+    currentAppearance: '',
+    hasReference: false,
+    continuityPriority: 'critical',
+  };
 }
 
 describe('findWholeName', () => {

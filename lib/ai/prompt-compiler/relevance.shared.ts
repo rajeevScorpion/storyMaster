@@ -124,6 +124,11 @@ const NEGATIVE_BUCKETS: Record<string, string> = {
   representativeModern: 'modern or anachronistic elements',
 };
 
+// The canonical bucket label strings themselves, for callers (the compiler's
+// budget algorithm) that need to tell a bucket label apart from a specific,
+// non-bucketed negative when trimming the list under budget pressure.
+export const NEGATIVE_BUCKET_LABELS: ReadonlySet<string> = new Set(Object.values(NEGATIVE_BUCKETS));
+
 const NEGATIVE_TERM_TO_BUCKET: Record<string, keyof typeof NEGATIVE_BUCKETS> = {};
 function mapNegativeTerms(terms: string[], bucket: keyof typeof NEGATIVE_BUCKETS) {
   for (const term of terms) NEGATIVE_TERM_TO_BUCKET[term] = bucket;

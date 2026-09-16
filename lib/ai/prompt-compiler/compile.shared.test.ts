@@ -4,16 +4,18 @@ import { buildCanonicalImageScene } from './scene-spec.shared';
 import type { PromptCompilerCapability } from './capability.shared';
 import {
   MEDIEVAL_MARKET_INPUT,
+  MEDIEVAL_MARKET_PLAN,
   MINIMAL_INPUT,
   LEGACY_TEXT_INPUT,
   HINDI_VILLAGE_INPUT,
   HINDI_VILLAGE_PLAN,
   RAGHAV,
+  ANVI,
 } from './__fixtures__/scenes';
 
 const NEUTRAL: PromptCompilerCapability = {
   enabled: true,
-  promptBudgetChars: 2800,
+  promptBudgetChars: 3000,
   supportsNegativePrompt: false,
   adapterVersion: 'neutral-v1',
 };
@@ -31,15 +33,29 @@ describe('compileImagePrompt determinism', () => {
 });
 
 describe('compileImagePrompt structure', () => {
-  it('states layout first, then identity, then panels', () => {
+  it('orders sections FORMAT, STYLE, SETTING AND TIME, CHARACTERS, PANELS, CONTINUITY, AVOID', () => {
     const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
     const { fullPrompt } = compileImagePrompt(scene, NEUTRAL);
-    const layoutIdx = fullPrompt.indexOf('four equal panels');
-    const identityIdx = fullPrompt.indexOf('Characters and identity');
-    const panelsIdx = fullPrompt.indexOf('Panels:');
-    expect(layoutIdx).toBeGreaterThanOrEqual(0);
-    expect(layoutIdx).toBeLessThan(identityIdx);
-    expect(identityIdx).toBeLessThan(panelsIdx);
+    const headings = ['FORMAT', 'STYLE', 'SETTING AND TIME', 'CHARACTERS', 'PANELS', 'CONTINUITY', 'AVOID'];
+    const indices = headings.map((h) => fullPrompt.indexOf(`${h}\n`));
+    for (const idx of indices) expect(idx).toBeGreaterThanOrEqual(0);
+    for (let i = 1; i < indices.length; i += 1) expect(indices[i]).toBeGreaterThan(indices[i - 1]);
+  });
+
+  it('separates sections with a blank line, never collapsing the prompt into one block', () => {
+    // Regression: redact() used to strip \n as a control character, collapsing
+    // every section break into a single space (docs/image-composer-continuity-
+    // handoff.md section 0, 4a's last finding before the session limit).
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    const { fullPrompt } = compileImagePrompt(scene, NEUTRAL);
+    expect(fullPrompt).toContain('\n\n');
+    // Every section heading starts its own line, immediately preceded by a
+    // blank line (or the very start of the prompt, for FORMAT).
+    const headings = ['STYLE', 'SETTING AND TIME', 'CHARACTERS', 'PANELS', 'CONTINUITY', 'AVOID'];
+    for (const heading of headings) {
+      expect(fullPrompt).toContain(`\n\n${heading}\n`);
+    }
+    expect(fullPrompt.startsWith('FORMAT\n')).toBe(true);
   });
 
   it('states each character identity exactly once', () => {
@@ -65,20 +81,21 @@ describe('compileImagePrompt structure', () => {
       regeneration: { mode: 'refine', overallSuggestion: 'add evening light', panelSuggestions: { bottomRight: 'apple closer to Leo' } },
     });
     const { fullPrompt } = compileImagePrompt(scene, NEUTRAL);
-    expect(fullPrompt).toContain('User visual directives');
+    expect(fullPrompt).toContain('USER DIRECTIVES');
     expect(fullPrompt).toContain('add evening light');
     expect(fullPrompt).toContain('Bottom-right: apple closer to Leo.');
   });
 });
 
 describe('compileImagePrompt adapters', () => {
-  it('neutral lists negatives, gemini folds them into one Avoid sentence', () => {
+  it('neutral lists negatives one per line, gemini folds them into one sentence', () => {
     const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
     const neutral = compileImagePrompt(scene, NEUTRAL);
     const gemini = compileImagePrompt(scene, GEMINI);
-    expect(neutral.sections.negatives).toContain('Avoid the following:');
-    expect(gemini.sections.negatives.startsWith('Avoid:')).toBe(true);
+    expect(neutral.sections.negatives.startsWith('- ')).toBe(true);
+    expect(neutral.sections.negatives).toContain('\n- ');
     expect(gemini.sections.negatives).not.toContain('\n- ');
+    expect(gemini.sections.negatives.endsWith('.')).toBe(true);
   });
 });
 
@@ -96,21 +113,88 @@ describe('compileImagePrompt compression', () => {
     expect(result.compressionActions.length).toBeGreaterThan(0);
   });
 
-  it('warns when still over budget at max compression instead of truncating', () => {
+});
+
+describe('compileImagePrompt budget tiers', () => {
+  it('tier 0: a fixture within target renders untouched and byte-identical across runs', () => {
+    const a = compileImagePrompt(buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT), NEUTRAL);
+    const b = compileImagePrompt(buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT), NEUTRAL);
+    expect(a.budget.tier).toBe(0);
+    expect(a.compressionLevel).toBe(0);
+    expect(a.characterCount).toBeLessThanOrEqual(NEUTRAL.promptBudgetChars);
+    expect(a.fullPrompt).toBe(b.fullPrompt);
+  });
+
+  it('tier 1: lossless passes bring an over-target scene back under target, keeping the never-drop set', () => {
     const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
-    const impossible: PromptCompilerCapability = { ...NEUTRAL, promptBudgetChars: 1200 };
-    // Force a very small budget by inflating identity text.
-    scene.characters[0].visualIdentity = 'x'.repeat(1200);
-    const result = compileImagePrompt(scene, impossible);
+    // The full render is ~2545 chars and the lossless floor for this fixture
+    // is ~2451 (verified empirically) -- a target in that gap reaches tier 1
+    // by breaking out of the lossless loop early, never touching the lossy
+    // passes at all.
+    const capability: PromptCompilerCapability = { ...NEUTRAL, promptBudgetChars: 2500 };
+    const result = compileImagePrompt(scene, capability);
+    expect(result.budget.tier).toBe(1);
+    expect(result.compressionLevel).toBe(1);
+    expect(result.characterCount).toBeLessThanOrEqual(2500);
+    expect(result.compressionActions.length).toBeGreaterThan(0);
+    expect(result.warnings).not.toContain('over_target');
+    expect(result.fullPrompt).toContain('four equal panels');
+    expect(result.fullPrompt).toContain('Master Elrick');
+    expect(result.fullPrompt).toContain('tosses a bright red apple');
+  });
+
+  it('tier 2: over target but within the hard cap is accepted with an over_target warning', () => {
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    scene.characters[0].visualIdentity = 'x'.repeat(1400);
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.budget.tier).toBe(2);
+    expect(result.compressionLevel).toBe(2);
+    expect(result.warnings).toContain('over_target');
+    expect(result.characterCount).toBeGreaterThan(NEUTRAL.promptBudgetChars);
+    expect(result.characterCount).toBeLessThanOrEqual(5000);
+  });
+
+  it('tier 3: a pathological scene is trimmed to the hard cap and never cut mid-word', () => {
+    const LONGWORD = 'Supercalifragilisticexpialidocious';
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    scene.world.invariants = Array.from({ length: 12 }, (_, i) => `${LONGWORD} invariant number ${i} in the market.`);
+    for (const panel of scene.panels) {
+      panel.action = `${LONGWORD} `.repeat(40).trim();
+      panel.emotion = 'a complex layered emotional state described at unusual length for testing';
+      panel.visualFocus = Array.from({ length: 6 }, (_, i) => `unique focus descriptor number ${i} extra words`);
+    }
+    scene.continuity.notes = [`${LONGWORD} continuity note one.`, `${LONGWORD} continuity note two.`];
+    scene.negativeConstraints = [
+      ...scene.negativeConstraints,
+      ...Array.from({ length: 20 }, (_, i) => `unwanted specific element number ${i}`),
+    ];
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.budget.tier).toBe(3);
     expect(result.compressionLevel).toBe(3);
-    expect(result.warnings).toContain('over_budget_after_max_compression');
-    // Identity anchor is still present (not blindly truncated away).
-    expect(result.fullPrompt).toContain('xxxxx');
+    expect(result.characterCount).toBeLessThanOrEqual(5000);
+    expect(result.warnings).toContain('lossy_trim');
+    // Never mid-word: a trailing run of letters is either empty or the whole
+    // repeated long word, never a partial fragment of it.
+    const trailingLetters = /[A-Za-z]+$/.exec(result.fullPrompt.trimEnd())?.[0] ?? '';
+    if (trailingLetters && LONGWORD.toLowerCase().startsWith(trailingLetters.toLowerCase())) {
+      expect(trailingLetters.length).toBe(LONGWORD.length);
+    }
+  });
+
+  it('reservedChars lowers both the target and the hard cap; nothing ever exceeds the resulting hard cap', () => {
+    const withoutReserve = compileImagePrompt(buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT), NEUTRAL);
+    const withReserve = compileImagePrompt(buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT), NEUTRAL, {
+      reservedChars: 500,
+    });
+    expect(withReserve.budget.reservedChars).toBe(500);
+    expect(withReserve.budget.targetChars).toBe(withoutReserve.budget.targetChars - 502);
+    expect(withReserve.budget.hardMaxChars).toBe(withoutReserve.budget.hardMaxChars - 502);
+    expect(withReserve.characterCount).toBeLessThanOrEqual(withReserve.budget.hardMaxChars);
   });
 });
 
 describe('compileImagePrompt non-Latin scenes', () => {
-  it('renders the auto absent-character line with a Devanagari name', () => {
+  it('falls back to "Character N" (never the Devanagari name) in the absent line', () => {
     const plan = structuredClone(HINDI_VILLAGE_PLAN);
     // Bottom-right's action must not name राघव itself, so it is the
     // compiler's own absence detection — not the composer's text — that has
@@ -118,9 +202,110 @@ describe('compileImagePrompt non-Latin scenes', () => {
     plan.bottomRight.description = 'अन्वी अकेली बरगद के पेड़ के नीचे बैठी किताब पढ़ रही है।';
     plan.bottomRight.charactersPresent = ['अन्वी'];
     const scene = buildCanonicalImageScene({ ...HINDI_VILLAGE_INPUT, storyboardPlan: plan });
-    const { sections } = compileImagePrompt(scene, NEUTRAL);
+    // Neither fixture character has an englishName, and both names are
+    // Devanagari, so both fall back to a positional placeholder.
+    const raghav = scene.characters.find((c) => c.displayName === RAGHAV.name)!;
+    expect(raghav.imageName).toBe('Character 1');
+    const { sections, fullPrompt } = compileImagePrompt(scene, NEUTRAL);
     const bottomRight = sections.panels.find((p) => p.startsWith('Bottom-right'))!;
-    expect(bottomRight).toContain(`${RAGHAV.name} is absent`);
+    expect(bottomRight).toContain(`${raghav.imageName} is absent`);
+    expect(fullPrompt).not.toContain(RAGHAV.name);
+  });
+
+  it('replaces a non-English display name wherever it survives into a rendered string, not just the absent line', () => {
+    // Every fixture panel action mentions राघव by name (see __fixtures__/scenes.ts),
+    // and the action is the one field kept verbatim even when non-English —
+    // so without the imageName substitution, his raw Devanagari name would
+    // leak into an otherwise-English compiled prompt.
+    const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+    const raghav = scene.characters.find((c) => c.displayName === RAGHAV.name)!;
+    const anvi = scene.characters.find((c) => c.displayName === ANVI.name)!;
+    expect(raghav.imageName).not.toBe(RAGHAV.name);
+    const { fullPrompt } = compileImagePrompt(scene, NEUTRAL);
+    expect(fullPrompt).not.toContain(RAGHAV.name);
+    expect(fullPrompt).not.toContain(ANVI.name);
+    expect(fullPrompt).toContain(raghav.imageName);
+    expect(fullPrompt).toContain(anvi.imageName);
+  });
+});
+
+describe('compileImagePrompt old non-English stored plan', () => {
+  it('drops secondary Hindi fields but keeps the panel action, and warns non_english_prompt', () => {
+    // HINDI_VILLAGE_PLAN has no transition/setting/mustNotInherit/characterVisuals
+    // -- exactly the shape of a plan stored before the continuity model landed.
+    const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.warnings).toContain('non_english_prompt');
+    // The action is the one field the scene builder keeps even when non-English
+    // (so the image still depicts the event) -- it must survive into the prompt.
+    expect(result.fullPrompt).toContain('अपने खेत की मेड़ पर खड़े होकर');
+    // Every other per-panel/world Hindi field is dropped at scene-build time
+    // (scene-spec.shared.ts's English gate), so none of it reaches the prompt.
+    expect(result.fullPrompt).not.toContain('शांत और संतुष्ट'); // emotion
+    expect(result.fullPrompt).not.toContain('दूर के पहाड़'); // visual focus
+    expect(result.fullPrompt).not.toContain('टेक्स्ट'); // Hindi negative constraint
+    expect(result.fullPrompt).not.toContain('यही सुबह की रोशनी'); // continuity anchor
+  });
+});
+
+describe('compileImagePrompt STYLE axes', () => {
+  const AXIS_STYLE = [
+    'Rendering: Whimsical medieval storybook illustration with painterly textures.',
+    'Emotional atmosphere: warm and wondrous, with gentle golden warmth throughout.',
+    'Color and light: golden hour glow with amber highlights and soft long shadows.',
+    'Scope boundary: keep every embellishment strictly within the bounds of the story world and nothing more.',
+  ].join('\n');
+
+  it('tier 0: keeps every axis in full -- never the old first-clause cut', () => {
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, visualStyle: AXIS_STYLE });
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.budget.tier).toBe(0);
+    for (const line of AXIS_STYLE.split('\n')) {
+      expect(result.sections.style).toContain(line);
+    }
+  });
+
+  it('a tight budget shortens only the scope line -- the other three axes and the axis count survive', () => {
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, visualStyle: AXIS_STYLE });
+    const result = compileImagePrompt(scene, TIGHT);
+    expect(result.compressionActions.some((a) => a.reason === 'lossless-shorten-scope-line')).toBe(true);
+    const styleLines = result.sections.style.split('\n');
+    expect(styleLines).toHaveLength(4);
+    expect(result.sections.style).toContain(
+      'Scope boundary: style applies only to story-grounded content; add nothing just to express it.'
+    );
+    expect(result.sections.style).toContain('Rendering: Whimsical medieval storybook illustration with painterly textures.');
+    expect(result.sections.style).toContain(
+      'Emotional atmosphere: warm and wondrous, with gentle golden warmth throughout.'
+    );
+    expect(result.sections.style).toContain(
+      'Color and light: golden hour glow with amber highlights and soft long shadows.'
+    );
+  });
+});
+
+describe('compileImagePrompt CONTINUITY', () => {
+  it('a continuous scene (no transition) keeps clothing continuity', () => {
+    const scene = buildCanonicalImageScene(MEDIEVAL_MARKET_INPUT);
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.sections.continuity).toContain('clothing');
+  });
+
+  it('a years_later transition drops the clothing-lock wording and renders Do not carry over', () => {
+    const plan = structuredClone(MEDIEVAL_MARKET_PLAN);
+    plan.transition = {
+      timeRelation: 'years_later',
+      locationRelation: 'new_location',
+      evidence: 'Years have passed since the last scene.',
+    };
+    plan.mustNotInherit = ['previous wardrobe', 'previous hairstyle'];
+    const scene = buildCanonicalImageScene({ ...MEDIEVAL_MARKET_INPUT, storyboardPlan: plan });
+    const result = compileImagePrompt(scene, NEUTRAL);
+    expect(result.sections.continuity).toContain(
+      'reassess age, hair, clothing and setting for this point in the story'
+    );
+    expect(result.sections.continuity).not.toContain('within this continuous scene keep identity, clothing');
+    expect(result.sections.continuity).toContain('Do not carry over: previous wardrobe; previous hairstyle.');
   });
 });
 

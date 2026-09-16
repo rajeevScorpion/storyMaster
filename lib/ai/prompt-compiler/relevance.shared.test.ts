@@ -6,8 +6,34 @@ import {
   detectPhraseConflict,
   phraseKey,
 } from './relevance.shared';
-import { buildCanonicalImageScene } from './scene-spec.shared';
-import { MEDIEVAL_MARKET_INPUT, MINIMAL_INPUT, HINDI_VILLAGE_INPUT } from './__fixtures__/scenes';
+import { buildCanonicalImageScene, type CanonicalImageScene, type PanelPosition } from './scene-spec.shared';
+import { MEDIEVAL_MARKET_INPUT, MINIMAL_INPUT, HINDI_VILLAGE_INPUT, HINDI_VILLAGE_PLAN } from './__fixtures__/scenes';
+
+// scene-spec's English gate (Unit 4a) drops all-Hindi invariants/focus/
+// negatives at build time, since the compiled prompt must be English-only.
+// These tests exercise relevance.shared.ts's Unicode-safe dedup itself, so
+// they repopulate the built scene with the fixture's raw Hindi content —
+// independent of, and upstream of, that gate.
+const FRAME_KEYS = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'] as const;
+const POSITION_BY_FRAME_KEY: Record<(typeof FRAME_KEYS)[number], PanelPosition> = {
+  topLeft: 'top-left',
+  topRight: 'top-right',
+  bottomLeft: 'bottom-left',
+  bottomRight: 'bottom-right',
+};
+
+function withRawHindiContent(scene: CanonicalImageScene): CanonicalImageScene {
+  const panels = scene.panels.map((panel) => {
+    const frameKey = FRAME_KEYS.find((key) => POSITION_BY_FRAME_KEY[key] === panel.position)!;
+    return { ...panel, visualFocus: [...HINDI_VILLAGE_PLAN[frameKey].visualFocus] };
+  });
+  return {
+    ...scene,
+    world: { ...scene.world, invariants: [...HINDI_VILLAGE_PLAN.sharedVisualInvariants] },
+    panels,
+    negativeConstraints: [...HINDI_VILLAGE_PLAN.negativeConstraints, ...scene.negativeConstraints],
+  };
+}
 
 describe('phraseKey', () => {
   it('folds synonyms and ignores order/case/punctuation', () => {
@@ -151,7 +177,7 @@ describe('filterAndDedupScene', () => {
 
   describe('non-Latin scenes (Hindi)', () => {
     it('keeps every distinct world invariant, visual-focus item and negative', () => {
-      const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+      const scene = withRawHindiContent(buildCanonicalImageScene(HINDI_VILLAGE_INPUT));
       const { scene: filtered } = filterAndDedupScene(scene);
       // All 4 invariants are distinct topics — none should be dropped as a
       // "duplicate" of another via the empty phraseKey.
@@ -173,7 +199,7 @@ describe('filterAndDedupScene', () => {
     });
 
     it('still dedups genuinely identical Hindi phrases', () => {
-      const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+      const scene = withRawHindiContent(buildCanonicalImageScene(HINDI_VILLAGE_INPUT));
       scene.world.invariants = [...scene.world.invariants, scene.world.invariants[0]];
       const { scene: filtered, diagnostics } = filterAndDedupScene(scene);
       expect(filtered.world.invariants).toHaveLength(4);
@@ -181,7 +207,7 @@ describe('filterAndDedupScene', () => {
     });
 
     it('does not hoist or drop a Hindi focus item unless it really is only a character name', () => {
-      const scene = buildCanonicalImageScene(HINDI_VILLAGE_INPUT);
+      const scene = withRawHindiContent(buildCanonicalImageScene(HINDI_VILLAGE_INPUT));
       // Make a genuine bare-name focus item ("राघव") appear in >= 3 panels —
       // it must be dropped as redundant-character-name, not hoisted.
       for (const panel of scene.panels) panel.visualFocus.push('राघव');
