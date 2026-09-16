@@ -232,6 +232,13 @@ deployed and live on `kissago.cc`. Migrations **102-114 and 116-123 are applied*
 only gap. The signed-out gallery was verified populated after 116, and a prompt-only beat generated cleanly
 on a real account.
 
+**Storyline sign-in return promoted 2026-09-16** (`main` at `897a205`, no migrations; plan
+`docs/storyline-signin-return-plan.md`). A signed-out visitor picking a story gets the sign-in dialog on the
+gallery with no loader and lands on the story afterwards; a direct storyline link opens the dialog by itself.
+Owner-verified on dev before promotion; e2e covers the email/password path. If Google sign-in ever lands on `/`
+again, check Supabase Auth → URL Configuration first: an address missing from Redirect URLs silently falls back
+to the Site URL.
+
 Still outstanding on production after that promotion:
 
 - **115** — see its migration row for the 5-row decision it needs first.
@@ -439,14 +446,6 @@ with the branch.
 
 Work that is built and merged but has **not** been QA'd in a browser. The owner does this manually.
 
-- **Storyline sign-in return** (`fix/storyline-signin-return`, merged into `dev` 2026-09-16; not on production;
-  plan `docs/storyline-signin-return-plan.md`). A signed-out visitor picking a story now gets the sign-in dialog
-  on the gallery with no loader, and lands on the story after signing in; a direct storyline link opens the
-  dialog by itself. E2E-proven for email/password (`e2e/storyline-signin-return.spec.ts`). **Owner to check by
-  hand:** Google sign-in on dev and prod, and the email-confirmation link for a new sign-up. If Google still lands
-  on `/`, the cause is Supabase Auth URL configuration, not code — Supabase silently falls back to the Site URL
-  when the callback address isn't allowed. Both environments need `/auth/callback` allowed for every host
-  actually served (`kissago.cc` **and** `www.kissago.cc` on prod; localhost on dev), e.g. `https://kissago.cc/**`.
 - **Gallery OTT pack** (rails, hero billboard, kids mode, viewer profiles) — browser QA never done.
 - **Expanding rail cards + series/episodes** — hover-expand, touch-tap, series collapse, next-episode
   countdown. Note: only one published storyline currently has a `series_id`, so the Series rail correctly
