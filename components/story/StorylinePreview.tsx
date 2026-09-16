@@ -35,9 +35,7 @@ export default function StorylinePreview({
     openAuthDialog('sign_in', returnTo);
   };
 
-  // The owner decision here is that this preview must never just sit there
-  // for a signed-out visitor -- ask immediately rather than waiting on the
-  // button.
+  // Ask straight away rather than waiting on the button.
   useEffect(() => {
     if (isLoading || user || hasRequestedAuthRef.current) return;
     hasRequestedAuthRef.current = true;
