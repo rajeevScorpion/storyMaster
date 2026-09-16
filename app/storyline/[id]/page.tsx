@@ -191,6 +191,7 @@ export default async function StorylinePage({ params, searchParams }: PageProps)
         authorName={storyline.author_name}
         coverImageUrl={storyline.cover_image_url}
         beatCount={storyline.beat_count}
+        shareToken={validatedShareToken}
       />
     );
   }

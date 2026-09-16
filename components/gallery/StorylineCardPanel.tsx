@@ -7,6 +7,7 @@ import SeriesEpisodeList from '@/components/gallery/SeriesEpisodeList';
 import { getStoryGenreLabel } from '@/lib/story/genres';
 import { getStoryAudienceProfile } from '@/lib/ai/story-audience';
 import { SERIES_EPISODE_LIST_LIMIT } from '@/lib/gallery/series';
+import { useSignInBeforeWatching } from '@/lib/hooks/useSignInBeforeWatching';
 import type { ExpandedPanelPlacement } from '@/lib/gallery/card-expansion';
 import type { GalleryItem } from '@/lib/types/database';
 
@@ -46,6 +47,7 @@ export default function StorylineCardPanel({
   onShare,
 }: StorylineCardPanelProps) {
   const prefersReducedMotion = useReducedMotion();
+  const gateOnSignIn = useSignInBeforeWatching();
 
   const genreLabel = item.genre ? getStoryGenreLabel(item.genre) : null;
   // An unclassified story stays unlabelled rather than reading as "All Ages".
@@ -115,7 +117,7 @@ export default function StorylineCardPanel({
       <div className="flex flex-wrap items-center gap-2 pt-0.5">
         <Link
           href={`/storyline/${item.id}`}
-          onClick={() => onOpen()}
+          onClick={(event) => { onOpen(); gateOnSignIn(event, `/storyline/${item.id}`); }}
           prefetch={false}
           className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500 px-3.5 py-2 text-xs font-semibold text-neutral-950 shadow-lg shadow-emerald-500/20 transition-all hover:bg-emerald-400 hover:shadow-emerald-400/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 focus-visible:ring-offset-2 focus-visible:ring-offset-neutral-950"
         >

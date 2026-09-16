@@ -439,6 +439,14 @@ with the branch.
 
 Work that is built and merged but has **not** been QA'd in a browser. The owner does this manually.
 
+- **Storyline sign-in return** (`fix/storyline-signin-return`, merged into `dev` 2026-09-16; not on production;
+  plan `docs/storyline-signin-return-plan.md`). A signed-out visitor picking a story now gets the sign-in dialog
+  on the gallery with no loader, and lands on the story after signing in; a direct storyline link opens the
+  dialog by itself. E2E-proven for email/password (`e2e/storyline-signin-return.spec.ts`). **Owner to check by
+  hand:** Google sign-in on dev and prod, and the email-confirmation link for a new sign-up. If Google still lands
+  on `/`, the cause is Supabase Auth URL configuration, not code — Supabase silently falls back to the Site URL
+  when the callback address isn't allowed. Both environments need `/auth/callback` allowed for every host
+  actually served (`kissago.cc` **and** `www.kissago.cc` on prod; localhost on dev), e.g. `https://kissago.cc/**`.
 - **Gallery OTT pack** (rails, hero billboard, kids mode, viewer profiles) — browser QA never done.
 - **Expanding rail cards + series/episodes** — hover-expand, touch-tap, series collapse, next-episode
   countdown. Note: only one published storyline currently has a `series_id`, so the Series rail correctly
@@ -480,6 +488,10 @@ hand-verified on 2026-08-26 and pass, but nothing automated covers them.
 ---
 
 ## Deferred / known gaps
+
+- **Sign-up confirmation opened on a different device** can't finish signing in (Supabase's code exchange
+  needs the browser that started sign-up). The visitor lands on the story's sign-in dialog rather than `/`,
+  and their email is already confirmed, so signing in there works. Accepted, not fixed.
 
 ### Image composer continuity — deferred on purpose
 
