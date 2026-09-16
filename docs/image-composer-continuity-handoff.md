@@ -21,7 +21,7 @@ The spec is [visual-composer-continuity-framework.md](visual-composer-continuity
 | 2 Unicode-safe relevance and scene spec | `cf28089` | done; 1334 unit tests; no snapshot change. `findWholeName` uses a regex lookbehind in browser code — within Next 16's default browser floor |
 | 3 English composer plan | `33c25f4`, `1f502e0`, smoke `4c191c9` | done; 1373 unit tests. Review blanked the fallback plan's per-panel anchors (they repeated the whole visual intent four times). Live smoke passed on Luna and Gemini 3.8 Flash |
 | 4a compiler-v2 core (pure) | `6ca8ab0`; migration `aaa098f` | done; 1385 unit tests, compare 4/4. Took two agents (the first hit the session limit; its uncommitted work was repaired and finished by the second). Key fix: `redact()` stripped `\n` as a control character, so every section break became a space — that is why prompts arrived as one block. Snapshots now show eight real sections. Migration 122 is committed and applied on dev |
-| 4b compiler-v2 runtime wiring | | pending — split from Unit 4: reference lines inside the budget with English names, call sites, R9 gaps |
+| 4b compiler-v2 runtime wiring | `893b7b0` | done; 1393 unit tests. Reference lines now use the same image-facing name the compiled prompt uses and are reserved from the budget at all 9 store call sites and the bundle. R9: the bundle finally gets a world anchor and world reference; the continue-story job path's legacy build got its missing anchor. Agentic and stateful-batch paths append no binding lines, so nothing is reserved there. **Leftover for Unit 6:** the continue-story `promptOnly` legacy build still omits `worldAnchor` (diagnostics/shadow only, not the sent prompt) |
 | 5 continuity model | | pending |
 | 6 docs | | pending |
 
