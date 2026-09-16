@@ -133,7 +133,13 @@ for what has actually run.
 |---|---|---|---|---|
 | 119 | `text_model_registry` | table `text_model_registry`, one row per text model. `model_config.model_id` and persona `model_overrides[*].modelId` now name a `model_key` here. Touch trigger, RLS with no policies, 12 seed rows: 8 Gemini enabled, 4 OpenAI/OpenRouter disabled | **Applied** 2026-09-14 05:27:43+00. Verified against the schema, not only the ledger: 18 columns, every CHECK, the trigger, RLS with 0 policies, 12 seed rows with the right enabled flags. **Frozen** — changes ship as 120 | **Not applied.** First run `select task_key, model_id from public.model_config order by task_key;` — a text `model_id` with no seeded row runs on its task default once 119 lands. A server that is already running needs a redeploy afterwards (see GOTCHAS "Text models") |
 | 120 | `text_model_thinking` | column `model_config.reasoning_level` (CHECK on the level vocabulary); `capabilities.reasoningLevels` on every remaining registry row; Gemini rows stop accepting a task temperature; row `gemini-3.8-flash`. Moves text tasks and persona overrides off seven removed Gemini text models (the three economy tasks at Low thinking), records the move in `model_config_history`, then deletes those rows | **Applied** 2026-09-14 17:45:48+00. Verified against the schema: column and CHECK, 6 registry rows with levels, `graphic_style_extraction` and `voice_selection` moved to 3.8 Flash at Low with history rows, `agent_novelty_assessment` row inserted at Low, image and TTS rows untouched. **Frozen** — changes ship as 121 | **Not applied.** Needs 119 first. Run the read-only pre-apply check in `docs/text-model-thinking-plan.md` section 3 to see which tasks will move. Redeploy afterwards |
-| 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Not applied.** File committed `eb849cd` on `feature/content-block-fallback`; **frozen** — changes ship as 122 | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
+| 121 | `text_task_content_block_fallback` | column `model_config.content_block_fallback_model_id` — a registry `model_key` as text, no foreign key. Read in its own query with its own missing-column latch (see GOTCHAS "Thinking levels, temperature and failure text") | **Applied** on dev (owner, 2026-09-15); merged into `dev` as `8df40e2`. **Frozen** — further changes ship as a new migration, not 122 (that number is the image prompt budget target) | **Not applied.** Needs 119 and 120 first. Without it the gateway still reports blocks and logs failures, but never retries; the card shows "Needs migration 121" |
+
+### Image composer continuity (`feature/image-composer-continuity`, not merged)
+
+| # | File | Introduces | dev | production |
+|---|---|---|---|---|
+| 122 | `image_prompt_budget_target` | raises `capabilities.promptCompiler.promptBudgetChars` from 2,800 to 3,000 on every `image_model_registry` row still at the 081 default — 7 rows on dev (1 Gemini, 6 Runware, 3 of those reel rows) | **Applied** 2026-09-16 by the owner. **Frozen** — further budget changes ship as a new migration. The number is a *target*, not a ceiling: compiler-v2 may exceed it up to a hard 5,000 cap in code, and reference-image binding lines are already reserved from it, so never lower it to make room for them | **Not applied.** Safe to defer — without it the target stays 2,800 and prompts simply compress a little harder |
 
 #### Promoting the agentic system to production — checklist
 
@@ -511,7 +517,7 @@ Deliberate decisions, not oversights. Don't "fix" them without checking why.
   this; it remains scoped to worker media-state patches.
 - **The evaluator's restricted-theme check is effectively English-only against beat text.** All 15 seeded
   personas store `restricted_themes` as ENGLISH phrases ("graphic violence", "self-harm"), including the 12
-  that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `` is defined over
+  that write in Hindi, Bangla, Gujarati or Marathi — verified by query, not assumed. JS `\b` is defined over
   `[A-Za-z0-9_]` and never holds beside a Devanagari/Bengali/Gujarati/Arabic character, and the English
   phrase would not appear in that prose anyway. The `briefThemes` half works for every persona, because
   `buildStoryBriefPrompt` asks for themes "in English" while the prose goes in the target language. It fails
